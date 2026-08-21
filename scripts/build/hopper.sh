@@ -1,0 +1,7 @@
+#!/usr/bin/env bash
+set -euo pipefail
+source "$(dirname -- "${BASH_SOURCE[0]}")/../lib/common.sh"
+ARCH="${ARCH:-sm_90}"
+TMPDIR="$ONEESAN_TMP_DIR" nvcc -O3 -std=c++17 -arch="$ARCH" -lineinfo \
+  "$ONEESAN_ROOT/src/cuda/hopper/oneesan_cuda_hopper.cu" \
+  -o "$ONEESAN_BUILD_DIR/oneesan_cuda_hopper"
