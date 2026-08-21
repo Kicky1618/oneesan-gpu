@@ -1,0 +1,6 @@
+#!/usr/bin/env bash
+set -euo pipefail
+mkdir -p .tmp
+TMPDIR="$PWD/.tmp" nvcc -O3 -std=c++17 -arch=sm_90 \
+  -lineinfo \
+  oneesan_cuda_h100.cu -o oneesan_cuda_h100

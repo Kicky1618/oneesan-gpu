@@ -1,0 +1,64 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+build/
+dist/
+wheels/
+.venv/
+.uv-cache/
+
+# Local agent/editor state
+.agents/
+.codex/
+
+# Experiment scratch/state
+.tmp/
+.b300_exact*/
+.gridfp*/
+.host32*/
+.mgtest*/
+
+# Credentials
+.vast_debug_key*
+*.pem
+.env
+.env.*
+
+# Raw run output
+*.out
+*.err
+*.time
+*.exit
+*.log
+
+# Native/CUDA build products
+*.o
+*.a
+*.so
+/*.sm_*
+/*_sm[0-9]*
+/oneesan_cpu
+/oneesan_frontier
+/oneesan_cuda
+/oneesan_cuda_*
+!/oneesan_cuda_*.cu
+!/oneesan_cuda_*.cpp
+/ggcount_step_run
+/ggcount_transition_probe
+/gridfp_formula_probe
+/gridfp_indegree_probe
+/gridfp_parallel_debug
+/gridfp_rank_test
+/p2p_probe
+/shrink_probe
+/shrink_relevant_probe
+
+# Reference implementation build products
+GGCount_ref/src/ggcount_multi
+GGCount_ref/src/ggcount_single
+
+# Manim generated artifacts
+manimations/media/
+manimations/preview_*/
+manimations/layout_audit*.log
