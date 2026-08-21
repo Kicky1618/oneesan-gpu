@@ -4,6 +4,51 @@ GPU frontier-DP experiments for counting simple corner-to-corner paths on an `(n
 
 The main target is an 8-GPU NVIDIA B300 node. The current production path stores the authoritative DP state as `uint32` residues sharded across all 8 GPUs, then reconstructs the exact integer with CRT.
 
+## Local / single GPU
+
+For development and correctness checks on an ordinary CUDA GPU, use the local wrapper. It builds for the GPU installed in the machine and forces a single-GPU run.
+
+Quick one-residue run:
+
+```bash
+./scripts/run/local.sh 18
+```
+
+The defaults are intentionally conservative for an 8 GiB-class development GPU:
+
+```text
+N=18
+NGPU=1
+ARCH=native
+TARGET_MIB=512
+GRIDFP_VRAM_RESERVE_MIB=1024
+modulus=4294967291
+```
+
+On the development RTX 3070 8GB, the current `n=18` one-residue path completes in about 3 seconds and uses about 169 MiB for the authoritative state, plus scratch/LUT allocations.
+
+To reconstruct the exact count with CRT instead of computing only one residue:
+
+```bash
+./scripts/run/local.sh 18 --exact
+```
+
+The exact run is checkpointed under `work/b300_exact_n18/` and can be resumed with the same command. To verify the exact pipeline without running every CRT modulus:
+
+```bash
+./scripts/run/local.sh 18 --exact --max-runs 1
+```
+
+You can override the memory budget through environment variables:
+
+```bash
+TARGET_MIB=256 \
+GRIDFP_VRAM_RESERVE_MIB=1536 \
+./scripts/run/local.sh 18
+```
+
+Larger `n` values require rapidly increasing state memory; the B300 x8 path below is the intended route for `n=27`.
+
 ## B300 x8: exact n=27
 
 ### Requirements
