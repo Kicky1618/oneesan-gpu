@@ -1,0 +1,39 @@
+#include <rapidd/rapidd.hpp>
+#include <algorithm>
+#include <chrono>
+#include <fstream>
+#include <array>
+#include <unordered_set>
+#include <cstdint>
+#include <iostream>
+#include <stdexcept>
+#include <string>
+#include <unordered_map>
+#include <vector>
+using rapidd::Zdd;using rapidd::ZddManager;
+struct Edge{int u,v;};
+struct State{std::vector<uint8_t>deg,hdeg;std::vector<int16_t>lab;std::vector<uint8_t>flags;bool done=false;};
+class B{
+public:int n,W,V,Q,s,t;std::string ord;std::vector<Edge> vars;std::vector<uint8_t> pol;std::vector<int> ev,first;std::vector<std::vector<int>> at,active;ZddManager m;std::vector<std::unordered_map<std::string,Zdd>> memo;uint64_t calls=0,hits=0,pruned=0;int maxf=0;uint64_t sumf=0;
+ int id(int r,int c)const{return r*W+c;}
+ B(int nn,std::string o,uint32_t cap):n(nn),W(n+1),V(W*W),Q(n*n),s(0),t(V-1),ord(std::move(o)),m(ZddManager::Config{.max_nodes=cap,.unique_shards=256,.thread_safe=false,.apply_cache_slots=1u<<18,.unary_cache_slots=1u<<16}){build_order();schedule();pol.assign(Q,0);if(const char*pp=std::getenv("ZDD_POLARITY")){std::string q(pp);if((int)q.size()!=Q)throw std::invalid_argument("ZDD_POLARITY length");for(int i=0;i<Q;++i){if(q[i]!='0'&&q[i]!='1')throw std::invalid_argument("ZDD_POLARITY bits");pol[i]=q[i]-'0';}}m.ensure_variables(Q);memo.resize(Q+1);}
+ void build_order(){auto addh=[&](int r,int c){vars.push_back({id(r,c),id(r,c+1)});};if(ord=="formula"||ord=="formula2"){if(n<4)throw std::invalid_argument("formula n>=4");int A=W-1,B=W-2;addh(A,0);addh(A,1);addh(B,0);addh(A,2);addh(B,1);addh(B,2);for(int c=3;c<W-1;++c){addh(A,c);addh(B,c);}for(int r=W-3;r>=3;--r)for(int c=0;c<W-1;++c)addh(r,c);if(ord=="formula"){for(int c=W-2;c>=0;--c)addh(2,c);for(int c=0;c<W-1;++c)addh(1,c);}else{int N=W-1;addh(2,N-1);addh(2,N-2);addh(2,N-3);addh(1,N-2);addh(1,N-1);for(int a=N-4;a>=1;--a){addh(2,a);addh(1,a+1);}addh(2,0);addh(1,0);addh(1,1);}if((int)vars.size()!=Q)throw std::runtime_error("formula Q");return;}bool rtl=ord=="bottom-rtl";bool custom=ord.rfind("rows-",0)==0;unsigned long long mask=custom?std::stoull(ord.substr(5),nullptr,16):0;if(!rtl&&ord!="bottom-ltr"&&ord!="snake"&&!custom)throw std::invalid_argument("bottom-ltr|bottom-rtl|snake|rows-HEX|formula");for(int r=W-1;r>=1;--r){int k=W-1-r;bool rr=custom?((mask>>k)&1):rtl||(ord=="snake"&&(k&1));if(rr)for(int c=W-2;c>=0;--c)addh(r,c);else for(int c=0;c<W-1;++c)addh(r,c);}if((int)vars.size()!=Q)throw std::runtime_error("Q");}
+ void schedule(){std::vector<int> hf(V,Q),hl(V,-1);for(int i=0;i<Q;++i)for(int v:{vars[i].u,vars[i].v}){hf[v]=std::min(hf[v],i);hl[v]=std::max(hl[v],i);}ev.assign(V,-1);first.assign(V,Q);at.assign(Q,{});
+  for(int c=0;c<W;++c){int below=-1;for(int r=W-1;r>=1;--r){int v=id(r,c),e=std::max(hl[v],below);ev[v]=e;first[v]=std::min(hf[v],r<W-1?below:Q);at[e].push_back(v);below=e;}int top=id(0,c);ev[top]=Q;first[top]=below;}
+  for(auto&q:at)std::sort(q.begin(),q.end(),[&](int a,int b){return a/W>b/W;});active.assign(Q+1,{});for(int i=0;i<=Q;++i){for(int v=0;v<V;++v)if(first[v]<i&&i<=ev[v])active[i].push_back(v);maxf=std::max(maxf,(int)active[i].size());sumf+=active[i].size();}}
+ uint8_t tf(int v)const{return (v==s?1:0)|(v==t?2:0);}bool finalok(int v,int d)const{return v==s||v==t?d==1:(d==0||d==2);}
+ int nl(State&z,uint8_t f){int q=z.flags.size();z.flags.push_back(f);return q;}
+ bool add(State&z,int u,int v,bool horiz){if(z.done)return false;int du=(u==s||u==t)?1:2,dv=(v==s||v==t)?1:2;if(z.deg[u]>=du||z.deg[v]>=dv)return false;int a=z.lab[u],b=z.lab[v];if(a>=0&&b>=0&&a==b)return false;if(a<0&&b<0){int q=nl(z,tf(u)|tf(v));z.lab[u]=z.lab[v]=q;}else if(a<0){z.lab[u]=b;z.flags[b]|=tf(u);}else if(b<0){z.lab[v]=a;z.flags[a]|=tf(v);}else{z.flags[a]|=z.flags[b];for(int x=0;x<V;++x)if(z.lab[x]==b)z.lab[x]=a;z.flags[b]=0;}++z.deg[u];++z.deg[v];if(horiz){++z.hdeg[u];++z.hdeg[v];}return true;}
+ bool fin(State&z,int v){if(!finalok(v,z.deg[v]))return false;int q=z.lab[v];z.deg[v]=z.hdeg[v]=0;z.lab[v]=-1;if(q<0)return true;bool alive=false;for(int x=0;x<V;++x)if(z.lab[x]==q){alive=true;break;}if(alive)return true;if(z.flags[q]!=3)return false;for(int x=0;x<V;++x)if(z.lab[x]>=0)return false;z.done=true;return true;}
+ void canon(State&z,int nx){std::vector<int16_t>mp(z.flags.size(),-1);std::vector<uint8_t>nf;int k=0;for(int v:active[nx]){int q=z.lab[v];if(q<0)continue;if(mp[q]<0){mp[q]=k++;nf.push_back(z.flags[q]);}z.lab[v]=mp[q];}z.flags=std::move(nf);}
+ bool events(State&z,int step){for(int v:at[step]){int r=v/W,c=v%W;int below=int(z.deg[v])-int(z.hdeg[v]);if(below<0||below>1)return false;int up=below^(z.hdeg[v]&1)^((v==s||v==t)?1:0);if(up&&!add(z,v,id(r-1,c),false))return false;if(!fin(z,v))return false;}canon(z,step+1);return true;}
+ bool finish_top(State&z){ // after all cotree variables/tree verticals are fixed
+  for(int c=W-1;c>=1;--c){int v=id(0,c);int known=z.deg[v];int left=(known&1)^((v==s||v==t)?1:0);if(left&&!add(z,v,id(0,c-1),false))return false;if(!fin(z,v))return false;}
+  int v=id(0,0);if((z.deg[v]&1)!=1)return false;if(!fin(z,v))return false;return z.done;
+ }
+ std::string key(State const&z,int st)const{std::string k;k.reserve(active[st].size()*3+z.flags.size()+2);k.push_back(char(z.done));for(int v:active[st]){k.push_back(char(z.deg[v]));k.push_back(char(z.hdeg[v]));k.push_back(char(z.lab[v]+1));}k.push_back(char(z.flags.size()));for(auto f:z.flags)k.push_back(char(f));return k;}
+ Zdd solve(int st,State const&in){++calls;if(st==Q){State z=in;return finish_top(z)?m.unit():m.empty();}auto k=key(in,st);auto&mm=memo[st];if(auto it=mm.find(k);it!=mm.end()){++hits;return it->second;}State a=in;Zdd lo=m.empty();if(events(a,st))lo=solve(st+1,a);else ++pruned;State b=in;Zdd hi=m.empty();auto e=vars[st];if(add(b,e.u,e.v,true)&&events(b,st))hi=solve(st+1,b);else ++pruned;if(pol[st])std::swap(lo,hi);Zdd z=m.make_node(Q-st,lo,hi);mm.emplace(std::move(k),z);return z;}
+ Zdd build(){State z;z.deg.assign(V,0);z.hdeg.assign(V,0);z.lab.assign(V,-1);return solve(0,z);}
+ void write(const char*path,Zdd root){std::ofstream os(path);if(!os)throw std::runtime_error("write");std::vector<int> eid(Q);int ce=0;auto pk=[](int a,int b){if(a>b)std::swap(a,b);return (uint64_t)(uint32_t)a<<32|(uint32_t)b;};std::unordered_map<uint64_t,int> mp;for(int r=0;r<W;++r)for(int c=0;c<W;++c){if(c+1<W)mp[pk(id(r,c),id(r,c+1))]=ce++;if(r+1<W)mp[pk(id(r,c),id(r+1,c))]=ce++;}os<<"ONEESAN_ZDD_V1\n"<<"grid_n "<<n<<"\nvertices "<<V<<"\nvariables "<<Q<<"\nsource 0\ntarget "<<(V-1)<<"\nroot "<<root.raw()<<"\nprojection_cotree 1\n";os<<"# level edge_index u v\n";for(int st=0;st<Q;++st){auto e=vars[st];os<<"var "<<(Q-st)<<' '<<mp.at(pk(e.u,e.v))<<' '<<e.u<<' '<<e.v<<"\n";}std::unordered_set<uint32_t>seen;std::vector<Zdd>q{root};std::vector<std::array<uint32_t,4>> rr;while(!q.empty()){auto z=q.back();q.pop_back();if(z.raw()<=1||!seen.insert(z.raw()).second)continue;auto [lo,hi]=m.split(z);rr.push_back({z.raw(),m.top_level(z),lo.raw(),hi.raw()});q.push_back(lo);q.push_back(hi);}std::sort(rr.begin(),rr.end(),[](auto&a,auto&b){return a[0]<b[0];});os<<"# id level low high\n";for(auto&r:rr)os<<"node "<<r[0]<<' '<<r[1]<<' '<<r[2]<<' '<<r[3]<<"\n";os<<"end\n";}
+};
+int main(int ac,char**av){try{if(ac<3){std::cerr<<"usage n bottom-ltr|bottom-rtl|snake [cap]\n";return 2;}int n=std::stoi(av[1]);uint32_t cap=ac>3?std::stoul(av[3]):32000000u;auto t=std::chrono::steady_clock::now();B b(n,av[2],cap);auto r=b.build();double sec=std::chrono::duration<double>(std::chrono::steady_clock::now()-t).count();if(const char*o=std::getenv("ZDD_COTREE_OUT"))b.write(o,r);std::cout<<"n="<<n<<" order="<<av[2]<<" vars="<<b.Q<<" nodes="<<r.node_count()<<" allocated="<<b.m.allocated_nodes()<<" calls="<<b.calls<<" hits="<<b.hits<<" pruned="<<b.pruned<<" max_frontier="<<b.maxf<<" avg_frontier="<<double(b.sumf)/(b.Q+1)<<" card="<<r.cardinality()<<" sec="<<sec<<"\n";}catch(std::exception const&e){std::cerr<<"error: "<<e.what()<<"\n";return 1;}}

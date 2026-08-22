@@ -27,6 +27,88 @@ PRIMES = [
 RESULT_RE = re.compile(r"residue=(\d+).*?modulus=(\d+).*?wall_s=([0-9.eE+-]+)")
 
 
+def _strip_compatible(x: int, y: int, height: int) -> bool:
+    """Whether two adjacent face-bit columns avoid a 2x2 checkerboard."""
+    for r in range(height - 1):
+        a = (x >> r) & 1
+        b = (x >> (r + 1)) & 1
+        c = (y >> r) & 1
+        d = (y >> (r + 1)) & 1
+        if a != b and c != d and a != c:
+            return False
+    return True
+
+
+def checkerboard_strip_count(height: int, width: int) -> int:
+    """Count height x width binary matrices with no checkerboard 2x2 block."""
+    states = 1 << height
+    nxt = [
+        [y for y in range(states) if _strip_compatible(x, y, height)]
+        for x in range(states)
+    ]
+    dp = [1] * states
+    for _ in range(1, width):
+        ndp = [0] * states
+        for x, ys in enumerate(nxt):
+            v = dp[x]
+            if not v:
+                continue
+            for y in ys:
+                ndp[y] += v
+        dp = ndp
+    return sum(dp)
+
+
+def simple_path_upper_bound(n: int, max_strip_height: int = 9) -> tuple[int, list[int]]:
+    """Rigorous upper bound for corner-to-corner simple paths.
+
+    Fix one outer-boundary s-t path P0. Every s-t path is a T-join and can be
+    written uniquely as P0 XOR boundary(F), where F is a subset of the n^2
+    bounded faces. At an interior vertex P0 has degree zero. If the four
+    surrounding face bits form either checkerboard pattern, boundary(F) uses
+    all four incident edges, giving degree four, which a simple path cannot
+    have. Thus path count is at most the number of n x n face-bit matrices
+    without checkerboard 2x2 blocks.
+
+    To keep the bound cheap to compute, partition the rows into independent
+    strips and ignore constraints across strip boundaries. This enlarges the
+    set and therefore remains a rigorous upper bound. Dynamic programming
+    chooses the strip-height partition (up to max_strip_height) with the
+    smallest exact product.
+    """
+    if n < 1:
+        return 1, []
+    hmax = min(max_strip_height, n)
+    strip = {h: checkerboard_strip_count(h, n) for h in range(1, hmax + 1)}
+    best: list[int | None] = [None] * (n + 1)
+    parts: list[list[int] | None] = [None] * (n + 1)
+    best[0], parts[0] = 1, []
+    for rows in range(1, n + 1):
+        for h, cnt in strip.items():
+            if h > rows or best[rows - h] is None:
+                continue
+            cand = best[rows - h] * cnt
+            if best[rows] is None or cand < best[rows]:
+                best[rows] = cand
+                parts[rows] = parts[rows - h] + [h]
+    assert best[n] is not None and parts[n] is not None
+    return best[n], parts[n]
+
+
+def primes_for_bound(bound: int) -> list[int]:
+    m = 1
+    out: list[int] = []
+    for p in PRIMES:
+        out.append(p)
+        m *= p
+        if m > bound:
+            return out
+    raise SystemExit(
+        f"CRT prime capacity insufficient: product has {m.bit_length()} bits, "
+        f"bound has {bound.bit_length()} bits"
+    )
+
+
 def crt_pair(x: int, m: int, r: int, p: int) -> tuple[int, int]:
     t = ((r - x) % p) * pow(m, -1, p) % p
     return x + m * t, m * p
@@ -60,21 +142,14 @@ def main() -> int:
     args = ap.parse_args()
 
     n = args.n
-    # Every simple s-t path is a T-join.  In a connected graph, all T-joins
-    # form one affine coset of the cycle space, hence there are exactly
-    # 2^(E-V+1) T-joins.  For an (n+1)x(n+1) grid, E-V+1 = n^2.
-    # Therefore the path count is <= 2^(n^2), a much tighter rigorous bound
-    # than the old 2^E edge-subset bound.
-    required_bits = n * n
-    if len(PRIMES) != len(set(PRIMES)):
-        raise SystemExit("internal error: duplicate CRT primes")
-    total_modulus = 1
-    for p in PRIMES:
-        total_modulus *= p
-    if total_modulus.bit_length() <= required_bits:
-        raise SystemExit(
-            f"CRT prime capacity insufficient: {total_modulus.bit_length()} bits, need >{required_bits}"
-        )
+    path_bound, strip_partition = simple_path_upper_bound(n)
+    prefix = primes_for_bound(path_bound)
+    required_bits = path_bound.bit_length()
+    print(
+        f"rigorous path bound: <={path_bound} "
+        f"({required_bits} bits), strips={strip_partition}, CRT primes={len(prefix)}",
+        file=sys.stderr,
+    )
     binary = Path(args.binary) if args.binary else REPO_ROOT / "build" / f"oneesan_cuda_gridfp_b300_hbm32_n{n}"
     if not binary.exists():
         raise SystemExit(f"binary not found: {binary}")
@@ -96,18 +171,18 @@ def main() -> int:
     total_wall = 0.0
     runs_this_invocation = 0
 
-    for idx, p in enumerate(PRIMES, 1):
+    for idx, p in enumerate(prefix, 1):
         if p in residues:
             rec = residues[p]
             r = int(rec["residue"])
             wall = float(rec.get("wall_s", 0.0))
-            print(f"[{idx:02d}/{len(PRIMES)}] cached p={p} residue={r}", file=sys.stderr)
+            print(f"[{idx:02d}/{len(prefix)}] cached p={p} residue={r}", file=sys.stderr)
         else:
             if args.max_runs and runs_this_invocation >= args.max_runs:
                 break
             log = work / f"p{p}.log"
             cmd = [str(binary), str(n), str(p), str(args.target_mib), str(args.max_window), str(args.gpus)]
-            print(f"[{idx:02d}/{len(PRIMES)}] run p={p}: {' '.join(cmd)}", file=sys.stderr, flush=True)
+            print(f"[{idx:02d}/{len(prefix)}] run p={p}: {' '.join(cmd)}", file=sys.stderr, flush=True)
             proc = subprocess.run(cmd, text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, env=os.environ.copy())
             log.write_text(proc.stderr + proc.stdout)
             if proc.returncode != 0:
@@ -123,13 +198,13 @@ def main() -> int:
             residues[p] = {"residue": r, "wall_s": wall, "log": str(log)}
             save_checkpoint(checkpoint, n, residues)
             runs_this_invocation += 1
-            print(f"[{idx:02d}/{len(PRIMES)}] done p={p} residue={r} wall_s={wall:.6f}", file=sys.stderr, flush=True)
+            print(f"[{idx:02d}/{len(prefix)}] done p={p} residue={r} wall_s={wall:.6f}", file=sys.stderr, flush=True)
 
         x, M = crt_pair(x, M, r, p)
         used += 1
         total_wall += wall
-        print(f"  CRT bits={M.bit_length()} / need>{required_bits}", file=sys.stderr, flush=True)
-        if M.bit_length() > required_bits:
+        print(f"  CRT bits={M.bit_length()} / bound_bits={required_bits}", file=sys.stderr, flush=True)
+        if M > path_bound:
             out = work / "exact.txt"
             out.write_text(
                 f"n={n}\n"
@@ -148,7 +223,7 @@ def main() -> int:
             print(f"result_file={out}")
             return 0
 
-    print(f"partial: CRT bits={M.bit_length()} need>{required_bits}; cached_residues={len(residues)}", file=sys.stderr)
+    print(f"partial: CRT bits={M.bit_length()} bound_bits={required_bits}; cached_residues={len(residues)}", file=sys.stderr)
     return 0 if args.max_runs else 2
 
 

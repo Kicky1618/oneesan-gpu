@@ -188,6 +188,20 @@ TARGET_MIB=245760 ./scripts/run/b300x8-mmap.sh \
 
 For `n=27`, a single 64-bit-residue external state is roughly 3.88 TiB, so use local NVMe/RAID rather than a network filesystem.
 
+
+## ZDD output
+
+The complete family of simple corner-to-corner paths can be reconstructed as a ZDD over **all real grid edges** by replaying the same Grid-FP `MateID` transition system used by the factorized CUDA solver. RAPiDD is used only as the reduced ZDD node manager.
+
+```bash
+./scripts/build/zdd-replay.sh
+./scripts/run/zdd-replay.sh 9 work/zdd/replay_n9.zdd \
+  --sapporo work/zdd/replay_n9.sapporo.zbdd
+./scripts/tools/validate_zdd.py work/zdd/replay_n9.zdd
+```
+
+An independent SIMPATH-style builder is also kept for differential verification. See [`docs/zdd.md`](docs/zdd.md) for transition sharing, full edge-set equality tests, the format, and SAPPOROBDD interoperability.
+
 ## Repository layout
 
 ```text

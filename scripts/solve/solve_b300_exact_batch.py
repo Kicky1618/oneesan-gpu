@@ -9,7 +9,7 @@ from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 
-from solve_b300_exact import PRIMES, crt_pair
+from solve_b300_exact import PRIMES, crt_pair, simple_path_upper_bound, primes_for_bound
 
 RESULT_RE = re.compile(r"residue=(\d+).*?modulus=(\d+).*?wall_s=([0-9.eE+-]+)")
 
@@ -30,17 +30,6 @@ def save_checkpoint(path: Path, n: int, residues: dict[int, dict]) -> None:
         "residues": {str(k): v for k, v in residues.items()},
     }, indent=2, sort_keys=True) + "\n")
     tmp.replace(path)
-
-
-def prefix_needed(required_bits: int) -> list[int]:
-    m = 1
-    out = []
-    for p in PRIMES:
-        out.append(p)
-        m *= p
-        if m.bit_length() > required_bits:
-            return out
-    raise SystemExit(f"CRT capacity insufficient: {m.bit_length()} bits, need >{required_bits}")
 
 
 def reconstruct(prefix: list[int], residues: dict[int, dict]) -> tuple[int, int, float]:
@@ -66,13 +55,14 @@ def main() -> int:
     args = ap.parse_args()
 
     n = args.n
-    # Every simple s-t path is a T-join.  In a connected graph, all T-joins
-    # form one affine coset of the cycle space, hence there are exactly
-    # 2^(E-V+1) T-joins.  For an (n+1)x(n+1) grid, E-V+1 = n^2.
-    # Therefore the path count is <= 2^(n^2), a much tighter rigorous bound
-    # than the old 2^E edge-subset bound.
-    required_bits = n * n
-    prefix = prefix_needed(required_bits)
+    path_bound, strip_partition = simple_path_upper_bound(n)
+    prefix = primes_for_bound(path_bound)
+    required_bits = path_bound.bit_length()
+    print(
+        f"rigorous path bound: <={path_bound} "
+        f"({required_bits} bits), strips={strip_partition}, CRT primes={len(prefix)}",
+        file=sys.stderr,
+    )
     binary = Path(args.binary) if args.binary else REPO_ROOT / "build" / f"oneesan_cuda_gridfp_b300_hbm32_batch_n{n}"
     if not binary.exists():
         raise SystemExit(f"batch binary not found: {binary}")
@@ -84,14 +74,14 @@ def main() -> int:
     residues = load_checkpoint(checkpoint, n)
 
     x, m, total_wall = reconstruct(prefix, residues)
-    if m.bit_length() > required_bits:
-        return finish(work, n, required_bits, prefix, residues)
+    if m > path_bound:
+        return finish(work, n, path_bound, prefix, residues)
 
     missing = [p for p in prefix if p not in residues]
     if args.max_runs:
         missing = missing[:args.max_runs]
     if not missing:
-        print(f"partial: CRT bits={m.bit_length()} need>{required_bits}", file=sys.stderr)
+        print(f"partial: CRT bits={m.bit_length()} bound_bits={required_bits}", file=sys.stderr)
         return 0 if args.max_runs else 2
 
     cmd = [
@@ -123,7 +113,7 @@ def main() -> int:
         seen.add(p)
         save_checkpoint(checkpoint, n, residues)
         xx, mm, _ = reconstruct(prefix, residues)
-        print(f"checkpoint p={p}: contiguous CRT bits={mm.bit_length()} / need>{required_bits}", file=sys.stderr, flush=True)
+        print(f"checkpoint p={p}: contiguous CRT bits={mm.bit_length()} / bound_bits={required_bits}", file=sys.stderr, flush=True)
 
     rc = proc.wait()
     if rc != 0:
@@ -133,15 +123,16 @@ def main() -> int:
         raise SystemExit(f"batch solver exited without residues for: {missing_output}")
 
     x, m, total_wall = reconstruct(prefix, residues)
-    if m.bit_length() > required_bits:
-        return finish(work, n, required_bits, prefix, residues)
-    print(f"partial: CRT bits={m.bit_length()} need>{required_bits}; cached={len(residues)}", file=sys.stderr)
+    if m > path_bound:
+        return finish(work, n, path_bound, prefix, residues)
+    print(f"partial: CRT bits={m.bit_length()} bound_bits={required_bits}; cached={len(residues)}", file=sys.stderr)
     return 0 if args.max_runs else 2
 
 
-def finish(work: Path, n: int, required_bits: int, prefix: list[int], residues: dict[int, dict]) -> int:
+def finish(work: Path, n: int, path_bound: int, prefix: list[int], residues: dict[int, dict]) -> int:
+    required_bits = path_bound.bit_length()
     x, m, total_wall = reconstruct(prefix, residues)
-    if m.bit_length() <= required_bits:
+    if m <= path_bound:
         raise RuntimeError("finish called before CRT capacity reached")
     used = 0
     mm = 1
@@ -150,7 +141,7 @@ def finish(work: Path, n: int, required_bits: int, prefix: list[int], residues: 
             break
         used += 1
         mm *= p
-        if mm.bit_length() > required_bits:
+        if mm > path_bound:
             break
     out = work / "exact.txt"
     out.write_text(
