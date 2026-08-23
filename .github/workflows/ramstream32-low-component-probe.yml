@@ -1,0 +1,27 @@
+name: ramstream32 LOW component probe
+
+on:
+  pull_request:
+    paths:
+      - 'src/cuda/gridfp/probes/ramstream32_low_highcomponent_probe.cu'
+      - 'src/cuda/gridfp/ramstream32_cpu_low_maskmajor.hpp'
+      - '.github/workflows/ramstream32-low-component-probe.yml'
+  workflow_dispatch:
+
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    container: nvidia/cuda:12.8.1-devel-ubuntu22.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Compile W28 component probe
+        shell: bash
+        run: |
+          mkdir -p build
+          nvcc -O3 -std=c++17 -arch=sm_80 \
+            -DTARGET_W=28 -DLOW_LUT_K=14 -DHIGH_LUT_K=13 \
+            src/cuda/gridfp/probes/ramstream32_low_highcomponent_probe.cu \
+            -o build/low_component_w28
+      - name: Run W28 component probe
+        shell: bash
+        run: build/low_component_w28
