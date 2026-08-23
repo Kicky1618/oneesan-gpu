@@ -105,3 +105,7 @@ __global__ void maskshard_main_lowdesc_closure_cols_inplace_kernel(
         maskshard_main_lowdesc_closure_cols_inplace_kernel
 
 #endif
+
+#ifdef MASKSHARD_SKIP_ZERO_BLOCK_GATHER
+#include "maskshard_zero_block_gather.cuh"
+#endif
