@@ -1,6 +1,7 @@
 #include <cstdint>
 #include <cstdlib>
 #include <iostream>
+#include <unordered_set>
 #include <vector>
 
 #include "../../common/gridfp_transition.hpp"
@@ -44,10 +45,11 @@ static U64 state_count(int width) {
 static void verify_width(int W) {
     const auto main_states = enumerate_states(W);
     const auto blocked_states = enumerate_states(W - 1);
+    const std::unordered_set<MateID> main_set(main_states.begin(), main_states.end());
 
-    // A complete Grid-FP row ends at p=1.  For p=1 every valid included
+    // A complete Grid-FP row ends at p=1. For p=1 every valid included
     // transition remains MAIN: include_horizontal() explicitly avoids shrink()
-    // in NN/NR/NL/LL/RR/RL p=1 cases.  Existing BLOCKED input has only its
+    // in NN/NR/NL/LL/RR/RL p=1 cases. Existing BLOCKED input has only its
     // excluded branch and blocked_exclude() inserts N back into MAIN.
     // Therefore the output BLOCKED vector after p=1 is identically zero for
     // arbitrary input values, not merely for the particular counting DP seed.
@@ -64,14 +66,12 @@ static void verify_width(int W) {
         std::exit(10);
     }
 
-    U64 excluded_blocked_outputs = 0;
     for (MateID d : blocked_states) {
         const MateID z = blocked_exclude(d, 1);
-        if (z == d) ++excluded_blocked_outputs; // impossible width mismatch guard
-    }
-    if (excluded_blocked_outputs != 0) {
-        std::cerr << "blocked_exclude failed to return MAIN-width state W=" << W << '\n';
-        std::exit(11);
+        if (!main_set.count(z)) {
+            std::cerr << "blocked_exclude escaped MAIN state set W=" << W << '\n';
+            std::exit(11);
+        }
     }
 
     if (main_states.size() != state_count(W)
