@@ -21,15 +21,22 @@
 //     the partner center (NN/NL -> L, NR -> R).
 // Only the three LOW ranks and the orbit kind need to be streamed at runtime.
 //
-// v4.5 also pre-ranks LOWDESC_CROSS on the inactive HIGH half. A CROSS update
+// v4.5 pre-ranks LOWDESC_CROSS on the inactive HIGH half. A CROSS update
 // preserves the HIGH occupancy mask and only flips one L to R, so the target
 // mask-local HIGH rank depends solely on (source HIGH code, matching depth).
-// Compute that topology map once while the dense storage rank table still
-// exists; runtime then replaces an O(H) bracket scan plus binary search with a
-// single uint16_t lookup. HIGH_LUT_K <= 15 guarantees every mask-local rank is
-// below 2^15, leaving 0xffff as an invalid sentinel.
+// Runtime replaces an O(H) bracket scan plus binary search with one uint16_t
+// lookup. HIGH_LUT_K <= 15 leaves 0xffff as an invalid sentinel.
+//
+// v4.6 separates closure operations into LOCAL and CROSS streams. For a local
+// closure, destination storage is determined entirely by p: p=1 writes main,
+// p>1 writes blocked. The builder asserts this invariant while the dense
+// descriptor still exists. Runtime therefore has no per-closure kind branch;
+// CROSS operations likewise execute in a separate loop with the p branch
+// hoisted outside the operation loop.
 using CpuLowSparseOrbitOp = uint64_t;
+using CpuLowSparseClosureOp = uint64_t;
 static_assert(sizeof(CpuLowSparseOrbitOp) == 8);
+static_assert(sizeof(CpuLowSparseClosureOp) == 8);
 static_assert(HIGH_LUT_K <= 15,
               "uint16_t sparse CROSS rank requires HIGH_LUT_K <= 15");
 
@@ -38,6 +45,10 @@ static constexpr int CPU_SPARSE_JLR_SHIFT = 20;
 static constexpr int CPU_SPARSE_DLR_SHIFT = 40;
 static constexpr int CPU_SPARSE_KIND_SHIFT = 60;
 static constexpr uint16_t CPU_SPARSE_CROSS_INVALID = 0xffffu;
+
+static constexpr int CPU_SPARSE_CLOSURE_DST_LR_SHIFT = 20;
+static constexpr int CPU_SPARSE_CLOSURE_BLOCK_SHIFT = 40;
+static constexpr int CPU_SPARSE_CLOSURE_DEPTH_SHIFT = 46;
 
 static inline CpuLowSparseOrbitOp cpu_sparse_orbit_pack(
     uint32_t src_lr, uint32_t kind, uint32_t jlr, uint32_t dlr
@@ -75,13 +86,42 @@ static inline uint32_t cpu_sparse_jblock(
     return 3u * uint32_t(source.he) + center;
 }
 
+static inline CpuLowSparseClosureOp cpu_sparse_closure_pack(
+    uint32_t src_lr, uint32_t block, uint32_t dst_lr, uint32_t depth = 0
+) {
+    if (src_lr > CPU_SPARSE_RANK_MASK || dst_lr > CPU_SPARSE_RANK_MASK
+        || block > LOWDESC_BLOCK_MASK || depth > LOWDESC_DEPTH_MASK) {
+        std::cerr << "cpu sparse closure encoding overflow src=" << src_lr
+                  << " block=" << block << " dst=" << dst_lr
+                  << " depth=" << depth << '\n';
+        std::exit(101);
+    }
+    return uint64_t(src_lr)
+        | (uint64_t(dst_lr) << CPU_SPARSE_CLOSURE_DST_LR_SHIFT)
+        | (uint64_t(block) << CPU_SPARSE_CLOSURE_BLOCK_SHIFT)
+        | (uint64_t(depth) << CPU_SPARSE_CLOSURE_DEPTH_SHIFT);
+}
+static inline uint32_t cpu_sparse_closure_src(CpuLowSparseClosureOp z) {
+    return uint32_t(z & CPU_SPARSE_RANK_MASK);
+}
+static inline uint32_t cpu_sparse_closure_lr(CpuLowSparseClosureOp z) {
+    return uint32_t((z >> CPU_SPARSE_CLOSURE_DST_LR_SHIFT) & CPU_SPARSE_RANK_MASK);
+}
+static inline uint32_t cpu_sparse_closure_block(CpuLowSparseClosureOp z) {
+    return uint32_t((z >> CPU_SPARSE_CLOSURE_BLOCK_SHIFT) & LOWDESC_BLOCK_MASK);
+}
+static inline uint32_t cpu_sparse_closure_depth(CpuLowSparseClosureOp z) {
+    return uint32_t((z >> CPU_SPARSE_CLOSURE_DEPTH_SHIFT) & LOWDESC_DEPTH_MASK);
+}
+
 struct CpuLowSparseHost {
     std::vector<CpuLowSparseOrbitOp> orbit_ops;
-    // closure op: low 20 bits = source lr; bits 20..51 = lowdesc word.
-    std::vector<uint64_t> closure_ops;
+    std::vector<CpuLowSparseClosureOp> local_closure_ops;
+    std::vector<CpuLowSparseClosureOp> cross_closure_ops;
     // flattened [pi * (nblocks+1) + bid]
     std::vector<uint32_t> orbit_off;
-    std::vector<uint32_t> closure_off;
+    std::vector<uint32_t> local_closure_off;
+    std::vector<uint32_t> cross_closure_off;
     uint32_t nblocks = 0;
 
     // flattened [(depth-1) * high_cross_pitch + global high-mask-code index].
@@ -91,20 +131,6 @@ struct CpuLowSparseHost {
     uint32_t high_cross_pitch = 0;
 };
 
-static inline uint64_t cpu_sparse_closure_pack(uint32_t src_lr, uint32_t desc) {
-    if (src_lr >= (1u << 20)) {
-        std::cerr << "cpu sparse closure rank overflow\n";
-        std::exit(101);
-    }
-    return uint64_t(src_lr) | (uint64_t(desc) << 20);
-}
-static inline uint32_t cpu_sparse_closure_src(uint64_t z) {
-    return uint32_t(z & ((1ull<<20)-1));
-}
-static inline uint32_t cpu_sparse_closure_desc(uint64_t z) {
-    return uint32_t(z >> 20);
-}
-
 static CpuLowSparseHost build_cpu_low_sparse(
     const StorageFactorHost& storage, const StorageLayout& layout,
     const LowDescHost& desc, const LowOrbitHost& orbit
@@ -113,13 +139,17 @@ static CpuLowSparseHost build_cpu_low_sparse(
     s.nblocks = uint32_t(layout.main_blocks.size());
     size_t pitch = size_t(s.nblocks) + 1;
     s.orbit_off.resize(size_t(LOW_LUT_K) * pitch);
-    s.closure_off.resize(size_t(LOW_LUT_K) * pitch);
+    s.local_closure_off.resize(size_t(LOW_LUT_K) * pitch);
+    s.cross_closure_off.resize(size_t(LOW_LUT_K) * pitch);
 
     for (int p = LOW_LUT_K; p >= 1; --p) {
         uint32_t pi = uint32_t(LOW_LUT_K - p);
         for (uint32_t bid = 0; bid < s.nblocks; ++bid) {
             s.orbit_off[size_t(pi) * pitch + bid] = uint32_t(s.orbit_ops.size());
-            s.closure_off[size_t(pi) * pitch + bid] = uint32_t(s.closure_ops.size());
+            s.local_closure_off[size_t(pi) * pitch + bid]
+                = uint32_t(s.local_closure_ops.size());
+            s.cross_closure_off[size_t(pi) * pitch + bid]
+                = uint32_t(s.cross_closure_ops.size());
             uint32_t cols = layout.main_blocks[bid].cols;
             for (uint32_t lr = 0; lr < cols; ++lr) {
                 uint64_t ow = orbit.rec[
@@ -145,15 +175,36 @@ static CpuLowSparseHost build_cpu_low_sparse(
                 } else if (k == CPU_ORBIT_CLOSURE) {
                     uint32_t dw = desc.main_desc[
                         size_t(pi) * desc.main_total + desc.main_base[bid] + lr];
-                    // Invalid closure states are harmless, but dropping them
-                    // reduces both metadata and runtime branches.
-                    if (cpu_low_kind(dw) != LOWDESC_INVALID)
-                        s.closure_ops.push_back(cpu_sparse_closure_pack(lr, dw));
+                    uint32_t kind = cpu_low_kind(dw);
+                    if (kind == LOWDESC_INVALID) continue;
+                    if (kind == LOWDESC_CROSS) {
+                        uint32_t depth = cpu_low_depth(dw);
+                        if (!depth) {
+                            std::cerr << "cpu sparse CROSS with zero depth p=" << p
+                                      << " bid=" << bid << " lr=" << lr << '\n';
+                            std::exit(104);
+                        }
+                        s.cross_closure_ops.push_back(cpu_sparse_closure_pack(
+                            lr, cpu_low_block(dw), cpu_low_lr(dw), depth));
+                    } else {
+                        uint32_t expected = p == 1 ? LOWDESC_MAIN : LOWDESC_BLOCK;
+                        if (kind != expected) {
+                            std::cerr << "cpu sparse local closure kind mismatch p=" << p
+                                      << " bid=" << bid << " lr=" << lr
+                                      << " kind=" << kind << " expected=" << expected << '\n';
+                            std::exit(105);
+                        }
+                        s.local_closure_ops.push_back(cpu_sparse_closure_pack(
+                            lr, cpu_low_block(dw), cpu_low_lr(dw)));
+                    }
                 }
             }
         }
         s.orbit_off[size_t(pi) * pitch + s.nblocks] = uint32_t(s.orbit_ops.size());
-        s.closure_off[size_t(pi) * pitch + s.nblocks] = uint32_t(s.closure_ops.size());
+        s.local_closure_off[size_t(pi) * pitch + s.nblocks]
+            = uint32_t(s.local_closure_ops.size());
+        s.cross_closure_off[size_t(pi) * pitch + s.nblocks]
+            = uint32_t(s.cross_closure_ops.size());
     }
 
     // Pre-rank every possible inactive-HIGH CROSS operation. The dense storage
@@ -184,11 +235,18 @@ static CpuLowSparseHost build_cpu_low_sparse(
     }
 
     std::cerr << "cpu_low_sparse orbit_ops=" << s.orbit_ops.size()
-              << " closure_ops=" << s.closure_ops.size()
+              << " local_closure_ops=" << s.local_closure_ops.size()
+              << " cross_closure_ops=" << s.cross_closure_ops.size()
               << " orbit_op_bytes=" << sizeof(CpuLowSparseOrbitOp)
-              << " orbit_mib=" << double(s.orbit_ops.size() * sizeof(CpuLowSparseOrbitOp)) / (1<<20)
-              << " closure_mib=" << double(s.closure_ops.size() * sizeof(uint64_t)) / (1<<20)
-              << " cross_rank_mib=" << double(s.high_cross_rank.size() * sizeof(uint16_t)) / (1<<20)
+              << " closure_op_bytes=" << sizeof(CpuLowSparseClosureOp)
+              << " orbit_mib="
+              << double(s.orbit_ops.size() * sizeof(CpuLowSparseOrbitOp)) / (1<<20)
+              << " local_closure_mib="
+              << double(s.local_closure_ops.size() * sizeof(CpuLowSparseClosureOp)) / (1<<20)
+              << " cross_closure_mib="
+              << double(s.cross_closure_ops.size() * sizeof(CpuLowSparseClosureOp)) / (1<<20)
+              << " cross_rank_mib="
+              << double(s.high_cross_rank.size() * sizeof(uint16_t)) / (1<<20)
               << '\n';
     return s;
 }
@@ -266,50 +324,111 @@ static void process_cpu_low_group_sparse(
             }
         }
 
-        for (uint32_t bid = 0; bid < sparse.nblocks; ++bid) {
-            const FBlock& x = job.main_blocks[bid];
-            Count* xb = mp[bid];
-            if (!xb || !x.stride) continue;
-            auto [ca, cb] = cpu_sparse_range(sparse.closure_off, sparse.nblocks, pi, bid);
-            if (ca == cb) continue;
-            Code rows = (x.end - x.off) / x.stride;
-            uint32_t high0 = G_FACTOR.high_mask_off[
-                size_t(job.mask) * FactorTablesHost::STRIDE + x.he];
-            for (Code hr = 0; hr < rows; ++hr) {
-                Count* xr = xb + hr * x.stride;
-                for (uint32_t q = ca; q < cb; ++q) {
-                    uint64_t op = sparse.closure_ops[q];
-                    uint32_t src_lr = cpu_sparse_closure_src(op);
-                    Count c = xr[src_lr];
-                    if (!c) continue;
-                    uint32_t word = cpu_sparse_closure_desc(op);
-                    uint32_t kind = cpu_low_kind(word);
-                    if (kind == LOWDESC_MAIN) {
-                        uint32_t jbid = cpu_low_block(word);
-                        Count* j = mp[jbid] + hr * job.main_blocks[jbid].stride + cpu_low_lr(word);
+        // Local closures are branch-free with respect to destination kind.
+        // The builder proved p=1 -> main and p>1 -> blocked.
+        if (p == 1) {
+            for (uint32_t bid = 0; bid < sparse.nblocks; ++bid) {
+                const FBlock& x = job.main_blocks[bid];
+                Count* xb = mp[bid];
+                if (!xb || !x.stride) continue;
+                auto [ca, cb] = cpu_sparse_range(
+                    sparse.local_closure_off, sparse.nblocks, pi, bid);
+                if (ca == cb) continue;
+                Code rows = (x.end - x.off) / x.stride;
+                for (Code hr = 0; hr < rows; ++hr) {
+                    Count* xr = xb + hr * x.stride;
+                    for (uint32_t q = ca; q < cb; ++q) {
+                        CpuLowSparseClosureOp op = sparse.local_closure_ops[q];
+                        Count c = xr[cpu_sparse_closure_src(op)];
+                        if (!c) continue;
+                        uint32_t jbid = cpu_sparse_closure_block(op);
+                        Count* j = mp[jbid] + hr * job.main_blocks[jbid].stride
+                            + cpu_sparse_closure_lr(op);
                         *j = cpu_low_add(*j, c, mod);
-                    } else if (kind == LOWDESC_BLOCK) {
-                        uint32_t dbid = cpu_low_block(word);
-                        Count* j = dp[dbid] + hr * job.block_blocks[dbid].stride + cpu_low_lr(word);
+                    }
+                }
+            }
+        } else {
+            for (uint32_t bid = 0; bid < sparse.nblocks; ++bid) {
+                const FBlock& x = job.main_blocks[bid];
+                Count* xb = mp[bid];
+                if (!xb || !x.stride) continue;
+                auto [ca, cb] = cpu_sparse_range(
+                    sparse.local_closure_off, sparse.nblocks, pi, bid);
+                if (ca == cb) continue;
+                Code rows = (x.end - x.off) / x.stride;
+                for (Code hr = 0; hr < rows; ++hr) {
+                    Count* xr = xb + hr * x.stride;
+                    for (uint32_t q = ca; q < cb; ++q) {
+                        CpuLowSparseClosureOp op = sparse.local_closure_ops[q];
+                        Count c = xr[cpu_sparse_closure_src(op)];
+                        if (!c) continue;
+                        uint32_t dbid = cpu_sparse_closure_block(op);
+                        Count* j = dp[dbid] + hr * job.block_blocks[dbid].stride
+                            + cpu_sparse_closure_lr(op);
                         *j = cpu_low_add(*j, c, mod);
-                    } else if (kind == LOWDESC_CROSS) {
-                        uint32_t depth = cpu_low_depth(word);
-                        if (!depth || depth > uint32_t(HIGH_LUT_K)) continue;
+                    }
+                }
+            }
+        }
+
+        // CROSS closures use the pre-ranked HIGH table and contain no kind
+        // dispatch. Hoist p=1 vs p>1 outside the operation loop as well.
+        if (p == 1) {
+            for (uint32_t bid = 0; bid < sparse.nblocks; ++bid) {
+                const FBlock& x = job.main_blocks[bid];
+                Count* xb = mp[bid];
+                if (!xb || !x.stride) continue;
+                auto [ca, cb] = cpu_sparse_range(
+                    sparse.cross_closure_off, sparse.nblocks, pi, bid);
+                if (ca == cb) continue;
+                Code rows = (x.end - x.off) / x.stride;
+                uint32_t high0 = G_FACTOR.high_mask_off[
+                    size_t(job.mask) * FactorTablesHost::STRIDE + x.he];
+                for (Code hr = 0; hr < rows; ++hr) {
+                    Count* xr = xb + hr * x.stride;
+                    for (uint32_t q = ca; q < cb; ++q) {
+                        CpuLowSparseClosureOp op = sparse.cross_closure_ops[q];
+                        Count c = xr[cpu_sparse_closure_src(op)];
+                        if (!c) continue;
+                        uint32_t depth = cpu_sparse_closure_depth(op);
                         uint16_t hr16 = sparse.high_cross_rank[
                             size_t(depth - 1) * sparse.high_cross_pitch + high0 + hr];
                         if (hr16 == CPU_SPARSE_CROSS_INVALID) continue;
-                        uint32_t hr2 = uint32_t(hr16);
-                        if (p == 1) {
-                            uint32_t jbid = cpu_low_block(word);
-                            const FBlock& y = job.main_blocks[jbid];
-                            Count* j = mp[jbid] + Code(hr2) * y.stride + cpu_low_lr(word);
-                            *j = cpu_low_add(*j, c, mod);
-                        } else {
-                            uint32_t dbid = cpu_low_block(word);
-                            const FBlock& y = job.block_blocks[dbid];
-                            Count* j = dp[dbid] + Code(hr2) * y.stride + cpu_low_lr(word);
-                            *j = cpu_low_add(*j, c, mod);
-                        }
+                        uint32_t jbid = cpu_sparse_closure_block(op);
+                        const FBlock& y = job.main_blocks[jbid];
+                        Count* j = mp[jbid] + Code(hr16) * y.stride
+                            + cpu_sparse_closure_lr(op);
+                        *j = cpu_low_add(*j, c, mod);
+                    }
+                }
+            }
+        } else {
+            for (uint32_t bid = 0; bid < sparse.nblocks; ++bid) {
+                const FBlock& x = job.main_blocks[bid];
+                Count* xb = mp[bid];
+                if (!xb || !x.stride) continue;
+                auto [ca, cb] = cpu_sparse_range(
+                    sparse.cross_closure_off, sparse.nblocks, pi, bid);
+                if (ca == cb) continue;
+                Code rows = (x.end - x.off) / x.stride;
+                uint32_t high0 = G_FACTOR.high_mask_off[
+                    size_t(job.mask) * FactorTablesHost::STRIDE + x.he];
+                for (Code hr = 0; hr < rows; ++hr) {
+                    Count* xr = xb + hr * x.stride;
+                    for (uint32_t q = ca; q < cb; ++q) {
+                        CpuLowSparseClosureOp op = sparse.cross_closure_ops[q];
+                        Count c = xr[cpu_sparse_closure_src(op)];
+                        if (!c) continue;
+                        uint32_t depth = cpu_sparse_closure_depth(op);
+                        uint16_t hr16 = sparse.high_cross_rank[
+                            size_t(depth - 1) * sparse.high_cross_pitch + high0 + hr];
+                        if (hr16 == CPU_SPARSE_CROSS_INVALID) continue;
+                        uint32_t dbid = cpu_sparse_closure_block(op);
+                        const FBlock& y = job.block_blocks[dbid];
+                        Count* j = dp[dbid] + Code(hr16) * y.stride
+                            + cpu_sparse_closure_lr(op);
+                        *j = cpu_low_add(*j, c, mod);
                     }
                 }
             }
