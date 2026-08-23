@@ -7,5 +7,6 @@
 #include "../ramstream32_low_orbit_device.cuh"
 #include "../ramstream32_b300_compact_io.cuh"
 #include "../ramstream32_b300_rowkernels.cuh"
+#include "../ramstream32_b300_high_warp.cuh"
 
 int main() { return 0; }
