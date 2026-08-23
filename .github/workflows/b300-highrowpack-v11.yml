@@ -10,6 +10,8 @@ on:
       - 'src/cuda/b300/maskshard_highclosure_rowpack.cuh'
       - 'src/cuda/b300/oneesan_cuda_gridfp_b300_hbm32_maskshard_blockorbit_compactaux_fullclosure_highrowpack_batch_guarded.cu'
       - 'src/cuda/b300/oneesan_cuda_gridfp_b300_hbm32_maskshard_blockorbit_compactaux_fullclosure_highrowpack16_batch_guarded.cu'
+      - 'scripts/bench/b300_maskshard_ab.py'
+      - 'scripts/bench/b300_maskshard_rowpack_ab.py'
       - '.github/workflows/b300-highrowpack-v11.yml'
   pull_request:
     paths:
@@ -20,6 +22,8 @@ on:
       - 'src/cuda/b300/maskshard_highclosure_rowpack.cuh'
       - 'src/cuda/b300/oneesan_cuda_gridfp_b300_hbm32_maskshard_blockorbit_compactaux_fullclosure_highrowpack_batch_guarded.cu'
       - 'src/cuda/b300/oneesan_cuda_gridfp_b300_hbm32_maskshard_blockorbit_compactaux_fullclosure_highrowpack16_batch_guarded.cu'
+      - 'scripts/bench/b300_maskshard_ab.py'
+      - 'scripts/bench/b300_maskshard_rowpack_ab.py'
       - '.github/workflows/b300-highrowpack-v11.yml'
   workflow_dispatch:
 
@@ -56,6 +60,21 @@ jobs:
             -o build/factor_highclosure_rowpack_hybrid_taskmap
       - name: Compare hybrid and row-wise source maps
         run: build/factor_highclosure_rowpack_hybrid_taskmap ${{ matrix.width }} ${{ matrix.low }} 16
+
+  ab-driver:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Syntax-check row-pack A/B entrypoint
+        run: |
+          python3 -m py_compile scripts/bench/b300_maskshard_ab.py
+          python3 -m py_compile scripts/bench/b300_maskshard_rowpack_ab.py
+      - name: Verify base parser/result self-test
+        run: python3 scripts/bench/b300_maskshard_rowpack_ab.py --self-test
+      - name: Inspect row-pack command construction
+        run: |
+          python3 scripts/bench/b300_maskshard_rowpack_ab.py \
+            --dry-run --result-dir build/rowpack-ab-dry-run
 
   cuda-compile:
     runs-on: ubuntu-latest
