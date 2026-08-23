@@ -5,11 +5,13 @@ on:
     paths:
       - 'src/cpp/probes/factor_mask_shard_balance.cpp'
       - 'src/cpp/probes/factor_highmask_closure.cpp'
+      - 'src/cpp/probes/factor_highmask_edge_cut.cpp'
       - '.github/workflows/factor-mask-shard.yml'
   pull_request:
     paths:
       - 'src/cpp/probes/factor_mask_shard_balance.cpp'
       - 'src/cpp/probes/factor_highmask_closure.cpp'
+      - 'src/cpp/probes/factor_highmask_edge_cut.cpp'
       - '.github/workflows/factor-mask-shard.yml'
   workflow_dispatch:
 
@@ -59,3 +61,17 @@ jobs:
         run: |
           build/factor_highmask_closure \
             ${{ matrix.width }} ${{ matrix.low }}
+
+  edge-cut:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build HIGH-mask edge-cut probe
+        run: |
+          mkdir -p build
+          g++ -O3 -std=c++17 -Wall -Wextra -Werror \
+            src/cpp/probes/factor_highmask_edge_cut.cpp \
+            -o build/factor_highmask_edge_cut
+      - name: Search balanced linear shard functions
+        run: |
+          build/factor_highmask_edge_cut 28 14 10000 1.025
