@@ -1,6 +1,7 @@
 #pragma once
 
 #include <cstdint>
+#include "maskshard_index.cuh"
 
 // In-place HIGH-window orbit executor for fix_low=true factorized groups.
 //
@@ -22,20 +23,6 @@ __device__ __forceinline__ Count maskshard_add_mod_plain(Count a, Count b) {
     return a >= mod - b ? a - (mod - b) : a + b;
 }
 
-__device__ __forceinline__ void maskshard_split_rank(
-    Code i, const FBlock& x, uint32_t& hr, uint32_t& lr
-) {
-    const Code r64 = i - x.off;
-    if (r64 <= 0xffffffffULL) {
-        const uint32_t r = uint32_t(r64);
-        hr = x.stride ? r / x.stride : 0;
-        lr = x.stride ? r - hr * x.stride : 0;
-    } else {
-        hr = x.stride ? uint32_t(r64 / x.stride) : 0;
-        lr = x.stride ? uint32_t(r64 - Code(hr) * x.stride) : 0;
-    }
-}
-
 __device__ __forceinline__ uint32_t maskshard_active_high_center(
     const FBlock& x, uint32_t high_all_rank
 ) {
@@ -46,7 +33,7 @@ __device__ __forceinline__ uint32_t maskshard_active_high_center(
 __device__ __forceinline__ MateValuePair maskshard_high_pair(
     const FBlock& x, uint32_t high_all_rank, int p
 ) {
-    const int q = p - LOW_LUT_K; // compact active index; center is index 0
+    const int q = p - LOW_LUT_K;
     const uint32_t active = maskshard_active_high_center(x, high_all_rank);
     return MateValuePair((active >> (2 * (q - 1))) & 15u);
 }
@@ -130,8 +117,6 @@ __global__ void maskshard_main_block_highorbit_kernel(
         } else {
             const Count cc = mainv[j];
             mainv[i] = maskshard_add_mod_plain(maskshard_add_mod_plain(c, cc), d);
-            // Companion RN/LN keeps its identity value. Source NR/NL becomes
-            // the new blocked contribution after old blocked is consumed.
             blockv[dj] = c;
         }
     }
