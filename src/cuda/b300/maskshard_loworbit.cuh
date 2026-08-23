@@ -74,9 +74,8 @@ __global__ void maskshard_main_block_loworbit_kernel(
     for (; i < n; i += step) {
         const int bid = f_find_main(i);
         const FBlock x = D_F_MAIN_BLOCKS[bid];
-        const Code r = i - x.off;
-        const uint32_t hr = x.stride ? uint32_t(r / x.stride) : 0;
-        const uint32_t lr = x.stride ? uint32_t(r - Code(hr) * x.stride) : 0;
+        uint32_t hr = 0, lr = 0;
+        maskshard_split_rank(i, x, hr, lr);
         const uint32_t active = maskshard_active_low_center(x, lr);
         const MateValuePair w = maskshard_low_pair(x, lr, p);
         if (w != NN && w != NR && w != NL) continue;
@@ -122,9 +121,8 @@ __global__ void maskshard_main_lowdesc_closure_inplace_kernel(
     for (; i < n; i += step) {
         const int bid = f_find_main(i);
         const FBlock x = D_F_MAIN_BLOCKS[bid];
-        const Code r = i - x.off;
-        const uint32_t hr = x.stride ? uint32_t(r / x.stride) : 0;
-        const uint32_t lr = x.stride ? uint32_t(r - Code(hr) * x.stride) : 0;
+        uint32_t hr = 0, lr = 0;
+        maskshard_split_rank(i, x, hr, lr);
         const MateValuePair w = maskshard_low_pair(x, lr, p);
         if (w != LL && w != RR && w != RL) continue;
 
