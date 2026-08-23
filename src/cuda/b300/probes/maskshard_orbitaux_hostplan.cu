@@ -22,7 +22,15 @@ static uint32_t aux_block(uint32_t x) {
 }
 static uint32_t aux_rank(uint32_t x) { return x & MS_ORBIT_AUX_RANK_MASK; }
 static uint32_t hkind(uint32_t x) { return x >> HIGHDESC_KIND_SHIFT; }
+static uint32_t hblock(uint32_t x) {
+    return (x >> HIGHDESC_BLOCK_SHIFT) & HIGHDESC_BLOCK_MASK;
+}
+static uint32_t hrank(uint32_t x) { return x & HIGHDESC_RANK_MASK; }
 static uint32_t lkind(uint32_t x) { return x >> LOWDESC_KIND_SHIFT; }
+static uint32_t lblock(uint32_t x) {
+    return (x >> LOWDESC_BLOCK_SHIFT) & LOWDESC_BLOCK_MASK;
+}
+static uint32_t lrank(uint32_t x) { return x & LOWDESC_LR_MASK; }
 static bool orbit_rep(MateValuePair w) { return w == NN || w == NR || w == NL; }
 
 int main(int argc, char** argv) {
@@ -51,7 +59,9 @@ int main(int argc, char** argv) {
     }
 
     uint64_t h_nn = 0, h_pair = 0, l_nn = 0, l_pair = 0, l_p1_pair = 0;
+    uint64_t h_block_inverse = 0, l_block_inverse = 0;
 
+    // v0.5 main-domain aux targets.
     for (int p = TARGET_W - 1; p >= L + 1; --p) {
         const uint32_t pi = uint32_t((TARGET_W - 1) - p);
         for (size_t bid = 0; bid < layout.main_blocks.size(); ++bid) {
@@ -169,12 +179,74 @@ int main(int argc, char** argv) {
         }
     }
 
+    // v0.6 exact integration path: block descriptor must be the inverse
+    // insert-N map into the representative main coordinate, and that target
+    // must carry a non-invalid v0.5 aux entry.
+    for (int p = TARGET_W - 1; p >= L + 1; --p) {
+        const uint32_t pi = uint32_t((TARGET_W - 1) - p);
+        for (size_t dbid = 0; dbid < layout.block_blocks.size(); ++dbid) {
+            const StorageBlock& sb = layout.block_blocks[dbid];
+            if (!sb.valid || !sb.rows || !sb.cols) continue;
+            const uint32_t lc = storage.low_all_codes[storage.low_all_off[sb.hs]];
+            for (uint32_t hr = 0; hr < sb.rows; ++hr) {
+                ++h_block_inverse;
+                const uint32_t hc = storage.high_all_codes[storage.high_all_off[sb.he] + hr];
+                const MateID blocked = MateID(lc) | (MateID(hc) << (2 * L));
+                const MateID rep = blocked_exclude(blocked, p);
+                if (!orbit_rep(mpair(rep, p))) return 30;
+                const uint32_t hc2 = uint32_t((rep >> (2 * (L + 1))) & HIGH_CODE_MASK);
+                const int he2 = seg_end_height_host(hc2, H);
+                const int cv2 = int(mget(rep, L));
+                const uint32_t packed = storage.high_packed_rank[hc2];
+                if (packed == 0xffffffffu) return 31;
+                const size_t bix = size_t(pi) * hd.block_total + hd.block_base[dbid] + hr;
+                const uint32_t d = hd.block_desc[bix];
+                if (hkind(d) != HIGHDESC_MAIN
+                    || hblock(d) != uint32_t(3 * he2 + cv2)
+                    || hrank(d) != (packed >> H)) return 32;
+                const size_t six = size_t(pi) * hd.main_total
+                    + hd.main_base[hblock(d)] + hrank(d);
+                if (aux_kind(oa.high_aux[six]) == MS_ORBIT_AUX_INVALID) return 33;
+            }
+        }
+    }
+
+    for (int p = L; p >= 1; --p) {
+        const uint32_t pi = uint32_t(L - p);
+        for (size_t dbid = 0; dbid < layout.block_blocks.size(); ++dbid) {
+            const StorageBlock& sb = layout.block_blocks[dbid];
+            if (!sb.valid || !sb.rows || !sb.cols) continue;
+            const uint32_t hc = storage.high_all_codes[storage.high_all_off[sb.he]];
+            for (uint32_t lr = 0; lr < sb.cols; ++lr) {
+                ++l_block_inverse;
+                const uint32_t lc = storage.low_all_codes[storage.low_all_off[sb.hs] + lr];
+                const MateID blocked = MateID(lc) | (MateID(hc) << (2 * L));
+                const MateID rep = blocked_exclude(blocked, p);
+                if (!orbit_rep(mpair(rep, p))) return 40;
+                const uint32_t lc2 = uint32_t(rep & LOW_CODE_MASK);
+                const int cv2 = int(mget(rep, L));
+                const uint32_t packed = storage.low_packed_rank[lc2];
+                if (packed == 0xffffffffu) return 41;
+                const size_t bix = size_t(pi) * ld.block_total + ld.block_base[dbid] + lr;
+                const uint32_t d = ld.block_desc[bix];
+                if (lkind(d) != LOWDESC_MAIN
+                    || lblock(d) != uint32_t(3 * int(sb.he) + cv2)
+                    || lrank(d) != (packed >> L)) return 42;
+                const size_t six = size_t(pi) * ld.main_total
+                    + ld.main_base[lblock(d)] + lrank(d);
+                if (aux_kind(oa.low_aux[six]) == MS_ORBIT_AUX_INVALID) return 43;
+            }
+        }
+    }
+
     std::cout << "maskshard-orbitaux-hostplan OK n=" << n
               << " high_aux_mib=" << double(oa.high_aux.size() * sizeof(uint32_t)) / double(1ULL << 20)
               << " low_aux_mib=" << double(oa.low_aux.size() * sizeof(uint32_t)) / double(1ULL << 20)
               << " high_nn=" << h_nn << " high_pair=" << h_pair
               << " low_nn=" << l_nn << " low_pair=" << l_pair
               << " low_p1_pair=" << l_p1_pair
+              << " high_block_inverse=" << h_block_inverse
+              << " low_block_inverse=" << l_block_inverse
               << " masks=" << (1u << H) << '/' << (1u << L) << '\n';
     return 0;
 }
