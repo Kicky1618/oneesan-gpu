@@ -11,10 +11,12 @@ on:
       - 'src/cuda/gridfp/ramstream32_b300_dual_tile_peer_swap.cuh'
       - 'src/cuda/gridfp/ramstream32_b300_dual_tile_reachability.cuh'
       - 'src/cuda/gridfp/ramstream32_b300_dual_tile_pruned_peer.cuh'
+      - 'src/cuda/gridfp/ramstream32_b300_dual_tile_pruned_plan.cuh'
       - 'src/cuda/gridfp/ramstream32_b300_dual_tile_opt.cuh'
       - 'src/cuda/gridfp/ramstream32_b300_dual_tile_precomputed_w28.cuh'
       - 'src/cuda/gridfp/probes/b300_dual_tile_selftest.cu'
       - 'src/cuda/gridfp/probes/b300_dual_tile_pruned_selftest.cu'
+      - 'src/cuda/gridfp/probes/b300_dual_tile_pruned_plan_probe.cu'
       - 'src/cuda/gridfp/probes/b300_dual_tile_opt_plan.cu'
       - 'src/cuda/gridfp/probes/b300_dual_tile_precomputed_plan.cu'
       - 'src/cuda/gridfp/probes/b300_dual_tile_block_reachability_plan.cu'
@@ -80,6 +82,14 @@ jobs:
             src/cuda/gridfp/probes/b300_dual_tile_owner_reachability_plan.cu \
             -o build/b300_dual_tile_owner_reachability_plan
           build/b300_dual_tile_owner_reachability_plan
+      - name: W28 pruned shuffle Pareto plan
+        shell: bash
+        run: |
+          nvcc -O3 -std=c++17 -arch=sm_80 \
+            -DTARGET_W=28 -DLOW_LUT_K=14 -DHIGH_LUT_K=13 \
+            src/cuda/gridfp/probes/b300_dual_tile_pruned_plan_probe.cu \
+            -o build/b300_dual_tile_pruned_plan_probe
+          build/b300_dual_tile_pruned_plan_probe
       - name: W28 mixed-orientation screening probe
         shell: bash
         run: |
