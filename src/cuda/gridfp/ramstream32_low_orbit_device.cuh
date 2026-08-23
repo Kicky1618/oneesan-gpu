@@ -33,6 +33,11 @@ struct LowOrbitDeviceTables {
     }
 };
 
+__device__ __forceinline__ Count low_orbit_add(Count a, Count b) {
+    if (!b) return a;
+    Count mod = D_MOD;
+    return (a >= mod - b) ? a - (mod - b) : a + b;
+}
 __device__ __forceinline__ uint32_t low_orbit_kind_dev(uint64_t x) {
     return uint32_t((x >> CPU_ORBIT_KIND_SHIFT) & 7u);
 }
@@ -74,15 +79,15 @@ __global__ void main_group_low_orbit_inplace_kernel(
         Count d = blockv[dj];
 
         if (kind == CPU_ORBIT_NN) {
-            mainv[j] = high_orbit_add(mainv[j], c);
-            mainv[i] = high_orbit_add(c, d);
+            mainv[j] = low_orbit_add(mainv[j], c);
+            mainv[i] = low_orbit_add(c, d);
             blockv[dj] = 0;
         } else {
             Count cc = mainv[j];
-            Count all = high_orbit_add(high_orbit_add(c, cc), d);
+            Count all = low_orbit_add(low_orbit_add(c, cc), d);
             if (p == 1) {
                 mainv[i] = all;
-                mainv[j] = high_orbit_add(c, cc);
+                mainv[j] = low_orbit_add(c, cc);
                 blockv[dj] = 0;
             } else {
                 mainv[i] = all;
