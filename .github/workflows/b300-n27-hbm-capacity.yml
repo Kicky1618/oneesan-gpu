@@ -4,7 +4,11 @@ on:
   pull_request:
     paths:
       - 'src/cuda/gridfp/probes/b300_n27_hbm_capacity_probe.cu'
+      - 'src/cuda/gridfp/probes/b300_compact_io_selftest.cu'
+      - 'src/cuda/gridfp/probes/b300_compact_kernel_compile.cu'
       - 'src/cuda/gridfp/ramstream32_high_orbit.cuh'
+      - 'src/cuda/gridfp/ramstream32_low_orbit_device.cuh'
+      - 'src/cuda/gridfp/ramstream32_b300_compact_io.cuh'
       - 'src/cuda/gridfp/ramstream32_lowdesc.cuh'
       - 'src/cuda/gridfp/ramstream32_highdesc.cuh'
       - '.github/workflows/b300-n27-hbm-capacity.yml'
@@ -27,3 +31,18 @@ jobs:
       - name: Run W28 capacity probe
         shell: bash
         run: build/b300_capacity_w28
+      - name: Compile W28 compact resident kernels
+        shell: bash
+        run: |
+          nvcc -O3 -std=c++17 -arch=sm_80 \
+            -DTARGET_W=28 -DLOW_LUT_K=14 -DHIGH_LUT_K=13 \
+            src/cuda/gridfp/probes/b300_compact_kernel_compile.cu \
+            -o build/b300_compact_kernel_w28
+      - name: Exhaustive W10 compact canonical rank test
+        shell: bash
+        run: |
+          nvcc -O3 -std=c++17 -arch=sm_80 \
+            -DTARGET_W=10 -DLOW_LUT_K=5 -DHIGH_LUT_K=4 \
+            src/cuda/gridfp/probes/b300_compact_io_selftest.cu \
+            -o build/b300_compact_io_selftest
+          build/b300_compact_io_selftest
