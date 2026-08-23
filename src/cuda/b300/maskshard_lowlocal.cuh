@@ -8,16 +8,10 @@
 
 // Shard-local LOW-window executor for MaskShardLayout.
 //
-// Required include order:
-//   1. oneesan_cuda_gridfp_b300_hbm32_factorized_batch.cu (main renamed)
-//   2. ramstream32_factorized_storage.hpp
-//   3. maskshard_layout.hpp
-//   4. this file
-//
 // The authoritative HIGH-mask group is already laid out exactly like
-// make_factor_*_blocks(false, mask).  We therefore use the authoritative group
-// itself as one ping-pong side and allocate only one alternate M+D buffer.
-// No group gather/scatter and no canonical rank conversion occur.
+// make_factor_*_blocks(false, mask). The authoritative group itself is one
+// ping-pong side; only one alternate M+D buffer is required. No group
+// gather/scatter and no canonical rank conversion occur.
 
 struct MaskShardLowScratch {
     uint8_t* arena = nullptr;
@@ -93,13 +87,14 @@ static void maskshard_configure_low_group(uint32_t mask) {
     ck(cudaMemcpyToSymbol(D_BLOCK_DP, ds.dp, sizeof(ds.dp)), "maskshard low block dp");
 }
 
-static void maskshard_process_low_group(
-    MaskShardLowScratch& scratch,
+static void maskshard_process_low_group_buffers(
     MaskShardLowStats& stats,
     const MaskShardLayout& shard,
     uint32_t mask,
     Count* authoritative_main,
     Count* authoritative_block,
+    Count* main_alt,
+    Count* block_alt,
     int threads = 256
 ) {
     if (mask >= shard.masks) {
@@ -111,14 +106,13 @@ static void maskshard_process_low_group(
     if (!main_n && !block_n) return;
 
     maskshard_configure_low_group(mask);
-    scratch.ensure(main_n, block_n);
 
     Count* auth_m = authoritative_main + shard.main_base[mask];
     Count* auth_b = authoritative_block + shard.block_base[mask];
     Count* cur = auth_m;
     Count* dcur = auth_b;
-    Count* nxt = scratch.main_alt;
-    Count* dnext = scratch.block_alt;
+    Count* nxt = main_alt;
+    Count* dnext = block_alt;
 
     const int bm = int(std::min<Code>(65535, (main_n + threads - 1) / threads));
     const int bd = int(std::min<Code>(65535, (block_n + threads - 1) / threads));
@@ -147,7 +141,7 @@ static void maskshard_process_low_group(
     }
 
     // LOW_LUT_K=14 (n=27 production) is even, so cur/dcur are authoritative
-    // already.  Keep this fallback for other widths and regression builds.
+    // already. Keep a fallback copyback for odd regression widths.
     if (cur != auth_m || dcur != auth_b) {
         auto t = std::chrono::steady_clock::now();
         if (main_n && cur != auth_m)
@@ -160,4 +154,21 @@ static void maskshard_process_low_group(
         ++stats.copyback_groups;
     }
     ++stats.groups;
+}
+
+static void maskshard_process_low_group(
+    MaskShardLowScratch& scratch,
+    MaskShardLowStats& stats,
+    const MaskShardLayout& shard,
+    uint32_t mask,
+    Count* authoritative_main,
+    Count* authoritative_block,
+    int threads = 256
+) {
+    const Code main_n = shard.main_group_size[mask];
+    const Code block_n = shard.block_group_size[mask];
+    scratch.ensure(main_n, block_n);
+    maskshard_process_low_group_buffers(
+        stats, shard, mask, authoritative_main, authoritative_block,
+        scratch.main_alt, scratch.block_alt, threads);
 }
