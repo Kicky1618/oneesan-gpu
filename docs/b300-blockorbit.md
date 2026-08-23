@@ -1,14 +1,12 @@
 # B300 blocked-domain orbit research
 
-Status: experimental follow-up to `docs/b300-mask-shard.md`. v0.4 remains the correctness baseline; v0.5 adds main-coordinate orbit aux; v0.6 changes the orbit iteration domain; v0.7 also compacts aux into blocked coordinates.
+Status: experimental follow-up to `docs/b300-mask-shard.md`. v0.4 remains the correctness baseline; v0.5 adds main-coordinate orbit aux; v0.6 moves orbit iteration to blocked states; v0.7 compacts aux into blocked coordinates; v0.8 additionally compacts the HIGH closure pass by HIGH row.
 
 ## Delete-N bijection
 
 Fix one horizontal position `p`. A main orbit representative is exactly a main state whose upper active symbol at `p` is `N`, i.e. one of `NN`, `NR`, `NL`.
 
-Deleting that `N` produces a valid blocked state. Conversely `blocked_exclude(blocked, p)` inserts `N` at the same position and produces exactly one representative main state. These maps are inverse.
-
-Therefore, for every `p`,
+Deleting that `N` produces a valid blocked state. Conversely `blocked_exclude(blocked, p)` inserts `N` at the same position and produces exactly one representative main state. These maps are inverse, so for every `p`:
 
 ```
 # orbit representatives = # blocked states.
@@ -22,18 +20,12 @@ D = blocked states = 135,015,505,407
 D / M              = 0.3500354612348228
 ```
 
-The representative count is independent of `p`.
-
 ## v0.6 blocked-domain executor
-
-v0.5 scans every main state in the orbit kernel, loads an aux descriptor, and immediately rejects about 65% of those states. v0.6 instead scans the blocked vector.
 
 Existing descriptor tables already contain the inverse map:
 
 - `HighDesc.block_desc`: blocked HIGH coordinate -> representative main coordinate;
 - `LowDesc.block_desc`: blocked LOW coordinate -> representative main coordinate.
-
-For each blocked state the kernel obtains the representative main state without reconstructing a MateID. v0.6 reuses the v0.5 main-coordinate aux table to identify `NN` vs `NR/NL` and, for the pair case, to obtain the companion main target.
 
 The orbit update algebra is unchanged:
 
@@ -41,21 +33,9 @@ The orbit update algebra is unchanged:
 - NR/NL, p>1: representative becomes `c + companion + old_block`; blocked becomes `c`;
 - NR/NL, p=1: representative becomes `c + companion + old_block`; companion becomes `c + companion`; blocked becomes 0.
 
-A pure-C++ exhaustive seeded-vector probe compares this blocked-domain pass plus the existing closure pass against the ordinary out-of-place Grid-FP transition for every p. W=10 and W=12 pass. It also verifies that blocked->representative is a bijection onto all NN/NR/NL sources.
+A pure-C++ exhaustive seeded-vector probe compares blocked-domain orbit + closure against the ordinary out-of-place Grid-FP update for every p at W=10 and W=12.
 
-## Exact work reduction
-
-One residue has W rows and W-1 horizontal positions per row.
-
-Representative state-steps at n=27:
-
-```
-HIGH positions (13): D * 13 * 28 = 49,145,643,968,148
-LOW positions  (14): D * 14 * 28 = 52,926,078,119,544
-total orbit reps    :             = 102,071,722,087,692
-```
-
-For kernel source scanning per p:
+For source scanning per p:
 
 ```
 v0.5: orbit M + closure M = 2M = 771,439,013,240
@@ -63,26 +43,18 @@ v0.6: orbit D + closure M = M+D = 520,735,012,027
 ratio v0.6/v0.5            = 0.6750177306
 ```
 
-Thus v0.6 removes about 32.50% of total orbit+closure source-thread iterations, and about 64.996% of the orbit-pass iterations specifically.
-
 ## v0.7 compact blocked-coordinate aux
 
-Once iteration is over blocked states, a main-coordinate aux table is wasteful. `block_desc` already supplies the representative main coordinate. The only extra information needed is:
+Once iteration is over blocked states, a main-coordinate aux table is wasteful. `block_desc` already supplies the representative main coordinate. The only extra information needed is NN-vs-pair and, for NR/NL with p>1, the companion main block/rank. LOW p=1 needs only the PAIR kind because `LowDesc.main_desc` is already the companion target.
 
-- whether the representative is NN or NR/NL;
-- for NR/NL with p>1, the companion main block/rank;
-- for LOW p=1, only the PAIR kind is needed because `LowDesc.main_desc` is already the companion target.
-
-v0.7 therefore stores one 32-bit word in exactly the same coordinate system as the descriptor block table:
+v0.7 stores one 32-bit word in the same coordinate system as the descriptor block table:
 
 ```
 HIGH aux index = [p][HighDesc blocked active coordinate]
 LOW  aux index = [p][LowDesc  blocked active coordinate]
 ```
 
-The blocked kernel has already computed the descriptor index `bdi`, so the compact aux lookup reuses that exact index. No additional base table or index arithmetic is introduced.
-
-Exact n=27 auxiliary memory:
+Exact n=27 memory:
 
 ```
 v0.5/v0.6 HIGH main aux : 113.573406 MiB/GPU
@@ -94,7 +66,7 @@ v0.7 LOW  block aux     :  64.189293 MiB/GPU
 v0.7 total              : 103.233974 MiB/GPU
 ```
 
-The exact HBM model is now:
+HBM model:
 
 ```
 v0.4 peak                : 248.980810 GiB/GPU
@@ -104,52 +76,75 @@ planning usable HBM      : 268.590000 GiB/GPU
 v0.7 headroom            :  19.508375 GiB/GPU
 ```
 
-Compared with v0.6, v0.7 returns about 196.84 MiB/GPU while preserving the same blocked-domain execution count.
+Validation layers:
 
-## v0.7 validation layers
+1. `factor_blockorbit_semantics.cpp`: blocked-domain orbit + closure equals canonical update at W=10/W=12.
+2. `factor_blockorbit_compactaux_semantics.cpp`: one compact aux word per blocked state is sufficient, including LOW p=1.
+3. `maskshard_blockorbitaux_hostplan.cu`: builds the actual compact CUDA host tables and checks block descriptor -> representative -> compact aux against exact MateID transitions.
 
-The branch contains three independent checks around this transformation:
+## v0.8 compact HIGH closure rows
 
-1. `factor_blockorbit_semantics.cpp`: blocked-domain orbit + closure equals canonical out-of-place update for every p at W=10/W=12.
-2. `factor_blockorbit_compactaux_semantics.cpp`: one compact aux word per blocked state is sufficient to reproduce the same update algebra, including LOW p=1.
-3. `maskshard_blockorbitaux_hostplan.cu`: builds the actual CUDA-side compact host tables and checks the block descriptor -> representative -> compact aux path against exact MateID transitions.
+For the HIGH window, transition kind depends only on `(HIGH exact row, center, p)`. The passive LOW mask-rank does not affect whether the source is `LL`, `RR`, or `RL`. Therefore the old closure kernel repeats the same HIGH-code lookup, row split, pair classification, and HighDesc lookup for every LOW column.
 
-The CUDA runtime candidate is:
+v0.8 extends HighDesc generation with a compact list of source HIGH rows that are both:
 
-`oneesan_cuda_gridfp_b300_hbm32_maskshard_blockorbit_compactaux_batch_guarded.cu`
+- `LL`, `RR`, or `RL`; and
+- actually represented by a `HIGHDESC_BLOCK` or `HIGHDESC_CROSS` descriptor.
 
-It defines `MASKSHARD_BLOCK_ORBIT_AUX`, so the existing aux allocation/pointer plumbing is reused but uploads blocked-coordinate tables instead of main-coordinate tables.
+At n=27 there are exactly 715,533 such source HIGH rows for every HIGH position. Across 13 positions:
 
-## Main-state partition and closure follow-up
+```
+closure row entries     : 9,301,929
+closure row table       : 35.484043 MiB/GPU
+FBlock range table      : 3.300781 KiB/GPU
+v0.8 extra vs v0.7      : 35.487267 MiB/GPU
+v0.8 peak               : 249.116280 GiB/GPU
+v0.8 headroom           :  19.473720 GiB/GPU
+```
 
-For fixed p, main states partition into three disjoint classes:
+The list is stored in source-FBlock order. A tiny `[p][FBlock]` offset table lets every CTA build a shared prefix containing only FBlocks whose `stride` is nonzero for the currently fixed LOW occupancy mask. Consequently no warp is launched for an impossible block.
+
+The v0.8 closure kernel assigns one valid HIGH closure row to one warp. The warp processes passive LOW columns coalesced as `lr = lane, lane+32, ...`. The row classification and descriptor lookup are performed once per row, not once per state.
+
+n=27 work model for the 13 HIGH positions, per DP row:
+
+```
+old full-state HIGH closure state threads : 5,014,353,586,060
+exact useful closure state updates         : 1,503,950,445,478
+valid closure-row warp assignments         :    71,386,429,790
+warp rounds incl. LOW widths > 32          :    94,409,928,028
+```
+
+The old flattened closure launch corresponds to about 156,698,652,084 warps over all LOW-mask groups and 13 positions, so the row executor's warp-round model is about 60.25% of that count. This is still a model, not a B300 timing prediction: atomics, LOW-column widths, cache behavior, and row-list indirection must be measured.
+
+`maskshard_highclosure_rows_hostplan.cu` validates the actual HighDesc-generated row list, exact membership, source-FBlock ranges, and descriptor kinds. The older HighDesc semantic probe independently validates descriptor semantics across compatible LOW codes.
+
+v0.8 runtime candidate:
+
+`oneesan_cuda_gridfp_b300_hbm32_maskshard_blockorbit_compactaux_highclosurerows_batch_guarded.cu`
+
+## Remaining closure opportunity
+
+For fixed p, main states partition into:
 
 1. orbit representatives `NN/NR/NL`: D states;
-2. their companions `LR/RN/LN`: D states;
-3. closure sources `LL/RR/RL`: `M - 2D` states.
+2. companions `LR/RN/LN`: D states;
+3. closure sources `LL/RR/RL`: `M - 2D = 115,688,495,806` states.
 
-At n=27:
-
-```
-closure sources = 115,688,495,806
-fraction of M   = 0.2999290775303543
-```
-
-If both HIGH and LOW closure could be iterated compactly, the two transition passes would scan
+If LOW closure could also be iterated compactly, ideal source-state work per p would become
 
 ```
-D + (M - 2D) = M - D = 250,704,001,213
+D + (M - 2D) = M - D = 250,704,001,213.
 ```
 
-source states per p, 32.498% of v0.5's `2M` scan count.
-
-HIGH closure compaction is naturally row-oriented in factorized storage, so it is the next plausible algorithmic step. LOW closure compaction is harder because a naive one-active-column traversal gives strided HIGH-row memory accesses. It should be treated separately rather than assuming the same representation is optimal for both windows.
+LOW closure is harder: the active coordinate is the LOW column, so a naive compact-column traversal produces strided HIGH-row accesses. It should remain separate until a storage-friendly representation is found.
 
 ## Runtime candidates
 
-- v0.4 A/B baseline: `oneesan_cuda_gridfp_b300_hbm32_maskshard_fullorbit_batch_guarded.cu`
+- v0.4 baseline: `oneesan_cuda_gridfp_b300_hbm32_maskshard_fullorbit_batch_guarded.cu`
 - v0.5 main-domain aux: `oneesan_cuda_gridfp_b300_hbm32_maskshard_fullorbit_aux_batch_guarded.cu`
 - v0.6 blocked-domain/full-aux: `oneesan_cuda_gridfp_b300_hbm32_maskshard_blockorbit_aux_batch_guarded.cu`
 - v0.7 blocked-domain/compact-aux: `oneesan_cuda_gridfp_b300_hbm32_maskshard_blockorbit_compactaux_batch_guarded.cu`
+- v0.8 v0.7 + compact HIGH closure rows: `oneesan_cuda_gridfp_b300_hbm32_maskshard_blockorbit_compactaux_highclosurerows_batch_guarded.cu`
 
 GitHub Actions is still failing before job steps start (`steps=null`), so fresh nvcc confirmation remains blocked by CI infrastructure. Do not merge any candidate to the production path before fresh nvcc CI and real full-P2P multi-GPU residue checks.
