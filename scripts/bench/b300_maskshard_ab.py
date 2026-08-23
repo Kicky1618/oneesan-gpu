@@ -10,6 +10,7 @@ modulus, then writes raw stdout/stderr plus a machine-readable summary.
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import math
 import os
@@ -116,6 +117,53 @@ def validate_result_rows(
                 )
         if float(row["wall_s"]) <= 0:
             raise ValueError(f"{name} result row {i} has non-positive wall_s")
+
+
+def file_sha256(path: Path) -> str:
+    h = hashlib.sha256()
+    with path.open("rb") as f:
+        for chunk in iter(lambda: f.read(1 << 20), b""):
+            h.update(chunk)
+    return h.hexdigest()
+
+
+def validate_build_provenance(
+    name: str, binary: Path, source: str, args: argparse.Namespace
+) -> Dict[str, object]:
+    meta_path = Path(str(binary) + ".build.json")
+    if not meta_path.is_file():
+        raise RuntimeError(f"{name} is missing build provenance: {meta_path}")
+    try:
+        meta = json.loads(meta_path.read_text())
+    except (OSError, json.JSONDecodeError) as exc:
+        raise RuntimeError(f"{name} has unreadable build provenance: {meta_path}") from exc
+    if not isinstance(meta, dict):
+        raise RuntimeError(f"{name} build provenance is not a JSON object")
+
+    checks = {
+        "schema": 1,
+        "source": source,
+        "n": args.n,
+        "width": args.n + 1,
+        "arch": args.arch,
+        "low_lut_k": args.low,
+        "high_lut_k": args.high,
+        "binary_sha256": file_sha256(binary),
+        "source_sha256": file_sha256(ROOT / source),
+        "build_script": "scripts/build/b300-hbm32-batch.sh",
+        "build_script_sha256": file_sha256(BUILD_SCRIPT),
+    }
+    mismatches = []
+    for key, expected in checks.items():
+        got = meta.get(key)
+        if got != expected:
+            mismatches.append(f"{key}: got={got!r} expected={expected!r}")
+    if mismatches:
+        raise RuntimeError(
+            f"{name} build provenance mismatch; rebuild the candidate: "
+            + "; ".join(mismatches)
+        )
+    return meta
 
 
 def visible_gpu_count_hint() -> Tuple[int | None, str]:
@@ -343,16 +391,23 @@ def main() -> int:
     result_dir.mkdir(parents=True, exist_ok=True)
 
     binaries: Dict[str, Path] = {}
+    provenance: Dict[str, Dict[str, object]] = {}
     for name in args.variants:
         expected = args.build_dir / f"b300_maskshard_{name.replace('.', '')}_n{args.n}"
         if args.skip_build:
             if not expected.is_file():
                 raise SystemExit(f"missing binary for --skip-build: {expected}")
             binaries[name] = expected
+            provenance[name] = validate_build_provenance(
+                name, expected, VARIANTS[name], args
+            )
         elif args.dry_run:
             binaries[name] = expected
         else:
             binaries[name] = build_variant(name, VARIANTS[name], args)
+            provenance[name] = validate_build_provenance(
+                name, binaries[name], VARIANTS[name], args
+            )
 
     manifest = {
         "n": args.n,
@@ -365,6 +420,7 @@ def main() -> int:
         "variants": args.variants,
         "sources": {v: VARIANTS[v] for v in args.variants},
         "binaries": {v: str(binaries[v]) for v in args.variants},
+        "provenance": provenance,
         "git_head": subprocess.run(
             ["git", "rev-parse", "HEAD"],
             cwd=ROOT,
