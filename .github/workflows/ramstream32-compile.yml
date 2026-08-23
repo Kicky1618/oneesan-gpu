@@ -102,7 +102,7 @@ jobs:
             -DHIGH_LUT_K=${{ matrix.high }} \
             src/cuda/gridfp/oneesan_cuda_gridfp_ramstream32_factorized_bidesc_compact.cu \
             -o build/ramstream32_bidesc_compact_w${{ matrix.width }}
-      - name: Validate host descriptor plan
+      - name: Validate compact host plan
         shell: bash
         run: |
           build/ramstream32_bidesc_compact_w${{ matrix.width }} \
@@ -135,7 +135,21 @@ jobs:
         run: |
           build/ramstream32_hybrid_inplace_w${{ matrix.width }} \
             ${{ matrix.n }} 4294967291 12288 4 --plan-only
-      - name: Validate CPU low-window executor
+      - name: Compile zero-scratch hybrid-direct backend
+        shell: bash
+        run: |
+          nvcc -O3 -std=c++17 -lineinfo -arch=sm_80 \
+            -DTARGET_W=${{ matrix.width }} \
+            -DLOW_LUT_K=${{ matrix.low }} \
+            -DHIGH_LUT_K=${{ matrix.high }} \
+            src/cuda/gridfp/oneesan_cuda_gridfp_ramstream32_factorized_hybrid_direct.cu \
+            -o build/ramstream32_hybrid_direct_w${{ matrix.width }}
+      - name: Validate hybrid-direct plan
+        shell: bash
+        run: |
+          build/ramstream32_hybrid_direct_w${{ matrix.width }} \
+            ${{ matrix.n }} 4294967291 12288 4 --plan-only
+      - name: Validate CPU low-window executors
         if: matrix.width == 22
         shell: bash
         run: |
