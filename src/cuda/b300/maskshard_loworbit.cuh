@@ -78,11 +78,56 @@ __global__ void maskshard_main_block_loworbit_kernel(
 ) {
     Code i = Code(blockIdx.x) * blockDim.x + threadIdx.x;
     const Code step = Code(gridDim.x) * blockDim.x;
+#ifdef MASKSHARD_ORBIT_AUX
+    const uint32_t pi = uint32_t(LOW_LUT_K - p);
+#endif
     for (; i < n; i += step) {
         const int bid = f_find_main(i);
         const FBlock x = D_F_MAIN_BLOCKS[bid];
         uint32_t hr = 0, lr = 0;
         maskshard_split_rank(i, x, hr, lr);
+
+#ifdef MASKSHARD_ORBIT_AUX
+        const size_t di = size_t(pi) * D_LOWDESC_MAIN_TOTAL
+                        + D_LOWDESC_MAIN_BASE[bid] + lr;
+        const uint32_t aux = D_MS_LOW_ORBIT_AUX[di];
+        const uint32_t ak = maskshard_orbit_aux_kind(aux);
+        if (ak == MS_ORBIT_AUX_INVALID) continue;
+        const uint32_t desc = D_LOWDESC_MAIN[di];
+
+        Code j = ~Code(0), dj = ~Code(0);
+        if (ak == MS_ORBIT_AUX_NN || p == 1) {
+            if (lowdesc_kind(desc) != LOWDESC_MAIN) continue;
+            const FBlock ym = D_F_MAIN_BLOCKS[lowdesc_block(desc)];
+            const FBlock yd = D_F_BLOCK_BLOCKS[maskshard_orbit_aux_block(aux)];
+            j = ym.off + Code(hr) * ym.stride + lowdesc_lr(desc);
+            dj = yd.off + Code(hr) * yd.stride + maskshard_orbit_aux_rank(aux);
+        } else {
+            if (lowdesc_kind(desc) != LOWDESC_BLOCK) continue;
+            const FBlock ym = D_F_MAIN_BLOCKS[maskshard_orbit_aux_block(aux)];
+            const FBlock yd = D_F_BLOCK_BLOCKS[lowdesc_block(desc)];
+            j = ym.off + Code(hr) * ym.stride + maskshard_orbit_aux_rank(aux);
+            dj = yd.off + Code(hr) * yd.stride + lowdesc_lr(desc);
+        }
+
+        const Count c = mainv[i];
+        const Count d = blockv[dj];
+        if (ak == MS_ORBIT_AUX_NN) {
+            mainv[j] = maskshard_add_mod_plain(mainv[j], c);
+            mainv[i] = maskshard_add_mod_plain(c, d);
+            blockv[dj] = 0;
+        } else {
+            const Count cc = mainv[j];
+            const Count all = maskshard_add_mod_plain(maskshard_add_mod_plain(c, cc), d);
+            mainv[i] = all;
+            if (p == 1) {
+                mainv[j] = maskshard_add_mod_plain(c, cc);
+                blockv[dj] = 0;
+            } else {
+                blockv[dj] = c;
+            }
+        }
+#else
         const uint32_t active = maskshard_active_low_center(x, lr);
         const MateValuePair w = maskshard_low_pair_from_active(active, p);
         if (w != NN && w != NR && w != NL) continue;
@@ -113,6 +158,7 @@ __global__ void maskshard_main_block_loworbit_kernel(
                 blockv[dj] = c;
             }
         }
+#endif
     }
 }
 
