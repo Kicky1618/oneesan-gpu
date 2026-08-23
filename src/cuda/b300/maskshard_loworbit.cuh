@@ -18,11 +18,17 @@ __device__ __forceinline__ uint32_t maskshard_active_low_center(
     return lc | (uint32_t(x.c) << (2 * L));
 }
 
+__device__ __forceinline__ MateValuePair maskshard_low_pair_from_active(
+    uint32_t active, int p
+) {
+    return MateValuePair((active >> (2 * (p - 1))) & 15u);
+}
+
 __device__ __forceinline__ MateValuePair maskshard_low_pair(
     const FBlock& x, uint32_t low_all_rank, int p
 ) {
-    const uint32_t active = maskshard_active_low_center(x, low_all_rank);
-    return MateValuePair((active >> (2 * (p - 1))) & 15u);
+    return maskshard_low_pair_from_active(
+        maskshard_active_low_center(x, low_all_rank), p);
 }
 
 __device__ __forceinline__ uint32_t maskshard_set_low_pair(
@@ -78,7 +84,7 @@ __global__ void maskshard_main_block_loworbit_kernel(
         uint32_t hr = 0, lr = 0;
         maskshard_split_rank(i, x, hr, lr);
         const uint32_t active = maskshard_active_low_center(x, lr);
-        const MateValuePair w = maskshard_low_pair(x, lr, p);
+        const MateValuePair w = maskshard_low_pair_from_active(active, p);
         if (w != NN && w != NR && w != NL) continue;
 
         MateValuePair cw = LR;
