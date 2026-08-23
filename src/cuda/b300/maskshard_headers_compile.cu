@@ -9,6 +9,7 @@
 #include "maskshard_layout.hpp"
 #include "maskshard_lowlocal.cuh"
 #include "maskshard_highio.cuh"
+#include "maskshard_highorbit.cuh"
 
 int main() {
     // Compile-time integration probe. Runtime behavior is validated separately
