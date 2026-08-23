@@ -5,6 +5,7 @@
 #include <cstdlib>
 #include <cstring>
 #include <iostream>
+#include <thread>
 #include <vector>
 
 #define RAMSTREAM_BIDESC_COMPACT_NO_MAIN
@@ -52,6 +53,17 @@ static int env_positive_int(const char* name, int fallback) {
     return int(v);
 }
 
+static bool env_bool(const char* name, bool fallback) {
+    const char* s = std::getenv(name);
+    if (!s || !*s) return fallback;
+    if (std::strcmp(s, "1") == 0 || std::strcmp(s, "true") == 0
+        || std::strcmp(s, "yes") == 0 || std::strcmp(s, "on") == 0) return true;
+    if (std::strcmp(s, "0") == 0 || std::strcmp(s, "false") == 0
+        || std::strcmp(s, "no") == 0 || std::strcmp(s, "off") == 0) return false;
+    std::cerr << name << " must be 0/1, false/true, no/yes, or off/on\n";
+    std::exit(2);
+}
+
 int main(int argc, char** argv) {
     int n = argc > 1 ? std::atoi(argv[1]) : TARGET_W - 1;
     Count mod = argc > 2 ? Count(std::strtoul(argv[2], nullptr, 10)) : 4294967291u;
@@ -60,6 +72,7 @@ int main(int argc, char** argv) {
     bool plan_only = argc > 5 && std::strcmp(argv[5], "--plan-only") == 0;
     double cpu_high_max_mib = env_nonnegative_double("CPU_HIGH_MAX_MIB", 0.0);
     int cpu_high_workers = env_positive_int("CPU_HIGH_WORKERS", cpu_workers);
+    bool cpu_high_overlap = env_bool("CPU_HIGH_OVERLAP", false);
     const char* cpu_high_mode_env = std::getenv("CPU_HIGH_MODE");
     bool cpu_high_direct_mode = cpu_high_mode_env
         && std::strcmp(cpu_high_mode_env, "direct") == 0;
@@ -176,7 +189,7 @@ int main(int argc, char** argv) {
 
     if (plan_only) {
         std::cout
-            << "backend=gridfp-ramstream32-factorized-hybrid-sparse-v4.9-plan"
+            << "backend=gridfp-ramstream32-factorized-hybrid-sparse-v5.0-plan"
             << " n=" << n
             << " gpu_high_desc_mib=" << highdesc_mib
             << " gpu_mask_mib=" << mask_mib
@@ -199,6 +212,7 @@ int main(int argc, char** argv) {
             << " cpu_workers=" << cpu_workers
             << " cpu_high_workers=" << cpu_high_workers
             << " cpu_high_mode=" << cpu_high_mode
+            << " cpu_high_overlap=" << int(cpu_high_overlap)
             << " cpu_high_max_mib=" << cpu_high_max_mib
             << " cpu_high_groups=" << selected_cpu_high_jobs.size()
             << " gpu_high_groups=" << gpu_high_nonempty_groups
@@ -241,22 +255,36 @@ int main(int argc, char** argv) {
     CpuHighPool cpu_high_scratch(cpu_high_workers);
     CpuHighDirectPool cpu_high_direct(cpu_high_workers);
     int gpu_threads=256;
-    auto wall0=std::chrono::steady_clock::now();
-    for(int row=0;row<W;++row){
+
+    auto run_gpu_high = [&] {
         for(const auto& job:high_jobs) {
             if (!job.work || cpu_high_selected[size_t(job.g)]) continue;
             process_group_bidesc_compact(
                 gpu,main_auth,block_auth,storage,layout,W,high_wp,job.g,gpu_threads);
         }
-        if (!selected_cpu_high_jobs.empty()) {
-            if (cpu_high_direct_mode) {
-                cpu_high_direct.run(selected_cpu_high_jobs, main_auth, block_auth,
-                                    storage, layout, cpu_high_direct_meta,
-                                    cpu_high_cross, mod);
-            } else {
-                cpu_high_scratch.run(selected_cpu_high_jobs, main_auth, block_auth,
-                                     storage, layout, highdesc, cpu_high_cross, mod);
-            }
+    };
+    auto run_cpu_high = [&] {
+        if (selected_cpu_high_jobs.empty()) return;
+        if (cpu_high_direct_mode) {
+            cpu_high_direct.run(selected_cpu_high_jobs, main_auth, block_auth,
+                                storage, layout, cpu_high_direct_meta,
+                                cpu_high_cross, mod);
+        } else {
+            cpu_high_scratch.run(selected_cpu_high_jobs, main_auth, block_auth,
+                                 storage, layout, highdesc, cpu_high_cross, mod);
+        }
+    };
+
+    auto wall0=std::chrono::steady_clock::now();
+    for(int row=0;row<W;++row){
+        if (cpu_high_overlap && !selected_cpu_high_jobs.empty()
+            && gpu_high_nonempty_groups) {
+            std::thread cpu_thread(run_cpu_high);
+            run_gpu_high();
+            cpu_thread.join();
+        } else {
+            run_gpu_high();
+            run_cpu_high();
         }
         cpu_low.run(cpu_low_jobs,main_auth,block_auth,storage,layout,sparse,mod);
         uint64_t cpu_high_groups = cpu_high_direct_mode
@@ -281,7 +309,7 @@ int main(int argc, char** argv) {
         : double(cpu_high_scratch.peak_scratch_bytes())/double(1<<20);
 
     std::cout
-        << "backend=gridfp-ramstream32-factorized-hybrid-sparse-v4.9"
+        << "backend=gridfp-ramstream32-factorized-hybrid-sparse-v5.0"
         << " n="<<n<<" residue="<<answer<<" modulus="<<mod
         << " gpu_high_desc_mib="<<highdesc_mib<<" gpu_mask_mib="<<mask_mib
         << " cpu_sparse_nn_orbit_mib="<<sparse_nn_orbit_mib
@@ -300,6 +328,7 @@ int main(int argc, char** argv) {
         << " cpu_workers="<<cpu_workers
         << " cpu_high_workers="<<cpu_high_workers
         << " cpu_high_mode="<<cpu_high_mode
+        << " cpu_high_overlap="<<int(cpu_high_overlap)
         << " cpu_high_max_mib="<<cpu_high_max_mib
         << " cpu_high_peak_worker_scratch_mib="<<cpu_high_peak_scratch_mib
         << " h2d_s="<<gpu.h2d_s<<" gpu_kernel_s="<<gpu.kernel_s<<" d2h_s="<<gpu.d2h_s
