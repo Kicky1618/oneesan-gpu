@@ -1,0 +1,37 @@
+name: factor mask shard research
+
+on:
+  push:
+    paths:
+      - 'src/cpp/probes/factor_mask_shard_balance.cpp'
+      - '.github/workflows/factor-mask-shard.yml'
+  pull_request:
+    paths:
+      - 'src/cpp/probes/factor_mask_shard_balance.cpp'
+      - '.github/workflows/factor-mask-shard.yml'
+  workflow_dispatch:
+
+jobs:
+  balance:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        include:
+          - width: 22
+            low: 11
+            gpus: 8
+          - width: 28
+            low: 14
+            gpus: 8
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build balance probe
+        run: |
+          mkdir -p build
+          g++ -O3 -std=c++17 -Wall -Wextra -Werror \
+            src/cpp/probes/factor_mask_shard_balance.cpp \
+            -o build/factor_mask_shard_balance
+      - name: Run balance probe
+        run: |
+          build/factor_mask_shard_balance \
+            ${{ matrix.width }} ${{ matrix.low }} ${{ matrix.gpus }}
