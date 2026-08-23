@@ -249,33 +249,59 @@ __global__ void maskshard_main_highdesc_closure_inplace_kernel(
 }
 
 #ifdef MASKSHARD_HIGH_CLOSURE_ROWS
-// v0.8: compact HighDesc closure-row list removes both the all-main scan and
-// repeated per-column HIGH classification. One listed HIGH row is assigned to
-// one warp; its passive LOW columns are contiguous and processed coalesced.
+// v0.8: use the compact per-p closure row list. Each CTA builds a tiny shared
+// prefix over source FBlocks that actually have LOW columns in the current
+// occupancy-mask group, eliminating both non-closure rows and inactive blocks.
 __global__ void maskshard_main_highdesc_closure_rows_inplace_kernel(
     Count* mainv, Count* blockv, Code n, int p
 ) {
     constexpr int S = MAXW + 2;
     constexpr uint32_t LR_MASK = (1u << LOW_LUT_K) - 1u;
+    __shared__ uint32_t prefix[65];
     const uint32_t pi = uint32_t((TARGET_W - 1) - p);
-    const uint32_t begin = D_HIGHDESC_CLOSURE_OFF[pi];
-    const uint32_t end = D_HIGHDESC_CLOSURE_OFF[pi + 1];
+    const int nb = D_F_MAIN_NBLOCKS;
+
+    if (threadIdx.x == 0) {
+        prefix[0] = 0;
+        for (int b = 0; b < nb; ++b) {
+            const FBlock x = D_F_MAIN_BLOCKS[b];
+            const uint32_t a = D_HIGHDESC_CLOSURE_BLOCK_OFF[size_t(pi) * 65 + b];
+            const uint32_t z = D_HIGHDESC_CLOSURE_BLOCK_OFF[size_t(pi) * 65 + b + 1];
+            prefix[b + 1] = prefix[b] + (x.stride ? z - a : 0u);
+        }
+    }
+    __syncthreads();
+
     const unsigned active = __activemask();
     const int lane = int(threadIdx.x & 31);
     const int warp_in_block = int(threadIdx.x >> 5);
     const int warps_per_block = int((blockDim.x + 31) >> 5);
-    Code qi = Code(begin) + Code(blockIdx.x) * Code(warps_per_block)
-            + Code(warp_in_block);
-    const Code qstep = Code(gridDim.x) * Code(warps_per_block);
+    Code row = Code(blockIdx.x) * Code(warps_per_block) + Code(warp_in_block);
+    const Code row_step = Code(gridDim.x) * Code(warps_per_block);
+    const uint32_t total = prefix[nb];
 
-    for (; qi < Code(end); qi += qstep) {
+    for (; row < Code(total); row += row_step) {
+        int bid = 0;
+        uint32_t local = 0;
+        if (lane == 0) {
+            int lo = 0, hi = nb + 1;
+            while (lo < hi) {
+                const int mid = (lo + hi) >> 1;
+                if (prefix[mid] <= uint32_t(row)) lo = mid + 1;
+                else hi = mid;
+            }
+            bid = lo - 1;
+            local = uint32_t(row) - prefix[bid];
+        }
+        bid = __shfl_sync(active, bid, 0);
+        local = __shfl_sync(active, local, 0);
+
+        const uint32_t a = D_HIGHDESC_CLOSURE_BLOCK_OFF[size_t(pi) * 65 + bid];
         uint32_t source = 0;
-        if (lane == 0) source = D_HIGHDESC_CLOSURE_ROWS[qi];
+        if (lane == 0) source = D_HIGHDESC_CLOSURE_ROWS[a + local];
         source = __shfl_sync(active, source, 0);
-        const uint32_t bid = highdesc_block(source);
         const uint32_t hr = highdesc_rank(source);
         const FBlock x = D_F_MAIN_BLOCKS[bid];
-        if (!x.stride) continue; // this LOW occupancy mask has no such row
 
         uint32_t desc = 0;
         if (lane == 0) {
@@ -285,7 +311,6 @@ __global__ void maskshard_main_highdesc_closure_rows_inplace_kernel(
         }
         desc = __shfl_sync(active, desc, 0);
         const uint32_t kind = highdesc_kind(desc);
-        if (kind != HIGHDESC_BLOCK && kind != HIGHDESC_CROSS) continue;
 
         for (uint32_t lr = uint32_t(lane); lr < x.stride; lr += 32u) {
             const Code i = x.off + Code(hr) * x.stride + lr;
@@ -295,9 +320,9 @@ __global__ void maskshard_main_highdesc_closure_rows_inplace_kernel(
                 const FBlock y = D_F_BLOCK_BLOCKS[highdesc_block(desc)];
                 const Code j = y.off + Code(highdesc_rank(desc)) * y.stride + lr;
                 atomic_add_mod(blockv + j, c);
-            } else {
-                const uint32_t a = D_F_LOW_MASK_OFF[size_t(D_F_MASK) * S + x.hs];
-                const uint32_t lc = D_F_LOW_MASK_CODES[a + lr];
+            } else if (kind == HIGHDESC_CROSS) {
+                const uint32_t la = D_F_LOW_MASK_OFF[size_t(D_F_MASK) * S + x.hs];
+                const uint32_t lc = D_F_LOW_MASK_CODES[la + lr];
                 const uint32_t lc2 = highdesc_flip_low(lc, highdesc_depth(desc));
                 if (lc2 == 0xffffffffu) continue;
                 const uint32_t lp = D_F_LOW_PACKED_RANK[lc2];
