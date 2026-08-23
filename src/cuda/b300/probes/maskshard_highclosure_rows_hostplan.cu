@@ -49,15 +49,15 @@ int main(int argc, char** argv) {
             const uint32_t z = hd.closure_block_off[size_t(pi) * 65 + bid + 1];
             if (a > z || a < begin || z > end) return 6;
             for (uint32_t q = a; q < z; ++q) {
-                if (highdesc_block(hd.closure_rows[q]) != bid) return 7;
+                if (highdesc_host_block(hd.closure_rows[q]) != bid) return 7;
             }
         }
 
         for (uint32_t q = begin; q < end; ++q) {
             const uint32_t src = hd.closure_rows[q];
-            if (highdesc_kind(src) != HIGHDESC_MAIN) return 8;
-            const uint32_t bid = highdesc_block(src);
-            const uint32_t hr = highdesc_rank(src);
+            if (highdesc_host_kind(src) != HIGHDESC_MAIN) return 8;
+            const uint32_t bid = highdesc_host_block(src);
+            const uint32_t hr = highdesc_host_rank(src);
             if (bid >= layout.main_blocks.size()) return 9;
             const StorageBlock& sb = layout.main_blocks[bid];
             if (!sb.valid || !sb.rows || !sb.cols || hr >= sb.rows) return 10;
@@ -72,7 +72,7 @@ int main(int argc, char** argv) {
             const MateValuePair w = mpair(m, p);
             if (w != LL && w != RR && w != RL) return 12;
             const uint32_t desc = hd.main_desc[size_t(pi) * hd.main_total + ix];
-            const uint32_t kind = highdesc_kind(desc);
+            const uint32_t kind = highdesc_host_kind(desc);
             if (kind != HIGHDESC_BLOCK && kind != HIGHDESC_CROSS) return 13;
         }
 
@@ -88,7 +88,7 @@ int main(int argc, char** argv) {
                 const MateValuePair w = mpair(m, p);
                 const uint32_t ix = hd.main_base[bid] + hr;
                 const uint32_t desc = hd.main_desc[size_t(pi) * hd.main_total + ix];
-                const uint32_t kind = highdesc_kind(desc);
+                const uint32_t kind = highdesc_host_kind(desc);
                 const bool expected = (w == LL || w == RR || w == RL)
                     && (kind == HIGHDESC_BLOCK || kind == HIGHDESC_CROSS);
                 if (bool(seen[ix]) != expected) {
