@@ -7,6 +7,7 @@ on:
       - 'src/cuda/gridfp/ramstream32_cpu_low_sparse.hpp'
       - 'src/cuda/gridfp/ramstream32_cpu_low_direct.hpp'
       - 'src/cuda/gridfp/ramstream32_cpu_low_inplace.hpp'
+      - 'src/cuda/gridfp/ramstream32_cpu_high.hpp'
       - 'src/cuda/gridfp/probes/ramstream32_cpu_low_selftest.cu'
       - 'scripts/build/gridfp-ramstream32-factorized-hybrid-sparse.sh'
       - '.github/workflows/ramstream32-sparse-ci.yml'
@@ -16,6 +17,7 @@ on:
       - 'src/cuda/gridfp/ramstream32_cpu_low_sparse.hpp'
       - 'src/cuda/gridfp/ramstream32_cpu_low_direct.hpp'
       - 'src/cuda/gridfp/ramstream32_cpu_low_inplace.hpp'
+      - 'src/cuda/gridfp/ramstream32_cpu_high.hpp'
       - 'src/cuda/gridfp/probes/ramstream32_cpu_low_selftest.cu'
       - 'scripts/build/gridfp-ramstream32-factorized-hybrid-sparse.sh'
       - '.github/workflows/ramstream32-sparse-ci.yml'
@@ -53,7 +55,14 @@ jobs:
         run: |
           build/ramstream32_hybrid_sparse_w${{ matrix.width }} \
             ${{ matrix.n }} 4294967291 12288 4 --plan-only
-      - name: Validate sparse CPU executor against reference
+      - name: Validate n27 CPU HIGH partition plan
+        if: matrix.width == 28
+        shell: bash
+        run: |
+          CPU_HIGH_MAX_MIB=256 build/ramstream32_hybrid_sparse_w28 \
+            27 4294967291 12288 4 --plan-only | tee /tmp/high-offload-plan.txt
+          grep -Fq 'cpu_high_groups=12911' /tmp/high-offload-plan.txt
+      - name: Validate CPU LOW/HIGH executors against reference
         if: matrix.width == 22
         shell: bash
         run: |
