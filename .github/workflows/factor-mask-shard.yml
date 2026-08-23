@@ -4,10 +4,12 @@ on:
   push:
     paths:
       - 'src/cpp/probes/factor_mask_shard_balance.cpp'
+      - 'src/cpp/probes/factor_highmask_closure.cpp'
       - '.github/workflows/factor-mask-shard.yml'
   pull_request:
     paths:
       - 'src/cpp/probes/factor_mask_shard_balance.cpp'
+      - 'src/cpp/probes/factor_highmask_closure.cpp'
       - '.github/workflows/factor-mask-shard.yml'
   workflow_dispatch:
 
@@ -35,3 +37,25 @@ jobs:
         run: |
           build/factor_mask_shard_balance \
             ${{ matrix.width }} ${{ matrix.low }} ${{ matrix.gpus }}
+
+  closure:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        include:
+          - width: 10
+            low: 5
+          - width: 12
+            low: 6
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build HIGH-mask closure probe
+        run: |
+          mkdir -p build
+          g++ -O3 -std=c++17 -Wall -Wextra -Werror \
+            src/cpp/probes/factor_highmask_closure.cpp \
+            -o build/factor_highmask_closure
+      - name: Exhaustively verify LOW-window closure
+        run: |
+          build/factor_highmask_closure \
+            ${{ matrix.width }} ${{ matrix.low }}
