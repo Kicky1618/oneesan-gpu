@@ -10,6 +10,7 @@ on:
       - 'src/cuda/gridfp/ramstream32_high_orbit.cuh'
       - 'src/cuda/gridfp/ramstream32_low_orbit_device.cuh'
       - 'src/cuda/gridfp/ramstream32_b300_compact_io.cuh'
+      - 'src/cuda/gridfp/ramstream32_b300_rowkernels.cuh'
       - 'src/cuda/gridfp/ramstream32_lowdesc.cuh'
       - 'src/cuda/gridfp/ramstream32_highdesc.cuh'
       - '.github/workflows/b300-n27-hbm-capacity.yml'
