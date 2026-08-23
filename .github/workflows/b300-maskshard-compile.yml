@@ -6,6 +6,7 @@ on:
       - 'src/cuda/b300/oneesan_cuda_gridfp_b300_hbm32_maskshard.cu'
       - 'src/cuda/b300/oneesan_cuda_gridfp_b300_hbm32_maskshard_plan.cu'
       - 'src/cuda/b300/maskshard_headers_compile.cu'
+      - 'src/cuda/b300/maskshard_address_selftest.cu'
       - 'src/cuda/b300/maskshard_layout.hpp'
       - 'src/cuda/b300/maskshard_lowlocal.cuh'
       - 'src/cuda/b300/maskshard_highio.cuh'
@@ -17,6 +18,7 @@ on:
       - 'src/cuda/b300/oneesan_cuda_gridfp_b300_hbm32_maskshard.cu'
       - 'src/cuda/b300/oneesan_cuda_gridfp_b300_hbm32_maskshard_plan.cu'
       - 'src/cuda/b300/maskshard_headers_compile.cu'
+      - 'src/cuda/b300/maskshard_address_selftest.cu'
       - 'src/cuda/b300/maskshard_layout.hpp'
       - 'src/cuda/b300/maskshard_lowlocal.cuh'
       - 'src/cuda/b300/maskshard_highio.cuh'
@@ -26,6 +28,23 @@ on:
   workflow_dispatch:
 
 jobs:
+  address-selftest:
+    runs-on: ubuntu-latest
+    container: nvidia/cuda:12.8.1-devel-ubuntu22.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build exhaustive address selftest
+        shell: bash
+        run: |
+          mkdir -p build
+          nvcc -O3 -std=c++17 -lineinfo -arch=sm_80 \
+            -DTARGET_W=10 -DLOW_LUT_K=5 -DHIGH_LUT_K=4 \
+            src/cuda/b300/maskshard_address_selftest.cu \
+            -o build/maskshard_address_selftest
+      - name: Verify authoritative and HIGH-I/O bijections
+        shell: bash
+        run: build/maskshard_address_selftest
+
   plan:
     runs-on: ubuntu-latest
     container: nvidia/cuda:12.8.1-devel-ubuntu22.04
