@@ -124,7 +124,9 @@ static U64 high_closure_rows_per_position(int high, int low) {
         for (int he = 0; he < int(codes.size()); ++he) {
             for (int cv = 0; cv < 3; ++cv) {
                 const int hs = he + (cv == 2 ? 1 : cv == 1 ? -1 : 0);
-                if (hs < 0 || hs > low + 1) continue;
+                // A LOW segment of length `low` cannot descend from low+1 to 0.
+                // Match the actual storage layout and exclude that empty FBlock.
+                if (hs < 0 || hs > low) continue;
                 for (std::uint32_t hc : codes[he]) {
                     const std::uint32_t active = (hc << 2) | std::uint32_t(cv);
                     const std::uint32_t w = (active >> (2 * (q - 1))) & 15u;
