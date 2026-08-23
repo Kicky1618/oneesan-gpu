@@ -60,24 +60,78 @@ static std::vector<std::vector<U64>> low_counts(int width) {
     return out;
 }
 
-struct Balance { std::vector<U64> bins; };
+struct Balance {
+    std::vector<U64> bins;
+    std::vector<std::uint8_t> owner;
+};
 
 static Balance greedy_balance(int bits, const std::vector<U64>& weight, int ngpu) {
     struct Item { U64 w; std::uint32_t mask; };
+    const std::uint32_t nm = std::uint32_t(1) << bits;
     std::vector<Item> items;
-    items.reserve(std::size_t(1) << bits);
-    for (std::uint32_t m = 0; m < (std::uint32_t(1) << bits); ++m)
+    items.reserve(nm);
+    for (std::uint32_t m = 0; m < nm; ++m)
         items.push_back({weight[__builtin_popcount(m)], m});
     std::sort(items.begin(), items.end(), [](const Item& a, const Item& b) {
         return a.w != b.w ? a.w > b.w : a.mask < b.mask;
     });
 
-    Balance out{std::vector<U64>(ngpu)};
+    Balance out{std::vector<U64>(ngpu), std::vector<std::uint8_t>(nm)};
     for (const Item& x : items) {
-        auto it = std::min_element(out.bins.begin(), out.bins.end());
-        *it += x.w;
+        const int d = int(std::min_element(out.bins.begin(), out.bins.end()) - out.bins.begin());
+        out.bins[d] += x.w;
+        out.owner[x.mask] = std::uint8_t(d);
     }
     return out;
+}
+
+// If authoritative data is sharded by HIGH mask, a HIGH-active window fixes a
+// LOW mask and touches pieces owned by all GPUs.  Schedule that LOW-mask group
+// on the GPU owning the largest piece; only the remainder crosses peer links.
+static U64 remote_states_high_active(
+    int high, int low, int ngpu,
+    const std::vector<std::vector<U64>>& pair,
+    const Balance& high_shard
+) {
+    const std::uint32_t hm_count = std::uint32_t(1) << high;
+    const std::uint32_t lm_count = std::uint32_t(1) << low;
+    U64 remote = 0;
+    for (std::uint32_t lm = 0; lm < lm_count; ++lm) {
+        const int kl = __builtin_popcount(lm);
+        std::vector<U64> by_gpu(ngpu);
+        U64 group = 0;
+        for (std::uint32_t hm = 0; hm < hm_count; ++hm) {
+            const U64 w = pair[__builtin_popcount(hm)][kl];
+            by_gpu[high_shard.owner[hm]] += w;
+            group += w;
+        }
+        remote += group - *std::max_element(by_gpu.begin(), by_gpu.end());
+    }
+    return remote;
+}
+
+// Symmetric model for authoritative data sharded by LOW mask.  LOW-active
+// groups then span all LOW-mask owners, while the HIGH-active window is local.
+static U64 remote_states_low_active(
+    int high, int low, int ngpu,
+    const std::vector<std::vector<U64>>& pair,
+    const Balance& low_shard
+) {
+    const std::uint32_t hm_count = std::uint32_t(1) << high;
+    const std::uint32_t lm_count = std::uint32_t(1) << low;
+    U64 remote = 0;
+    for (std::uint32_t hm = 0; hm < hm_count; ++hm) {
+        const int kh = __builtin_popcount(hm);
+        std::vector<U64> by_gpu(ngpu);
+        U64 group = 0;
+        for (std::uint32_t lm = 0; lm < lm_count; ++lm) {
+            const U64 w = pair[kh][__builtin_popcount(lm)];
+            by_gpu[low_shard.owner[lm]] += w;
+            group += w;
+        }
+        remote += group - *std::max_element(by_gpu.begin(), by_gpu.end());
+    }
+    return remote;
 }
 
 static LD gib(U64 states) {
@@ -101,7 +155,7 @@ int main(int argc, char** argv) {
     const auto lc = low_counts(low);
 
     // Exact main+blocked state count for one specific pair of masks having
-    // popcounts (kh, kl).  Main center N and blocked share the same height;
+    // popcounts (kh, kl). Main center N and blocked share the same height;
     // center L/R shift the LOW starting height by +/-1.
     std::vector<std::vector<U64>> pair(high + 1, std::vector<U64>(low + 1));
     for (int kh = 0; kh <= high; ++kh) {
@@ -138,8 +192,8 @@ int main(int argc, char** argv) {
     }
 
     // Mutual information of HIGH/LOW mask popcounts in the authoritative-state
-    // distribution.  This quantifies how much a two-layout transpose could gain
-    // merely by aligning popcount classes.
+    // distribution. A tiny value predicts little benefit from trying to align
+    // two independent mask-sharded layouts by popcount class alone.
     std::vector<LD> ph(high + 1), pl(low + 1);
     std::vector<std::vector<LD>> joint(high + 1, std::vector<LD>(low + 1));
     for (int kh = 0; kh <= high; ++kh) {
@@ -166,10 +220,15 @@ int main(int argc, char** argv) {
     const U64 max_high_group = *std::max_element(high_weight.begin(), high_weight.end());
     const U64 max_low_group = *std::max_element(low_weight.begin(), low_weight.end());
     const LD avg = LD(total) / ngpu;
+
+    const U64 high_shard_remote_states = remote_states_high_active(high, low, ngpu, pair, hb);
+    const U64 low_shard_remote_states = remote_states_low_active(high, low, ngpu, pair, lb);
     const LD auth_bytes = LD(total) * 4.0L;
-    const LD one_window = 2.0L * W * auth_bytes;
-    const LD two_windows = 2.0L * one_window;
-    const LD remote_frac = ngpu == 1 ? 0.0L : LD(ngpu - 1) / ngpu;
+    const LD one_window_roundtrip = 2.0L * W * auth_bytes;
+    const LD two_window_roundtrip = 2.0L * one_window_roundtrip;
+    const LD uniform_remote = ngpu == 1 ? 0.0L : LD(ngpu - 1) / ngpu;
+    const LD high_shard_peer_bytes = 2.0L * W * LD(high_shard_remote_states) * 4.0L;
+    const LD low_shard_peer_bytes = 2.0L * W * LD(low_shard_remote_states) * 4.0L;
 
     std::cout << std::fixed << std::setprecision(6)
               << "factor-mask-shard W=" << W << " low=" << low << " high=" << high
@@ -184,10 +243,12 @@ int main(int argc, char** argv) {
               << " low_shard_max_gib=" << double(gib(lmax))
               << " low_imbalance_frac=" << double(LD(lmax - lmin) / avg) << '\n'
               << "popcount_mutual_information_bits=" << double(mi) << '\n'
-              << "two_window_group_roundtrip_tib_per_residue=" << double(tib(two_windows)) << '\n'
-              << "one_window_group_roundtrip_tib_per_residue=" << double(tib(one_window)) << '\n'
-              << "uniform_flat_remote_tib_two_windows=" << double(tib(two_windows * remote_frac)) << '\n'
-              << "mask_shard_remote_tib_one_window_model=" << double(tib(one_window * remote_frac)) << '\n';
+              << "two_window_group_roundtrip_tib_per_residue=" << double(tib(two_window_roundtrip)) << '\n'
+              << "uniform_flat_remote_tib_two_windows=" << double(tib(two_window_roundtrip * uniform_remote)) << '\n'
+              << "high_mask_shard_remote_fraction=" << double(LD(high_shard_remote_states) / total)
+              << " high_mask_shard_peer_tib=" << double(tib(high_shard_peer_bytes)) << '\n'
+              << "low_mask_shard_remote_fraction=" << double(LD(low_shard_remote_states) / total)
+              << " low_mask_shard_peer_tib=" << double(tib(low_shard_peer_bytes)) << '\n';
 
     std::cout << "high_shard_gib=";
     for (int d = 0; d < ngpu; ++d) std::cout << (d ? "," : "") << double(gib(hb.bins[d]));
