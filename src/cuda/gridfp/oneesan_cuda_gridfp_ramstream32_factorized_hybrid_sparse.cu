@@ -45,7 +45,7 @@ int main(int argc, char** argv) {
     LowDescHost lowdesc = build_low_descriptors(storage, layout);
     HighDescHost highdesc = build_high_descriptors(storage, layout);
     LowOrbitHost orbit = build_cpu_low_orbit(storage, layout, lowdesc);
-    CpuLowSparseHost sparse = build_cpu_low_sparse(layout, lowdesc, orbit);
+    CpuLowSparseHost sparse = build_cpu_low_sparse(storage, layout, lowdesc, orbit);
     double meta_build_s = ram_seconds_since(meta0);
 
     WindowPlan high_wp = make_direct2d_window(true);
@@ -68,6 +68,7 @@ int main(int argc, char** argv) {
     double sparse_orbit_mib = double(sparse.orbit_ops.size()*sizeof(CpuLowSparseOrbitOp))/(1<<20);
     double sparse_closure_mib = double(sparse.closure_ops.size()*sizeof(uint64_t))/(1<<20);
     double sparse_offsets_mib = double((sparse.orbit_off.size()+sparse.closure_off.size())*sizeof(uint32_t))/(1<<20);
+    double sparse_cross_mib = double(sparse.high_cross_rank.size()*sizeof(uint16_t))/(1<<20);
     double mask_mib = double((G_FACTOR.low_mask_codes.size()+G_FACTOR.low_mask_off.size()
         +G_FACTOR.high_mask_codes.size()+G_FACTOR.high_mask_off.size())*sizeof(uint32_t))/(1<<20);
     double dense_host_release_mib = double((storage.low_packed_rank.size()+storage.high_packed_rank.size()
@@ -82,13 +83,14 @@ int main(int argc, char** argv) {
 
     if (plan_only) {
         std::cout
-            << "backend=gridfp-ramstream32-factorized-hybrid-sparse-v4.3-plan"
+            << "backend=gridfp-ramstream32-factorized-hybrid-sparse-v4.5-plan"
             << " n=" << n
             << " gpu_high_desc_mib=" << highdesc_mib
             << " gpu_mask_mib=" << mask_mib
             << " cpu_sparse_orbit_mib=" << sparse_orbit_mib
             << " cpu_sparse_closure_mib=" << sparse_closure_mib
             << " cpu_sparse_offsets_mib=" << sparse_offsets_mib
+            << " cpu_sparse_cross_rank_mib=" << sparse_cross_mib
             << " cpu_dense_meta_replaced_mib=" << dense_cpu_meta_mib
             << " dense_host_release_mib=" << dense_host_release_mib
             << " meta_build_s=" << meta_build_s
@@ -134,11 +136,12 @@ int main(int argc, char** argv) {
     double wall_s=ram_seconds_since(wall0);
     Count answer=main_auth.ptr[answer_rank];
     std::cout
-        << "backend=gridfp-ramstream32-factorized-hybrid-sparse-v4.3"
+        << "backend=gridfp-ramstream32-factorized-hybrid-sparse-v4.5"
         << " n="<<n<<" residue="<<answer<<" modulus="<<mod
         << " gpu_high_desc_mib="<<highdesc_mib<<" gpu_mask_mib="<<mask_mib
         << " cpu_sparse_orbit_mib="<<sparse_orbit_mib
         << " cpu_sparse_closure_mib="<<sparse_closure_mib
+        << " cpu_sparse_cross_rank_mib="<<sparse_cross_mib
         << " gpu_groups="<<gpu.groups<<" cpu_groups="<<cpu.groups()
         << " cpu_workers="<<cpu_workers<<" cpu_scratch_gib=0"
         << " h2d_s="<<gpu.h2d_s<<" gpu_kernel_s="<<gpu.kernel_s<<" d2h_s="<<gpu.d2h_s
