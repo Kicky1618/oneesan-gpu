@@ -1,0 +1,56 @@
+name: factor orbit aux research
+
+on:
+  push:
+    paths:
+      - 'src/cpp/probes/factor_orbit_aux_semantics.cpp'
+      - 'src/cuda/b300/maskshard_highio.cuh'
+      - 'src/cuda/b300/maskshard_highorbit.cuh'
+      - 'src/cuda/b300/maskshard_loworbit.cuh'
+      - 'src/cuda/b300/maskshard_index.cuh'
+      - 'src/cpp/probes/factor_maskshard_memory.cpp'
+      - '.github/workflows/factor-orbit-aux.yml'
+  pull_request:
+    paths:
+      - 'src/cpp/probes/factor_orbit_aux_semantics.cpp'
+      - 'src/cuda/b300/maskshard_highio.cuh'
+      - 'src/cuda/b300/maskshard_highorbit.cuh'
+      - 'src/cuda/b300/maskshard_loworbit.cuh'
+      - 'src/cuda/b300/maskshard_index.cuh'
+      - 'src/cpp/probes/factor_maskshard_memory.cpp'
+      - '.github/workflows/factor-orbit-aux.yml'
+  workflow_dispatch:
+
+jobs:
+  semantics:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        include:
+          - width: 10
+            low: 5
+          - width: 12
+            low: 6
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build orbit aux semantic probe
+        run: |
+          mkdir -p build
+          g++ -O3 -std=c++17 -Wall -Wextra -Werror \
+            src/cpp/probes/factor_orbit_aux_semantics.cpp \
+            -o build/factor_orbit_aux_semantics
+      - name: Verify descriptor plus aux orbit targets
+        run: build/factor_orbit_aux_semantics ${{ matrix.width }} ${{ matrix.low }}
+
+  memory:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build v0.5 HBM budget probe
+        run: |
+          mkdir -p build
+          g++ -O3 -std=c++17 -Wall -Wextra -Werror \
+            src/cpp/probes/factor_maskshard_memory.cpp \
+            -o build/factor_maskshard_memory
+      - name: Verify n=27 v0.5 HBM budget
+        run: build/factor_maskshard_memory 28 14 8 268.59
