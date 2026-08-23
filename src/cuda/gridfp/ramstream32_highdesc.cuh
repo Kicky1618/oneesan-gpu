@@ -67,6 +67,12 @@ struct HighDescHost {
     uint64_t main_observations = 0;
     uint64_t main_cross = 0;
     uint64_t main_invalid = 0;
+#ifdef MASKSHARD_HIGH_CLOSURE_ROWS
+    // Packed source coordinate, encoded with the ordinary block/rank fields.
+    // Entries are grouped by HIGH p in closure_off.
+    std::vector<uint32_t> closure_rows;
+    std::array<uint32_t, MAXW + 2> closure_off{};
+#endif
 };
 
 static HighDescHost build_high_descriptors(
@@ -101,6 +107,9 @@ static HighDescHost build_high_descriptors(
 
     for (int p = TARGET_W - 1; p >= L + 1; --p) {
         int pi = (TARGET_W - 1) - p;
+#ifdef MASKSHARD_HIGH_CLOSURE_ROWS
+        d.closure_off[size_t(pi)] = uint32_t(d.closure_rows.size());
+#endif
 
         for (size_t bid = 0; bid < layout.main_blocks.size(); ++bid) {
             const StorageBlock& sb = layout.main_blocks[bid];
@@ -115,6 +124,7 @@ static HighDescHost build_high_descriptors(
                 MateID m = MateID(lc)
                     | (MateID(sb.c) << (2 * L))
                     | (MateID(hc) << (2 * (L + 1)));
+                const MateValuePair source_pair = mpair(m, p);
                 auto z = oneesan::gridfp::include_horizontal(m, TARGET_W, p);
                 uint32_t out = highdesc_pack(HIGHDESC_INVALID, 0, 0);
 
@@ -170,8 +180,19 @@ static HighDescHost build_high_descriptors(
                     }
                 }
                 d.main_desc[size_t(pi) * mt + d.main_base[bid] + hr] = out;
+#ifdef MASKSHARD_HIGH_CLOSURE_ROWS
+                const uint32_t kind = out >> HIGHDESC_KIND_SHIFT;
+                if ((source_pair == LL || source_pair == RR || source_pair == RL)
+                    && (kind == HIGHDESC_BLOCK || kind == HIGHDESC_CROSS)) {
+                    d.closure_rows.push_back(
+                        highdesc_pack(HIGHDESC_MAIN, uint32_t(bid), hr));
+                }
+#endif
             }
         }
+#ifdef MASKSHARD_HIGH_CLOSURE_ROWS
+        d.closure_off[size_t(pi) + 1] = uint32_t(d.closure_rows.size());
+#endif
 
         for (size_t bid = 0; bid < layout.block_blocks.size(); ++bid) {
             const StorageBlock& sb = layout.block_blocks[bid];
@@ -219,6 +240,11 @@ static HighDescHost build_high_descriptors(
         << " block_active=" << d.block_total
         << " main_desc_mib=" << double(d.main_desc.size() * sizeof(uint32_t)) / (1 << 20)
         << " block_desc_mib=" << double(d.block_desc.size() * sizeof(uint32_t)) / (1 << 20)
+#ifdef MASKSHARD_HIGH_CLOSURE_ROWS
+        << " closure_rows=" << d.closure_rows.size()
+        << " closure_rows_mib="
+        << double(d.closure_rows.size() * sizeof(uint32_t)) / double(1 << 20)
+#endif
         << " cross_frac=" << cross_frac
         << " invalid_frac=" << invalid_frac
         << "\n";
@@ -231,10 +257,17 @@ __constant__ uint32_t D_HIGHDESC_MAIN_BASE[64];
 __constant__ uint32_t D_HIGHDESC_BLOCK_BASE[32];
 __constant__ uint32_t D_HIGHDESC_MAIN_TOTAL;
 __constant__ uint32_t D_HIGHDESC_BLOCK_TOTAL;
+#ifdef MASKSHARD_HIGH_CLOSURE_ROWS
+__constant__ uint32_t* D_HIGHDESC_CLOSURE_ROWS;
+__constant__ uint32_t D_HIGHDESC_CLOSURE_OFF[MAXW + 2];
+#endif
 
 struct HighDescDeviceTables {
     uint32_t* main_desc = nullptr;
     uint32_t* block_desc = nullptr;
+#ifdef MASKSHARD_HIGH_CLOSURE_ROWS
+    uint32_t* closure_rows = nullptr;
+#endif
 
     void install(const HighDescHost& d) {
         if (!d.main_desc.empty()) {
@@ -247,6 +280,15 @@ struct HighDescDeviceTables {
             ck(cudaMemcpy(block_desc, d.block_desc.data(), d.block_desc.size() * sizeof(uint32_t),
                           cudaMemcpyHostToDevice), "highdesc block copy");
         }
+#ifdef MASKSHARD_HIGH_CLOSURE_ROWS
+        if (!d.closure_rows.empty()) {
+            ck(cudaMalloc(&closure_rows, d.closure_rows.size() * sizeof(uint32_t)),
+               "highdesc closure rows alloc");
+            ck(cudaMemcpy(closure_rows, d.closure_rows.data(),
+                          d.closure_rows.size() * sizeof(uint32_t), cudaMemcpyHostToDevice),
+               "highdesc closure rows copy");
+        }
+#endif
         ck(cudaMemcpyToSymbol(D_HIGHDESC_MAIN, &main_desc, sizeof(main_desc)), "highdesc main ptr");
         ck(cudaMemcpyToSymbol(D_HIGHDESC_BLOCK, &block_desc, sizeof(block_desc)), "highdesc block ptr");
         ck(cudaMemcpyToSymbol(D_HIGHDESC_MAIN_BASE, d.main_base.data(),
@@ -257,11 +299,22 @@ struct HighDescDeviceTables {
                               "highdesc main total");
         ck(cudaMemcpyToSymbol(D_HIGHDESC_BLOCK_TOTAL, &d.block_total, sizeof(d.block_total)),
                               "highdesc block total");
+#ifdef MASKSHARD_HIGH_CLOSURE_ROWS
+        ck(cudaMemcpyToSymbol(D_HIGHDESC_CLOSURE_ROWS, &closure_rows, sizeof(closure_rows)),
+                              "highdesc closure rows ptr");
+        ck(cudaMemcpyToSymbol(D_HIGHDESC_CLOSURE_OFF, d.closure_off.data(),
+                              sizeof(uint32_t) * d.closure_off.size()),
+                              "highdesc closure rows off");
+#endif
     }
 
     void release() {
         if (main_desc) cudaFree(main_desc);
         if (block_desc) cudaFree(block_desc);
+#ifdef MASKSHARD_HIGH_CLOSURE_ROWS
+        if (closure_rows) cudaFree(closure_rows);
+        closure_rows = nullptr;
+#endif
         main_desc = block_desc = nullptr;
     }
 };
