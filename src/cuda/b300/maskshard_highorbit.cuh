@@ -4,7 +4,7 @@
 #include "maskshard_index.cuh"
 
 #if defined(MASKSHARD_BLOCK_ORBIT) && !defined(MASKSHARD_ORBIT_AUX)
-#error "MASKSHARD_BLOCK_ORBIT currently reuses MASKSHARD_ORBIT_AUX target tables"
+#error "MASKSHARD_BLOCK_ORBIT currently requires an orbit aux target table"
 #endif
 
 static_assert(HIGH_LUT_K < 16, "compact HIGH+center orbit code requires HIGH<16");
@@ -113,7 +113,12 @@ __global__ void maskshard_main_block_highorbit_kernel(
 
         const size_t sdi = size_t(pi) * D_HIGHDESC_MAIN_TOTAL
                          + D_HIGHDESC_MAIN_BASE[sbid] + shr;
+#ifdef MASKSHARD_BLOCK_ORBIT_AUX
+        // v0.7 compact aux has exactly the same coordinate system as block_desc.
+        const uint32_t aux = D_MS_HIGH_ORBIT_AUX[bdi];
+#else
         const uint32_t aux = D_MS_HIGH_ORBIT_AUX[sdi];
+#endif
         const uint32_t ak = maskshard_orbit_aux_kind(aux);
         if (ak == MS_ORBIT_AUX_INVALID) continue;
 
