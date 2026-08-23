@@ -5,12 +5,21 @@
 #include <iostream>
 #include <vector>
 
-// Symmetric descriptor for the HIGH window.  HIGH + center are active while
-// exact LOW topology is normally unchanged.  Only LL whose partner search
-// crosses below the center needs the full topology codec.
+// HIGH-window descriptor.  HIGH + center are active.  The only transition that
+// can touch exact LOW topology is a boundary-crossing LL partner search.  Once
+// it crosses the center, the operation on LOW is only: find the `depth`-th
+// unmatched R from the boundary and flip R -> L.  We encode that depth in four
+// spare descriptor bits and rank the modified LOW code directly.
+//
+// bits 31..30: kind
+// bits 29..26: boundary matching depth (CROSS only)
+// bits 25..20: destination FBlock index
+// bits 19..0 : destination HIGH all-rank
 static constexpr uint32_t HIGHDESC_RANK_MASK = (1u << 20) - 1u;
 static constexpr uint32_t HIGHDESC_BLOCK_MASK = 0x3fu;
+static constexpr uint32_t HIGHDESC_DEPTH_MASK = 0x0fu;
 static constexpr int HIGHDESC_BLOCK_SHIFT = 20;
+static constexpr int HIGHDESC_DEPTH_SHIFT = 26;
 static constexpr int HIGHDESC_KIND_SHIFT = 30;
 
 enum HighDescKind : uint32_t {
@@ -20,13 +29,32 @@ enum HighDescKind : uint32_t {
     HIGHDESC_CROSS = 3,
 };
 
-static inline uint32_t highdesc_pack(HighDescKind kind, uint32_t block, uint32_t rank) {
-    if (rank > HIGHDESC_RANK_MASK || block > HIGHDESC_BLOCK_MASK) {
-        std::cerr << "highdesc encoding overflow block=" << block << " rank=" << rank << "\n";
+static inline uint32_t highdesc_pack(
+    HighDescKind kind, uint32_t block, uint32_t rank, uint32_t depth = 0
+) {
+    if (rank > HIGHDESC_RANK_MASK || block > HIGHDESC_BLOCK_MASK
+        || depth > HIGHDESC_DEPTH_MASK) {
+        std::cerr << "highdesc encoding overflow block=" << block
+                  << " rank=" << rank << " depth=" << depth << "\n";
         std::exit(60);
     }
     return (uint32_t(kind) << HIGHDESC_KIND_SHIFT)
+        | (depth << HIGHDESC_DEPTH_SHIFT)
         | (block << HIGHDESC_BLOCK_SHIFT) | rank;
+}
+
+static int highdesc_cross_depth_host(MateID m, int p) {
+    constexpr int L = LOW_LUT_K;
+    MateID t = msetpair(m, p, NN);
+    int q = p - 1, s = 1;
+    for (;;) {
+        --q;
+        if (q < L) return s; // next symbol is LOW[L-1]
+        MateValue v = mget(t, q);
+        if (v == ::L) ++s;
+        else if (v == R) --s;
+        if (!s) return 0;
+    }
 }
 
 struct HighDescHost {
@@ -94,17 +122,33 @@ static HighDescHost build_high_descriptors(
                     ++d.main_invalid;
                 } else {
                     uint32_t lc2 = uint32_t(z.mate) & LM;
+                    uint32_t hc2 = z.blocked
+                        ? uint32_t((z.mate >> (2 * L)) & HM)
+                        : uint32_t((z.mate >> (2 * (L + 1))) & HM);
+                    uint32_t packed = storage.high_packed_rank[hc2];
+                    if (packed == 0xffffffffu) {
+                        std::cerr << "highdesc destination HIGH code missing\n";
+                        std::exit(61);
+                    }
+                    uint32_t hr2 = packed >> H;
+
                     if (lc2 != lc) {
-                        out = highdesc_pack(HIGHDESC_CROSS, 0, 0);
+                        int depth = highdesc_cross_depth_host(m, p);
+                        if (depth <= 0 || depth > int(HIGHDESC_DEPTH_MASK) || !z.blocked) {
+                            std::cerr << "highdesc invalid cross depth=" << depth
+                                      << " blocked=" << z.blocked << "\n";
+                            std::exit(68);
+                        }
+                        int h2 = seg_end_height_host(hc2, H);
+                        uint32_t dbid = uint32_t(h2);
+                        if (dbid >= layout.block_blocks.size()
+                            || hr2 >= layout.block_blocks[dbid].rows) {
+                            std::cerr << "highdesc cross blocked destination mismatch\n";
+                            std::exit(69);
+                        }
+                        out = highdesc_pack(HIGHDESC_CROSS, dbid, hr2, uint32_t(depth));
                         ++d.main_cross;
                     } else if (z.blocked) {
-                        uint32_t hc2 = uint32_t((z.mate >> (2 * L)) & HM);
-                        uint32_t packed = storage.high_packed_rank[hc2];
-                        if (packed == 0xffffffffu) {
-                            std::cerr << "highdesc blocked HIGH code missing\n";
-                            std::exit(61);
-                        }
-                        uint32_t hr2 = packed >> H;
                         int h2 = seg_end_height_host(hc2, H);
                         uint32_t dbid = uint32_t(h2);
                         if (dbid >= layout.block_blocks.size()
@@ -114,13 +158,6 @@ static HighDescHost build_high_descriptors(
                         }
                         out = highdesc_pack(HIGHDESC_BLOCK, dbid, hr2);
                     } else {
-                        uint32_t hc2 = uint32_t((z.mate >> (2 * (L + 1))) & HM);
-                        uint32_t packed = storage.high_packed_rank[hc2];
-                        if (packed == 0xffffffffu) {
-                            std::cerr << "highdesc main HIGH code missing\n";
-                            std::exit(63);
-                        }
-                        uint32_t hr2 = packed >> H;
                         int he2 = seg_end_height_host(hc2, H);
                         int cv2 = int(mget(z.mate, L));
                         uint32_t dbid = uint32_t(3 * he2 + cv2);
@@ -238,10 +275,32 @@ __device__ __forceinline__ uint32_t highdesc_block(uint32_t x) {
 __device__ __forceinline__ uint32_t highdesc_rank(uint32_t x) {
     return x & HIGHDESC_RANK_MASK;
 }
+__device__ __forceinline__ uint32_t highdesc_depth(uint32_t x) {
+    return (x >> HIGHDESC_DEPTH_SHIFT) & HIGHDESC_DEPTH_MASK;
+}
+
+__device__ __forceinline__ uint32_t highdesc_flip_low(uint32_t lc, uint32_t depth) {
+    int s = int(depth);
+#pragma unroll
+    for (int pos = LOW_LUT_K - 1; pos >= 0; --pos) {
+        MateValue v = MateValue((lc >> (2 * pos)) & 3u);
+        if (v == ::L) {
+            ++s;
+        } else if (v == R) {
+            if (--s == 0) {
+                uint32_t z = 3u << (2 * pos);
+                return (lc & ~z) | (uint32_t(::L) << (2 * pos));
+            }
+        }
+    }
+    return 0xffffffffu;
+}
 
 __global__ void main_group_highdesc_kernel(
     const Count* in, Code n, Count* out_main, Count* out_block, int p
 ) {
+    constexpr int S = MAXW + 2;
+    constexpr uint32_t LR_MASK = (1u << LOW_LUT_K) - 1u;
     Code i = Code(blockIdx.x) * blockDim.x + threadIdx.x;
     Code step = Code(gridDim.x) * blockDim.x;
     uint32_t pi = uint32_t((TARGET_W - 1) - p);
@@ -267,11 +326,15 @@ __global__ void main_group_highdesc_kernel(
             Code j = y.off + Code(highdesc_rank(desc)) * y.stride + lr;
             atomic_add_mod(out_block + j, c);
         } else if (kind == HIGHDESC_CROSS) {
-            MateID m = factor_unrank_main(i);
-            auto z = oneesan::gridfp::include_horizontal(m, TARGET_W, p);
-            if (!z.valid) continue;
-            if (z.blocked) atomic_add_mod(out_block + factor_rank_block(z.mate), c);
-            else atomic_add_mod(out_main + factor_rank_main(z.mate), c);
+            uint32_t a = D_F_LOW_MASK_OFF[size_t(D_F_MASK) * S + x.hs];
+            uint32_t lc = D_F_LOW_MASK_CODES[a + lr];
+            uint32_t lc2 = highdesc_flip_low(lc, highdesc_depth(desc));
+            if (lc2 == 0xffffffffu) continue;
+            uint32_t lp = D_F_LOW_PACKED_RANK[lc2];
+            uint32_t lr2 = lp & LR_MASK;
+            FBlock y = D_F_BLOCK_BLOCKS[highdesc_block(desc)];
+            Code j = y.off + Code(highdesc_rank(desc)) * y.stride + lr2;
+            atomic_add_mod(out_block + j, c);
         }
     }
 }
