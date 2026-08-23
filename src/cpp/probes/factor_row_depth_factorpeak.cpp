@@ -12,27 +12,26 @@ struct CodePeak {
     std::uint8_t peak = 0;
 };
 
-static void enum_low_rec(int pos, int h, int start_h, std::uint32_t code,
+static void enum_low_rec(int pos, int h, std::uint32_t code,
                          std::uint8_t peak, std::vector<CodePeak>& out) {
     if (pos < 0) {
         if (h == 0) out.push_back({code, peak});
         return;
     }
     if (h < 0 || h > pos + 1) return;
-    enum_low_rec(pos - 1, h, start_h, code, peak, out);
+    enum_low_rec(pos - 1, h, code, peak, out);
     if (h > 0)
-        enum_low_rec(pos - 1, h - 1, start_h,
+        enum_low_rec(pos - 1, h - 1,
                      code | (1u << (2 * pos)), peak, out);
-    enum_low_rec(pos - 1, h + 1, start_h,
+    enum_low_rec(pos - 1, h + 1,
                  code | (2u << (2 * pos)),
                  std::uint8_t(std::max<int>(peak, h + 1)), out);
-    (void)start_h;
 }
 
 static std::vector<std::vector<CodePeak>> enumerate_low(int len) {
     std::vector<std::vector<CodePeak>> by_h(len + 2);
     for (int h = 0; h <= len + 1; ++h)
-        enum_low_rec(len - 1, h, h, 0, std::uint8_t(h), by_h[h]);
+        enum_low_rec(len - 1, h, 0, std::uint8_t(h), by_h[h]);
     return by_h;
 }
 
@@ -44,8 +43,10 @@ static void enum_high_rec(int pos, int h, std::uint32_t code, std::uint8_t peak,
     }
     enum_high_rec(pos - 1, h, code, peak, by_h);
     if (h > 0)
-        enum_high_rec(pos - 1, h - 1, code | (1u << (2 * pos)), peak, by_h);
-    enum_high_rec(pos - 1, h + 1, code | (2u << (2 * pos)),
+        enum_high_rec(pos - 1, h - 1,
+                      code | (1u << (2 * pos)), peak, by_h);
+    enum_high_rec(pos - 1, h + 1,
+                  code | (2u << (2 * pos)),
                   std::uint8_t(std::max<int>(peak, h + 1)), by_h);
 }
 
@@ -70,6 +71,20 @@ static U64 capped_state_count(int width, int cap) {
     return cur[0];
 }
 
+static std::vector<std::vector<U64>> peak_cumulative(
+    const std::vector<std::vector<CodePeak>>& by_h, int max_peak
+) {
+    std::vector<std::vector<U64>> out(
+        by_h.size(), std::vector<U64>(max_peak + 1));
+    for (std::size_t h = 0; h < by_h.size(); ++h) {
+        for (const CodePeak& x : by_h[h])
+            if (x.peak <= max_peak) ++out[h][x.peak];
+        for (int p = 1; p <= max_peak; ++p)
+            out[h][p] += out[h][p - 1];
+    }
+    return out;
+}
+
 int main(int argc, char** argv) {
     const int W = argc > 1 ? std::atoi(argv[1]) : 28;
     const int low = argc > 2 ? std::atoi(argv[2]) : 14;
@@ -82,29 +97,30 @@ int main(int argc, char** argv) {
     for (const auto& v : lows) low_entries += v.size();
     for (const auto& v : highs) high_entries += v.size();
 
+    const int maxh = std::min(low, high + 1);
+    const auto lc = peak_cumulative(lows, maxh);
+    const auto hc = peak_cumulative(highs, maxh);
+
     auto main_cap = [&](int cap) -> U64 {
         U64 z = 0;
-        for (int he = 0; he < int(highs.size()); ++he) {
-            for (const CodePeak& hp : highs[he]) if (hp.peak <= cap) {
-                for (int cv = 0; cv < 3; ++cv) {
-                    const int hs = he + (cv == 2 ? 1 : cv == 1 ? -1 : 0);
-                    if (hs < 0 || hs >= int(lows.size())) continue;
-                    for (const CodePeak& lp : lows[hs])
-                        if (lp.peak <= cap) ++z;
-                }
+        for (int he = 0; he < int(hc.size()); ++he) {
+            const U64 hn = hc[he][cap];
+            if (!hn) continue;
+            for (int cv = 0; cv < 3; ++cv) {
+                const int hs = he + (cv == 2 ? 1 : cv == 1 ? -1 : 0);
+                if (hs < 0 || hs >= int(lc.size())) continue;
+                z += hn * lc[hs][cap];
             }
         }
         return z;
     };
     auto block_cap = [&](int cap) -> U64 {
         U64 z = 0;
-        for (int h = 0; h < int(highs.size()) && h < int(lows.size()); ++h)
-            for (const CodePeak& hp : highs[h]) if (hp.peak <= cap)
-                for (const CodePeak& lp : lows[h]) if (lp.peak <= cap) ++z;
+        for (int h = 0; h < int(hc.size()) && h < int(lc.size()); ++h)
+            z += hc[h][cap] * lc[h][cap];
         return z;
     };
 
-    const int maxh = std::min(low, high + 1);
     const U64 M = main_cap(maxh);
     const U64 D = block_cap(maxh);
     U64 words = 0;
