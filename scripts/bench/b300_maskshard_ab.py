@@ -2,15 +2,16 @@
 """Build/run B300 mask-shard research variants on identical inputs.
 
 The driver intentionally runs variants sequentially so each process releases its
-HBM before the next candidate starts.  It verifies that every successful run
-returns the same residue for each modulus and writes raw stdout/stderr plus a
-machine-readable summary under the result directory.
+HBM before the next candidate starts. It verifies that every successful run
+returns the requested n/GPU count/modulus sequence and the same residue for each
+modulus, then writes raw stdout/stderr plus a machine-readable summary.
 """
 
 from __future__ import annotations
 
 import argparse
 import json
+import math
 import os
 from pathlib import Path
 import shlex
@@ -18,7 +19,7 @@ import subprocess
 import sys
 import threading
 import time
-from typing import Dict, Iterable, List, Tuple
+from typing import Dict, List, Tuple
 
 ROOT = Path(__file__).resolve().parents[2]
 BUILD_SCRIPT = ROOT / "scripts" / "build" / "b300-hbm32-batch.sh"
@@ -60,6 +61,61 @@ def result_rows(stdout: str) -> List[Dict[str, str]]:
         if "residue" in row and "modulus" in row and "wall_s" in row:
             rows.append(row)
     return rows
+
+
+def validate_result_rows(
+    name: str,
+    rows: List[Dict[str, str]],
+    *,
+    n: int,
+    gpus: int,
+    moduli: List[int],
+) -> None:
+    if len(rows) != len(moduli):
+        raise ValueError(
+            f"{name} produced {len(rows)} result rows for {len(moduli)} moduli"
+        )
+
+    expected_moduli = [str(x) for x in moduli]
+    got_moduli = [row.get("modulus", "") for row in rows]
+    if got_moduli != expected_moduli:
+        raise ValueError(
+            f"{name} modulus sequence mismatch: got={got_moduli} "
+            f"expected={expected_moduli}"
+        )
+
+    for i, row in enumerate(rows):
+        if row.get("n") != str(n):
+            raise ValueError(f"{name} reported n={row.get('n')} but requested n={n}")
+        if row.get("gpus") != str(gpus):
+            raise ValueError(
+                f"{name} reported gpus={row.get('gpus')} but requested gpus={gpus}; "
+                "the solver may have silently reduced the GPU count"
+            )
+        if row.get("residue_index") != str(i):
+            raise ValueError(
+                f"{name} residue_index mismatch at row {i}: {row.get('residue_index')}"
+            )
+        if row.get("residues_total") != str(len(moduli)):
+            raise ValueError(
+                f"{name} residues_total mismatch at row {i}: {row.get('residues_total')}"
+            )
+
+        for key in PHASE_KEYS:
+            if key not in row:
+                raise ValueError(f"{name} result row {i} is missing {key}")
+            try:
+                value = float(row[key])
+            except ValueError as exc:
+                raise ValueError(
+                    f"{name} result row {i} has non-numeric {key}={row[key]!r}"
+                ) from exc
+            if not math.isfinite(value) or value < 0:
+                raise ValueError(
+                    f"{name} result row {i} has invalid {key}={row[key]!r}"
+                )
+        if float(row["wall_s"]) <= 0:
+            raise ValueError(f"{name} result row {i} has non-positive wall_s")
 
 
 def tee_process(cmd: List[str], env: Dict[str, str]) -> Tuple[int, str, str]:
@@ -151,6 +207,49 @@ def print_comparison(summary: List[Dict[str, object]]) -> None:
             print(f"  modulus={mod} {variant}: {wall:.6f}s  ratio={ratio:.6f}")
 
 
+def run_self_test() -> None:
+    line0 = (
+        "backend=x n=27 gpus=8 residue=123 modulus=4294967291 "
+        "residue_index=0 residues_total=2 setup_s=1 wall_s=2 "
+        "high_io_sum_s=3 high_orbit_sum_s=4 high_closure_sum_s=5 "
+        "low_orbit_sum_s=6 low_closure_sum_s=7 max_scratch_gib=8"
+    )
+    line1 = (
+        "backend=x n=27 gpus=8 residue=456 modulus=4294967279 "
+        "residue_index=1 residues_total=2 setup_s=1 wall_s=2 "
+        "high_io_sum_s=3 high_orbit_sum_s=4 high_closure_sum_s=5 "
+        "low_orbit_sum_s=6 low_closure_sum_s=7 max_scratch_gib=8"
+    )
+    rows = result_rows("noise\n" + line0 + "\n" + line1 + "\n")
+    validate_result_rows(
+        "self-test", rows, n=27, gpus=8, moduli=[4294967291, 4294967279]
+    )
+
+    bad_gpu = [dict(row) for row in rows]
+    bad_gpu[0]["gpus"] = "4"
+    try:
+        validate_result_rows(
+            "self-test", bad_gpu, n=27, gpus=8, moduli=[4294967291, 4294967279]
+        )
+    except ValueError:
+        pass
+    else:
+        raise AssertionError("GPU-count mismatch was not rejected")
+
+    bad_mod = [dict(row) for row in rows]
+    bad_mod[1]["modulus"] = bad_mod[0]["modulus"]
+    try:
+        validate_result_rows(
+            "self-test", bad_mod, n=27, gpus=8, moduli=[4294967291, 4294967279]
+        )
+    except ValueError:
+        pass
+    else:
+        raise AssertionError("modulus-sequence mismatch was not rejected")
+
+    print("b300-maskshard-ab self-test OK")
+
+
 def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--n", type=int, default=27)
@@ -177,12 +276,24 @@ def main() -> int:
     ap.add_argument("--result-dir", type=Path)
     ap.add_argument("--vram-reserve-mib", type=int)
     ap.add_argument("--dry-run", action="store_true")
+    ap.add_argument("--self-test", action="store_true")
     args = ap.parse_args()
 
-    if args.n + 1 != args.low + args.high + 1:
-        ap.error("LOW+HIGH must equal n")
+    if args.self_test:
+        run_self_test()
+        return 0
+
+    if args.n < 2:
+        ap.error("n must be at least 2")
+    if args.gpus < 1 or args.gpus > 8:
+        ap.error("gpus must be in [1,8]")
+    if args.low < 1 or args.high < 1 or args.low + args.high != args.n:
+        ap.error("LOW+HIGH must equal n and both must be positive")
     if args.threads < 32 or args.threads > 1024 or args.threads % 32:
         ap.error("threads must be a multiple of 32 in [32,1024]")
+    if args.vram_reserve_mib is not None and args.vram_reserve_mib < 0:
+        ap.error("vram-reserve-mib must be nonnegative")
+
     moduli = args.moduli or [4294967291]
     for mod in moduli:
         if not 2 <= mod <= 0xFFFFFFFF:
@@ -217,8 +328,11 @@ def main() -> int:
         "sources": {v: VARIANTS[v] for v in args.variants},
         "binaries": {v: str(binaries[v]) for v in args.variants},
         "git_head": subprocess.run(
-            ["git", "rev-parse", "HEAD"], cwd=ROOT, text=True,
-            stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
+            ["git", "rev-parse", "HEAD"],
+            cwd=ROOT,
+            text=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.DEVNULL,
         ).stdout.strip(),
     }
     (result_dir / "manifest.json").write_text(json.dumps(manifest, indent=2) + "\n")
@@ -245,16 +359,19 @@ def main() -> int:
         (result_dir / f"{name}.stdout.log").write_text(stdout)
         (result_dir / f"{name}.stderr.log").write_text(stderr)
         if rc:
-            print(f"ERROR: {name} exited rc={rc}; logs kept in {result_dir}", file=sys.stderr)
+            print(
+                f"ERROR: {name} exited rc={rc}; logs kept in {result_dir}",
+                file=sys.stderr,
+            )
             return rc
 
         rows = result_rows(stdout)
-        if len(rows) != len(moduli):
-            print(
-                f"ERROR: {name} produced {len(rows)} result rows for {len(moduli)} moduli",
-                file=sys.stderr,
-            )
+        try:
+            validate_result_rows(name, rows, n=args.n, gpus=args.gpus, moduli=moduli)
+        except ValueError as exc:
+            print(f"ERROR: {exc}", file=sys.stderr)
             return 90
+
         for row in rows:
             mod = row["modulus"]
             residue = row["residue"]
@@ -262,11 +379,12 @@ def main() -> int:
                 expected_residue[mod] = residue
             elif residue != expected_residue[mod]:
                 print(
-                    f"RESIDUE MISMATCH modulus={mod}: reference={expected_residue[mod]} "
-                    f"{name}={residue}",
+                    f"RESIDUE MISMATCH modulus={mod}: "
+                    f"reference={expected_residue[mod]} {name}={residue}",
                     file=sys.stderr,
                 )
                 return 91
+
         summary.append({"variant": name, "rows": rows})
         (result_dir / "summary.json").write_text(json.dumps(summary, indent=2) + "\n")
 
