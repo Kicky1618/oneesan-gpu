@@ -9,7 +9,7 @@
 #define RAMSTREAM_BIDESC_COMPACT_NO_MAIN
 #include "../oneesan_cuda_gridfp_ramstream32_factorized_bidesc_compact.cu"
 #undef RAMSTREAM_BIDESC_COMPACT_NO_MAIN
-#include "../ramstream32_cpu_low.hpp"
+#include "../ramstream32_cpu_low_inplace.hpp"
 
 static void enum_states_rec(int pos, int h, MateID m, std::vector<MateID>& out) {
     if (pos < 0) {
@@ -31,6 +31,46 @@ static inline Count ref_add(Count a, Count b, Count mod) {
     return (a >= mod - b) ? a - (mod - b) : a + b;
 }
 
+static void fill_factor(
+    RamCounts& main_auth, RamCounts& block_auth,
+    const std::vector<MateID>& main_states, const std::vector<MateID>& block_states,
+    const std::vector<Count>& main_values, const std::vector<Count>& block_values,
+    const StorageFactorHost& storage, const StorageLayout& layout
+) {
+    std::memset(main_auth.ptr, 0, main_auth.bytes);
+    std::memset(block_auth.ptr, 0, block_auth.bytes);
+    for (size_t i = 0; i < main_states.size(); ++i)
+        main_auth.ptr[storage_rank_main_host(main_states[i], storage, layout)] = main_values[i];
+    for (size_t i = 0; i < block_states.size(); ++i)
+        block_auth.ptr[storage_rank_block_host(block_states[i], storage, layout)] = block_values[i];
+}
+
+static bool compare_factor(
+    const char* tag,
+    const RamCounts& main_auth, const RamCounts& block_auth,
+    const std::vector<MateID>& main_states, const std::vector<MateID>& block_states,
+    const std::vector<Count>& rm, const std::vector<Count>& rd,
+    const StorageFactorHost& storage, const StorageLayout& layout
+) {
+    for (size_t i = 0; i < main_states.size(); ++i) {
+        Count got = main_auth.ptr[storage_rank_main_host(main_states[i], storage, layout)];
+        if (got != rm[i]) {
+            std::cerr << "FAIL " << tag << " main i=" << i
+                      << " got=" << got << " want=" << rm[i] << '\n';
+            return false;
+        }
+    }
+    for (size_t i = 0; i < block_states.size(); ++i) {
+        Count got = block_auth.ptr[storage_rank_block_host(block_states[i], storage, layout)];
+        if (got != rd[i]) {
+            std::cerr << "FAIL " << tag << " block i=" << i
+                      << " got=" << got << " want=" << rd[i] << '\n';
+            return false;
+        }
+    }
+    return true;
+}
+
 int main() {
     constexpr Count mod = 4294967291u;
     constexpr int W = TARGET_W;
@@ -42,6 +82,7 @@ int main() {
     StorageFactorHost storage = build_storage_factor_tables(G_FACTOR);
     StorageLayout layout = build_storage_layout(storage);
     LowDescHost lowdesc = build_low_descriptors(storage, layout);
+    LowOrbitHost orbit = build_cpu_low_orbit(storage, layout, lowdesc);
 
     auto main_states = enum_states(W);
     auto block_states = enum_states(W - 1);
@@ -60,20 +101,15 @@ int main() {
     RamCounts main_auth, block_auth;
     main_auth.alloc(layout.main_size, "selftest main");
     block_auth.alloc(layout.block_size, "selftest block");
-    std::vector<Count> rm(main_states.size()), rd(block_states.size());
+    std::vector<Count> init_m(main_states.size()), init_d(block_states.size());
 
     std::mt19937_64 rng(1618);
-    for (size_t i = 0; i < main_states.size(); ++i) {
-        Count v = Count(rng() % mod);
-        rm[i] = v;
-        main_auth.ptr[storage_rank_main_host(main_states[i], storage, layout)] = v;
-    }
-    for (size_t i = 0; i < block_states.size(); ++i) {
-        Count v = Count(rng() % mod);
-        rd[i] = v;
-        block_auth.ptr[storage_rank_block_host(block_states[i], storage, layout)] = v;
-    }
+    for (auto& v : init_m) v = Count(rng() % mod);
+    for (auto& v : init_d) v = Count(rng() % mod);
+    fill_factor(main_auth, block_auth, main_states, block_states,
+                init_m, init_d, storage, layout);
 
+    std::vector<Count> rm = init_m, rd = init_d;
     // Direct reference for exactly the LOW+center window p=LOW..1.
     for (int p = LOW_LUT_K; p >= 1; --p) {
         std::vector<Count> nm = rm;
@@ -84,17 +120,11 @@ int main() {
             if (!z.valid) continue;
             if (z.blocked) {
                 auto it = di.find(z.mate);
-                if (it == di.end()) {
-                    std::cerr << "reference blocked destination missing p=" << p << '\n';
-                    return 3;
-                }
+                if (it == di.end()) return 3;
                 nd[it->second] = ref_add(nd[it->second], c, mod);
             } else {
                 auto it = mi.find(z.mate);
-                if (it == mi.end()) {
-                    std::cerr << "reference main destination missing p=" << p << '\n';
-                    return 4;
-                }
+                if (it == mi.end()) return 4;
                 nm[it->second] = ref_add(nm[it->second], c, mod);
             }
         }
@@ -102,10 +132,7 @@ int main() {
             Count c = rd[i];
             MateID z = oneesan::gridfp::blocked_exclude(block_states[i], p);
             auto it = mi.find(z);
-            if (it == mi.end()) {
-                std::cerr << "reference blocked-exclude destination missing p=" << p << '\n';
-                return 5;
-            }
+            if (it == mi.end()) return 5;
             nm[it->second] = ref_add(nm[it->second], c, mod);
         }
         rm.swap(nm);
@@ -114,31 +141,31 @@ int main() {
 
     WindowPlan low_wp = make_direct2d_window(false);
     auto jobs = make_cpu_low_jobs(W, low_wp);
-    CpuLowPool pool(2);
-    pool.run(jobs, main_auth, block_auth, storage, layout, lowdesc, mod);
 
-    for (size_t i = 0; i < main_states.size(); ++i) {
-        Count got = main_auth.ptr[storage_rank_main_host(main_states[i], storage, layout)];
-        if (got != rm[i]) {
-            std::cerr << "FAIL main i=" << i << " got=" << got << " want=" << rm[i] << '\n';
-            return 10;
-        }
-    }
-    for (size_t i = 0; i < block_states.size(); ++i) {
-        Count got = block_auth.ptr[storage_rank_block_host(block_states[i], storage, layout)];
-        if (got != rd[i]) {
-            std::cerr << "FAIL block i=" << i << " got=" << got << " want=" << rd[i] << '\n';
-            return 11;
-        }
-    }
+    CpuLowPool out_pool(2);
+    out_pool.run(jobs, main_auth, block_auth, storage, layout, lowdesc, mod);
+    if (!compare_factor("out-of-place", main_auth, block_auth, main_states, block_states,
+                        rm, rd, storage, layout)) return 10;
+
+    fill_factor(main_auth, block_auth, main_states, block_states,
+                init_m, init_d, storage, layout);
+    CpuLowInplacePool in_pool(2);
+    in_pool.run(jobs, main_auth, block_auth, storage, layout, lowdesc, orbit, mod);
+    if (!compare_factor("in-place", main_auth, block_auth, main_states, block_states,
+                        rm, rd, storage, layout)) return 11;
 
     std::cout << "cpu-low-selftest OK W=" << W
               << " main=" << main_states.size()
               << " block=" << block_states.size()
-              << " groups=" << pool.groups()
-              << " scratch_mib=" << double(pool.peak_scratch_bytes()) / (1 << 20)
+              << " out_groups=" << out_pool.groups()
+              << " in_groups=" << in_pool.groups()
+              << " out_scratch_mib=" << double(out_pool.peak_scratch_bytes()) / (1 << 20)
+              << " in_scratch_mib=" << double(in_pool.peak_scratch_bytes()) / (1 << 20)
+              << " orbit_mib=" << double(orbit.rec.size() * sizeof(uint64_t)) / (1 << 20)
               << '\n';
-    pool.release();
+
+    in_pool.release();
+    out_pool.release();
     main_auth.release();
     block_auth.release();
     return 0;
