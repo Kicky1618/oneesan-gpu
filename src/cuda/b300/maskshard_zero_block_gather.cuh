@@ -9,11 +9,19 @@
 // BLOCKED output and every pre-existing BLOCKED state is excluded back to MAIN.
 //
 // The normal HIGH gather nevertheless reads every authoritative BLOCKED state
-// through P2P.  For the next HIGH window we only need a zero-initialized local
-// scratch vector, so replace the gather half with local zero stores while
-// preserving the ordinary scatter half after the HIGH window.
+// through P2P. v0.12 replaces that read with local zero stores. If
+// MASKSHARD_LAZY_ZERO_BLOCK_INIT is also enabled, the first HIGH orbit treats
+// the old BLOCKED value as zero and overwrites every BLOCKED coordinate before
+// closure, so even the local zero stores can be skipped.
 template<bool SCATTER>
 __global__ void maskshard_high_block_io_skipzero_kernel(Count* scratch, Code n) {
+#ifdef MASKSHARD_LAZY_ZERO_BLOCK_INIT
+    if constexpr (!SCATTER) {
+        (void)scratch;
+        (void)n;
+        return;
+    }
+#endif
     Code i = Code(blockIdx.x) * blockDim.x + threadIdx.x;
     const Code step = Code(gridDim.x) * blockDim.x;
     for (; i < n; i += step) {
