@@ -10,7 +10,6 @@
 
 using namespace oneesan::gridfp;
 using U64 = std::uint64_t;
-using U128 = unsigned __int128;
 
 static std::vector<MateID> enumerate_states(int width) {
     std::vector<MateID> out;
@@ -43,11 +42,6 @@ static U64 state_count(int width) {
         cur.swap(nxt);
     }
     return cur[0];
-}
-
-static long double as_ld(U128 x) {
-    const U64 lo = U64(x), hi = U64(x >> 64);
-    return (long double)hi * 18446744073709551616.0L + (long double)lo;
 }
 
 static void verify_small_width(int W) {
@@ -124,8 +118,11 @@ static void verify_small_width(int W) {
 
 int main(int argc, char** argv) {
     const int W = argc > 1 ? std::atoi(argv[1]) : 28;
-    const int exhaustive_max = argc > 2 ? std::atoi(argv[2]) : 13;
-    if (W < 4 || W > 30 || exhaustive_max < 4 || exhaustive_max > 13) return 1;
+    const int low = argc > 2 ? std::atoi(argv[2]) : 14;
+    const int exhaustive_max = argc > 3 ? std::atoi(argv[3]) : 13;
+    const int high = W - 1 - low;
+    if (W < 4 || W > 30 || low < 1 || high < 1
+        || exhaustive_max < 4 || exhaustive_max > 13) return 1;
 
     for (int w = 4; w <= exhaustive_max; ++w) verify_small_width(w);
 
@@ -137,13 +134,14 @@ int main(int argc, char** argv) {
     const long double aggregate_ratio =
         (long double)distinct_dest_per_p / (long double)updates_per_p;
     const long double all_remote_tib =
-        (long double)updates_per_p * (W - 1) * W * 4.0L / (long double)(U64(1) << 40);
+        (long double)updates_per_p * high * W * 4.0L / (long double)(U64(1) << 40);
     const long double all_remote_aggregated_tib =
-        (long double)distinct_dest_per_p * (W - 1) * W * 4.0L
+        (long double)distinct_dest_per_p * high * W * 4.0L
         / (long double)(U64(1) << 40);
 
-    if (W == 28) {
-        if (m != 385719506620ULL
+    if (W == 28 && low == 14) {
+        if (high != 13
+            || m != 385719506620ULL
             || d != 135015505407ULL
             || s2 != 47337954326ULL
             || updates_per_p != 473397057701ULL
@@ -155,6 +153,7 @@ int main(int argc, char** argv) {
 
     std::cout << std::fixed << std::setprecision(9)
               << "factor-highupdate-aggregation W=" << W
+              << " low=" << low << " high=" << high
               << " exhaustive_verified_through=" << exhaustive_max << '\n'
               << "main_states=" << m
               << " blocked_states=" << d
