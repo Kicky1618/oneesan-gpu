@@ -3,6 +3,7 @@
 #include <cstdlib>
 #include <iomanip>
 #include <iostream>
+#include <string>
 #include <vector>
 
 using U64 = std::uint64_t;
@@ -19,6 +20,17 @@ static U64 choose_u64(int n, int k) {
 static long double as_ld(U128 x) {
     const U64 lo = U64(x), hi = U64(x >> 64);
     return (long double)hi * 18446744073709551616.0L + (long double)lo;
+}
+
+static std::string u128_string(U128 x) {
+    if (!x) return "0";
+    std::string s;
+    while (x) {
+        s.push_back(char('0' + x % 10));
+        x /= 10;
+    }
+    std::reverse(s.begin(), s.end());
+    return s;
 }
 
 static U64 low_fixed_count(int occupied, int start) {
@@ -55,9 +67,9 @@ int main(int argc, char** argv) {
     };
     rec(rec, high - 1, 1, 0);
 
-    std::vector<std::vector<U64>> lc(low + 1, std::vector<U64>(low + 3));
+    std::vector<std::vector<U64>> lc(low + 1, std::vector<U64>(low + 2));
     for (int k = 0; k <= low; ++k)
-        for (int h = 0; h <= low + 1; ++h)
+        for (int h = 0; h <= low; ++h)
             lc[k][h] = low_fixed_count(k, h);
 
     U128 full_state_threads = 0;
@@ -75,13 +87,15 @@ int main(int argc, char** argv) {
             if (hc[he].empty()) continue;
             for (int cv = 0; cv < 3; ++cv) {
                 const int hs = he + (cv == 2 ? 1 : cv == 1 ? -1 : 0);
-                if (hs < 0 || hs > low + 1) continue;
+                // A LOW segment of length `low` cannot descend from low+1 to 0.
+                // Exclude the empty FBlock exactly as the storage layout does.
+                if (hs < 0 || hs > low) continue;
                 U64 cr = 0;
                 for (std::uint32_t code : hc[he]) {
                     const int w = pair_at(code, cv, q);
                     if (w == 0xa || w == 0x5 || w == 0x6) ++cr; // LL/RR/RL
                 }
-                if (cr) q_global_rows += cr;
+                q_global_rows += cr;
                 for (int k = 0; k <= low; ++k) {
                     const U64 cols = lc[k][hs];
                     if (!cols) continue;
@@ -107,20 +121,28 @@ int main(int argc, char** argv) {
         warp_slots += 32 * q_warps;
     }
 
+    const U128 residue_full = full_state_threads * U128(W);
+    const U128 residue_closure = closure_states * U128(W);
+    const U128 residue_warp_slots = warp_slots * U128(W);
+
     std::cout << std::fixed << std::setprecision(6)
               << "highclosure-rows W=" << W << " low=" << low << " high=" << high << '\n'
               << "global_closure_rows_per_p=" << global_rows_per_p
               << " compact_row_table_mib="
               << double((long double)global_rows_per_p * high * 4 / (1ULL << 20)) << '\n'
-              << "full_state_threads=" << double(as_ld(full_state_threads)) << '\n'
-              << "exact_closure_states=" << double(as_ld(closure_states))
+              << "full_state_threads=" << u128_string(full_state_threads) << '\n'
+              << "exact_closure_states=" << u128_string(closure_states)
               << " exact_state_ratio="
               << double(as_ld(closure_states) / as_ld(full_state_threads)) << '\n'
-              << "candidate_rows=" << double(as_ld(candidate_rows))
-              << " closure_rows=" << double(as_ld(closure_rows)) << '\n'
-              << "warp_lane_slots=" << double(as_ld(warp_slots))
+              << "candidate_rows=" << u128_string(candidate_rows)
+              << " closure_rows=" << u128_string(closure_rows) << '\n'
+              << "warp_lane_slots=" << u128_string(warp_slots)
               << " warp_lane_ratio=" << double(as_ld(warp_slots) / as_ld(full_state_threads))
               << " useful_lane_fraction=" << double(as_ld(closure_states) / as_ld(warp_slots))
+              << '\n'
+              << "per_residue_full_state_threads=" << u128_string(residue_full)
+              << " per_residue_closure_states=" << u128_string(residue_closure)
+              << " per_residue_warp_lane_slots=" << u128_string(residue_warp_slots)
               << '\n';
     return 0;
 }
