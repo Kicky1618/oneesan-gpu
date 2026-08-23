@@ -6,9 +6,9 @@
 #include <iostream>
 #include <vector>
 
-#define main oneesan_bidesc_dense_unused_main
+#define RAMSTREAM_BIDESC_NO_MAIN
 #include "oneesan_cuda_gridfp_ramstream32_factorized_bidesc.cu"
-#undef main
+#undef RAMSTREAM_BIDESC_NO_MAIN
 
 #include "ramstream32_bidesc_compact.cuh"
 
