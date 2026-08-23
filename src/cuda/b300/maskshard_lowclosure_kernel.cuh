@@ -117,3 +117,7 @@ __global__ void maskshard_main_lowdesc_closure_cols_inplace_kernel(
 #ifdef MASKSHARD_ROW_DEPTH_FBLOCK_IO
 #include "maskshard_rowdepth_fblock_io.cuh"
 #endif
+
+#ifdef MASKSHARD_ROW_DEPTH_EXACT_IO
+#include "maskshard_rowdepth_exact_io.cuh"
+#endif
