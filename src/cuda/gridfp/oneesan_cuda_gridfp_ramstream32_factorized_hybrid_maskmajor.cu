@@ -26,12 +26,13 @@ static void maskmajor_release_dense_host(StorageFactorHost& storage) {
     G_FACTOR.high_all_codes.clear(); G_FACTOR.high_all_codes.shrink_to_fit();
     G_FACTOR.high_main_base.clear(); G_FACTOR.high_main_base.shrink_to_fit();
     G_FACTOR.high_block_base.clear(); G_FACTOR.high_block_base.shrink_to_fit();
-    // LOW mask codes are only needed on the GPU after installation; the CPU
-    // LOW executor needs offsets but not the code list.  HIGH mask codes remain
-    // resident because CROSS closures rank the modified HIGH topology.
     G_FACTOR.low_mask_codes.clear(); G_FACTOR.low_mask_codes.shrink_to_fit();
 }
 
+// At every row boundary the blocked vector is exactly zero.  The LOW window
+// ends at p=1: no main transition creates a blocked successor at p=1, and every
+// old blocked state is consumed by blocked_exclude into main.  Therefore the
+// next HIGH window never needs blocked H2D traffic; zero device scratch instead.
 static void process_group_bidesc_maskmajor(
     Direct2DCtx& c, RamCounts& main_auth, RamCounts& block_auth,
     const LowMaskMajorLayout& mm,
@@ -63,12 +64,9 @@ static void process_group_bidesc_maskmajor(
            "maskmajor H2D main");
         ++c.copy1d; c.copy_elems += ms.size;
     }
-    if (ds.size) {
-        ck(cudaMemcpy(c.dD, block_auth.ptr + mm.block_mask_off[mask],
-                      size_t(ds.size) * sizeof(Count), cudaMemcpyHostToDevice),
-           "maskmajor H2D block");
-        ++c.copy1d; c.copy_elems += ds.size;
-    }
+    if (ds.size)
+        ck(cudaMemset(c.dD, 0, size_t(ds.size) * sizeof(Count)),
+           "maskmajor zero row-boundary block");
     c.h2d_s += ram_seconds_since(t);
 
     int bm = int(std::min<Code>(65535, (ms.size + gpu_threads - 1) / gpu_threads));
@@ -113,8 +111,9 @@ static void process_group_bidesc_maskmajor(
 }
 
 struct HighCopyModel {
-    uint64_t old_calls_per_row = 0;
-    uint64_t maskmajor_calls_per_row = 0;
+    uint64_t blockmajor_calls_per_row = 0;
+    uint64_t v5_calls_per_row = 0;
+    uint64_t v51_calls_per_row = 0;
     uint64_t nonempty_groups = 0;
 };
 
@@ -132,9 +131,11 @@ static HighCopyModel build_high_copy_model(const WindowPlan& wp) {
         uint64_t nmb = 0, ndb = 0;
         for (const auto& b : mb) if (b.end != b.off) ++nmb;
         for (const auto& b : db) if (b.end != b.off) ++ndb;
-        z.old_calls_per_row += 2 * (nmb + ndb);
-        if (ms.size) z.maskmajor_calls_per_row += 2;
-        if (ds.size) z.maskmajor_calls_per_row += 2;
+        z.blockmajor_calls_per_row += 2 * (nmb + ndb);
+        if (ms.size) z.v5_calls_per_row += 2;
+        if (ds.size) z.v5_calls_per_row += 2;
+        if (ms.size) z.v51_calls_per_row += 2;
+        if (ds.size) z.v51_calls_per_row += 1;
         if (ms.size || ds.size) ++z.nonempty_groups;
     }
     return z;
@@ -197,19 +198,21 @@ int main(int argc, char** argv) {
     double mm_layout_mib = double((mm.main_mask_off.size() + mm.block_mask_off.size()
         + mm.main_block_off.size() + mm.block_block_off.size()) * sizeof(Code)) / (1 << 20);
 
-    double auth_bytes = double(mm.main_size + mm.block_size) * sizeof(Count);
-    double pcie_bytes = 2.0 * W * auth_bytes;
+    double main_bytes = double(mm.main_size) * sizeof(Count);
+    double block_bytes = double(mm.block_size) * sizeof(Count);
+    double pcie_bytes = double(W) * (2.0 * main_bytes + block_bytes);
     double pcie_tib = pcie_bytes / double(1ULL << 40);
     double pcie_50gib_s = pcie_bytes / (50.0 * double(1ULL << 30));
-    uint64_t mm_calls_residue = copy_model.maskmajor_calls_per_row * uint64_t(W);
-    uint64_t old_calls_residue = copy_model.old_calls_per_row * uint64_t(W);
-    double avg_copy_mib = copy_model.maskmajor_calls_per_row
-        ? (2.0 * auth_bytes / double(copy_model.maskmajor_calls_per_row)) / double(1 << 20)
+    uint64_t blockmajor_calls_residue = copy_model.blockmajor_calls_per_row * uint64_t(W);
+    uint64_t v5_calls_residue = copy_model.v5_calls_per_row * uint64_t(W);
+    uint64_t v51_calls_residue = copy_model.v51_calls_per_row * uint64_t(W);
+    double avg_copy_mib = copy_model.v51_calls_per_row
+        ? ((2.0 * main_bytes + block_bytes) / double(copy_model.v51_calls_per_row)) / double(1 << 20)
         : 0.0;
 
     if (plan_only) {
         std::cout
-            << "backend=gridfp-ramstream32-factorized-hybrid-maskmajor-v5-plan"
+            << "backend=gridfp-ramstream32-factorized-hybrid-maskmajor-v5.1-plan"
             << " n=" << n
             << " gpu_high_desc_mib=" << highdesc_mib
             << " gpu_mask_mib=" << mask_mib
@@ -223,11 +226,14 @@ int main(int argc, char** argv) {
             << " gpu_high_window_max_gib=" << double(high_wp.max_bytes) / double(1ULL << 30)
             << " cpu_workers=" << cpu_workers
             << " cpu_scratch_gib=0"
+            << " row_boundary_blocked_zero=1"
             << " pcie_tib_per_residue=" << pcie_tib
             << " pcie_50gib_s=" << pcie_50gib_s
-            << " old_copy_calls_per_residue=" << old_calls_residue
-            << " maskmajor_copy_calls_per_residue=" << mm_calls_residue
-            << " copy_call_reduction=" << (mm_calls_residue ? double(old_calls_residue)/mm_calls_residue : 0.0)
+            << " blockmajor_copy_calls_per_residue=" << blockmajor_calls_residue
+            << " v5_copy_calls_per_residue=" << v5_calls_residue
+            << " v51_copy_calls_per_residue=" << v51_calls_residue
+            << " copy_call_reduction_vs_blockmajor="
+            << (v51_calls_residue ? double(blockmajor_calls_residue)/v51_calls_residue : 0.0)
             << " avg_maskmajor_copy_mib=" << avg_copy_mib
             << '\n';
         return 0;
@@ -275,13 +281,14 @@ int main(int argc, char** argv) {
     double wall_s = ram_seconds_since(wall0);
     Count answer = main_auth.ptr[answer_rank];
     std::cout
-        << "backend=gridfp-ramstream32-factorized-hybrid-maskmajor-v5"
+        << "backend=gridfp-ramstream32-factorized-hybrid-maskmajor-v5.1"
         << " n=" << n << " residue=" << answer << " modulus=" << mod
         << " gpu_high_desc_mib=" << highdesc_mib
         << " cpu_sparse_orbit_mib=" << sparse_orbit_mib
         << " cpu_sparse_closure_mib=" << sparse_closure_mib
         << " gpu_groups=" << gpu.groups << " cpu_groups=" << cpu.groups()
         << " cpu_workers=" << cpu_workers << " cpu_scratch_gib=0"
+        << " row_boundary_blocked_zero=1"
         << " pci_copy_calls=" << gpu.copy1d
         << " h2d_s=" << gpu.h2d_s << " gpu_kernel_s=" << gpu.kernel_s
         << " d2h_s=" << gpu.d2h_s
