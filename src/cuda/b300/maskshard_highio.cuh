@@ -4,6 +4,7 @@
 #include <cstdint>
 #include <iostream>
 #include <vector>
+#include "maskshard_index.cuh"
 
 // Direct HIGH-window I/O for HIGH-mask-sharded authoritative HBM.
 //
@@ -65,11 +66,6 @@ struct MaskShardDeviceMeta {
         copy_vec(&block_block_off, shard.block_block_off, "maskshard block block off");
         copy_vec(&high_route, route, "maskshard high route");
 
-        // StorageFactorHost orders LOW all-codes by (height, occupancy mask,
-        // mask-local rank). Reconstruct each mask interval's storage-column
-        // beginning directly from the base mask counts. This tiny table removes
-        // the per-element LOW code lookup and the 1 GiB dense packed-rank lookup
-        // from HIGH gather/scatter.
         constexpr int S = MAXW + 2;
         constexpr uint32_t NM = 1u << LOW_LUT_K;
         std::vector<uint32_t> lb(size_t(NM) * S, 0u);
@@ -89,27 +85,17 @@ struct MaskShardDeviceMeta {
         }
         copy_vec(&low_begin, lb, "maskshard low storage begin");
 
-        ck(cudaMemcpyToSymbol(D_MS_MAIN_PTR, main_ptr, sizeof(Count*) * 8),
-           "maskshard main ptrs");
-        ck(cudaMemcpyToSymbol(D_MS_BLOCK_PTR, block_ptr, sizeof(Count*) * 8),
-           "maskshard block ptrs");
+        ck(cudaMemcpyToSymbol(D_MS_MAIN_PTR, main_ptr, sizeof(Count*) * 8), "maskshard main ptrs");
+        ck(cudaMemcpyToSymbol(D_MS_BLOCK_PTR, block_ptr, sizeof(Count*) * 8), "maskshard block ptrs");
         ck(cudaMemcpyToSymbol(D_MS_OWNER, &owner, sizeof(owner)), "maskshard owner ptr");
-        ck(cudaMemcpyToSymbol(D_MS_MAIN_BASE, &main_base, sizeof(main_base)),
-           "maskshard main base ptr");
-        ck(cudaMemcpyToSymbol(D_MS_BLOCK_BASE, &block_base, sizeof(block_base)),
-           "maskshard block base ptr");
-        ck(cudaMemcpyToSymbol(D_MS_MAIN_BLOCK_OFF, &main_block_off, sizeof(main_block_off)),
-           "maskshard main block off ptr");
-        ck(cudaMemcpyToSymbol(D_MS_BLOCK_BLOCK_OFF, &block_block_off, sizeof(block_block_off)),
-           "maskshard block block off ptr");
-        ck(cudaMemcpyToSymbol(D_MS_HIGH_ROUTE, &high_route, sizeof(high_route)),
-           "maskshard high route ptr");
-        ck(cudaMemcpyToSymbol(D_MS_LOW_BEGIN, &low_begin, sizeof(low_begin)),
-           "maskshard low begin ptr");
-        ck(cudaMemcpyToSymbol(D_MS_MAIN_NBLOCKS, &shard.main_nblocks, sizeof(shard.main_nblocks)),
-           "maskshard main nblocks");
-        ck(cudaMemcpyToSymbol(D_MS_BLOCK_NBLOCKS, &shard.block_nblocks, sizeof(shard.block_nblocks)),
-           "maskshard block nblocks");
+        ck(cudaMemcpyToSymbol(D_MS_MAIN_BASE, &main_base, sizeof(main_base)), "maskshard main base ptr");
+        ck(cudaMemcpyToSymbol(D_MS_BLOCK_BASE, &block_base, sizeof(block_base)), "maskshard block base ptr");
+        ck(cudaMemcpyToSymbol(D_MS_MAIN_BLOCK_OFF, &main_block_off, sizeof(main_block_off)), "maskshard main block off ptr");
+        ck(cudaMemcpyToSymbol(D_MS_BLOCK_BLOCK_OFF, &block_block_off, sizeof(block_block_off)), "maskshard block block off ptr");
+        ck(cudaMemcpyToSymbol(D_MS_HIGH_ROUTE, &high_route, sizeof(high_route)), "maskshard high route ptr");
+        ck(cudaMemcpyToSymbol(D_MS_LOW_BEGIN, &low_begin, sizeof(low_begin)), "maskshard low begin ptr");
+        ck(cudaMemcpyToSymbol(D_MS_MAIN_NBLOCKS, &shard.main_nblocks, sizeof(shard.main_nblocks)), "maskshard main nblocks");
+        ck(cudaMemcpyToSymbol(D_MS_BLOCK_NBLOCKS, &shard.block_nblocks, sizeof(shard.block_nblocks)), "maskshard block nblocks");
 
         std::array<uint32_t, 64> mc{};
         std::array<uint32_t, 32> bc{};
@@ -188,9 +174,8 @@ __global__ void maskshard_high_main_io_kernel(Count* scratch, Code n) {
     for (; i < n; i += step) {
         const int bid = f_find_main(i);
         const FBlock x = D_F_MAIN_BLOCKS[bid];
-        const Code r = i - x.off;
-        const uint32_t hr = x.stride ? uint32_t(r / x.stride) : 0;
-        const uint32_t lr = x.stride ? uint32_t(r - Code(hr) * x.stride) : 0;
+        uint32_t hr = 0, lr = 0;
+        maskshard_split_rank(i, x, hr, lr);
         Count* p = maskshard_main_addr(bid, hr, lr);
         if constexpr (SCATTER) *p = scratch[i];
         else scratch[i] = *p;
@@ -204,9 +189,8 @@ __global__ void maskshard_high_block_io_kernel(Count* scratch, Code n) {
     for (; i < n; i += step) {
         const int bid = f_find_block(i);
         const FBlock x = D_F_BLOCK_BLOCKS[bid];
-        const Code r = i - x.off;
-        const uint32_t hr = x.stride ? uint32_t(r / x.stride) : 0;
-        const uint32_t lr = x.stride ? uint32_t(r - Code(hr) * x.stride) : 0;
+        uint32_t hr = 0, lr = 0;
+        maskshard_split_rank(i, x, hr, lr);
         Count* p = maskshard_block_addr(bid, hr, lr);
         if constexpr (SCATTER) *p = scratch[i];
         else scratch[i] = *p;
