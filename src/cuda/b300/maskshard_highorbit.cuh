@@ -4,7 +4,7 @@
 
 // In-place HIGH-window orbit executor for fix_low=true factorized groups.
 //
-// A main factorized row is (HIGH all-rank, LOW mask-rank).  For p in the HIGH
+// A main factorized row is (HIGH all-rank, LOW mask-rank). For p in the HIGH
 // window, the source pair is determined entirely by HIGH+center; LOW topology
 // is untouched except by the LL boundary CROSS handled by HighDesc closure.
 //
@@ -14,6 +14,13 @@
 //   - both destination HIGH ranks are dense O(1) lookups.
 // This lets us update identity + include/exclude contributions in-place with
 // only one M+D scratch buffer and no MateID reconstruction or Motzkin ranking.
+
+static_assert(HIGH_LUT_K < 16, "compact HIGH+center orbit code requires HIGH<16");
+
+__device__ __forceinline__ Count maskshard_add_mod_plain(Count a, Count b) {
+    const Count mod = D_MOD;
+    return a >= mod - b ? a - (mod - b) : a + b;
+}
 
 __device__ __forceinline__ uint32_t maskshard_active_high_center(
     const FBlock& x, uint32_t high_all_rank
@@ -44,7 +51,7 @@ __device__ __forceinline__ uint32_t maskshard_drop_active_symbol(
 ) {
     const int q = p - LOW_LUT_K;
     const uint32_t shift = uint32_t(2 * q);
-    const uint32_t lowmask = shift ? ((uint32_t(1) << shift) - 1u) : 0u;
+    const uint32_t lowmask = (uint32_t(1) << shift) - 1u;
     const uint32_t lo = active & lowmask;
     const uint32_t hi = active & ~lowmask;
     return lo | (hi >> 2);
@@ -104,12 +111,12 @@ __global__ void maskshard_main_block_highorbit_kernel(
         const Count c = mainv[i];
         const Count d = blockv[dj];
         if (w == NN) {
-            mainv[j] = add_mod_plain(mainv[j], c);
-            mainv[i] = add_mod_plain(c, d);
+            mainv[j] = maskshard_add_mod_plain(mainv[j], c);
+            mainv[i] = maskshard_add_mod_plain(c, d);
             blockv[dj] = 0;
         } else {
             const Count cc = mainv[j];
-            mainv[i] = add_mod_plain(add_mod_plain(c, cc), d);
+            mainv[i] = maskshard_add_mod_plain(maskshard_add_mod_plain(c, cc), d);
             // Companion RN/LN keeps its identity value. Source NR/NL becomes
             // the new blocked contribution after old blocked is consumed.
             blockv[dj] = c;
