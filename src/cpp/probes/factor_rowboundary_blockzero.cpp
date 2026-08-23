@@ -1,5 +1,6 @@
 #include <cstdint>
 #include <cstdlib>
+#include <iomanip>
 #include <iostream>
 #include <unordered_set>
 #include <vector>
@@ -91,21 +92,42 @@ int main(int argc, char** argv) {
     if (max_w < 4 || max_w > 13) return 1;
     for (int W = 4; W <= max_w; ++W) verify_width(W);
 
-    const U64 M28 = state_count(28);
-    const U64 D28 = state_count(27);
-    if (M28 != 385719506620ULL || D28 != 135015505407ULL) {
+    constexpr int W = 28;
+    constexpr long double PEER_FRACTION_BALANCED = 7.0L / 8.0L;
+    const U64 M = state_count(W);
+    const U64 D = state_count(W - 1);
+    if (M != 385719506620ULL || D != 135015505407ULL) {
         std::cerr << "n=27 state-count regression mismatch\n";
         return 2;
     }
 
-    const long double full_io = 2.0L * (long double)(M28 + D28);
-    const long double skip_io = 2.0L * (long double)M28 + (long double)D28;
-    const long double ratio = skip_io / full_io;
-    std::cout << "n27_full_high_io_state_words_per_row="
-              << 2ULL * (M28 + D28)
-              << " n27_skip_block_gather_words_per_row="
-              << 2ULL * M28 + D28
+    const U64 full_words = 2ULL * (M + D);
+    const U64 skip_words = 2ULL * M + D;
+    if (full_words != 1041470024054ULL || skip_words != 906454518647ULL) {
+        std::cerr << "n=27 HIGH I/O word-count regression mismatch\n";
+        return 3;
+    }
+
+    const long double ratio = (long double)skip_words / (long double)full_words;
+    const long double full_tib = (long double)full_words * 4.0L * W
+        / (long double)(U64(1) << 40);
+    const long double skip_tib = (long double)skip_words * 4.0L * W
+        / (long double)(U64(1) << 40);
+    const long double saved_tib = full_tib - skip_tib;
+    const long double peer_full_tib = full_tib * PEER_FRACTION_BALANCED;
+    const long double peer_skip_tib = skip_tib * PEER_FRACTION_BALANCED;
+
+    std::cout << std::fixed << std::setprecision(9)
+              << "n27_full_high_io_state_words_per_row=" << full_words
+              << " n27_skip_block_gather_words_per_row=" << skip_words
               << " ratio=" << double(ratio)
-              << " reduction=" << double(1.0L - ratio) << '\n';
+              << " reduction=" << double(1.0L - ratio) << '\n'
+              << "logical_high_io_tib_per_residue=" << double(full_tib)
+              << " zero_block_gather_tib_per_residue=" << double(skip_tib)
+              << " logical_saved_tib_per_residue=" << double(saved_tib) << '\n'
+              << "balanced_7of8_peer_tib_before=" << double(peer_full_tib)
+              << " balanced_7of8_peer_tib_after=" << double(peer_skip_tib)
+              << " balanced_peer_saved_tib=" << double(peer_full_tib - peer_skip_tib)
+              << '\n';
     return 0;
 }
