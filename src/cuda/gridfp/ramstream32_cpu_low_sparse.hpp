@@ -6,41 +6,63 @@
 #include <iostream>
 #include <vector>
 
-// Sparse CPU instruction stream for the LOW window.  The dense orbit table is
+// Sparse CPU instruction stream for the LOW window. The dense orbit table is
 // convenient for construction/proofs, but direct authoritative execution does
-// not need to inspect states whose local pair has no action.  Compress only the
+// not need to inspect states whose local pair has no action. Compress only the
 // N* orbit representatives and LL/RR/RL closure states into per-(p,FBlock)
 // streams.
+//
+// v4.4 compacts an orbit operation from 12 to 8 bytes. The source block and p
+// already determine both destination factor blocks:
+//   * drop-N always keeps HIGH unchanged, hence dblock = source.he;
+//   * below the LOW/center boundary, the partner keeps the center unchanged,
+//     hence jblock = source block;
+//   * at p=LOW_LUT_K the source center is N and the orbit kind uniquely gives
+//     the partner center (NN/NL -> L, NR -> R).
+// Only the three LOW ranks and the orbit kind need to be streamed at runtime.
+using CpuLowSparseOrbitOp = uint64_t;
+static_assert(sizeof(CpuLowSparseOrbitOp) == 8);
 
-struct CpuLowSparseOrbitOp {
-    // a: src_lr[19:0], kind[22:20], jblock[28:23]
-    // b: jlr[19:0], dblock[25:20]
-    // c: dlr[19:0]
-    uint32_t a = 0, b = 0, c = 0;
-};
+static constexpr uint64_t CPU_SPARSE_RANK_MASK = (1ull << 20) - 1ull;
+static constexpr int CPU_SPARSE_JLR_SHIFT = 20;
+static constexpr int CPU_SPARSE_DLR_SHIFT = 40;
+static constexpr int CPU_SPARSE_KIND_SHIFT = 60;
 
 static inline CpuLowSparseOrbitOp cpu_sparse_orbit_pack(
-    uint32_t src_lr, uint32_t kind, uint32_t jblock, uint32_t jlr,
-    uint32_t dblock, uint32_t dlr
+    uint32_t src_lr, uint32_t kind, uint32_t jlr, uint32_t dlr
 ) {
     if (src_lr > CPU_ORBIT_LR_MASK || jlr > CPU_ORBIT_LR_MASK
-        || dlr > CPU_ORBIT_LR_MASK || kind > 7
-        || jblock > CPU_ORBIT_BLOCK_MASK || dblock > CPU_ORBIT_BLOCK_MASK) {
+        || dlr > CPU_ORBIT_LR_MASK
+        || kind < CPU_ORBIT_NN || kind > CPU_ORBIT_NL) {
         std::cerr << "cpu sparse orbit encoding overflow\n";
         std::exit(100);
     }
-    CpuLowSparseOrbitOp z;
-    z.a = src_lr | (kind << 20) | (jblock << 23);
-    z.b = jlr | (dblock << 20);
-    z.c = dlr;
-    return z;
+    uint64_t kind2 = uint64_t(kind - CPU_ORBIT_NN);
+    return uint64_t(src_lr)
+        | (uint64_t(jlr) << CPU_SPARSE_JLR_SHIFT)
+        | (uint64_t(dlr) << CPU_SPARSE_DLR_SHIFT)
+        | (kind2 << CPU_SPARSE_KIND_SHIFT);
 }
-static inline uint32_t cpu_sparse_src(const CpuLowSparseOrbitOp& z) { return z.a & ((1u<<20)-1u); }
-static inline uint32_t cpu_sparse_kind(const CpuLowSparseOrbitOp& z) { return (z.a >> 20) & 7u; }
-static inline uint32_t cpu_sparse_jblock(const CpuLowSparseOrbitOp& z) { return (z.a >> 23) & 0x3fu; }
-static inline uint32_t cpu_sparse_jlr(const CpuLowSparseOrbitOp& z) { return z.b & ((1u<<20)-1u); }
-static inline uint32_t cpu_sparse_dblock(const CpuLowSparseOrbitOp& z) { return (z.b >> 20) & 0x3fu; }
-static inline uint32_t cpu_sparse_dlr(const CpuLowSparseOrbitOp& z) { return z.c & ((1u<<20)-1u); }
+static inline uint32_t cpu_sparse_src(CpuLowSparseOrbitOp z) {
+    return uint32_t(z & CPU_SPARSE_RANK_MASK);
+}
+static inline uint32_t cpu_sparse_jlr(CpuLowSparseOrbitOp z) {
+    return uint32_t((z >> CPU_SPARSE_JLR_SHIFT) & CPU_SPARSE_RANK_MASK);
+}
+static inline uint32_t cpu_sparse_dlr(CpuLowSparseOrbitOp z) {
+    return uint32_t((z >> CPU_SPARSE_DLR_SHIFT) & CPU_SPARSE_RANK_MASK);
+}
+static inline uint32_t cpu_sparse_kind(CpuLowSparseOrbitOp z) {
+    return uint32_t((z >> CPU_SPARSE_KIND_SHIFT) & 3u) + CPU_ORBIT_NN;
+}
+
+static inline uint32_t cpu_sparse_jblock(
+    uint32_t source_bid, const FBlock& source, int p, uint32_t kind
+) {
+    if (p != LOW_LUT_K) return source_bid;
+    uint32_t center = (kind == CPU_ORBIT_NR) ? uint32_t(R) : uint32_t(::L);
+    return 3u * uint32_t(source.he) + center;
+}
 
 struct CpuLowSparseHost {
     std::vector<CpuLowSparseOrbitOp> orbit_ops;
@@ -59,8 +81,12 @@ static inline uint64_t cpu_sparse_closure_pack(uint32_t src_lr, uint32_t desc) {
     }
     return uint64_t(src_lr) | (uint64_t(desc) << 20);
 }
-static inline uint32_t cpu_sparse_closure_src(uint64_t z) { return uint32_t(z & ((1ull<<20)-1)); }
-static inline uint32_t cpu_sparse_closure_desc(uint64_t z) { return uint32_t(z >> 20); }
+static inline uint32_t cpu_sparse_closure_src(uint64_t z) {
+    return uint32_t(z & ((1ull<<20)-1));
+}
+static inline uint32_t cpu_sparse_closure_desc(uint64_t z) {
+    return uint32_t(z >> 20);
+}
 
 static CpuLowSparseHost build_cpu_low_sparse(
     const StorageLayout& layout, const LowDescHost& desc, const LowOrbitHost& orbit
@@ -82,9 +108,22 @@ static CpuLowSparseHost build_cpu_low_sparse(
                     size_t(pi) * orbit.main_total + orbit.main_base[bid] + lr];
                 uint32_t k = cpu_orbit_kind(ow);
                 if (k >= CPU_ORBIT_NN && k <= CPU_ORBIT_NL) {
+                    const StorageBlock& sb = layout.main_blocks[bid];
+                    FBlock source{};
+                    source.he = sb.he;
+                    uint32_t derived_j = cpu_sparse_jblock(bid, source, p, k);
+                    uint32_t derived_d = uint32_t(sb.he);
+                    if (derived_j != cpu_orbit_jblock(ow)
+                        || derived_d != cpu_orbit_dblock(ow)) {
+                        std::cerr << "cpu sparse derived block mismatch p=" << p
+                                  << " bid=" << bid << " kind=" << k
+                                  << " j=" << derived_j << "/" << cpu_orbit_jblock(ow)
+                                  << " d=" << derived_d << "/" << cpu_orbit_dblock(ow)
+                                  << '\n';
+                        std::exit(102);
+                    }
                     s.orbit_ops.push_back(cpu_sparse_orbit_pack(
-                        lr, k, cpu_orbit_jblock(ow), cpu_orbit_jlr(ow),
-                        cpu_orbit_dblock(ow), cpu_orbit_dlr(ow)));
+                        lr, k, cpu_orbit_jlr(ow), cpu_orbit_dlr(ow)));
                 } else if (k == CPU_ORBIT_CLOSURE) {
                     uint32_t dw = desc.main_desc[
                         size_t(pi) * desc.main_total + desc.main_base[bid] + lr];
@@ -101,6 +140,7 @@ static CpuLowSparseHost build_cpu_low_sparse(
 
     std::cerr << "cpu_low_sparse orbit_ops=" << s.orbit_ops.size()
               << " closure_ops=" << s.closure_ops.size()
+              << " orbit_op_bytes=" << sizeof(CpuLowSparseOrbitOp)
               << " orbit_mib=" << double(s.orbit_ops.size() * sizeof(CpuLowSparseOrbitOp)) / (1<<20)
               << " closure_mib=" << double(s.closure_ops.size() * sizeof(uint64_t)) / (1<<20)
               << '\n';
@@ -145,17 +185,19 @@ static void process_cpu_low_group_sparse(
             if (!xb || !x.stride) continue;
             auto [oa, ob] = cpu_sparse_range(sparse.orbit_off, sparse.nblocks, pi, bid);
             if (oa == ob) continue;
+            uint32_t dbid = uint32_t(x.he);
             Code rows = (x.end - x.off) / x.stride;
             for (Code hr = 0; hr < rows; ++hr) {
                 Count* xr = xb + hr * x.stride;
                 for (uint32_t q = oa; q < ob; ++q) {
-                    const CpuLowSparseOrbitOp& op = sparse.orbit_ops[q];
+                    CpuLowSparseOrbitOp op = sparse.orbit_ops[q];
                     uint32_t kind = cpu_sparse_kind(op);
+                    uint32_t jbid = cpu_sparse_jblock(bid, x, p, kind);
                     Count* ip = xr + cpu_sparse_src(op);
-                    uint32_t jbid = cpu_sparse_jblock(op);
-                    uint32_t dbid = cpu_sparse_dblock(op);
-                    Count* jp = mp[jbid] + hr * job.main_blocks[jbid].stride + cpu_sparse_jlr(op);
-                    Count* dd = dp[dbid] + hr * job.block_blocks[dbid].stride + cpu_sparse_dlr(op);
+                    Count* jp = mp[jbid] + hr * job.main_blocks[jbid].stride
+                        + cpu_sparse_jlr(op);
+                    Count* dd = dp[dbid] + hr * job.block_blocks[dbid].stride
+                        + cpu_sparse_dlr(op);
                     Count c = *ip;
                     Count d = *dd;
                     if (kind == CPU_ORBIT_NN) {
