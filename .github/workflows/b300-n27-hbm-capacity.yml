@@ -8,6 +8,7 @@ on:
       - 'src/cuda/gridfp/probes/b300_n27_hbm_capacity_probe.cu'
       - 'src/cuda/gridfp/probes/b300_compact_io_selftest.cu'
       - 'src/cuda/gridfp/probes/b300_compact_kernel_compile.cu'
+      - 'src/cuda/gridfp/probes/b300_high_orbit_selftest.cu'
       - 'src/cuda/gridfp/ramstream32_high_orbit.cuh'
       - 'src/cuda/gridfp/ramstream32_low_orbit_device.cuh'
       - 'src/cuda/gridfp/ramstream32_b300_compact_io.cuh'
@@ -49,6 +50,14 @@ jobs:
             src/cuda/gridfp/probes/b300_compact_io_selftest.cu \
             -o build/b300_compact_io_selftest
           build/b300_compact_io_selftest
+      - name: Exhaustive W10 HIGH orbit test
+        shell: bash
+        run: |
+          nvcc -O3 -std=c++17 -arch=sm_80 \
+            -DTARGET_W=10 -DLOW_LUT_K=5 -DHIGH_LUT_K=4 \
+            src/cuda/gridfp/probes/b300_high_orbit_selftest.cu \
+            -o build/b300_high_orbit_selftest
+          build/b300_high_orbit_selftest
       - name: Compile W28 compact resident backend
         shell: bash
         run: |
