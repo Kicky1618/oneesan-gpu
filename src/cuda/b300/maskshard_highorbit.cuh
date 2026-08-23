@@ -8,13 +8,6 @@
 // A main factorized row is (HIGH all-rank, LOW mask-rank). For p in the HIGH
 // window, the source pair is determined entirely by HIGH+center; LOW topology
 // is untouched except by the LL boundary CROSS handled by HighDesc closure.
-//
-// For an orbit representative whose upper symbol is N (NN/NR/NL):
-//   - companion main state is obtained by changing just the active pair;
-//   - corresponding old blocked state is obtained by deleting that N;
-//   - both destination HIGH ranks are dense O(1) lookups.
-// This lets us update identity + include/exclude contributions in-place with
-// only one M+D scratch buffer and no MateID reconstruction or Motzkin ranking.
 
 static_assert(HIGH_LUT_K < 16, "compact HIGH+center orbit code requires HIGH<16");
 
@@ -30,12 +23,18 @@ __device__ __forceinline__ uint32_t maskshard_active_high_center(
     return (hc << 2) | uint32_t(x.c);
 }
 
+__device__ __forceinline__ MateValuePair maskshard_high_pair_from_active(
+    uint32_t active, int p
+) {
+    const int q = p - LOW_LUT_K;
+    return MateValuePair((active >> (2 * (q - 1))) & 15u);
+}
+
 __device__ __forceinline__ MateValuePair maskshard_high_pair(
     const FBlock& x, uint32_t high_all_rank, int p
 ) {
-    const int q = p - LOW_LUT_K;
-    const uint32_t active = maskshard_active_high_center(x, high_all_rank);
-    return MateValuePair((active >> (2 * (q - 1))) & 15u);
+    return maskshard_high_pair_from_active(
+        maskshard_active_high_center(x, high_all_rank), p);
 }
 
 __device__ __forceinline__ uint32_t maskshard_set_active_pair(
@@ -96,7 +95,7 @@ __global__ void maskshard_main_block_highorbit_kernel(
         uint32_t hr = 0, lr = 0;
         maskshard_split_rank(i, x, hr, lr);
         const uint32_t active = maskshard_active_high_center(x, hr);
-        const MateValuePair w = maskshard_high_pair(x, hr, p);
+        const MateValuePair w = maskshard_high_pair_from_active(active, p);
         if (w != NN && w != NR && w != NL) continue;
 
         MateValuePair cw = LR;
