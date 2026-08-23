@@ -24,6 +24,8 @@ struct B300DualPrunedArrayPlan {
     uint64_t logical_bytes = 0;   // minimum bytes if every raw mode boundary is kept
     uint64_t scheduled_bytes = 0; // bytes after launch-aware interval coalescing
     uint64_t full_bytes = 0;      // bytes of the unpruned whole-slot swap
+    // Operation units used by the launch penalty: mode3 is one swap kernel;
+    // mode1/2 is one peer copy plus one local memset, hence two units.
     uint64_t launches = 0;
     // NVLink 5's per-GPU throughput is bidirectional aggregate.  Every byte
     // crossing a peer link consumes one byte of port traffic at both endpoints,
@@ -74,6 +76,10 @@ struct B300DualRawInterval { Code begin=0,end=0; uint8_t mode=0; };
 
 static inline int b300_dt_mode_popcount(uint32_t mode) {
     return int(mode & 1u) + int((mode >> 1) & 1u);
+}
+static inline uint32_t b300_dt_mode_operation_units(uint32_t mode) {
+    if (!mode) return 0;
+    return mode == 3 ? 1u : 2u;
 }
 
 static B300DualPrunedArrayPlan b300_dt_build_pruned_array_plan(
@@ -129,7 +135,7 @@ static B300DualPrunedArrayPlan b300_dt_build_pruned_array_plan(
                 mode=uint8_t(mode|e[j-1].mode);
                 uint64_t n=uint64_t(e[j-1].end-e[i].begin);
                 uint64_t bytes=n*sizeof(Count)*uint64_t(b300_dt_mode_popcount(mode));
-                uint32_t launches=mode?1u:0u;
+                uint32_t launches=b300_dt_mode_operation_units(mode);
                 Score cand;
                 cand.bytes=dp[i].bytes+bytes;
                 cand.launches=dp[i].launches+launches;
