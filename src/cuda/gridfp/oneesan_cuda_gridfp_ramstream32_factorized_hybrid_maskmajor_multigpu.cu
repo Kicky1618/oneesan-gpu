@@ -102,7 +102,7 @@ struct V6Range {
 // is enough to balance both PCIe bytes and HIGH work.
 static std::vector<V6Range> partition_v6_batches(const V6BatchPlan& p, int ngpu) {
     ngpu = std::max(1, std::min<int>(ngpu, p.batches.size()));
-    std::vector<V6Range> out(size_t(ngpu));
+    std::vector<V6Range> out(static_cast<size_t>(ngpu));
     uint64_t total = 0;
     for (const auto& b : p.batches) total += b.arena_bytes;
     size_t pos = 0;
