@@ -1,7 +1,7 @@
 // Reuse the validated direct mask-shard runtime and replace only the placement
 // policy.  Keeping the baseline main available under another symbol makes A/B
 // builds straightforward while avoiding a second copy of all CUDA kernels.
-#define main b300_maskshard_lpt_main
+#define main(...) b300_maskshard_lpt_main(__VA_ARGS__)
 #include "oneesan_cuda_gridfp_b300_hbm32_factorized_maskshard_sparse.cu"
 #undef main
 
