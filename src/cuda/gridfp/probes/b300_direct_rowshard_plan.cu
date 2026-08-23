@@ -1,7 +1,9 @@
 #include <cuda_runtime.h>
 
+#include <algorithm>
 #include <array>
 #include <cstdint>
+#include <cstdlib>
 #include <iomanip>
 #include <iostream>
 #include <unordered_map>
@@ -27,7 +29,7 @@ static uint32_t rp_flip_high(uint32_t hc, uint32_t depth) {
     return 0xffffffffu;
 }
 
-struct RpCrossStat { uint64_t rows = 0, remote = 0; };
+struct RpCrossStat { uint64_t attempted = 0, valid = 0, remote = 0; };
 
 int main() {
     constexpr int NG = 8;
@@ -54,6 +56,7 @@ int main() {
 
     std::array<unsigned long long, NG> high_orbit_ops{}, high_closure_ops{};
     std::array<unsigned long long, NG> high_source_cells{};
+    unsigned long long high_orbit_cells = 0;
     unsigned long long high_partner_remote_cells = 0;
     unsigned long long high_drop_remote_cells = 0;
     unsigned long long high_closure_remote_cells = 0;
@@ -66,6 +69,7 @@ int main() {
         uint32_t do_ = b300_sparse_drank(op) % NG;
         ++high_orbit_ops[so];
         high_source_cells[so] += x.cols;
+        high_orbit_cells += x.cols;
         if (jo != so) high_partner_remote_cells += x.cols;
         if (do_ != so) high_drop_remote_cells += x.cols;
     }
@@ -82,6 +86,7 @@ int main() {
 
     unsigned long long low_orbit_cells = 0;
     unsigned long long low_closure_cells = 0;
+    unsigned long long low_cross_attempted_cells = 0;
     unsigned long long low_cross_cells = 0;
     unsigned long long low_cross_remote_cells = 0;
     for (const auto& op : sparse.low_orbit) {
@@ -111,7 +116,7 @@ int main() {
             auto it = cross_cache.find(key);
             if (it == cross_cache.end()) {
                 RpCrossStat st;
-                st.rows = x.rows;
+                st.attempted = x.rows;
                 for (uint32_t hr = 0; hr < x.rows; ++hr) {
                     uint32_t hc = storage.high_all_codes[storage.high_all_off[x.he] + hr];
                     uint32_t hc2 = rp_flip_high(hc, depth);
@@ -120,11 +125,13 @@ int main() {
                     if (packed == 0xffffffffu) std::exit(430);
                     uint32_t hr2 = packed >> HIGH_LUT_K;
                     if (hr2 >= y.rows) std::exit(431);
+                    ++st.valid;
                     if ((hr2 % NG) != (hr % NG)) ++st.remote;
                 }
                 it = cross_cache.emplace(key, st).first;
             }
-            low_cross_cells += it->second.rows;
+            low_cross_attempted_cells += it->second.attempted;
+            low_cross_cells += it->second.valid;
             low_cross_remote_cells += it->second.remote;
         }
     }
@@ -135,7 +142,8 @@ int main() {
     uint64_t common_bytes = uint64_t(storage.low_all_codes.size() + storage.high_all_codes.size()) * sizeof(uint32_t)
                           + uint64_t(storage.low_mask_begin.size() + storage.high_mask_begin.size()) * sizeof(uint32_t)
                           + uint64_t(G_FACTOR.low_mask_codes.size() + G_FACTOR.low_mask_off.size()
-                                   + G_FACTOR.high_mask_codes.size() + G_FACTOR.high_mask_off.size()) * sizeof(uint32_t);
+                                   + G_FACTOR.high_mask_codes.size() + G_FACTOR.high_mask_off.size()) * sizeof(uint32_t)
+                          + uint64_t(layout.main_blocks.size() + layout.block_blocks.size()) * sizeof(StorageBlock);
 
     std::array<unsigned long long, NG> high_sparse_bytes{};
     for (int g = 0; g < NG; ++g) {
@@ -153,9 +161,12 @@ int main() {
     unsigned long long auth_min = auth_bytes[0], auth_max = auth_bytes[0];
     unsigned long long meta_min = low_sparse_bytes + common_bytes + high_sparse_bytes[0];
     unsigned long long meta_max = meta_min;
+    unsigned long long high_work_min = high_source_cells[0], high_work_max = high_source_cells[0];
     for (int g = 0; g < NG; ++g) {
         auth_min = std::min(auth_min, auth_bytes[g]);
         auth_max = std::max(auth_max, auth_bytes[g]);
+        high_work_min = std::min(high_work_min, high_source_cells[g]);
+        high_work_max = std::max(high_work_max, high_source_cells[g]);
         unsigned long long mb = low_sparse_bytes + common_bytes + high_sparse_bytes[g];
         meta_min = std::min(meta_min, mb);
         meta_max = std::max(meta_max, mb);
@@ -166,7 +177,13 @@ int main() {
         << " auth_min_gib=" << gib(auth_min)
         << " auth_max_gib=" << gib(auth_max)
         << " auth_imbalance=" << (auth_min ? double(auth_max) / double(auth_min) : 0.0)
-        << '\n'
+        << '\n';
+    for (int g = 0; g < NG; ++g)
+        std::cout << "rowshard_gpu=" << g
+                  << " auth_gib=" << gib(auth_bytes[g])
+                  << " high_sparse_mib=" << mib(high_sparse_bytes[g])
+                  << " high_source_cells=" << high_source_cells[g] << '\n';
+    std::cout
         << "low_sparse_replicated_mib=" << mib(low_sparse_bytes)
         << " common_meta_mib=" << mib(common_bytes)
         << " high_sparse_partitioned_min_mib=" << mib(*std::min_element(high_sparse_bytes.begin(), high_sparse_bytes.end()))
@@ -174,18 +191,22 @@ int main() {
         << " meta_min_mib=" << mib(meta_min)
         << " meta_max_mib=" << mib(meta_max)
         << " max_need_gib=" << gib(auth_max + meta_max)
+        << " high_work_imbalance=" << (high_work_min ? double(high_work_max) / double(high_work_min) : 0.0)
         << '\n'
-        << "high_partner_remote_fraction=" << frac(high_partner_remote_cells,
-             high_partner_remote_cells + 0ULL + [&](){ unsigned long long z=0; for (auto x: high_source_cells) z+=x; return z; }())
+        << "high_orbit_cells=" << high_orbit_cells
         << " high_partner_remote_cells=" << high_partner_remote_cells
+        << " high_partner_remote_fraction=" << frac(high_partner_remote_cells, high_orbit_cells)
         << " high_drop_remote_cells=" << high_drop_remote_cells
-        << " high_closure_remote_fraction=" << frac(high_closure_remote_cells, high_closure_cells)
+        << " high_drop_remote_fraction=" << frac(high_drop_remote_cells, high_orbit_cells)
+        << " high_closure_cells=" << high_closure_cells
         << " high_closure_remote_cells=" << high_closure_remote_cells
+        << " high_closure_remote_fraction=" << frac(high_closure_remote_cells, high_closure_cells)
         << '\n'
         << "low_orbit_cells=" << low_orbit_cells
         << " low_orbit_remote_cells=0"
         << " low_closure_cells=" << low_closure_cells
-        << " low_cross_cells=" << low_cross_cells
+        << " low_cross_attempted_cells=" << low_cross_attempted_cells
+        << " low_cross_valid_cells=" << low_cross_cells
         << " low_cross_remote_cells=" << low_cross_remote_cells
         << " low_cross_remote_fraction=" << frac(low_cross_remote_cells, low_cross_cells)
         << '\n'
