@@ -17,7 +17,7 @@ if (( LOW_LUT_K + HIGH_LUT_K + 1 != W )); then
   exit 2
 fi
 
-SRC="$(repo_path "${SRC:-src/cuda/gridfp/oneesan_cuda_gridfp_ramstream32_factorized.cu}")"
+SRC="$(repo_path "${SRC:-src/cuda/gridfp/oneesan_cuda_gridfp_ramstream32_factorized_forced2.cu}")"
 OUT="$(build_path "${OUT:-oneesan_cuda_gridfp_ramstream32_factorized_n${N}}")"
 
 TMPDIR="$ONEESAN_TMP_DIR" nvcc \
@@ -29,4 +29,5 @@ TMPDIR="$ONEESAN_TMP_DIR" nvcc \
   "$SRC" -o "$OUT"
 
 echo "built $OUT"
+echo "  source=$SRC"
 echo "  n=$N width=$W arch=$ARCH low_lut_k=$LOW_LUT_K high_lut_k=$HIGH_LUT_K"
