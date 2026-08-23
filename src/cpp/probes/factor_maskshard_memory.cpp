@@ -19,7 +19,9 @@ static U64 choose_u64(int n, int k) {
     return r;
 }
 
-static std::vector<std::vector<U64>> high_counts(int width) {
+// Counts for one FIXED occupancy mask with popcount k. Zero bits are forced N,
+// occupied bits are forced to L/R, so only the k occupied positions move height.
+static std::vector<std::vector<U64>> high_fixed_counts(int width) {
     std::vector<std::vector<U64>> out(width + 1, std::vector<U64>(MAXW + 3));
     for (int k = 0; k <= width; ++k) {
         std::vector<U64> cur(MAXW + 3), nxt(MAXW + 3);
@@ -27,9 +29,8 @@ static std::vector<std::vector<U64>> high_counts(int width) {
         for (int step = 0; step < k; ++step) {
             std::fill(nxt.begin(), nxt.end(), 0);
             for (int h = 0; h <= MAXW + 1; ++h) if (cur[h]) {
-                nxt[h] += cur[h];
+                if (h + 1 < int(nxt.size())) nxt[h + 1] += cur[h];
                 if (h > 0) nxt[h - 1] += cur[h];
-                if (h + 1 <= MAXW + 1) nxt[h + 1] += cur[h];
             }
             cur.swap(nxt);
         }
@@ -38,7 +39,7 @@ static std::vector<std::vector<U64>> high_counts(int width) {
     return out;
 }
 
-static std::vector<std::vector<U64>> low_counts(int width) {
+static std::vector<std::vector<U64>> low_fixed_counts(int width) {
     std::vector<std::vector<U64>> out(width + 1, std::vector<U64>(MAXW + 3));
     for (int k = 0; k <= width; ++k) {
         for (int start = 0; start <= MAXW + 1; ++start) {
@@ -47,14 +48,49 @@ static std::vector<std::vector<U64>> low_counts(int width) {
             for (int step = 0; step < k; ++step) {
                 std::fill(nxt.begin(), nxt.end(), 0);
                 for (int h = 0; h <= MAXW + 1; ++h) if (cur[h]) {
-                    nxt[h] += cur[h];
+                    if (h + 1 < int(nxt.size())) nxt[h + 1] += cur[h];
                     if (h > 0) nxt[h - 1] += cur[h];
-                    if (h + 1 <= MAXW + 1) nxt[h + 1] += cur[h];
                 }
                 cur.swap(nxt);
             }
             out[k][start] = cur[0];
         }
+    }
+    return out;
+}
+
+// Counts for the unrestricted factor code tables. Here each position may be
+// N/R/L, unlike the fixed-occupancy count above.
+static std::vector<U64> high_all_counts(int width) {
+    std::vector<U64> cur(MAXW + 3), nxt(MAXW + 3);
+    cur[1] = 1;
+    for (int step = 0; step < width; ++step) {
+        std::fill(nxt.begin(), nxt.end(), 0);
+        for (int h = 0; h <= MAXW + 1; ++h) if (cur[h]) {
+            nxt[h] += cur[h];
+            if (h + 1 < int(nxt.size())) nxt[h + 1] += cur[h];
+            if (h > 0) nxt[h - 1] += cur[h];
+        }
+        cur.swap(nxt);
+    }
+    return cur;
+}
+
+static std::vector<U64> low_all_counts(int width) {
+    std::vector<U64> out(MAXW + 3);
+    for (int start = 0; start <= MAXW + 1; ++start) {
+        std::vector<U64> cur(MAXW + 3), nxt(MAXW + 3);
+        cur[start] = 1;
+        for (int step = 0; step < width; ++step) {
+            std::fill(nxt.begin(), nxt.end(), 0);
+            for (int h = 0; h <= MAXW + 1; ++h) if (cur[h]) {
+                nxt[h] += cur[h];
+                if (h + 1 < int(nxt.size())) nxt[h + 1] += cur[h];
+                if (h > 0) nxt[h - 1] += cur[h];
+            }
+            cur.swap(nxt);
+        }
+        out[start] = cur[0];
     }
     return out;
 }
@@ -91,8 +127,8 @@ int main(int argc, char** argv) {
         return 1;
     }
 
-    const auto hc_by_k = high_counts(high);
-    const auto lc_by_k = low_counts(low);
+    const auto hc_by_k = high_fixed_counts(high);
+    const auto lc_by_k = low_fixed_counts(low);
     std::vector<std::vector<U64>> pair(high + 1, std::vector<U64>(low + 1));
     for (int kh = 0; kh <= high; ++kh) {
         for (int kl = 0; kl <= low; ++kl) {
@@ -121,13 +157,10 @@ int main(int argc, char** argv) {
     const U64 max_high_mask_group = *std::max_element(high_mask_weight.begin(), high_mask_weight.end());
     const U64 max_low_mask_group = *std::max_element(low_mask_weight.begin(), low_mask_weight.end());
 
-    // All-code counts.  Fixed occupancy mask lists partition each all-code list,
-    // so total mask-code entries equal total all-code entries.
-    const auto hc_all_k = high_counts(high);
-    const auto lc_all_k = low_counts(low);
-    U64 high_all = 0, low_all = 0;
-    for (int h = 0; h <= high + 1; ++h) high_all += hc_all_k[high][h];
-    for (int h = 0; h <= low + 1; ++h) low_all += lc_all_k[low][h];
+    const auto hc_all = high_all_counts(high);
+    const auto lc_all = low_all_counts(low);
+    const U64 high_all = std::accumulate(hc_all.begin(), hc_all.end(), U64(0));
+    const U64 low_all = std::accumulate(lc_all.begin(), lc_all.end(), U64(0));
 
     const U64 low_dense = U64(1) << (2 * low);
     const U64 high_dense = U64(1) << (2 * high);
@@ -139,26 +172,24 @@ int main(int argc, char** argv) {
 
     const U64 main_blocks = U64(3) * U64(high + 2);
     const U64 block_blocks = U64(high + 2);
-    const LD meta_bytes = LD(high_masks) // uint8 owner
+    const LD meta_bytes = LD(high_masks)
         + LD(8) * LD(2 * high_masks + high_masks * main_blocks + high_masks * block_blocks)
-        + LD(4) * LD(high_all); // HIGH route
+        + LD(4) * LD(high_all);
 
-    // Descriptor active dimensions.  A block contributes its HIGH rows to
-    // HighDesc and LOW columns to LowDesc only when both sides are nonempty.
+    // Descriptor active dimensions. A storage block contributes its HIGH rows
+    // to HighDesc and LOW columns to LowDesc only when both dimensions exist.
     U64 highdesc_main_active = 0, lowdesc_main_active = 0;
     U64 highdesc_block_active = 0, lowdesc_block_active = 0;
-    const auto& hc = hc_all_k[high];
-    const auto& lc = lc_all_k[low];
     for (int he = 0; he <= high + 1; ++he) {
         for (int cv = 0; cv < 3; ++cv) {
             const int hs = he + (cv == 2 ? 1 : cv == 1 ? -1 : 0);
-            if (hs < 0 || hs > low + 1 || !hc[he] || !lc[hs]) continue;
-            highdesc_main_active += hc[he];
-            lowdesc_main_active += lc[hs];
+            if (hs < 0 || hs > low + 1 || !hc_all[he] || !lc_all[hs]) continue;
+            highdesc_main_active += hc_all[he];
+            lowdesc_main_active += lc_all[hs];
         }
-        if (he <= low + 1 && hc[he] && lc[he]) {
-            highdesc_block_active += hc[he];
-            lowdesc_block_active += lc[he];
+        if (he <= low + 1 && hc_all[he] && lc_all[he]) {
+            highdesc_block_active += hc_all[he];
+            lowdesc_block_active += lc_all[he];
         }
     }
     const LD highdesc_bytes = LD(4) * LD(high) * LD(highdesc_main_active + highdesc_block_active);
