@@ -251,3 +251,89 @@ __global__ void maskshard_main_highdesc_closure_inplace_kernel(
         }
     }
 }
+
+#ifdef MASKSHARD_HIGH_CLOSURE_ROWS
+// v0.8: HIGH transition kind is a property of (FBlock, HIGH row, p), not of
+// the passive LOW column. One warp therefore classifies a HIGH row once and
+// processes its LOW columns coalesced. This adds no descriptor/HBM table.
+__global__ void maskshard_main_highdesc_closure_rows_inplace_kernel(
+    Count* mainv, Count* blockv, Code n, int p
+) {
+    constexpr int S = MAXW + 2;
+    constexpr uint32_t LR_MASK = (1u << LOW_LUT_K) - 1u;
+    const uint32_t pi = uint32_t((TARGET_W - 1) - p);
+    const unsigned active = __activemask();
+    const int lane = int(threadIdx.x & 31);
+    const int warp_in_block = int(threadIdx.x >> 5);
+    const int warps_per_block = int((blockDim.x + 31) >> 5);
+    Code row = Code(blockIdx.x) * Code(warps_per_block) + Code(warp_in_block);
+    const Code row_step = Code(gridDim.x) * Code(warps_per_block);
+
+    for (;; row += row_step) {
+        int bid = -1;
+        uint32_t hr = 0;
+        if (lane == 0) {
+            Code r = row;
+            for (int b = 0; b < D_F_MAIN_NBLOCKS; ++b) {
+                const FBlock z = D_F_MAIN_BLOCKS[b];
+                if (!z.stride) continue;
+                const Code rows = (z.end - z.off) / Code(z.stride);
+                if (r < rows) {
+                    bid = b;
+                    hr = uint32_t(r);
+                    break;
+                }
+                r -= rows;
+            }
+        }
+        bid = __shfl_sync(active, bid, 0);
+        if (bid < 0) break;
+        hr = __shfl_sync(active, hr, 0);
+        const FBlock x = D_F_MAIN_BLOCKS[bid];
+
+        int is_closure = 0;
+        uint32_t desc = 0;
+        if (lane == 0) {
+            const MateValuePair w = maskshard_high_pair(x, hr, p);
+            is_closure = (w == LL || w == RR || w == RL);
+            if (is_closure) {
+                desc = D_HIGHDESC_MAIN[
+                    size_t(pi) * D_HIGHDESC_MAIN_TOTAL
+                    + D_HIGHDESC_MAIN_BASE[bid] + hr];
+            }
+        }
+        is_closure = __shfl_sync(active, is_closure, 0);
+        if (!is_closure) continue;
+        desc = __shfl_sync(active, desc, 0);
+        const uint32_t kind = highdesc_kind(desc);
+        if (kind != HIGHDESC_BLOCK && kind != HIGHDESC_CROSS) continue;
+
+        for (uint32_t lr = uint32_t(lane); lr < x.stride; lr += 32u) {
+            const Code i = x.off + Code(hr) * x.stride + lr;
+            const Count c = mainv[i];
+            if (!c) continue;
+            if (kind == HIGHDESC_BLOCK) {
+                const FBlock y = D_F_BLOCK_BLOCKS[highdesc_block(desc)];
+                const Code j = y.off + Code(highdesc_rank(desc)) * y.stride + lr;
+                atomic_add_mod(blockv + j, c);
+            } else {
+                const uint32_t a = D_F_LOW_MASK_OFF[size_t(D_F_MASK) * S + x.hs];
+                const uint32_t lc = D_F_LOW_MASK_CODES[a + lr];
+                const uint32_t lc2 = highdesc_flip_low(lc, highdesc_depth(desc));
+                if (lc2 == 0xffffffffu) continue;
+                const uint32_t lp = D_F_LOW_PACKED_RANK[lc2];
+                const uint32_t lr2 = lp & LR_MASK;
+                const FBlock y = D_F_BLOCK_BLOCKS[highdesc_block(desc)];
+                const Code j = y.off + Code(highdesc_rank(desc)) * y.stride + lr2;
+                atomic_add_mod(blockv + j, c);
+            }
+        }
+    }
+    (void)n;
+}
+
+// The batch source keeps calling the historical symbol; select the row executor
+// at preprocessing time without touching v0.4-v0.7 call sites.
+#define maskshard_main_highdesc_closure_inplace_kernel \
+        maskshard_main_highdesc_closure_rows_inplace_kernel
+#endif
