@@ -7,6 +7,7 @@ on:
       - 'src/cuda/gridfp/ramstream32_high_rawbatch.cuh'
       - 'src/cuda/gridfp/ramstream32_high_orbit.cuh'
       - 'src/cuda/gridfp/ramstream32_cpu_low_maskmajor.hpp'
+      - 'src/cuda/gridfp/probes/ramstream32_high_rawbatch_selftest.cu'
       - 'scripts/build/gridfp-ramstream32-factorized-hybrid-maskmajor-rawbatch.sh'
       - '.github/workflows/ramstream32-v54-compile.yml'
   workflow_dispatch:
@@ -39,3 +40,12 @@ jobs:
       - name: Plan v5.4 raw batch
         shell: bash
         run: build/v54_w${{ matrix.width }} ${{ matrix.n }} 4294967291 12288 4 --plan-only
+      - name: Validate raw-batch physical indexing
+        if: matrix.width == 22
+        shell: bash
+        run: |
+          nvcc -O3 -std=c++17 -arch=sm_80 \
+            -DTARGET_W=10 -DLOW_LUT_K=5 -DHIGH_LUT_K=4 \
+            src/cuda/gridfp/probes/ramstream32_high_rawbatch_selftest.cu \
+            -o build/high_rawbatch_selftest
+          build/high_rawbatch_selftest
