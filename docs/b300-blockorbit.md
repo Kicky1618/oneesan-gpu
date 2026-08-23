@@ -91,7 +91,7 @@ v0.8 extends HighDesc generation with a compact list of source HIGH rows that ar
 - `LL`, `RR`, or `RL`; and
 - represented by a `HIGHDESC_BLOCK` or `HIGHDESC_CROSS` descriptor.
 
-At n=27 there are exactly 715,533 such source HIGH rows for every HIGH position. Across 13 positions:
+At n=27 there are exactly 715,533 such source HIGH rows for every HIGH position. The earlier 715,534 count included the impossible `hs=LOW+1` FBlock; a LOW segment of length 14 cannot descend from height 15 to zero, so that block has zero columns and is now excluded consistently with the storage layout. Across 13 positions:
 
 ```
 closure row entries     : 9,301,929
@@ -102,9 +102,15 @@ v0.8 peak               : 249.116280 GiB/GPU
 v0.8 headroom           :  19.473720 GiB/GPU
 ```
 
-The HBM figure is independently tracked by `factor_maskshard_memory.cpp`; `factor_highclosure_rows.cpp` separately derives the 715,533-row combinatorial count and the row-execution work model.
+The HBM figure is independently tracked by `factor_maskshard_memory.cpp`; `factor_highclosure_rows.cpp` separately derives the 715,533-row combinatorial count, state work, warp work, and launch-grid model.
 
-The list is stored in source-FBlock order. A tiny `[p][FBlock]` offset table lets every CTA build a shared prefix containing only FBlocks whose `stride` is nonzero for the currently fixed LOW occupancy mask. Consequently no warp is assigned to an impossible block.
+The list is stored in source-FBlock order. A tiny `[p][FBlock]` offset table identifies the valid row range for each block. For each fixed LOW occupancy mask, the host precomputes how many listed rows belong to FBlocks whose group-local `stride` is nonzero and stores that count in the HIGH job. The closure grid is then launched as
+
+```
+ceil(valid_closure_rows / warps_per_block)
+```
+
+with the existing 65,535-block cap. This avoids sizing the v0.8 grid from the much larger `main_n` while leaving v0.4-v0.7 launch behavior unchanged.
 
 The v0.8 closure kernel assigns one valid HIGH closure row to one warp. The warp processes passive LOW columns coalesced as `lr = lane, lane+32, ...`. Row membership is precomputed once on the host; the kernel no longer performs pair classification for closure.
 
@@ -115,9 +121,23 @@ old full-state HIGH closure state threads : 5,014,353,586,060
 exact useful closure state updates         : 1,503,950,445,478
 valid closure-row warp assignments         :    71,386,429,790
 warp rounds incl. LOW widths > 32          :    94,409,928,028
+warp lane slots                            : 3,021,117,696,896
 ```
 
-The old flattened closure launch corresponds to about 156,698,652,084 warps over all LOW-mask groups and 13 positions, so the row executor's warp-round model is about 60.25% of that count. This is still a model, not a B300 timing prediction: atomics, cache behavior, and row-list indirection must be measured.
+The warp-lane model is 60.2494% of the old flattened state-thread count, with 49.7813% of those lane slots carrying a useful closure state. This is a structural work model, not a B300 timing prediction: atomics, cache behavior, row-list indirection, and memory latency still require measurement.
+
+The host grid-sizing improvement is much smaller because many large LOW-mask groups hit the 65,535-block cap. At 256 threads:
+
+```
+old main_n-sized closure blocks / DP row : 9,140,772,719
+v0.8 row-sized closure blocks / DP row   : 8,923,348,057
+ratio                                     : 0.976213755
+
+old blocks / residue (28 rows)           : 255,941,636,132
+v0.8 blocks / residue                    : 249,853,745,596
+```
+
+Thus v0.8 should not be justified as a large kernel-launch-count reduction. Its main expected benefit is removing repeated per-state HIGH-row decoding/classification and traversing only closure rows while retaining coalesced LOW-column access.
 
 `maskshard_highclosure_rows_hostplan.cu` validates the actual HighDesc-generated row list, exact membership, source-FBlock ranges, and descriptor kinds. The older HighDesc semantic probe independently validates descriptor semantics across compatible LOW codes.
 
