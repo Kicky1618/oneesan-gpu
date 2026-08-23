@@ -89,7 +89,7 @@ For the HIGH window, transition kind depends only on `(HIGH exact row, center, p
 v0.8 extends HighDesc generation with a compact list of source HIGH rows that are both:
 
 - `LL`, `RR`, or `RL`; and
-- actually represented by a `HIGHDESC_BLOCK` or `HIGHDESC_CROSS` descriptor.
+- represented by a `HIGHDESC_BLOCK` or `HIGHDESC_CROSS` descriptor.
 
 At n=27 there are exactly 715,533 such source HIGH rows for every HIGH position. Across 13 positions:
 
@@ -102,9 +102,11 @@ v0.8 peak               : 249.116280 GiB/GPU
 v0.8 headroom           :  19.473720 GiB/GPU
 ```
 
-The list is stored in source-FBlock order. A tiny `[p][FBlock]` offset table lets every CTA build a shared prefix containing only FBlocks whose `stride` is nonzero for the currently fixed LOW occupancy mask. Consequently no warp is launched for an impossible block.
+The HBM figure is independently tracked by `factor_maskshard_memory.cpp`; `factor_highclosure_rows.cpp` separately derives the 715,533-row combinatorial count and the row-execution work model.
 
-The v0.8 closure kernel assigns one valid HIGH closure row to one warp. The warp processes passive LOW columns coalesced as `lr = lane, lane+32, ...`. The row classification and descriptor lookup are performed once per row, not once per state.
+The list is stored in source-FBlock order. A tiny `[p][FBlock]` offset table lets every CTA build a shared prefix containing only FBlocks whose `stride` is nonzero for the currently fixed LOW occupancy mask. Consequently no warp is assigned to an impossible block.
+
+The v0.8 closure kernel assigns one valid HIGH closure row to one warp. The warp processes passive LOW columns coalesced as `lr = lane, lane+32, ...`. Row membership is precomputed once on the host; the kernel no longer performs pair classification for closure.
 
 n=27 work model for the 13 HIGH positions, per DP row:
 
@@ -115,7 +117,7 @@ valid closure-row warp assignments         :    71,386,429,790
 warp rounds incl. LOW widths > 32          :    94,409,928,028
 ```
 
-The old flattened closure launch corresponds to about 156,698,652,084 warps over all LOW-mask groups and 13 positions, so the row executor's warp-round model is about 60.25% of that count. This is still a model, not a B300 timing prediction: atomics, LOW-column widths, cache behavior, and row-list indirection must be measured.
+The old flattened closure launch corresponds to about 156,698,652,084 warps over all LOW-mask groups and 13 positions, so the row executor's warp-round model is about 60.25% of that count. This is still a model, not a B300 timing prediction: atomics, cache behavior, and row-list indirection must be measured.
 
 `maskshard_highclosure_rows_hostplan.cu` validates the actual HighDesc-generated row list, exact membership, source-FBlock ranges, and descriptor kinds. The older HighDesc semantic probe independently validates descriptor semantics across compatible LOW codes.
 
