@@ -1,0 +1,50 @@
+name: B300 mask-shard compile
+
+on:
+  push:
+    paths:
+      - 'src/cuda/b300/oneesan_cuda_gridfp_b300_hbm32_maskshard_plan.cu'
+      - 'src/cuda/b300/maskshard_layout.hpp'
+      - 'src/cuda/gridfp/ramstream32_factorized_storage.hpp'
+      - 'src/cuda/b300/oneesan_cuda_gridfp_b300_hbm32_factorized_batch.cu'
+      - '.github/workflows/b300-maskshard-compile.yml'
+  pull_request:
+    paths:
+      - 'src/cuda/b300/oneesan_cuda_gridfp_b300_hbm32_maskshard_plan.cu'
+      - 'src/cuda/b300/maskshard_layout.hpp'
+      - 'src/cuda/gridfp/ramstream32_factorized_storage.hpp'
+      - 'src/cuda/b300/oneesan_cuda_gridfp_b300_hbm32_factorized_batch.cu'
+      - '.github/workflows/b300-maskshard-compile.yml'
+  workflow_dispatch:
+
+jobs:
+  plan:
+    runs-on: ubuntu-latest
+    container: nvidia/cuda:12.8.1-devel-ubuntu22.04
+    strategy:
+      matrix:
+        include:
+          - width: 22
+            n: 21
+            low: 11
+            high: 10
+          - width: 28
+            n: 27
+            low: 14
+            high: 13
+    steps:
+      - uses: actions/checkout@v4
+      - name: Compile mask-shard layout plan
+        shell: bash
+        run: |
+          mkdir -p build
+          nvcc -O3 -std=c++17 -lineinfo -arch=sm_80 \
+            -DTARGET_W=${{ matrix.width }} \
+            -DLOW_LUT_K=${{ matrix.low }} \
+            -DHIGH_LUT_K=${{ matrix.high }} \
+            src/cuda/b300/oneesan_cuda_gridfp_b300_hbm32_maskshard_plan.cu \
+            -o build/b300_maskshard_plan_w${{ matrix.width }}
+      - name: Validate host layout plan
+        shell: bash
+        run: |
+          build/b300_maskshard_plan_w${{ matrix.width }} ${{ matrix.n }} 8
