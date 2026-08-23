@@ -12,6 +12,7 @@ on:
       - 'src/cuda/b300/maskshard_lowclosure_kernel.cuh'
       - 'src/cuda/b300/probes/maskshard_lowclosure_cols_hostplan.cu'
       - 'src/cuda/b300/oneesan_cuda_gridfp_b300_hbm32_maskshard_blockorbit_compactaux_fullclosurerows_batch_guarded.cu'
+      - 'scripts/bench/b300_maskshard_ab.py'
       - '.github/workflows/factor-lowclosure-v09.yml'
   pull_request:
     paths:
@@ -24,6 +25,7 @@ on:
       - 'src/cuda/b300/maskshard_lowclosure_kernel.cuh'
       - 'src/cuda/b300/probes/maskshard_lowclosure_cols_hostplan.cu'
       - 'src/cuda/b300/oneesan_cuda_gridfp_b300_hbm32_maskshard_blockorbit_compactaux_fullclosurerows_batch_guarded.cu'
+      - 'scripts/bench/b300_maskshard_ab.py'
       - '.github/workflows/factor-lowclosure-v09.yml'
   workflow_dispatch:
 
@@ -99,3 +101,12 @@ jobs:
             -o build/factor_v09_memory_delta
       - name: Verify n=27 v0.9 HBM delta
         run: build/factor_v09_memory_delta 28 14 249.116280202 268.59
+
+  ab-driver:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Syntax-check B300 A/B driver
+        run: python3 -m py_compile scripts/bench/b300_maskshard_ab.py
+      - name: Validate default A/B command construction
+        run: python3 scripts/bench/b300_maskshard_ab.py --dry-run --result-dir build/ab-dry-run
