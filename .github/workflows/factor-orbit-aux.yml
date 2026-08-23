@@ -5,6 +5,7 @@ on:
     paths:
       - 'src/cpp/probes/factor_orbit_aux_semantics.cpp'
       - 'src/cpp/probes/factor_orbitaux_savings.cpp'
+      - 'src/cpp/probes/factor_blockorbit_semantics.cpp'
       - 'src/cuda/b300/probes/maskshard_orbitaux_hostplan.cu'
       - 'src/cuda/b300/maskshard_highio.cuh'
       - 'src/cuda/b300/maskshard_highorbit.cuh'
@@ -16,6 +17,7 @@ on:
     paths:
       - 'src/cpp/probes/factor_orbit_aux_semantics.cpp'
       - 'src/cpp/probes/factor_orbitaux_savings.cpp'
+      - 'src/cpp/probes/factor_blockorbit_semantics.cpp'
       - 'src/cuda/b300/probes/maskshard_orbitaux_hostplan.cu'
       - 'src/cuda/b300/maskshard_highio.cuh'
       - 'src/cuda/b300/maskshard_highorbit.cuh'
@@ -45,6 +47,22 @@ jobs:
             -o build/factor_orbit_aux_semantics
       - name: Verify descriptor plus aux orbit targets
         run: build/factor_orbit_aux_semantics ${{ matrix.width }} ${{ matrix.low }}
+
+  blockorbit-semantics:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        width: [10, 12]
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build blocked-domain orbit semantic probe
+        run: |
+          mkdir -p build
+          g++ -O3 -std=c++17 -Wall -Wextra -Werror \
+            src/cpp/probes/factor_blockorbit_semantics.cpp \
+            -o build/factor_blockorbit_semantics
+      - name: Compare blocked-domain orbit plus closure with canonical update
+        run: build/factor_blockorbit_semantics ${{ matrix.width }}
 
   savings:
     runs-on: ubuntu-latest
