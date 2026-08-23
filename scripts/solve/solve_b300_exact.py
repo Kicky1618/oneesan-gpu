@@ -26,23 +26,27 @@ PRIMES = [
 
 RESULT_RE = re.compile(r"residue=(\d+).*?modulus=(\d+).*?wall_s=([0-9.eE+-]+)")
 
-# Exact 9x27 strip counts for the stronger planar-component condition used by
-# the n=27 bound.  They are independently recomputed by
+# Strong planar-component upper bound for n=27.  Split the outer boundary into
+# the fixed s-t arcs P0=top+right and Q0=left+bottom.  If
+# boundary(F)=P XOR P0 for a valid simple path P, every connected component of
+# 1-faces must touch P0; otherwise that component contributes a closed boundary
+# cycle to P.  Complementing gives boundary(~F)=P XOR Q0, hence every connected
+# 0-component must touch Q0.  Interior checkerboard 2x2 patterns are also
+# forbidden because they create degree four at a path vertex.
+#
+# We partition the 27 face rows into independent strips and allow either color
+# to escape through artificial strip boundaries.  Dropping consistency between
+# strips enlarges the set, so the product is still a rigorous upper bound.
+# Exhaustive frontier-DP recomputation lives in
 # src/cpp/probes/pq_component_strip_bound.cpp.
 #
-# Split the outer boundary into the fixed s-t arcs
-#   P0 = top + right,  Q0 = left + bottom.
-# For a valid simple path P, write boundary(F) = P XOR P0.  Every connected
-# component of 1-faces must touch P0; otherwise one boundary cycle of that
-# component survives in P.  Taking the complement gives
-# boundary(~F) = P XOR Q0, so every 0-component must touch Q0.  On an internal
-# strip boundary either color is allowed to escape into the adjacent strip.
-# Ignoring consistency between the three strips only enlarges the set and is
-# therefore still a rigorous upper bound.
-_PQ27_TOP9 = 1439363966680482394681847048772970007433626003156790462009370
-_PQ27_MIDDLE9 = 22942552281959548690313451479726513472161304029234933083393982
-_PQ27_BOTTOM9 = _PQ27_TOP9
-_PQ27_BOUND = _PQ27_TOP9 * _PQ27_MIDDLE9 * _PQ27_BOTTOM9
+# Re-optimizing the strip partition under this stronger condition gives
+# [12,3,12], improving the former [9,9,9] bound from log2 603.517874 to
+# log2 601.912248 while still requiring 19 near-32-bit CRT primes.
+_PQ27_TOP12 = 52999285085137477335762761439368203729124254768255645682708867086111555458359993
+_PQ27_MIDDLE3 = 5560340541250024201342
+_PQ27_BOTTOM12 = _PQ27_TOP12
+_PQ27_BOUND = _PQ27_TOP12 * _PQ27_MIDDLE3 * _PQ27_BOTTOM12
 
 
 def _strip_compatible(x: int, y: int, height: int) -> bool:
@@ -92,6 +96,8 @@ def simple_path_upper_bound(n: int, max_strip_height: int = 9) -> tuple[int, lis
     independent strips and ignore constraints across strip boundaries. For
     n=27 and strip height >=9, also use the stronger precomputed P0/Q0
     component bound documented above and take the smaller rigorous bound.
+    The n=27 component proof internally uses height-12 strips even though the
+    generic checkerboard helper's default max height remains 9.
     """
     if n < 1:
         return 1, []
@@ -113,7 +119,7 @@ def simple_path_upper_bound(n: int, max_strip_height: int = 9) -> tuple[int, lis
     generic_bound = best[n]
     generic_parts = parts[n]
     if n == 27 and hmax >= 9 and _PQ27_BOUND < generic_bound:
-        return _PQ27_BOUND, [9, 9, 9]
+        return _PQ27_BOUND, [12, 3, 12]
     return generic_bound, generic_parts
 
 
