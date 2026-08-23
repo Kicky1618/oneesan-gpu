@@ -1,0 +1,55 @@
+name: B300 mask-shard orbit-aux compile
+
+on:
+  push:
+    paths:
+      - 'src/cuda/b300/oneesan_cuda_gridfp_b300_hbm32_maskshard_fullorbit_batch.cu'
+      - 'src/cuda/b300/oneesan_cuda_gridfp_b300_hbm32_maskshard_fullorbit_batch_guarded.cu'
+      - 'src/cuda/b300/maskshard_highio.cuh'
+      - 'src/cuda/b300/maskshard_highorbit.cuh'
+      - 'src/cuda/b300/maskshard_loworbit.cuh'
+      - 'src/cuda/b300/maskshard_index.cuh'
+      - 'src/cuda/gridfp/ramstream32_factorized_storage.hpp'
+      - 'src/cuda/gridfp/ramstream32_highdesc.cuh'
+      - 'src/cuda/gridfp/ramstream32_lowdesc.cuh'
+      - '.github/workflows/b300-maskshard-orbitaux-compile.yml'
+  pull_request:
+    paths:
+      - 'src/cuda/b300/oneesan_cuda_gridfp_b300_hbm32_maskshard_fullorbit_batch.cu'
+      - 'src/cuda/b300/oneesan_cuda_gridfp_b300_hbm32_maskshard_fullorbit_batch_guarded.cu'
+      - 'src/cuda/b300/maskshard_highio.cuh'
+      - 'src/cuda/b300/maskshard_highorbit.cuh'
+      - 'src/cuda/b300/maskshard_loworbit.cuh'
+      - 'src/cuda/b300/maskshard_index.cuh'
+      - 'src/cuda/gridfp/ramstream32_factorized_storage.hpp'
+      - 'src/cuda/gridfp/ramstream32_highdesc.cuh'
+      - 'src/cuda/gridfp/ramstream32_lowdesc.cuh'
+      - '.github/workflows/b300-maskshard-orbitaux-compile.yml'
+  workflow_dispatch:
+
+jobs:
+  compile:
+    runs-on: ubuntu-latest
+    container: nvidia/cuda:12.8.1-devel-ubuntu22.04
+    strategy:
+      matrix:
+        include:
+          - width: 22
+            low: 11
+            high: 10
+          - width: 28
+            low: 14
+            high: 13
+    steps:
+      - uses: actions/checkout@v4
+      - name: Compile guarded v0.5 orbit-aux batch
+        shell: bash
+        run: |
+          mkdir -p build
+          nvcc -O3 -std=c++17 -lineinfo -arch=sm_80 \
+            -DMASKSHARD_ORBIT_AUX=1 \
+            -DTARGET_W=${{ matrix.width }} \
+            -DLOW_LUT_K=${{ matrix.low }} \
+            -DHIGH_LUT_K=${{ matrix.high }} \
+            src/cuda/b300/oneesan_cuda_gridfp_b300_hbm32_maskshard_fullorbit_batch_guarded.cu \
+            -o build/b300_maskshard_orbitaux_w${{ matrix.width }}
