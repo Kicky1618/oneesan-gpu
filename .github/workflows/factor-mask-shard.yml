@@ -6,12 +6,14 @@ on:
       - 'src/cpp/probes/factor_mask_shard_balance.cpp'
       - 'src/cpp/probes/factor_highmask_closure.cpp'
       - 'src/cpp/probes/factor_highmask_edge_cut.cpp'
+      - 'src/cpp/probes/factor_maskshard_bijection.cpp'
       - '.github/workflows/factor-mask-shard.yml'
   pull_request:
     paths:
       - 'src/cpp/probes/factor_mask_shard_balance.cpp'
       - 'src/cpp/probes/factor_highmask_closure.cpp'
       - 'src/cpp/probes/factor_highmask_edge_cut.cpp'
+      - 'src/cpp/probes/factor_maskshard_bijection.cpp'
       - '.github/workflows/factor-mask-shard.yml'
   workflow_dispatch:
 
@@ -61,6 +63,19 @@ jobs:
         run: |
           build/factor_highmask_closure \
             ${{ matrix.width }} ${{ matrix.low }}
+
+  bijection:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build independent mask-shard bijection probe
+        run: |
+          mkdir -p build
+          g++ -O3 -std=c++17 -Wall -Wextra -Werror \
+            src/cpp/probes/factor_maskshard_bijection.cpp \
+            -o build/factor_maskshard_bijection
+      - name: Verify LOW direct and HIGH route layouts
+        run: build/factor_maskshard_bijection 10 5 8
 
   edge-cut:
     runs-on: ubuntu-latest
