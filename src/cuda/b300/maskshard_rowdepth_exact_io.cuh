@@ -7,7 +7,7 @@
 #error "exact row-depth I/O layers on the v0.14 FBlock row-cap hook"
 #endif
 
-// Exact structural max-height filter using one byte per factor code.  HIGH peak
+// Exact structural max-height filter using one byte per factor code. HIGH peak
 // entries are aligned with D_F_HIGH_ALL_CODES; LOW entries are aligned with
 // D_F_LOW_MASK_CODES and are computed with the appropriate LOW starting height.
 // A composed state's exact frontier depth is max(high_peak, low_peak), because
@@ -146,8 +146,9 @@ __global__ void maskshard_high_main_io_rowdepth_exact_kernel(Count* scratch, Cod
         const std::uint32_t hi = D_F_HIGH_ALL_OFF[x.he] + hr;
         const std::uint32_t lo = D_F_LOW_MASK_OFF[
             std::size_t(D_F_MASK) * S + x.hs] + lr;
-        const int peak = std::max<int>(D_MS_ROW_DEPTH_HIGH_PEAK[hi],
-                                       D_MS_ROW_DEPTH_LOW_PEAK[lo]);
+        const int hp = int(D_MS_ROW_DEPTH_HIGH_PEAK[hi]);
+        const int lp = int(D_MS_ROW_DEPTH_LOW_PEAK[lo]);
+        const int peak = hp > lp ? hp : lp;
         if (peak > cap) {
             if constexpr (!SCATTER) scratch[i] = 0;
             continue;
@@ -179,8 +180,9 @@ __global__ void maskshard_high_block_io_rowdepth_exact_kernel(Count* scratch, Co
             const std::uint32_t hi = D_F_HIGH_ALL_OFF[x.he] + hr;
             const std::uint32_t lo = D_F_LOW_MASK_OFF[
                 std::size_t(D_F_MASK) * S + x.he] + lr;
-            const int peak = std::max<int>(D_MS_ROW_DEPTH_HIGH_PEAK[hi],
-                                           D_MS_ROW_DEPTH_LOW_PEAK[lo]);
+            const int hp = int(D_MS_ROW_DEPTH_HIGH_PEAK[hi]);
+            const int lp = int(D_MS_ROW_DEPTH_LOW_PEAK[lo]);
+            const int peak = hp > lp ? hp : lp;
             if (peak > cap) continue;
             Count* p = maskshard_block_addr(bid, hr, lr);
             *p = scratch[i];
