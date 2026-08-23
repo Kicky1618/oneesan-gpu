@@ -336,6 +336,12 @@ __global__ void maskshard_main_highdesc_closure_rows_inplace_kernel(
     (void)n;
 }
 
+#ifdef MASKSHARD_HIGH_CLOSURE_ROWPACK
+#include "maskshard_highclosure_rowpack.cuh"
+#define maskshard_main_highdesc_closure_inplace_kernel \
+        maskshard_main_highdesc_closure_rowpack_inplace_kernel
+#else
 #define maskshard_main_highdesc_closure_inplace_kernel \
         maskshard_main_highdesc_closure_rows_inplace_kernel
+#endif
 #endif
