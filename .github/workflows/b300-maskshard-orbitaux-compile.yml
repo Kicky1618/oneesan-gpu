@@ -6,6 +6,7 @@ on:
       - 'src/cuda/b300/oneesan_cuda_gridfp_b300_hbm32_maskshard_fullorbit_batch.cu'
       - 'src/cuda/b300/oneesan_cuda_gridfp_b300_hbm32_maskshard_fullorbit_batch_guarded.cu'
       - 'src/cuda/b300/oneesan_cuda_gridfp_b300_hbm32_maskshard_fullorbit_aux_batch_guarded.cu'
+      - 'src/cuda/b300/oneesan_cuda_gridfp_b300_hbm32_maskshard_blockorbit_aux_batch_guarded.cu'
       - 'src/cuda/b300/maskshard_highio.cuh'
       - 'src/cuda/b300/maskshard_highorbit.cuh'
       - 'src/cuda/b300/maskshard_loworbit.cuh'
@@ -20,6 +21,7 @@ on:
       - 'src/cuda/b300/oneesan_cuda_gridfp_b300_hbm32_maskshard_fullorbit_batch.cu'
       - 'src/cuda/b300/oneesan_cuda_gridfp_b300_hbm32_maskshard_fullorbit_batch_guarded.cu'
       - 'src/cuda/b300/oneesan_cuda_gridfp_b300_hbm32_maskshard_fullorbit_aux_batch_guarded.cu'
+      - 'src/cuda/b300/oneesan_cuda_gridfp_b300_hbm32_maskshard_blockorbit_aux_batch_guarded.cu'
       - 'src/cuda/b300/maskshard_highio.cuh'
       - 'src/cuda/b300/maskshard_highorbit.cuh'
       - 'src/cuda/b300/maskshard_loworbit.cuh'
@@ -58,6 +60,15 @@ jobs:
             -DHIGH_LUT_K=${{ matrix.high }} \
             src/cuda/b300/oneesan_cuda_gridfp_b300_hbm32_maskshard_fullorbit_aux_batch_guarded.cu \
             -o build/b300_maskshard_orbitaux_w${{ matrix.width }}
+      - name: Compile guarded v0.6 blocked-domain orbit batch
+        shell: bash
+        run: |
+          nvcc -O3 -std=c++17 -lineinfo -arch=sm_80 \
+            -DTARGET_W=${{ matrix.width }} \
+            -DLOW_LUT_K=${{ matrix.low }} \
+            -DHIGH_LUT_K=${{ matrix.high }} \
+            src/cuda/b300/oneesan_cuda_gridfp_b300_hbm32_maskshard_blockorbit_aux_batch_guarded.cu \
+            -o build/b300_maskshard_blockorbit_w${{ matrix.width }}
       - name: Compile actual orbit-aux host-plan probe
         shell: bash
         run: |
