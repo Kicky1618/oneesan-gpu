@@ -10,6 +10,7 @@ on:
       - 'src/cpp/probes/factor_highdesc_semantics.cpp'
       - 'src/cpp/probes/factor_highorbit_semantics.cpp'
       - 'src/cpp/probes/factor_loworbit_semantics.cpp'
+      - 'src/cpp/probes/factor_maskshard_memory.cpp'
       - 'src/common/gridfp_transition.hpp'
       - '.github/workflows/factor-mask-shard.yml'
   pull_request:
@@ -21,6 +22,7 @@ on:
       - 'src/cpp/probes/factor_highdesc_semantics.cpp'
       - 'src/cpp/probes/factor_highorbit_semantics.cpp'
       - 'src/cpp/probes/factor_loworbit_semantics.cpp'
+      - 'src/cpp/probes/factor_maskshard_memory.cpp'
       - 'src/common/gridfp_transition.hpp'
       - '.github/workflows/factor-mask-shard.yml'
   workflow_dispatch:
@@ -45,6 +47,28 @@ jobs:
           g++ -O3 -std=c++17 -Wall -Wextra -Werror src/cpp/probes/factor_mask_shard_balance.cpp -o build/factor_mask_shard_balance
       - name: Run balance probe
         run: build/factor_mask_shard_balance ${{ matrix.width }} ${{ matrix.low }} ${{ matrix.gpus }}
+
+  memory:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        include:
+          - width: 22
+            low: 11
+            gpus: 8
+            usable: 268.59
+          - width: 28
+            low: 14
+            gpus: 8
+            usable: 268.59
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build mask-shard HBM budget probe
+        run: |
+          mkdir -p build
+          g++ -O3 -std=c++17 -Wall -Wextra -Werror src/cpp/probes/factor_maskshard_memory.cpp -o build/factor_maskshard_memory
+      - name: Verify v0.4 HBM budget
+        run: build/factor_maskshard_memory ${{ matrix.width }} ${{ matrix.low }} ${{ matrix.gpus }} ${{ matrix.usable }}
 
   closure:
     runs-on: ubuntu-latest
