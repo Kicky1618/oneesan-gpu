@@ -14,6 +14,7 @@ GPU_TARGET_MIB="${GPU_TARGET_MIB:-12288}"
 CPU_WORKERS="${CPU_WORKERS:-32}"
 CPU_HIGH_WORKERS="${CPU_HIGH_WORKERS:-$CPU_WORKERS}"
 CPU_HIGH_MODE="${CPU_HIGH_MODE:-scratch}"
+CPU_HIGH_OVERLAP="${CPU_HIGH_OVERLAP:-0}"
 THRESHOLDS="${THRESHOLDS:-0 64 128 256 512 1024}"
 REPEATS="${REPEATS:-1}"
 BUILD="${BUILD:-1}"
@@ -29,6 +30,10 @@ if (( N < 2 || N > 27 || GPU_TARGET_MIB <= 0 || CPU_WORKERS <= 0 || CPU_HIGH_WOR
 fi
 if [[ "$CPU_HIGH_MODE" != scratch && "$CPU_HIGH_MODE" != direct ]]; then
   echo "CPU_HIGH_MODE must be scratch or direct" >&2
+  exit 2
+fi
+if [[ "$CPU_HIGH_OVERLAP" != 0 && "$CPU_HIGH_OVERLAP" != 1 ]]; then
+  echo "CPU_HIGH_OVERLAP must be 0 or 1" >&2
   exit 2
 fi
 
@@ -51,8 +56,8 @@ bin="$ROOT/build/oneesan_cuda_gridfp_ramstream32_factorized_hybrid_sparse_n${N}"
 
 mkdir -p "$OUT_DIR"
 ts="$(date -u +%Y%m%dT%H%M%SZ)"
-out="$OUT_DIR/cpu-high-${CPU_HIGH_MODE}-sweep-n${N}-${ts}.tsv"
-meta="$OUT_DIR/cpu-high-${CPU_HIGH_MODE}-sweep-n${N}-${ts}.meta"
+out="$OUT_DIR/cpu-high-${CPU_HIGH_MODE}-overlap${CPU_HIGH_OVERLAP}-n${N}-${ts}.tsv"
+meta="$OUT_DIR/cpu-high-${CPU_HIGH_MODE}-overlap${CPU_HIGH_OVERLAP}-n${N}-${ts}.meta"
 
 file_sha256() {
   if command -v sha256sum >/dev/null 2>&1; then sha256sum "$1" | awk '{print $1}'
@@ -78,23 +83,24 @@ gpu_target_mib=$GPU_TARGET_MIB
 cpu_workers=$CPU_WORKERS
 cpu_high_workers=$CPU_HIGH_WORKERS
 cpu_high_mode=$CPU_HIGH_MODE
+cpu_high_overlap=$CPU_HIGH_OVERLAP
 thresholds=$THRESHOLDS
 repeats=$REPEATS
 expected_residue=${EXPECTED_RESIDUE:-unknown}
 binary_sha256=$(file_sha256 "$bin")
 EOF
 
-printf 'repeat\torder\tmode\tthreshold_mib\tresidue\twall_s\th2d_s\tgpu_kernel_s\td2h_s\tcpu_high_wall_s\tcpu_high_kernel_sum_s\tcpu_low_wall_s\tpcie_removed_tib\tpcie_remaining_tib\tcpu_high_groups\traw\n' >"$out"
+printf 'repeat\torder\tmode\toverlap\tthreshold_mib\tresidue\twall_s\th2d_s\tgpu_kernel_s\td2h_s\tcpu_high_wall_s\tcpu_high_kernel_sum_s\tcpu_low_wall_s\tpcie_removed_tib\tpcie_remaining_tib\tcpu_high_groups\traw\n' >"$out"
 
 run_one() {
   local repeat="$1" order="$2" threshold="$3"
   local line residue
   line="$(CPU_HIGH_MAX_MIB="$threshold" CPU_HIGH_WORKERS="$CPU_HIGH_WORKERS" \
-    CPU_HIGH_MODE="$CPU_HIGH_MODE" \
+    CPU_HIGH_MODE="$CPU_HIGH_MODE" CPU_HIGH_OVERLAP="$CPU_HIGH_OVERLAP" \
     "$bin" "$N" "$MODULUS" "$GPU_TARGET_MIB" "$CPU_WORKERS" | tail -n1)"
   residue="$(field "$line" residue)"
-  printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
-    "$repeat" "$order" "$CPU_HIGH_MODE" "$threshold" "$residue" \
+  printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
+    "$repeat" "$order" "$CPU_HIGH_MODE" "$CPU_HIGH_OVERLAP" "$threshold" "$residue" \
     "$(field "$line" wall_s)" "$(field "$line" h2d_s)" \
     "$(field "$line" gpu_kernel_s)" "$(field "$line" d2h_s)" \
     "$(field "$line" cpu_high_wall_s)" "$(field "$line" cpu_high_kernel_sum_s)" \
@@ -114,7 +120,7 @@ for ((r=1; r<=REPEATS; ++r)); do
     run_thresholds=()
     for ((i=${#thresholds[@]}-1; i>=0; --i)); do run_thresholds+=("${thresholds[i]}"); done
   fi
-  echo "repeat $r/$REPEATS mode=$CPU_HIGH_MODE ($order)" >&2
+  echo "repeat $r/$REPEATS mode=$CPU_HIGH_MODE overlap=$CPU_HIGH_OVERLAP ($order)" >&2
   for threshold in "${run_thresholds[@]}"; do
     echo "  CPU_HIGH_MAX_MIB=$threshold" >&2
     residue="$(run_one "$r" "$order" "$threshold")"
@@ -132,7 +138,7 @@ done
 
 awk -F '\t' '
   NR==1 {next}
-  { n[$4]++; wall[$4]+=$6; high[$4]+=$10; low[$4]+=$12; rem[$4]+=$14 }
+  { n[$5]++; wall[$5]+=$7; high[$5]+=$11; low[$5]+=$13; rem[$5]+=$15 }
   END {
     for (t in n)
       printf("summary threshold_mib=%s runs=%d mean_wall_s=%.9f mean_cpu_high_wall_s=%.9f mean_cpu_low_wall_s=%.9f mean_pcie_remaining_tib=%.9f\n",
@@ -140,7 +146,7 @@ awk -F '\t' '
   }
 ' "$out" | sort -t= -k2,2n
 
-best="$(awk -F '\t' 'NR>1 {s[$4]+=$6;n[$4]++} END {for(t in n){m=s[t]/n[t]; if(best==""||m<best){best=m;bt=t}} printf "%s %.9f",bt,best}' "$out")"
-echo "mode=$CPU_HIGH_MODE best_threshold_mib=${best%% *} mean_wall_s=${best#* }"
+best="$(awk -F '\t' 'NR>1 {s[$5]+=$7;n[$5]++} END {for(t in n){m=s[t]/n[t]; if(best==""||m<best){best=m;bt=t}} printf "%s %.9f",bt,best}' "$out")"
+echo "mode=$CPU_HIGH_MODE overlap=$CPU_HIGH_OVERLAP best_threshold_mib=${best%% *} mean_wall_s=${best#* }"
 echo "results=$out"
 echo "metadata=$meta"
