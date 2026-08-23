@@ -2,6 +2,7 @@
 
 #include <chrono>
 #include <cstdlib>
+#include <cstring>
 #include <iostream>
 #include <vector>
 
@@ -74,6 +75,7 @@ int main(int argc, char** argv) {
     int n = argc > 1 ? std::atoi(argv[1]) : TARGET_W - 1;
     Count mod = argc > 2 ? Count(std::strtoul(argv[2], nullptr, 10)) : 4294967291u;
     int target_mib = argc > 3 ? std::atoi(argv[3]) : 16384;
+    bool plan_only = argc > 4 && std::strcmp(argv[4], "--plan-only") == 0;
     int W = n + 1;
 
     if (W != TARGET_W || n < 2 || W > MAXW) {
@@ -104,6 +106,30 @@ int main(int argc, char** argv) {
                   << " low_gib=" << double(low_wp.max_bytes) / double(1ULL << 30)
                   << " target_gib=" << double(target) / double(1ULL << 30) << "\n";
         return 4;
+    }
+
+    double low_cross = lowdesc.main_observations
+        ? double(lowdesc.main_cross) / double(lowdesc.main_observations) : 0.0;
+    double high_cross = highdesc.main_observations
+        ? double(highdesc.main_cross) / double(highdesc.main_observations) : 0.0;
+    double desc_mib = double((lowdesc.main_desc.size() + lowdesc.block_desc.size()
+                            + highdesc.main_desc.size() + highdesc.block_desc.size())
+                            * sizeof(uint32_t)) / (1 << 20);
+
+    if (plan_only) {
+        std::cout
+            << "backend=gridfp-ramstream32-factorized-bidesc-v3.4-plan"
+            << " n=" << n
+            << " main_states=" << layout.main_size
+            << " blocked_states=" << layout.block_size
+            << " descriptor_mib=" << desc_mib
+            << " low_cross_frac=" << low_cross
+            << " high_cross_frac=" << high_cross
+            << " desc_build_s=" << desc_build_s
+            << " high_window_max_gib=" << double(high_wp.max_bytes) / double(1ULL << 30)
+            << " low_window_max_gib=" << double(low_wp.max_bytes) / double(1ULL << 30)
+            << "\n";
+        return 0;
     }
 
     int visible = 0;
@@ -150,16 +176,9 @@ int main(int argc, char** argv) {
                       double(1ULL << 30);
     double avg_copy_elems = (ctx.copy1d + ctx.copy2d)
         ? double(ctx.copy_elems / (ctx.copy1d + ctx.copy2d)) : 0.0;
-    double low_cross = lowdesc.main_observations
-        ? double(lowdesc.main_cross) / double(lowdesc.main_observations) : 0.0;
-    double high_cross = highdesc.main_observations
-        ? double(highdesc.main_cross) / double(highdesc.main_observations) : 0.0;
-    double desc_mib = double((lowdesc.main_desc.size() + lowdesc.block_desc.size()
-                            + highdesc.main_desc.size() + highdesc.block_desc.size())
-                            * sizeof(uint32_t)) / (1 << 20);
 
     std::cout
-        << "backend=gridfp-ramstream32-factorized-bidesc-v3.3"
+        << "backend=gridfp-ramstream32-factorized-bidesc-v3.4"
         << " n=" << n
         << " residue=" << answer
         << " modulus=" << mod
