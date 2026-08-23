@@ -3,6 +3,7 @@ name: B300 mask-shard compile
 on:
   push:
     paths:
+      - 'src/cuda/b300/oneesan_cuda_gridfp_b300_hbm32_maskshard.cu'
       - 'src/cuda/b300/oneesan_cuda_gridfp_b300_hbm32_maskshard_plan.cu'
       - 'src/cuda/b300/maskshard_headers_compile.cu'
       - 'src/cuda/b300/maskshard_layout.hpp'
@@ -13,6 +14,7 @@ on:
       - '.github/workflows/b300-maskshard-compile.yml'
   pull_request:
     paths:
+      - 'src/cuda/b300/oneesan_cuda_gridfp_b300_hbm32_maskshard.cu'
       - 'src/cuda/b300/oneesan_cuda_gridfp_b300_hbm32_maskshard_plan.cu'
       - 'src/cuda/b300/maskshard_headers_compile.cu'
       - 'src/cuda/b300/maskshard_layout.hpp'
@@ -50,6 +52,15 @@ jobs:
             -DHIGH_LUT_K=${{ matrix.high }} \
             src/cuda/b300/maskshard_headers_compile.cu \
             -o build/b300_maskshard_headers_w${{ matrix.width }}
+      - name: Compile end-to-end mask-shard solver
+        shell: bash
+        run: |
+          nvcc -O3 -std=c++17 -lineinfo -arch=sm_80 \
+            -DTARGET_W=${{ matrix.width }} \
+            -DLOW_LUT_K=${{ matrix.low }} \
+            -DHIGH_LUT_K=${{ matrix.high }} \
+            src/cuda/b300/oneesan_cuda_gridfp_b300_hbm32_maskshard.cu \
+            -o build/b300_maskshard_w${{ matrix.width }}
       - name: Compile mask-shard layout plan
         shell: bash
         run: |
