@@ -9,6 +9,14 @@ on:
       - 'src/cuda/common/**'
       - 'scripts/build/gridfp-ramstream32-factorized.sh'
       - '.github/workflows/ramstream32-compile.yml'
+  pull_request:
+    paths:
+      - 'src/cuda/gridfp/oneesan_cuda_gridfp_ramstream32_factorized_forced2.cu'
+      - 'src/cuda/gridfp/ramstream32_factorized_storage.hpp'
+      - 'src/cuda/b300/oneesan_cuda_gridfp_b300_hbm32_factorized_batch.cu'
+      - 'src/cuda/common/**'
+      - 'scripts/build/gridfp-ramstream32-factorized.sh'
+      - '.github/workflows/ramstream32-compile.yml'
   workflow_dispatch:
 
 jobs:
