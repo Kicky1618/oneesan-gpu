@@ -234,7 +234,9 @@ static void process_fullorbit_batch_high_job(
 
     auto t = std::chrono::steady_clock::now();
     if (job.main_n) maskshard_high_main_io_kernel<false><<<bm, threads>>>(w.a, job.main_n);
+#ifndef MASKSHARD_LAZY_ZERO_BLOCK_INIT
     if (job.block_n) maskshard_high_block_io_kernel<false><<<bd, threads>>>(w.d, job.block_n);
+#endif
     ck(cudaGetLastError(), "fullorbit-batch high gather");
     ck(cudaDeviceSynchronize(), "fullorbit-batch high gather sync");
     w.high_io_s += ram_seconds_since(t);
