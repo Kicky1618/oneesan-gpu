@@ -1,0 +1,39 @@
+name: B300 dual tile
+
+on:
+  pull_request:
+    paths:
+      - 'src/cuda/b300/oneesan_cuda_gridfp_b300_hbm32_dual_tile_sparse.cu'
+      - 'src/cuda/gridfp/ramstream32_b300_dual_tile_layout.cuh'
+      - 'src/cuda/gridfp/ramstream32_b300_dual_tile_kernels.cuh'
+      - 'src/cuda/gridfp/ramstream32_b300_dual_tile_shuffle.cuh'
+      - 'src/cuda/gridfp/probes/b300_dual_tile_selftest.cu'
+      - 'scripts/build/gridfp-b300-hbm32-dual-tile-sparse.sh'
+      - '.github/workflows/b300-dual-tile.yml'
+  workflow_dispatch:
+
+jobs:
+  dual-tile:
+    runs-on: ubuntu-latest
+    container: nvidia/cuda:12.8.1-devel-ubuntu22.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: W10 dual-tile physical layout selftest
+        shell: bash
+        run: |
+          mkdir -p build
+          nvcc -O3 -std=c++17 -arch=sm_80 \
+            -DTARGET_W=10 -DLOW_LUT_K=5 -DHIGH_LUT_K=4 \
+            src/cuda/gridfp/probes/b300_dual_tile_selftest.cu \
+            -o build/b300_dual_tile_selftest
+          build/b300_dual_tile_selftest
+      - name: Compile W28 dual-tile backend
+        shell: bash
+        run: |
+          nvcc -O3 -std=c++17 -lineinfo -arch=sm_80 \
+            -DTARGET_W=28 -DLOW_LUT_K=14 -DHIGH_LUT_K=13 \
+            src/cuda/b300/oneesan_cuda_gridfp_b300_hbm32_dual_tile_sparse.cu \
+            -o build/b300_dual_tile_w28
+      - name: Plan n27 dual-tile x8
+        shell: bash
+        run: build/b300_dual_tile_w28 27 4294967291 8 256 --plan-only 512
