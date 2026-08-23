@@ -1,20 +1,232 @@
 #include <cuda_runtime.h>
 
-// Reuse the complete resident backend setup/allocation/topology machinery but
-// keep its scalar-state executor available under private names.  This file
-// supplies a second executor whose CUDA blocks are factor-row/LOW-column tiles,
-// making A/B benchmarking on B300 straightforward.
-#define process_resident_group process_resident_group_scalar
-#define run_resident_window run_resident_window_scalar
-#define main oneesan_compact_resident_scalar_unused_main
-#include "oneesan_cuda_gridfp_b300_hbm32_compact_resident.cu"
-#undef main
-#undef run_resident_window
-#undef process_resident_group
+#include <algorithm>
+#include <array>
+#include <atomic>
+#include <chrono>
+#include <cstdint>
+#include <cstdlib>
+#include <cstring>
+#include <iomanip>
+#include <iostream>
+#include <memory>
+#include <thread>
+#include <vector>
 
+#define RAMSTREAM_BIDESC_COMPACT_NO_MAIN
+#include "../gridfp/oneesan_cuda_gridfp_ramstream32_factorized_bidesc_compact.cu"
+#undef RAMSTREAM_BIDESC_COMPACT_NO_MAIN
+#include "../gridfp/ramstream32_high_orbit.cuh"
+#include "../gridfp/ramstream32_low_orbit_device.cuh"
+#include "../gridfp/ramstream32_b300_compact_io.cuh"
 #include "../gridfp/ramstream32_b300_rowkernels.cuh"
 
-static std::pair<uint32_t,uint32_t> resident_group_tile_counts(const ResidentGroup& x) {
+struct ResidentGroupRT {
+    uint32_t id = 0;
+    uint32_t mask = 0;
+    bool fix_low = false;
+    Code main_size = 0;
+    Code block_size = 0;
+    std::vector<FBlock> main_blocks;
+    std::vector<FBlock> block_blocks;
+    Code work = 0;
+};
+
+struct ResidentWindowRT {
+    int p_hi = 0, p_lo = 0;
+    bool fix_low = false;
+    std::vector<ResidentGroupRT> groups;
+    Code max_main = 0, max_block = 0;
+    size_t max_bytes = 0;
+};
+
+static ResidentWindowRT build_resident_window_rt(bool high_window) {
+    ResidentWindowRT w;
+    w.p_hi = high_window ? TARGET_W - 1 : LOW_LUT_K;
+    w.p_lo = high_window ? LOW_LUT_K + 1 : 1;
+    w.fix_low = high_window;
+    std::vector<int> fp = window_candidates(TARGET_W, w.p_hi, w.p_lo);
+    if (fp.size() >= 31) std::exit(300);
+    uint32_t ng = 1u << fp.size();
+    w.groups.reserve(ng);
+    for (uint32_t g = 0; g < ng; ++g) {
+        uint32_t mf, mo, bf, bo;
+        window_masks(TARGET_W, w.p_hi, w.p_lo, fp, g, mf, mo, bf, bo);
+        GroupSpec ms = make_spec(TARGET_W, mf, mo);
+        GroupSpec ds = make_spec(TARGET_W - 1, bf, bo);
+        uint32_t mask = high_window
+            ? (mo & ((1u << LOW_LUT_K) - 1u))
+            : ((mo >> (LOW_LUT_K + 1)) & ((1u << HIGH_LUT_K) - 1u));
+        auto mb = make_factor_main_blocks(high_window, mask);
+        auto db = make_factor_block_blocks(high_window, mask);
+        if (mb.empty() || db.empty() || mb.back().end != ms.size || db.back().end != ds.size)
+            std::exit(301);
+        ResidentGroupRT x;
+        x.id = g;
+        x.mask = mask;
+        x.fix_low = high_window;
+        x.main_size = ms.size;
+        x.block_size = ds.size;
+        x.main_blocks = std::move(mb);
+        x.block_blocks = std::move(db);
+        x.work = ms.size + ds.size;
+        w.max_main = std::max(w.max_main, x.main_size);
+        w.max_block = std::max(w.max_block, x.block_size);
+        w.max_bytes = std::max(w.max_bytes,
+            size_t(x.main_size + x.block_size) * sizeof(Count));
+        w.groups.push_back(std::move(x));
+    }
+    std::sort(w.groups.begin(), w.groups.end(), [](const ResidentGroupRT& a, const ResidentGroupRT& b) {
+        return a.work > b.work;
+    });
+    return w;
+}
+
+struct ResidentGpuRT {
+    int dev = 0;
+    Count* main_shard = nullptr;
+    Count* block_shard = nullptr;
+    Code main_count = 0, block_count = 0;
+
+    uint8_t* scratch = nullptr;
+    Count* main_local = nullptr;
+    Count* block_local = nullptr;
+    Code main_cap = 0, block_cap = 0;
+    size_t scratch_bytes = 0;
+
+    BidescMaskDeviceTables mask_tables;
+    LowDescDeviceTables lowdesc_tables;
+    HighDescDeviceTables highdesc_tables;
+    LowOrbitDeviceTables loworbit_tables;
+    HighOrbitDeviceTables highorbit_tables;
+    CompactCanonicalDeviceTables canonical_tables;
+
+    double gather_s = 0, kernel_s = 0, scatter_s = 0;
+    uint64_t groups = 0, launches = 0;
+
+    void allocate_large(Code mc, Code bc, Code max_m, Code max_b) {
+        main_count = mc;
+        block_count = bc;
+        main_cap = max_m;
+        block_cap = max_b;
+        ck(cudaSetDevice(dev), "rowtile set alloc device");
+        size_t free0 = 0, total0 = 0;
+        ck(cudaMemGetInfo(&free0, &total0), "rowtile meminfo before");
+        if (main_count)
+            ck(cudaMalloc(&main_shard, size_t(main_count) * sizeof(Count)), "rowtile main shard");
+        if (block_count)
+            ck(cudaMalloc(&block_shard, size_t(block_count) * sizeof(Count)), "rowtile block shard");
+        if (main_shard)
+            ck(cudaMemset(main_shard, 0, size_t(main_count) * sizeof(Count)), "rowtile zero main shard");
+        if (block_shard)
+            ck(cudaMemset(block_shard, 0, size_t(block_count) * sizeof(Count)), "rowtile zero block shard");
+
+        auto al = [](size_t n) { return (n + 255) & ~size_t(255); };
+        size_t mb = al(size_t(main_cap) * sizeof(Count));
+        size_t db = al(size_t(block_cap) * sizeof(Count));
+        scratch_bytes = mb + db;
+        if (scratch_bytes) ck(cudaMalloc(&scratch, scratch_bytes), "rowtile scratch");
+        main_local = reinterpret_cast<Count*>(scratch);
+        block_local = reinterpret_cast<Count*>(scratch + mb);
+
+        size_t free1 = 0, total1 = 0;
+        ck(cudaMemGetInfo(&free1, &total1), "rowtile meminfo after large");
+        std::cerr << "rowtile gpu=" << dev
+                  << " total_gib=" << double(total0) / double(1ULL << 30)
+                  << " free_before_gib=" << double(free0) / double(1ULL << 30)
+                  << " free_after_large_gib=" << double(free1) / double(1ULL << 30)
+                  << " auth_gib="
+                  << double((size_t(main_count) + size_t(block_count)) * sizeof(Count)) / double(1ULL << 30)
+                  << " scratch_gib=" << double(scratch_bytes) / double(1ULL << 30) << '\n';
+    }
+
+    void install_tables(
+        const LowDescHost& lowdesc, const HighDescHost& highdesc,
+        const LowOrbitHost& loworbit, const HighOrbitHost& highorbit,
+        const CompactCanonicalRankHost& canonical, Count mod
+    ) {
+        ck(cudaSetDevice(dev), "rowtile set table device");
+        mask_tables.install(G_FACTOR);
+        lowdesc_tables.install(lowdesc);
+        highdesc_tables.install(highdesc);
+        loworbit_tables.install(loworbit);
+        highorbit_tables.install(highorbit);
+        canonical_tables.install(canonical);
+        ck(cudaMemcpyToSymbol(D_MOD, &mod, sizeof(mod)), "rowtile modulus");
+        size_t freeb = 0, totalb = 0;
+        ck(cudaMemGetInfo(&freeb, &totalb), "rowtile meminfo after tables");
+        std::cerr << "rowtile gpu=" << dev
+                  << " free_after_tables_gib=" << double(freeb) / double(1ULL << 30) << '\n';
+    }
+
+    void release() {
+        ck(cudaSetDevice(dev), "rowtile set release device");
+        canonical_tables.release();
+        highorbit_tables.release();
+        loworbit_tables.release();
+        highdesc_tables.release();
+        lowdesc_tables.release();
+        mask_tables.release();
+        if (scratch) cudaFree(scratch);
+        if (main_shard) cudaFree(main_shard);
+        if (block_shard) cudaFree(block_shard);
+        scratch = nullptr;
+        main_local = block_local = nullptr;
+        main_shard = block_shard = nullptr;
+    }
+};
+
+static void enable_full_peer_mesh_rt(int ngpu) {
+    for (int a = 0; a < ngpu; ++a) {
+        ck(cudaSetDevice(a), "rowtile peer set source");
+        for (int b = 0; b < ngpu; ++b) if (a != b) {
+            int can = 0;
+            ck(cudaDeviceCanAccessPeer(&can, a, b), "rowtile cudaDeviceCanAccessPeer");
+            if (!can) {
+                std::cerr << "GPU " << a << " cannot peer-access GPU " << b << '\n';
+                std::exit(302);
+            }
+            cudaError_t e = cudaDeviceEnablePeerAccess(b, 0);
+            if (e == cudaErrorPeerAccessAlreadyEnabled) cudaGetLastError();
+            else ck(e, "rowtile cudaDeviceEnablePeerAccess");
+        }
+    }
+}
+
+static void install_global_shards_rt(
+    std::vector<std::unique_ptr<ResidentGpuRT>>& gpu,
+    Code main_chunk, Code block_chunk
+) {
+    int ngpu = int(gpu.size());
+    std::array<Count*, MAXGPU> mp{}, bp{};
+    for (int g = 0; g < ngpu; ++g) {
+        mp[g] = gpu[size_t(g)]->main_shard;
+        bp[g] = gpu[size_t(g)]->block_shard;
+    }
+    for (int g = 0; g < ngpu; ++g) {
+        ck(cudaSetDevice(g), "rowtile shard symbols device");
+        ck(cudaMemcpyToSymbol(D_MAIN_PTR, mp.data(), sizeof(Count*) * MAXGPU), "rowtile main ptrs");
+        ck(cudaMemcpyToSymbol(D_BLOCK_PTR, bp.data(), sizeof(Count*) * MAXGPU), "rowtile block ptrs");
+        ck(cudaMemcpyToSymbol(D_MAIN_CHUNK, &main_chunk, sizeof(main_chunk)), "rowtile main chunk");
+        ck(cudaMemcpyToSymbol(D_BLOCK_CHUNK, &block_chunk, sizeof(block_chunk)), "rowtile block chunk");
+        ck(cudaMemcpyToSymbol(D_NGPU, &ngpu, sizeof(ngpu)), "rowtile ngpu");
+    }
+}
+
+static void install_group_constants_rt(const ResidentGroupRT& x) {
+    int fm = int(x.main_blocks.size()), fd = int(x.block_blocks.size());
+    int fl = x.fix_low ? 1 : 0;
+    ck(cudaMemcpyToSymbol(D_F_MAIN_BLOCKS, x.main_blocks.data(),
+                          x.main_blocks.size() * sizeof(FBlock)), "rowtile group main blocks");
+    ck(cudaMemcpyToSymbol(D_F_BLOCK_BLOCKS, x.block_blocks.data(),
+                          x.block_blocks.size() * sizeof(FBlock)), "rowtile group block blocks");
+    ck(cudaMemcpyToSymbol(D_F_MAIN_NBLOCKS, &fm, sizeof(fm)), "rowtile group main n");
+    ck(cudaMemcpyToSymbol(D_F_BLOCK_NBLOCKS, &fd, sizeof(fd)), "rowtile group block n");
+    ck(cudaMemcpyToSymbol(D_F_MASK, &x.mask, sizeof(x.mask)), "rowtile group mask");
+    ck(cudaMemcpyToSymbol(D_F_FIX_LOW, &fl, sizeof(fl)), "rowtile group mode");
+}
+
+static std::pair<uint32_t,uint32_t> resident_group_tile_counts_rt(const ResidentGroupRT& x) {
     uint64_t mt = 0, bt = 0;
     for (const FBlock& b : x.main_blocks) {
         uint64_t rows = b.stride ? (b.end - b.off) / b.stride : 0;
@@ -29,11 +241,12 @@ static std::pair<uint32_t,uint32_t> resident_group_tile_counts(const ResidentGro
 }
 
 static void process_resident_group_rowtile(
-    ResidentGpu& c, const ResidentGroup& x, int p_hi, int p_lo, int threads
+    ResidentGpuRT& c, const ResidentGroupRT& x,
+    int p_hi, int p_lo, int threads
 ) {
     if (!x.main_size && !x.block_size) return;
     ck(cudaSetDevice(c.dev), "rowtile group device");
-    install_group_constants(x);
+    install_group_constants_rt(x);
     auto [mt, bt] = install_compact_tile_prefixes(x.main_blocks, x.block_blocks);
 
     auto t = std::chrono::steady_clock::now();
@@ -69,8 +282,6 @@ static void process_resident_group_rowtile(
     t = std::chrono::steady_clock::now();
     if (mt)
         compact_tile_scatter_main_kernel<<<mt, threads>>>(c.main_local);
-    // HIGH emits blocked values for the LOW half.  LOW p=1 consumes all of
-    // them, so the LOW path skips zero scatter exactly like the scalar backend.
     if (x.fix_low && bt)
         compact_tile_scatter_block_kernel<<<bt, threads>>>(c.block_local);
     ck(cudaGetLastError(), "rowtile scatter launch");
@@ -80,8 +291,8 @@ static void process_resident_group_rowtile(
 }
 
 static void run_resident_window_rowtile(
-    std::vector<std::unique_ptr<ResidentGpu>>& gpu,
-    const ResidentWindow& w, int threads
+    std::vector<std::unique_ptr<ResidentGpuRT>>& gpu,
+    const ResidentWindowRT& w, int threads
 ) {
     std::atomic<size_t> next{0};
     std::vector<std::thread> workers;
@@ -98,20 +309,27 @@ static void run_resident_window_rowtile(
     for (auto& t : workers) t.join();
 }
 
-static void resident_window_tile_stats(
-    const ResidentWindow& w,
+static void resident_window_tile_stats_rt(
+    const ResidentWindowRT& w,
     uint64_t& total_main, uint64_t& total_block,
     uint32_t& max_main, uint32_t& max_block
 ) {
     total_main = total_block = 0;
     max_main = max_block = 0;
     for (const auto& g : w.groups) {
-        auto [mt, bt] = resident_group_tile_counts(g);
+        auto [mt, bt] = resident_group_tile_counts_rt(g);
         total_main += mt;
         total_block += bt;
         max_main = std::max(max_main, mt);
         max_block = std::max(max_block, bt);
     }
+}
+
+static Code canonical_rank_host_rt(MateID m, int width) {
+    return rank_full_suffix_host(m, width, 1);
+}
+static double gib_ld_rt(long double b) {
+    return static_cast<double>(b / static_cast<long double>(1ULL << 30));
 }
 
 int main(int argc, char** argv) {
@@ -134,8 +352,8 @@ int main(int argc, char** argv) {
     LowOrbitHost loworbit = build_cpu_low_orbit(storage, logical, lowdesc);
     HighOrbitHost highorbit = build_high_orbit(storage, logical);
     CompactCanonicalRankHost canonical = build_compact_canonical_ranks();
-    ResidentWindow high = build_resident_window(true);
-    ResidentWindow low = build_resident_window(false);
+    ResidentWindowRT high = build_resident_window_rt(true);
+    ResidentWindowRT low = build_resident_window_rt(false);
 
     Code main_n = H_DP[W][1], block_n = H_DP[W - 1][1];
     Code main_chunk = (main_n + requested_gpus - 1) / requested_gpus;
@@ -166,8 +384,8 @@ int main(int argc, char** argv) {
 
     uint64_t high_mt, high_bt, low_mt, low_bt;
     uint32_t high_mmax, high_bmax, low_mmax, low_bmax;
-    resident_window_tile_stats(high, high_mt, high_bt, high_mmax, high_bmax);
-    resident_window_tile_stats(low, low_mt, low_bt, low_mmax, low_bmax);
+    resident_window_tile_stats_rt(high, high_mt, high_bt, high_mmax, high_bmax);
+    resident_window_tile_stats_rt(low, low_mt, low_bt, low_mmax, low_bmax);
 
     if (plan_only) {
         std::cout << std::fixed << std::setprecision(3)
@@ -175,18 +393,18 @@ int main(int argc, char** argv) {
             << " n=" << n << " gpus=" << requested_gpus
             << " col_tile=" << CF_COL_TILE
             << " auth_total_gib="
-            << gib_ld(static_cast<long double>(main_n + block_n) * sizeof(Count))
-            << " auth_shard_gib=" << gib_ld(auth_shard_bytes)
+            << gib_ld_rt(static_cast<long double>(main_n + block_n) * sizeof(Count))
+            << " auth_shard_gib=" << gib_ld_rt(auth_shard_bytes)
             << " high_groups=" << high.groups.size()
             << " low_groups=" << low.groups.size()
             << " high_scratch_peak_gib=" << double(high.max_bytes) / double(1ULL << 30)
             << " low_scratch_peak_gib=" << double(low.max_bytes) / double(1ULL << 30)
-            << " allocated_scratch_gib=" << gib_ld(scratch_bytes)
+            << " allocated_scratch_gib=" << gib_ld_rt(scratch_bytes)
             << " descriptor_mib=" << static_cast<double>(desc_bytes / (1 << 20))
             << " orbit_mib=" << static_cast<double>(orbit_bytes / (1 << 20))
             << " mask_mib=" << static_cast<double>(mask_bytes / (1 << 20))
             << " canonical_mib=" << static_cast<double>(canonical_bytes / (1 << 20))
-            << " estimated_need_gib=" << gib_ld(need)
+            << " estimated_need_gib=" << gib_ld_rt(need)
             << " high_main_tiles_total=" << high_mt
             << " high_block_tiles_total=" << high_bt
             << " high_main_tiles_max_group=" << high_mmax
@@ -207,10 +425,10 @@ int main(int argc, char** argv) {
     }
     int ngpu = requested_gpus;
 
-    std::vector<std::unique_ptr<ResidentGpu>> gpu;
+    std::vector<std::unique_ptr<ResidentGpuRT>> gpu;
     gpu.reserve(ngpu);
     for (int g = 0; g < ngpu; ++g) {
-        auto c = std::make_unique<ResidentGpu>();
+        auto c = std::make_unique<ResidentGpuRT>();
         c->dev = g;
         Code moff = Code(g) * main_chunk;
         Code boff = Code(g) * block_chunk;
@@ -220,13 +438,13 @@ int main(int argc, char** argv) {
         gpu.push_back(std::move(c));
     }
 
-    enable_full_peer_mesh(ngpu);
-    install_global_shards(gpu, main_chunk, block_chunk);
+    enable_full_peer_mesh_rt(ngpu);
+    install_global_shards_rt(gpu, main_chunk, block_chunk);
     for (int g = 0; g < ngpu; ++g)
         gpu[size_t(g)]->install_tables(lowdesc, highdesc, loworbit, highorbit, canonical, mod);
 
     MateID init = MateID(R) << (2 * (W - 1));
-    Code init_rank = canonical_rank_host(init, W);
+    Code init_rank = canonical_rank_host_rt(init, W);
     int init_owner = std::min<int>(ngpu - 1, int(init_rank / main_chunk));
     Code init_local = init_rank - Code(init_owner) * main_chunk;
     Count one = 1;
@@ -253,7 +471,7 @@ int main(int argc, char** argv) {
     }
     double wall_s = ram_seconds_since(wall0);
 
-    Code answer_rank = canonical_rank_host(MateID(R), W);
+    Code answer_rank = canonical_rank_host_rt(MateID(R), W);
     int ao = std::min<int>(ngpu - 1, int(answer_rank / main_chunk));
     Code al = answer_rank - Code(ao) * main_chunk;
     Count answer = 0;
