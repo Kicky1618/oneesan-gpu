@@ -124,10 +124,17 @@ int main() {
     fill_factor(main_auth, block_auth, main_states, block_states, init_m, init_d, storage, layout);
     CpuLowSparsePool sparse_pool(2);
     sparse_pool.run(jobs, main_auth, block_auth, storage, layout, sparse, mod);
-    if (!compare_factor("sparse", main_auth, block_auth, main_states, block_states, rm, rd, storage, layout)) return 13;
+    if (!compare_factor("sparse-v4.7", main_auth, block_auth, main_states, block_states, rm, rd, storage, layout)) return 13;
+
+    size_t sparse_orbit_ops = sparse.orbit_count();
+    if (!sparse_orbit_ops
+        || sparse_orbit_ops != sparse.nn_orbit_ops.size() + sparse.nr_orbit_ops.size() + sparse.nl_orbit_ops.size()) {
+        std::cerr << "FAIL sparse split orbit accounting\n";
+        return 14;
+    }
 
     double sparse_meta_mib = double(
-        sparse.orbit_ops.size()*sizeof(CpuLowSparseOrbitOp)
+        sparse_orbit_ops*sizeof(CpuLowSparseOrbitOp)
         + sparse.local_closure_ops.size()*sizeof(CpuLowSparseClosureOp)
         + sparse.cross_closure_ops.size()*sizeof(CpuLowSparseClosureOp)
         + sparse.high_cross_rank.size()*sizeof(uint16_t))/(1<<20);
@@ -140,6 +147,9 @@ int main() {
               << " in_scratch_mib=" << double(in_pool.peak_scratch_bytes()) / (1 << 20)
               << " direct_scratch_mib=0 sparse_scratch_mib=0"
               << " dense_orbit_mib=" << double(orbit.rec.size() * sizeof(uint64_t)) / (1 << 20)
+              << " sparse_nn_orbit_ops=" << sparse.nn_orbit_ops.size()
+              << " sparse_nr_orbit_ops=" << sparse.nr_orbit_ops.size()
+              << " sparse_nl_orbit_ops=" << sparse.nl_orbit_ops.size()
               << " sparse_local_closure_ops=" << sparse.local_closure_ops.size()
               << " sparse_cross_closure_ops=" << sparse.cross_closure_ops.size()
               << " sparse_meta_mib=" << sparse_meta_mib
