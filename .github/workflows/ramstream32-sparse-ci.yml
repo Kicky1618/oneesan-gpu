@@ -1,0 +1,64 @@
+name: ramstream32 sparse validation
+
+on:
+  push:
+    paths:
+      - 'src/cuda/gridfp/oneesan_cuda_gridfp_ramstream32_factorized_hybrid_sparse.cu'
+      - 'src/cuda/gridfp/ramstream32_cpu_low_sparse.hpp'
+      - 'src/cuda/gridfp/ramstream32_cpu_low_direct.hpp'
+      - 'src/cuda/gridfp/ramstream32_cpu_low_inplace.hpp'
+      - 'src/cuda/gridfp/probes/ramstream32_cpu_low_selftest.cu'
+      - 'scripts/build/gridfp-ramstream32-factorized-hybrid-sparse.sh'
+      - '.github/workflows/ramstream32-sparse-ci.yml'
+  pull_request:
+    paths:
+      - 'src/cuda/gridfp/oneesan_cuda_gridfp_ramstream32_factorized_hybrid_sparse.cu'
+      - 'src/cuda/gridfp/ramstream32_cpu_low_sparse.hpp'
+      - 'src/cuda/gridfp/ramstream32_cpu_low_direct.hpp'
+      - 'src/cuda/gridfp/ramstream32_cpu_low_inplace.hpp'
+      - 'src/cuda/gridfp/probes/ramstream32_cpu_low_selftest.cu'
+      - 'scripts/build/gridfp-ramstream32-factorized-hybrid-sparse.sh'
+      - '.github/workflows/ramstream32-sparse-ci.yml'
+  workflow_dispatch:
+
+jobs:
+  sparse:
+    runs-on: ubuntu-latest
+    container: nvidia/cuda:12.8.1-devel-ubuntu22.04
+    strategy:
+      matrix:
+        include:
+          - width: 22
+            n: 21
+            low: 11
+            high: 10
+          - width: 28
+            n: 27
+            low: 14
+            high: 13
+    steps:
+      - uses: actions/checkout@v4
+      - name: Compile hybrid sparse backend
+        shell: bash
+        run: |
+          mkdir -p build
+          nvcc -O3 -std=c++17 -lineinfo -arch=sm_80 \
+            -DTARGET_W=${{ matrix.width }} \
+            -DLOW_LUT_K=${{ matrix.low }} \
+            -DHIGH_LUT_K=${{ matrix.high }} \
+            src/cuda/gridfp/oneesan_cuda_gridfp_ramstream32_factorized_hybrid_sparse.cu \
+            -o build/ramstream32_hybrid_sparse_w${{ matrix.width }}
+      - name: Validate sparse n plan
+        shell: bash
+        run: |
+          build/ramstream32_hybrid_sparse_w${{ matrix.width }} \
+            ${{ matrix.n }} 4294967291 12288 4 --plan-only
+      - name: Validate sparse CPU executor against reference
+        if: matrix.width == 22
+        shell: bash
+        run: |
+          nvcc -O3 -std=c++17 -arch=sm_80 \
+            -DTARGET_W=10 -DLOW_LUT_K=5 -DHIGH_LUT_K=4 \
+            src/cuda/gridfp/probes/ramstream32_cpu_low_selftest.cu \
+            -o build/ramstream32_cpu_low_selftest
+          build/ramstream32_cpu_low_selftest
