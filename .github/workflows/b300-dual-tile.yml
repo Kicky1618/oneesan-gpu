@@ -9,9 +9,12 @@ on:
       - 'src/cuda/gridfp/ramstream32_b300_dual_tile_kernels.cuh'
       - 'src/cuda/gridfp/ramstream32_b300_dual_tile_shuffle.cuh'
       - 'src/cuda/gridfp/ramstream32_b300_dual_tile_peer_swap.cuh'
+      - 'src/cuda/gridfp/ramstream32_b300_dual_tile_reachability.cuh'
+      - 'src/cuda/gridfp/ramstream32_b300_dual_tile_pruned_peer.cuh'
       - 'src/cuda/gridfp/ramstream32_b300_dual_tile_opt.cuh'
       - 'src/cuda/gridfp/ramstream32_b300_dual_tile_precomputed_w28.cuh'
       - 'src/cuda/gridfp/probes/b300_dual_tile_selftest.cu'
+      - 'src/cuda/gridfp/probes/b300_dual_tile_pruned_selftest.cu'
       - 'src/cuda/gridfp/probes/b300_dual_tile_opt_plan.cu'
       - 'src/cuda/gridfp/probes/b300_dual_tile_precomputed_plan.cu'
       - 'src/cuda/gridfp/probes/b300_dual_tile_block_reachability_plan.cu'
@@ -37,6 +40,14 @@ jobs:
             src/cuda/gridfp/probes/b300_dual_tile_selftest.cu \
             -o build/b300_dual_tile_selftest
           build/b300_dual_tile_selftest
+      - name: W10 reachability-pruned shuffle selftest
+        shell: bash
+        run: |
+          nvcc -O3 -std=c++17 -arch=sm_80 \
+            -DTARGET_W=10 -DLOW_LUT_K=5 -DHIGH_LUT_K=4 \
+            src/cuda/gridfp/probes/b300_dual_tile_pruned_selftest.cu \
+            -o build/b300_dual_tile_pruned_selftest
+          build/b300_dual_tile_pruned_selftest
       - name: W28 optimized LOW-mask traffic plan
         shell: bash
         run: |
