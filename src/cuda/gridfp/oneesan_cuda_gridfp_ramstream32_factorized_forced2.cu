@@ -7,23 +7,27 @@
 #include <thread>
 #include <vector>
 
-#define main oneesan_ramfactor_generic_unused_main
-#include "oneesan_cuda_gridfp_ramstream32_factorized.cu"
+// Reuse the tested factorized topology codec and local transition kernels, but
+// replace its HBM authoritative arrays and main() with the RAM backend below.
+#define main oneesan_factorized_hbm_unused_main
+#include "../b300/oneesan_cuda_gridfp_b300_hbm32_factorized_batch.cu"
 #undef main
+
+#include "ramstream32_factorized_storage.hpp"
 
 static WindowPlan make_forced_factor_window(bool high_window) {
     WindowPlan wp;
     if (high_window) {
-        // Process p = W-1 .. L+1.  LOW positions [0,L) are fixed.
+        // Exact same split as the B300 forced2 profile:
+        // process p = W-1 .. L+1, fixing all LOW positions [0,L).
         wp.p_hi = TARGET_W - 1;
         wp.p_lo = LOW_LUT_K + 1;
-        for (int p = 0; p < LOW_LUT_K; ++p) wp.fixed_pos.push_back(p);
     } else {
-        // Process p = L .. 1.  HIGH positions [L+1,W) are fixed.
+        // process p = L .. 1, fixing all HIGH positions [L+1,W).
         wp.p_hi = LOW_LUT_K;
         wp.p_lo = 1;
-        for (int p = LOW_LUT_K + 1; p < TARGET_W; ++p) wp.fixed_pos.push_back(p);
     }
+    wp.fixed_pos = window_candidates(TARGET_W, wp.p_hi, wp.p_lo);
 
     Code max_main = 0, max_block = 0;
     size_t max_bytes = 0;
@@ -85,6 +89,10 @@ int main(int argc, char** argv) {
     }
     if (target_mib <= 0 || cpu_threads <= 0) {
         std::cerr << "target_mib and cpu_threads must be positive\n";
+        return 1;
+    }
+    if constexpr (LOW_LUT_K + HIGH_LUT_K != TARGET_W - 1) {
+        std::cerr << "forced2 requires LOW_LUT_K + HIGH_LUT_K == TARGET_W - 1\n";
         return 1;
     }
 
