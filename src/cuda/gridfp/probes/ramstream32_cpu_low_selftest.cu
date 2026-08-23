@@ -65,7 +65,7 @@ int main() {
     StorageLayout layout = build_storage_layout(storage);
     LowDescHost lowdesc = build_low_descriptors(storage, layout);
     LowOrbitHost orbit = build_cpu_low_orbit(storage, layout, lowdesc);
-    CpuLowSparseHost sparse = build_cpu_low_sparse(layout, lowdesc, orbit);
+    CpuLowSparseHost sparse = build_cpu_low_sparse(storage, layout, lowdesc, orbit);
 
     auto main_states = enum_states(W);
     auto block_states = enum_states(W - 1);
@@ -134,7 +134,10 @@ int main() {
               << " in_scratch_mib=" << double(in_pool.peak_scratch_bytes()) / (1 << 20)
               << " direct_scratch_mib=0 sparse_scratch_mib=0"
               << " dense_orbit_mib=" << double(orbit.rec.size() * sizeof(uint64_t)) / (1 << 20)
-              << " sparse_meta_mib=" << double(sparse.orbit_ops.size()*sizeof(CpuLowSparseOrbitOp)+sparse.closure_ops.size()*sizeof(uint64_t))/(1<<20)
+              << " sparse_meta_mib="
+              << double(sparse.orbit_ops.size()*sizeof(CpuLowSparseOrbitOp)
+                  + sparse.closure_ops.size()*sizeof(uint64_t)
+                  + sparse.high_cross_rank.size()*sizeof(uint16_t))/(1<<20)
               << '\n';
 
     in_pool.release(); out_pool.release();
