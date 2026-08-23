@@ -12,6 +12,7 @@ on:
       - 'src/cuda/b300/maskshard_lowclosure_kernel.cuh'
       - 'src/cuda/b300/probes/maskshard_lowclosure_cols_hostplan.cu'
       - 'src/cuda/b300/oneesan_cuda_gridfp_b300_hbm32_maskshard_blockorbit_compactaux_fullclosurerows_batch_guarded.cu'
+      - 'scripts/build/b300-hbm32-batch.sh'
       - 'scripts/bench/b300_maskshard_ab.py'
       - '.github/workflows/factor-lowclosure-v09.yml'
   pull_request:
@@ -25,6 +26,7 @@ on:
       - 'src/cuda/b300/maskshard_lowclosure_kernel.cuh'
       - 'src/cuda/b300/probes/maskshard_lowclosure_cols_hostplan.cu'
       - 'src/cuda/b300/oneesan_cuda_gridfp_b300_hbm32_maskshard_blockorbit_compactaux_fullclosurerows_batch_guarded.cu'
+      - 'scripts/build/b300-hbm32-batch.sh'
       - 'scripts/bench/b300_maskshard_ab.py'
       - '.github/workflows/factor-lowclosure-v09.yml'
   workflow_dispatch:
@@ -106,8 +108,41 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - name: Syntax-check B300 A/B driver
-        run: python3 -m py_compile scripts/bench/b300_maskshard_ab.py
+      - name: Syntax-check B300 build and A/B drivers
+        run: |
+          bash -n scripts/build/b300-hbm32-batch.sh
+          python3 -m py_compile scripts/bench/b300_maskshard_ab.py
+      - name: Exercise build provenance writer without CUDA
+        run: |
+          mkdir -p build/provenance-test
+          printf 'dummy source\n' > build/provenance-test/source.cu
+          printf 'dummy binary\n' > build/provenance-test/binary
+          python3 - <<'PY'
+          from pathlib import Path
+          s = Path('scripts/build/b300-hbm32-batch.sh').read_text()
+          body = s.split("<<'PY'\n", 1)[1].split("\nPY\n", 1)[0]
+          compile(body, '<b300-build-provenance>', 'exec')
+          Path('build/provenance-test/writer.py').write_text(body)
+          PY
+          python3 build/provenance-test/writer.py \
+            "$PWD" \
+            "$PWD/build/provenance-test/binary" \
+            "$PWD/build/provenance-test/source.cu" \
+            27 28 native 14 13 \
+            "$PWD/scripts/build/b300-hbm32-batch.sh"
+          python3 - <<'PY'
+          import hashlib, json
+          from pathlib import Path
+          p = Path('build/provenance-test/binary.build.json')
+          m = json.loads(p.read_text())
+          assert m['schema'] == 1
+          assert m['n'] == 27 and m['width'] == 28
+          assert m['low_lut_k'] == 14 and m['high_lut_k'] == 13
+          assert m['source'] == 'build/provenance-test/source.cu'
+          assert m['build_script'] == 'scripts/build/b300-hbm32-batch.sh'
+          assert m['binary_sha256'] == hashlib.sha256(
+              Path('build/provenance-test/binary').read_bytes()).hexdigest()
+          PY
       - name: Exercise A/B result parser and strict identity checks
         run: python3 scripts/bench/b300_maskshard_ab.py --self-test
       - name: Validate default A/B command construction
