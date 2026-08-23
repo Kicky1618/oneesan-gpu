@@ -176,10 +176,23 @@ int main(int argc, char** argv) {
 
     std::ofstream nodes(prefix + ".nodes.tsv");
     std::ofstream edges(prefix + ".edges.tsv");
-    if (!nodes || !edges) {
+    std::ofstream meta(prefix + ".meta.tsv");
+    if (!nodes || !edges || !meta) {
         std::cerr << "cannot open output prefix: " << prefix << '\n';
         return 3;
     }
+
+    meta << "key\tvalue\n"
+         << "width\t" << W << '\n'
+         << "low\t" << low << '\n'
+         << "high\t" << high << '\n'
+         << "vertices\t" << nm << '\n'
+         << "edges\t" << edge_weight.size() << '\n'
+         << "states\t" << total_states << '\n'
+         << "transition_updates\t" << total_transition_updates << '\n'
+         << "same_mask_updates\t" << local_mask_updates << '\n'
+         << "cuttable_updates\t" << cuttable_update_weight << '\n';
+
     nodes << "mask\tstate_weight\n";
     for (std::uint32_t m = 0; m < nm; ++m)
         nodes << m << '\t' << node_weight[m] << '\n';
@@ -195,7 +208,8 @@ int main(int argc, char** argv) {
         edges << a << '\t' << b << '\t' << kv.second << '\n';
     }
 
-    std::cout << "nodes_tsv=" << prefix << ".nodes.tsv"
+    std::cout << "meta_tsv=" << prefix << ".meta.tsv"
+              << " nodes_tsv=" << prefix << ".nodes.tsv"
               << " edges_tsv=" << prefix << ".edges.tsv\n";
     return 0;
 }
