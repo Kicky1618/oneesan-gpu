@@ -4,18 +4,20 @@ on:
   push:
     paths:
       - 'src/cuda/gridfp/oneesan_cuda_gridfp_ramstream32_factorized_forced2.cu'
+      - 'src/cuda/gridfp/oneesan_cuda_gridfp_ramstream32_factorized_direct2d.cu'
       - 'src/cuda/gridfp/ramstream32_factorized_storage.hpp'
       - 'src/cuda/b300/oneesan_cuda_gridfp_b300_hbm32_factorized_batch.cu'
       - 'src/cuda/common/**'
-      - 'scripts/build/gridfp-ramstream32-factorized.sh'
+      - 'scripts/build/gridfp-ramstream32-factorized*.sh'
       - '.github/workflows/ramstream32-compile.yml'
   pull_request:
     paths:
       - 'src/cuda/gridfp/oneesan_cuda_gridfp_ramstream32_factorized_forced2.cu'
+      - 'src/cuda/gridfp/oneesan_cuda_gridfp_ramstream32_factorized_direct2d.cu'
       - 'src/cuda/gridfp/ramstream32_factorized_storage.hpp'
       - 'src/cuda/b300/oneesan_cuda_gridfp_b300_hbm32_factorized_batch.cu'
       - 'src/cuda/common/**'
-      - 'scripts/build/gridfp-ramstream32-factorized.sh'
+      - 'scripts/build/gridfp-ramstream32-factorized*.sh'
       - '.github/workflows/ramstream32-compile.yml'
   workflow_dispatch:
 
@@ -34,7 +36,7 @@ jobs:
             high: 13
     steps:
       - uses: actions/checkout@v4
-      - name: Compile factorized RAM backend
+      - name: Compile forced2 factorized RAM backend
         shell: bash
         run: |
           mkdir -p build
@@ -43,4 +45,13 @@ jobs:
             -DLOW_LUT_K=${{ matrix.low }} \
             -DHIGH_LUT_K=${{ matrix.high }} \
             src/cuda/gridfp/oneesan_cuda_gridfp_ramstream32_factorized_forced2.cu \
-            -o build/ramstream32_w${{ matrix.width }}
+            -o build/ramstream32_forced2_w${{ matrix.width }}
+      - name: Compile direct2d factorized RAM backend
+        shell: bash
+        run: |
+          nvcc -O3 -std=c++17 -lineinfo -arch=sm_80 \
+            -DTARGET_W=${{ matrix.width }} \
+            -DLOW_LUT_K=${{ matrix.low }} \
+            -DHIGH_LUT_K=${{ matrix.high }} \
+            src/cuda/gridfp/oneesan_cuda_gridfp_ramstream32_factorized_direct2d.cu \
+            -o build/ramstream32_direct2d_w${{ matrix.width }}
