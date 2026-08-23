@@ -20,8 +20,10 @@
 #include "maskshard_layout.hpp"
 #include "maskshard_lowlocal.cuh"
 #include "maskshard_highio.cuh"
+#include "maskshard_lowclosure.cuh"
 #include "maskshard_highorbit.cuh"
 #include "maskshard_loworbit.cuh"
+#include "maskshard_lowclosure_kernel.cuh"
 
 struct FullOrbitBatchAddress {
     int owner = -1;
@@ -128,6 +130,13 @@ struct FullOrbitBatchHighJob {
     Code work = 0;
 #ifdef MASKSHARD_HIGH_CLOSURE_ROWS
     std::array<uint32_t, HIGH_LUT_K> closure_rows{};
+#endif
+};
+
+struct FullOrbitBatchLowJob {
+    uint32_t mask = 0;
+#ifdef MASKSHARD_LOW_CLOSURE_COLS
+    std::array<Code, LOW_LUT_K> closure_tasks{};
 #endif
 };
 
@@ -270,12 +279,13 @@ static void process_fullorbit_batch_high_job(
 
 static void process_fullorbit_batch_low_group(
     FullOrbitBatchWorker& w,
+    const FullOrbitBatchLowJob& job,
     const MaskShardLayout& shard,
-    uint32_t mask,
     Count* authoritative_main,
     Count* authoritative_block,
     int threads
 ) {
+    const uint32_t mask = job.mask;
     ck(cudaSetDevice(w.dev), "fullorbit-batch low set device");
     const Code main_n = shard.main_group_size[mask];
     const Code block_n = shard.block_group_size[mask];
@@ -284,6 +294,9 @@ static void process_fullorbit_batch_low_group(
     Count* mainv = authoritative_main + shard.main_base[mask];
     Count* blockv = authoritative_block + shard.block_base[mask];
     const int bm = int(std::min<Code>(65535, (main_n + threads - 1) / threads));
+#ifdef MASKSHARD_LOW_CLOSURE_COLS
+    const int warps_per_block = (threads + 31) / 32;
+#endif
 
     for (int p = LOW_LUT_K; p >= 1; --p) {
         auto t = std::chrono::steady_clock::now();
@@ -294,8 +307,21 @@ static void process_fullorbit_batch_low_group(
         w.low_orbit_s += ram_seconds_since(t);
 
         t = std::chrono::steady_clock::now();
+#ifdef MASKSHARD_LOW_CLOSURE_COLS
+        const uint32_t pi = uint32_t(LOW_LUT_K - p);
+        const Code closure_tasks = job.closure_tasks[size_t(pi)];
+        const int bc = closure_tasks
+            ? int(std::min<Code>(65535,
+                (closure_tasks + Code(warps_per_block) - 1) / Code(warps_per_block)))
+            : 0;
+        if (bc)
+            maskshard_main_lowdesc_closure_inplace_kernel<<<bc, threads>>>(
+                mainv, blockv, main_n, p);
+#else
         if (main_n)
-            maskshard_main_lowdesc_closure_inplace_kernel<<<bm, threads>>>(mainv, blockv, main_n, p);
+            maskshard_main_lowdesc_closure_inplace_kernel<<<bm, threads>>>(
+                mainv, blockv, main_n, p);
+#endif
         ck(cudaGetLastError(), "fullorbit-batch low closure");
         ck(cudaDeviceSynchronize(), "fullorbit-batch low closure sync");
         w.low_closure_s += ram_seconds_since(t);
@@ -333,6 +359,10 @@ int main(int argc, char** argv) {
     StorageLayout layout = build_storage_layout(storage);
     HighDescHost high_desc = build_high_descriptors(storage, layout);
     LowDescHost low_desc = build_low_descriptors(storage, layout);
+#ifdef MASKSHARD_LOW_CLOSURE_COLS
+    MaskShardLowClosureColsHost low_closure =
+        build_maskshard_low_closure_cols(storage, layout, low_desc);
+#endif
     const double highdesc_mib = double(
         (high_desc.main_desc.size() + high_desc.block_desc.size()) * sizeof(uint32_t)
     ) / double(1ULL << 20);
@@ -377,6 +407,9 @@ int main(int argc, char** argv) {
     std::vector<StorageDeviceTables> factor_dev(ngpu);
     std::vector<HighDescDeviceTables> highdesc_dev(ngpu);
     std::vector<LowDescDeviceTables> lowdesc_dev(ngpu);
+#ifdef MASKSHARD_LOW_CLOSURE_COLS
+    std::vector<MaskShardLowClosureColsDeviceTables> lowclosure_dev(ngpu);
+#endif
     std::vector<MaskShardDeviceMeta> shard_dev(ngpu);
     std::vector<FullOrbitBatchWorker> workers(ngpu);
     for (int d = 0; d < ngpu; ++d) {
@@ -384,6 +417,9 @@ int main(int argc, char** argv) {
         factor_dev[d].install(storage, G_FACTOR);
         highdesc_dev[d].install(high_desc);
         lowdesc_dev[d].install(low_desc);
+#ifdef MASKSHARD_LOW_CLOSURE_COLS
+        lowclosure_dev[d].install(low_closure);
+#endif
         shard_dev[d].install(d, shard, layout, high_route, mp, bp);
         workers[d].init(d);
     }
@@ -392,13 +428,33 @@ int main(int argc, char** argv) {
     const FullOrbitBatchAddress ia = fullorbit_batch_main_address_host(init, storage, layout, shard);
     const FullOrbitBatchAddress oa = fullorbit_batch_main_address_host(MateID(R), storage, layout, shard);
     const auto high_jobs = build_fullorbit_batch_high_jobs(&high_desc);
-    std::vector<std::vector<uint32_t>> low_jobs(ngpu);
-    for (uint32_t mask = 0; mask < shard.masks; ++mask)
-        low_jobs[shard.owner[mask]].push_back(mask);
+    std::vector<std::vector<FullOrbitBatchLowJob>> low_jobs(ngpu);
+    for (uint32_t mask = 0; mask < shard.masks; ++mask) {
+        FullOrbitBatchLowJob job;
+        job.mask = mask;
+#ifdef MASKSHARD_LOW_CLOSURE_COLS
+        const auto mb = make_factor_main_blocks(false, mask);
+        for (int pi = 0; pi < LOW_LUT_K; ++pi) {
+            Code tasks = 0;
+            for (size_t bid = 0; bid < mb.size(); ++bid) {
+                const FBlock& b = mb[bid];
+                if (!b.stride || b.end == b.off) continue;
+                const uint32_t a = low_closure.block_off[size_t(pi) * 65 + bid];
+                const uint32_t z = low_closure.block_off[size_t(pi) * 65 + bid + 1];
+                const uint32_t chunks = (z - a + 31u) >> 5;
+                const Code rows = (b.end - b.off) / b.stride;
+                tasks += rows * Code(chunks);
+            }
+            job.closure_tasks[size_t(pi)] = tasks;
+        }
+#endif
+        low_jobs[shard.owner[mask]].push_back(job);
+    }
     for (auto& v : low_jobs)
-        std::sort(v.begin(), v.end(), [&](uint32_t x, uint32_t y) {
-            return shard.main_group_size[x] + shard.block_group_size[x]
-                 > shard.main_group_size[y] + shard.block_group_size[y];
+        std::sort(v.begin(), v.end(), [&](const FullOrbitBatchLowJob& x,
+                                         const FullOrbitBatchLowJob& y) {
+            return shard.main_group_size[x.mask] + shard.block_group_size[x.mask]
+                 > shard.main_group_size[y.mask] + shard.block_group_size[y.mask];
         });
     const double setup_s = ram_seconds_since(setup0);
     std::cerr << "fullorbit-batch setup_s=" << setup_s
@@ -439,8 +495,9 @@ int main(int argc, char** argv) {
             ts.clear();
             for (int d = 0; d < ngpu; ++d) {
                 ts.emplace_back([&, d] {
-                    for (uint32_t mask : low_jobs[d])
-                        process_fullorbit_batch_low_group(workers[d], shard, mask, mp[d], bp[d], threads);
+                    for (const FullOrbitBatchLowJob& job : low_jobs[d])
+                        process_fullorbit_batch_low_group(
+                            workers[d], job, shard, mp[d], bp[d], threads);
                 });
             }
             for (auto& t : ts) t.join();
@@ -495,6 +552,9 @@ int main(int argc, char** argv) {
         ck(cudaSetDevice(d), "fullorbit-batch cleanup set");
         workers[d].release();
         shard_dev[d].release();
+#ifdef MASKSHARD_LOW_CLOSURE_COLS
+        lowclosure_dev[d].release();
+#endif
         lowdesc_dev[d].release();
         highdesc_dev[d].release();
         factor_dev[d].release();
