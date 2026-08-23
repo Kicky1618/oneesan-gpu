@@ -1,8 +1,11 @@
-# B300 row-depth structural sparsity study
+# B300 row-depth structural sparsity and v0.14
 
-This is a follow-up to v0.12. v0.12 proves that BLOCKED is zero at every row
-boundary. The next question is whether large parts of MAIN are also known zero
-from geometry, without inspecting count values.
+This study starts from v0.13, where row-boundary BLOCKED input is already known
+zero, its P2P gather is removed, and its local scratch is initialized lazily by
+the first HIGH orbit.
+
+The remaining question is whether MAIN/BLOCKED states can also be declared zero
+from row geometry without inspecting count values.
 
 ## Frontier depth
 
@@ -15,21 +18,13 @@ high position to low position, starting at height 1:
 
 Let `depth(m)` be the maximum height visited by that walk.
 
-Exhaustive boolean-reachability experiments through W=14 show the exact row
-boundary identity
+`factor_row_depth_support.cpp` propagates boolean reachability through the exact
+`include_horizontal()` / `blocked_exclude()` semantics. Through W=14 it verifies
+that after complete row `r`, reachable MAIN states are exactly those with
+`depth(m) <= r` until the full state space saturates. During the HIGH portion of
+row `r`, reachable MAIN/BLOCKED states also never exceed depth `r`.
 
-```text
-support after row r = { MAIN states m : depth(m) <= r }
-```
-
-until the maximum possible depth is reached. The same experiment checks that,
-during the HIGH portion of row `r`, every reachable MAIN and BLOCKED state has
-frontier depth at most `r`.
-
-`factor_row_depth_support.cpp` verifies this without using arithmetic count
-values: it propagates state-set reachability through the same
-`include_horizontal()` / `blocked_exclude()` semantics. It checks W=6,8,10,12,14
-and pins the W=14 row-boundary sequence
+For W=14 the row-boundary support sequence is pinned as
 
 ```text
 r=1  8,192
@@ -41,17 +36,9 @@ r=6  196,924
 r=7  196,938  (all states)
 ```
 
-These are exactly the numbers of W=14 frontier states with maximum height at
-most 1,2,...,7.
+## Exact max-depth opportunity at n=27
 
-The geometric interpretation is that a frontier nesting of depth `h` cannot be
-realized before enough grid rows exist to embed `h` nested noncrossing
-connections.
-
-## n=27 capped state counts
-
-The height-capped state count is computed by a tiny DP that forbids height above
-the chosen cap. For W=28 MAIN:
+For W=28 MAIN, exact maximum-height capped counts are
 
 ```text
 cap 1       134,217,728   0.0348%
@@ -62,66 +49,121 @@ cap 5   329,056,985,516  85.3099%
 cap 6   369,274,024,420  95.7364%
 cap 7   382,187,801,740  99.0844%
 cap 8   385,169,379,172  99.8574%
-cap 9   385,659,538,996  99.9845%
-cap 10  385,715,191,452  99.9989%
-cap 11  385,719,320,672  99.99995%
-cap 12  385,719,502,616  99.9999990%
-cap 13  385,719,506,592  ~100%
 cap 14  385,719,506,620  100%
 ```
 
-So structural sparsity is substantial only in roughly the first five or six
-rows. It should not be treated as a whole-run sparse-DP strategy.
-
-## Communication upper-bound model
-
-Starting from v0.12:
-
-- row-boundary BLOCKED gather is already removed;
-- before row `r>1`, MAIN above depth `r-1` is structurally zero;
-- after the HIGH portion of row `r`, MAIN/BLOCKED above depth `r` is
-  structurally unreachable.
-
-If an implementation could transfer exactly the height-capped regions while
-zero-filling the rest locally, the n=27 logical HIGH-I/O word count would change
-from
+Starting from the v0.12/v0.13 dense HIGH-I/O model, an implementation that could
+transfer exactly these height-capped regions would use
 
 ```text
-v0.12 dense words     25,380,726,522,116
-row-depth cap words   22,074,394,853,240
-ratio                  0.869730614
-reduction              13.0269386%
+dense words            25,380,726,522,116
+exact depth-cap words   22,074,394,853,240
+logical payload         92.334545196 -> 80.306180655 TiB/residue
+7/8 peer approximation                  -> 70.267908074 TiB/residue
 ```
 
-or in logical payload:
+This remains an upper-bound target rather than the first runtime implementation.
+
+## v0.14: coarse FBlock depth filtering
+
+The existing factorized HIGH scratch is organized into FBlocks. All states in a
+MAIN FBlock share:
+
+- `he`: frontier height after the HIGH segment;
+- `hs`: frontier height after the center symbol / before the LOW segment.
+
+Every BLOCKED FBlock similarly shares its segment boundary height.
+
+Therefore
 
 ```text
-92.334545196 -> 80.306180655 TiB/residue
+max(he, hs) > current row cap
 ```
 
-Under the same 7/8 peer-fraction model used elsewhere, the capped payload is
-about
+is a sufficient condition for every MAIN state in that block to be structurally
+zero. For BLOCKED, `he > cap` is sufficient. This test is deliberately weaker
+than the exact maximum-height predicate because a path may rise above the cap
+and return while keeping its segment endpoint heights small.
+
+The advantage is that the kernel already has `FBlock x`; no code reconstruction,
+no per-state table, and no additional persistent HBM metadata are required.
+
+`factor_row_depth_fblock.cpp` computes the exact n=27 traffic model for this
+coarse predicate. With gather cap `max(1,row-1)` and scatter cap `row`:
 
 ```text
-70.267908074 TiB/residue
+v0.13 dense words       25,380,726,522,116
+v0.14 FBlock-cap words  23,264,294,823,853
+ratio                    0.916612643
+reduction                 8.3387357%
+
+logical payload          84.635011531 TiB/residue
+7/8 peer approximation   74.055635090 TiB/residue
 ```
 
-This is a safe structural upper-bound opportunity, not a runtime result. The
-current factorized storage is not ordered directly by global maximum frontier
-height, so exploiting the cap requires either cheap per-factor depth metadata or
-row-specific compact task lists. Building a huge per-state table would defeat
-the purpose.
+Relative to v0.13's ~80.792727 TiB peer model, v0.14 removes another ~6.737 TiB
+per residue. It captures roughly 64% of the remaining peer-traffic reduction
+available in the exact max-depth model, without adding metadata.
 
-## Implementation direction
+The gather kernel still walks the whole scratch range. States in excluded
+FBlocks receive a local zero instead of a P2P load; scatter simply skips the
+remote store. HIGH orbit/closure kernels are unchanged, so v0.13 -> v0.14 is
+primarily an I/O experiment rather than a compute-work change.
 
-A promising low-metadata route is to precompute small per-factor quantities for
-the existing LOW/HIGH code tables, sufficient to decide whether a composed
-`(HIGH code, center, LOW code)` state can exceed a row depth cap. The HIGH I/O
-kernel can then replace remote loads/stores outside the cap by local zeros or no
-store.
+## Semantic validation
 
-Before implementing this candidate, profile v0.12 on real B300x8. If
-`high_io_sum_s` remains dominant after the free BLOCKED-gather removal, the
-additional ~13% logical-I/O opportunity is worth pursuing. If HIGH I/O is no
-longer dominant, row-depth filtering adds branch/metadata cost for limited
-whole-run benefit.
+`factor_row_depth_fblock_semantics.cpp` runs the complete numerical Grid-FP DP
+with modulus 4294967291 twice:
+
+1. canonical transitions;
+2. a simulated v0.14 path that zeros excluded gather states and drops excluded
+   scatter states at every HIGH window.
+
+The local validation command
+
+```bash
+g++ -O3 -std=c++17 -Wall -Wextra -Werror \
+  src/cpp/probes/factor_row_depth_fblock_semantics.cpp \
+  -o build/factor_row_depth_fblock_semantics
+build/factor_row_depth_fblock_semantics 12
+```
+
+passed for W=6,8,10,12. The traffic probe also passed locally and reproduced the
+n=27 pinned values above.
+
+## Runtime candidate
+
+Files:
+
+- `src/cuda/b300/maskshard_rowdepth_fblock_io.cuh`
+- `src/cuda/b300/oneesan_cuda_gridfp_b300_hbm32_maskshard_fullorbit_batch.cu`
+- `src/cuda/b300/oneesan_cuda_gridfp_b300_hbm32_maskshard_blockorbit_compactaux_fullclosure_highrowpack16_lazyblockinit_rowdepthfblock_batch_guarded.cu`
+- `scripts/bench/b300_maskshard_rowdepth_ab.py`
+- `.github/workflows/b300-rowdepth-v14.yml`
+
+Backend alias:
+
+```text
+b300-factorized-maskshard-v0.14-highrowpack16-lazyblockinit-rowdepthfblock-batch
+```
+
+A/B command:
+
+```bash
+python3 scripts/bench/b300_maskshard_rowdepth_ab.py \
+  --n 27 --gpus 8 --threads 256 \
+  --modulus 4294967291 \
+  --vram-reserve-mib 1024
+```
+
+Residues must match v0.13 exactly. The first metric is `high_io_sum_s`; total
+`wall_s` decides whether the added branch/local-zero work is worthwhile.
+
+## Next exact-depth candidate
+
+If v0.14 wins on B300, the next step is an exact per-factor max-depth predicate.
+A compact design needs about one byte per LOW/HIGH code: approximately
+1,201,917 LOW entries + 787,333 HIGH entries = 1,989,250 bytes, or ~1.90 MiB/GPU.
+That would approach the ~70.27 TiB peer upper-bound model while retaining the
+same factorized storage layout. It should not be implemented before v0.14 shows
+that the cheaper FBlock filter pays for its branch/local-zero overhead.
