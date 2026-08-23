@@ -11,6 +11,7 @@ on:
       - 'src/cpp/probes/factor_highorbit_semantics.cpp'
       - 'src/cpp/probes/factor_loworbit_semantics.cpp'
       - 'src/cpp/probes/factor_orbit_racefree.cpp'
+      - 'src/cpp/probes/factor_fullorbit_schedule_equiv.cpp'
       - 'src/cpp/probes/factor_maskshard_memory.cpp'
       - 'src/common/gridfp_transition.hpp'
       - '.github/workflows/factor-mask-shard.yml'
@@ -24,6 +25,7 @@ on:
       - 'src/cpp/probes/factor_highorbit_semantics.cpp'
       - 'src/cpp/probes/factor_loworbit_semantics.cpp'
       - 'src/cpp/probes/factor_orbit_racefree.cpp'
+      - 'src/cpp/probes/factor_fullorbit_schedule_equiv.cpp'
       - 'src/cpp/probes/factor_maskshard_memory.cpp'
       - 'src/common/gridfp_transition.hpp'
       - '.github/workflows/factor-mask-shard.yml'
@@ -172,6 +174,26 @@ jobs:
           g++ -O3 -std=c++17 -Wall -Wextra -Werror src/cpp/probes/factor_orbit_racefree.cpp -o build/factor_orbit_racefree
       - name: Verify non-atomic orbit footprints and closure non-cascade
         run: build/factor_orbit_racefree ${{ matrix.width }} ${{ matrix.low }}
+
+  fullorbit-schedule:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        include:
+          - width: 10
+            low: 5
+            rows: 10
+          - width: 12
+            low: 6
+            rows: 12
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build full-orbit schedule equivalence probe
+        run: |
+          mkdir -p build
+          g++ -O3 -std=c++17 -Wall -Wextra -Werror src/cpp/probes/factor_fullorbit_schedule_equiv.cpp -o build/factor_fullorbit_schedule_equiv
+      - name: Compare grouped full-orbit schedule with canonical DP
+        run: build/factor_fullorbit_schedule_equiv ${{ matrix.width }} ${{ matrix.low }} ${{ matrix.rows }}
 
   edge-cut:
     runs-on: ubuntu-latest
