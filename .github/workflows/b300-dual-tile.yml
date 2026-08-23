@@ -7,7 +7,9 @@ on:
       - 'src/cuda/gridfp/ramstream32_b300_dual_tile_layout.cuh'
       - 'src/cuda/gridfp/ramstream32_b300_dual_tile_kernels.cuh'
       - 'src/cuda/gridfp/ramstream32_b300_dual_tile_shuffle.cuh'
+      - 'src/cuda/gridfp/ramstream32_b300_dual_tile_opt.cuh'
       - 'src/cuda/gridfp/probes/b300_dual_tile_selftest.cu'
+      - 'src/cuda/gridfp/probes/b300_dual_tile_opt_plan.cu'
       - 'scripts/build/gridfp-b300-hbm32-dual-tile-sparse.sh'
       - '.github/workflows/b300-dual-tile.yml'
   workflow_dispatch:
@@ -27,6 +29,14 @@ jobs:
             src/cuda/gridfp/probes/b300_dual_tile_selftest.cu \
             -o build/b300_dual_tile_selftest
           build/b300_dual_tile_selftest
+      - name: W28 optimized LOW-mask traffic plan
+        shell: bash
+        run: |
+          nvcc -O3 -std=c++17 -arch=sm_80 \
+            -DTARGET_W=28 -DLOW_LUT_K=14 -DHIGH_LUT_K=13 \
+            src/cuda/gridfp/probes/b300_dual_tile_opt_plan.cu \
+            -o build/b300_dual_tile_opt_plan
+          build/b300_dual_tile_opt_plan
       - name: Compile W28 dual-tile backend
         shell: bash
         run: |
