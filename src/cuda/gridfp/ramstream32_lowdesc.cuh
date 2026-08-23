@@ -7,18 +7,22 @@
 
 // Low-window transition descriptor.
 //
-// The low window touches LOW + center.  For almost every included branch the
-// exact HIGH topology is unchanged; only RR whose partner search escapes above
-// the center modifies HIGH.  We precompute the LOW-side result once and fall
-// back to the full factorized topology codec only for those boundary-crossing
-// cases.
+// LOW + center are active.  A normal transition leaves the exact HIGH code
+// untouched.  For the only boundary-crossing case (RR partner search escaping
+// into HIGH), the inactive side operation is just: from the boundary, find the
+// `depth`-th unmatched L and flip that one L -> R.  `depth` fits in the four
+// previously unused descriptor bits, so even cross-boundary transitions avoid
+// full MateID reconstruction/ranking.
 //
 // bits 31..30: kind
-// bits 25..20: destination FBlock index (same-HIGH cases)
+// bits 29..26: boundary matching depth (CROSS only)
+// bits 25..20: destination FBlock index
 // bits 19..0 : destination LOW all-rank
 static constexpr uint32_t LOWDESC_LR_MASK = (1u << 20) - 1u;
 static constexpr uint32_t LOWDESC_BLOCK_MASK = 0x3fu;
+static constexpr uint32_t LOWDESC_DEPTH_MASK = 0x0fu;
 static constexpr int LOWDESC_BLOCK_SHIFT = 20;
+static constexpr int LOWDESC_DEPTH_SHIFT = 26;
 static constexpr int LOWDESC_KIND_SHIFT = 30;
 
 enum LowDescKind : uint32_t {
@@ -28,13 +32,31 @@ enum LowDescKind : uint32_t {
     LOWDESC_CROSS = 3,
 };
 
-static inline uint32_t lowdesc_pack(LowDescKind kind, uint32_t block, uint32_t lr) {
-    if (lr > LOWDESC_LR_MASK || block > LOWDESC_BLOCK_MASK) {
-        std::cerr << "lowdesc encoding overflow block=" << block << " lr=" << lr << "\n";
+static inline uint32_t lowdesc_pack(
+    LowDescKind kind, uint32_t block, uint32_t lr, uint32_t depth = 0
+) {
+    if (lr > LOWDESC_LR_MASK || block > LOWDESC_BLOCK_MASK || depth > LOWDESC_DEPTH_MASK) {
+        std::cerr << "lowdesc encoding overflow block=" << block
+                  << " lr=" << lr << " depth=" << depth << "\n";
         std::exit(50);
     }
     return (uint32_t(kind) << LOWDESC_KIND_SHIFT)
+        | (depth << LOWDESC_DEPTH_SHIFT)
         | (block << LOWDESC_BLOCK_SHIFT) | lr;
+}
+
+static int lowdesc_cross_depth_host(MateID m, int p) {
+    constexpr int L = LOW_LUT_K;
+    MateID t = msetpair(m, p, NN);
+    int q = p, s = 1;
+    for (;;) {
+        ++q;
+        if (q > L) return s; // next symbol is HIGH[0]
+        MateValue v = mget(t, q);
+        if (v == ::L) --s;
+        else if (v == R) ++s;
+        if (!s) return 0; // did not cross the boundary
+    }
 }
 
 struct LowDescHost {
@@ -58,9 +80,6 @@ static LowDescHost build_low_descriptors(
     constexpr uint32_t HM = (1u << (2 * H)) - 1u;
 
     LowDescHost d;
-
-    // Descriptor indexing is independent of occupancy mask.  It is the
-    // concatenation of each factor block's LOW all-rank dimension.
     uint32_t mt = 0;
     for (size_t bid = 0; bid < layout.main_blocks.size(); ++bid) {
         d.main_base[bid] = mt;
@@ -108,43 +127,64 @@ static LowDescHost build_low_descriptors(
                     uint32_t hc2 = z.blocked
                         ? uint32_t((z.mate >> (2 * L)) & HM)
                         : uint32_t((z.mate >> (2 * (L + 1))) & HM);
+                    uint32_t lc2 = uint32_t(z.mate) & LM;
+                    uint32_t packed = storage.low_packed_rank[lc2];
+                    if (packed == 0xffffffffu) {
+                        std::cerr << "lowdesc destination LOW code missing\n";
+                        std::exit(51);
+                    }
+                    uint32_t lr2 = packed >> L;
+
                     if (hc2 != hc) {
-                        out = lowdesc_pack(LOWDESC_CROSS, 0, 0);
-                        ++d.main_cross;
-                    } else {
-                        uint32_t lc2 = uint32_t(z.mate) & LM;
-                        uint32_t packed = storage.low_packed_rank[lc2];
-                        if (packed == 0xffffffffu) {
-                            std::cerr << "lowdesc destination LOW code missing\n";
-                            std::exit(51);
+                        int depth = lowdesc_cross_depth_host(m, p);
+                        if (depth <= 0 || depth > int(LOWDESC_DEPTH_MASK)) {
+                            std::cerr << "lowdesc invalid cross depth=" << depth << "\n";
+                            std::exit(57);
                         }
-                        uint32_t lr2 = packed >> L;
                         if (z.blocked) {
-                            uint32_t dbid = uint32_t(he);
+                            int h2 = seg_end_height_host(hc2, H);
+                            uint32_t dbid = uint32_t(h2);
                             if (dbid >= layout.block_blocks.size()
                                 || lr2 >= layout.block_blocks[dbid].cols) {
-                                std::cerr << "lowdesc blocked destination mismatch\n";
-                                std::exit(52);
+                                std::cerr << "lowdesc cross blocked destination mismatch\n";
+                                std::exit(58);
                             }
-                            out = lowdesc_pack(LOWDESC_BLOCK, dbid, lr2);
+                            out = lowdesc_pack(LOWDESC_CROSS, dbid, lr2, uint32_t(depth));
                         } else {
+                            int he2 = seg_end_height_host(hc2, H);
                             int cv2 = int(mget(z.mate, L));
-                            uint32_t dbid = uint32_t(3 * he + cv2);
+                            uint32_t dbid = uint32_t(3 * he2 + cv2);
                             if (dbid >= layout.main_blocks.size()
                                 || lr2 >= layout.main_blocks[dbid].cols) {
-                                std::cerr << "lowdesc main destination mismatch\n";
-                                std::exit(53);
+                                std::cerr << "lowdesc cross main destination mismatch\n";
+                                std::exit(59);
                             }
-                            out = lowdesc_pack(LOWDESC_MAIN, dbid, lr2);
+                            out = lowdesc_pack(LOWDESC_CROSS, dbid, lr2, uint32_t(depth));
                         }
+                        ++d.main_cross;
+                    } else if (z.blocked) {
+                        uint32_t dbid = uint32_t(he);
+                        if (dbid >= layout.block_blocks.size()
+                            || lr2 >= layout.block_blocks[dbid].cols) {
+                            std::cerr << "lowdesc blocked destination mismatch\n";
+                            std::exit(52);
+                        }
+                        out = lowdesc_pack(LOWDESC_BLOCK, dbid, lr2);
+                    } else {
+                        int cv2 = int(mget(z.mate, L));
+                        uint32_t dbid = uint32_t(3 * he + cv2);
+                        if (dbid >= layout.main_blocks.size()
+                            || lr2 >= layout.main_blocks[dbid].cols) {
+                            std::cerr << "lowdesc main destination mismatch\n";
+                            std::exit(53);
+                        }
+                        out = lowdesc_pack(LOWDESC_MAIN, dbid, lr2);
                     }
                 }
                 d.main_desc[size_t(pi) * mt + d.main_base[bid] + lr] = out;
             }
         }
 
-        // blocked_exclude only inserts N.  It never flips HIGH topology, so the
-        // blocked branch is descriptor-only with no fallback path.
         for (size_t bid = 0; bid < layout.block_blocks.size(); ++bid) {
             const StorageBlock& sb = layout.block_blocks[bid];
             if (!sb.valid || !sb.cols || !sb.rows) continue;
@@ -247,10 +287,32 @@ __device__ __forceinline__ uint32_t lowdesc_block(uint32_t x) {
 __device__ __forceinline__ uint32_t lowdesc_lr(uint32_t x) {
     return x & LOWDESC_LR_MASK;
 }
+__device__ __forceinline__ uint32_t lowdesc_depth(uint32_t x) {
+    return (x >> LOWDESC_DEPTH_SHIFT) & LOWDESC_DEPTH_MASK;
+}
+
+__device__ __forceinline__ uint32_t lowdesc_flip_high(uint32_t hc, uint32_t depth) {
+    int s = int(depth);
+#pragma unroll
+    for (int pos = 0; pos < HIGH_LUT_K; ++pos) {
+        MateValue v = MateValue((hc >> (2 * pos)) & 3u);
+        if (v == ::L) {
+            if (--s == 0) {
+                uint32_t z = 3u << (2 * pos);
+                return (hc & ~z) | (uint32_t(R) << (2 * pos));
+            }
+        } else if (v == R) {
+            ++s;
+        }
+    }
+    return 0xffffffffu;
+}
 
 __global__ void main_group_lowdesc_kernel(
     const Count* in, Code n, Count* out_main, Count* out_block, int p
 ) {
+    constexpr int S = MAXW + 2;
+    constexpr uint32_t HR_MASK = (1u << HIGH_LUT_K) - 1u;
     Code i = Code(blockIdx.x) * blockDim.x + threadIdx.x;
     Code step = Code(gridDim.x) * blockDim.x;
     uint32_t pi = uint32_t(LOW_LUT_K - p);
@@ -276,13 +338,21 @@ __global__ void main_group_lowdesc_kernel(
             Code j = y.off + Code(hr) * y.stride + lowdesc_lr(desc);
             atomic_add_mod(out_block + j, c);
         } else if (kind == LOWDESC_CROSS) {
-            // Rare boundary-crossing RR: exact HIGH topology determines which
-            // partner endpoint flips, so use the proven full codec here.
-            MateID m = factor_unrank_main(i);
-            auto z = oneesan::gridfp::include_horizontal(m, TARGET_W, p);
-            if (!z.valid) continue;
-            if (z.blocked) atomic_add_mod(out_block + factor_rank_block(z.mate), c);
-            else atomic_add_mod(out_main + factor_rank_main(z.mate), c);
+            uint32_t a = D_F_HIGH_MASK_OFF[size_t(D_F_MASK) * S + x.he];
+            uint32_t hc = D_F_HIGH_MASK_CODES[a + hr];
+            uint32_t hc2 = lowdesc_flip_high(hc, lowdesc_depth(desc));
+            if (hc2 == 0xffffffffu) continue;
+            uint32_t hp = D_F_HIGH_PACKED_RANK[hc2];
+            uint32_t hr2 = hp & HR_MASK;
+            if (p == 1) {
+                FBlock y = D_F_MAIN_BLOCKS[lowdesc_block(desc)];
+                Code j = y.off + Code(hr2) * y.stride + lowdesc_lr(desc);
+                atomic_add_mod(out_main + j, c);
+            } else {
+                FBlock y = D_F_BLOCK_BLOCKS[lowdesc_block(desc)];
+                Code j = y.off + Code(hr2) * y.stride + lowdesc_lr(desc);
+                atomic_add_mod(out_block + j, c);
+            }
         }
     }
 }
