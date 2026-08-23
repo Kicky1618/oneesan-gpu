@@ -7,9 +7,25 @@
 #include <iostream>
 #include <vector>
 
-#define main oneesan_maskmajor_v51_unused_main
-#include "oneesan_cuda_gridfp_ramstream32_factorized_hybrid_maskmajor.cu"
-#undef main
+#define RAMSTREAM_BIDESC_COMPACT_NO_MAIN
+#include "oneesan_cuda_gridfp_ramstream32_factorized_bidesc_compact.cu"
+#undef RAMSTREAM_BIDESC_COMPACT_NO_MAIN
+#include "ramstream32_cpu_low_maskmajor.hpp"
+
+static void maskmajor_batch_release_dense_host(StorageFactorHost& storage) {
+    storage.low_packed_rank.clear(); storage.low_packed_rank.shrink_to_fit();
+    storage.high_packed_rank.clear(); storage.high_packed_rank.shrink_to_fit();
+    storage.low_all_codes.clear(); storage.low_all_codes.shrink_to_fit();
+    storage.high_all_codes.clear(); storage.high_all_codes.shrink_to_fit();
+    storage.low_mask_begin.clear(); storage.low_mask_begin.shrink_to_fit();
+    G_FACTOR.low_packed_rank.clear(); G_FACTOR.low_packed_rank.shrink_to_fit();
+    G_FACTOR.high_packed_rank.clear(); G_FACTOR.high_packed_rank.shrink_to_fit();
+    G_FACTOR.low_all_codes.clear(); G_FACTOR.low_all_codes.shrink_to_fit();
+    G_FACTOR.high_all_codes.clear(); G_FACTOR.high_all_codes.shrink_to_fit();
+    G_FACTOR.high_main_base.clear(); G_FACTOR.high_main_base.shrink_to_fit();
+    G_FACTOR.high_block_base.clear(); G_FACTOR.high_block_base.shrink_to_fit();
+    G_FACTOR.low_mask_codes.clear(); G_FACTOR.low_mask_codes.shrink_to_fit();
+}
 
 struct MaskBatch {
     uint32_t first = 0, last = 0; // [first,last)
@@ -49,13 +65,6 @@ struct MaskBatchPlan {
     size_t arena_peak_bytes = 0;
 };
 
-// Allocate exactly two device arenas:
-//   raw = [batch main | batch blocked]
-//   alt = [largest main group | largest blocked group]
-// The alternate size is a global constant.  Batch only the raw payload into
-// the bytes left after reserving that alternate arena.  This makes the plan's
-// target an exact upper bound for cudaMalloc payload, even when the largest
-// main and blocked batches occur at different mask ranges.
 static MaskBatchPlan make_mask_batches(
     const LowMaskMajorLayout& mm, size_t target_bytes
 ) {
@@ -308,7 +317,7 @@ int main(int argc, char** argv) {
 
     BidescMaskDeviceTables mask_tables; mask_tables.install(G_FACTOR);
     HighDescDeviceTables highdesc_tables; highdesc_tables.install(highdesc);
-    maskmajor_release_dense_host(storage);
+    maskmajor_batch_release_dense_host(storage);
     highdesc.main_desc.clear(); highdesc.main_desc.shrink_to_fit();
     highdesc.block_desc.clear(); highdesc.block_desc.shrink_to_fit();
     lowdesc.main_desc.clear(); lowdesc.main_desc.shrink_to_fit();
