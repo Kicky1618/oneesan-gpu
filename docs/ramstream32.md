@@ -24,14 +24,17 @@ scripts/build/gridfp-ramstream32-intervals.sh
 
 v2 reuses the canonical interval construction from the factorized B300 implementation. Long canonical runs become parallel `memcpy`; fragmented groups fall back to v1 rank/unrank.
 
-### v3: factorized authoritative RAM layout
+### v3: occupancy-major factorized authoritative RAM
+
+Production entry point:
 
 ```text
-src/cuda/gridfp/oneesan_cuda_gridfp_ramstream32_factorized.cu
+src/cuda/gridfp/oneesan_cuda_gridfp_ramstream32_factorized_forced2.cu
+src/cuda/gridfp/ramstream32_factorized_storage.hpp
 scripts/build/gridfp-ramstream32-factorized.sh
 ```
 
-v3 changes the physical order of the authoritative RAM array while preserving the exact state set and transitions.
+`oneesan_cuda_gridfp_ramstream32_factorized.cu` is kept as the generic-layout research prototype. The build helper intentionally targets the strict forced-two-window implementation, because the factorized codec requires one whole side of the split to have fixed occupancy.
 
 For `W = H + 1 + L`, main states are stored as
 
@@ -51,14 +54,19 @@ Within each fixed-height HIGH/LOW dimension, codes are ordered by
 (occupancy mask, mask-local rank)
 ```
 
-instead of canonical code rank. The existing factorized device codec is reused with its `all-rank` field redefined to this occupancy-major rank. This preserves the local factorized transition kernels but makes occupancy classes contiguous in system RAM.
+instead of canonical code rank. The existing factorized GPU codec is reused with its `all-rank` field redefined to this occupancy-major rank. This changes only the permutation in authoritative memory, not the state set or DP transitions.
+
+The two windows are exactly the same split used by the B300 forced2 profile:
+
+```text
+HIGH window: p = W-1 .. L+1   (all LOW occupancy fixed)
+LOW  window: p = L   .. 1     (all HIGH occupancy fixed)
+```
 
 Consequences:
 
-- fixed HIGH occupancy: the selected rows are consecutive and the complete LOW dimension is present, so each factor block can be packed with one large `memcpy`;
-- fixed LOW occupancy: each HIGH row contributes one consecutive LOW slice, so accesses are no longer random 4-byte gathers, but v3 still needs one copy per HIGH row.
-
-The latter is the remaining weakness addressed by the planned v4 mask-batching scheme below.
+- fixed HIGH occupancy: the selected HIGH rows are consecutive and the complete LOW dimension is present, so each factor block is one large RAM copy;
+- fixed LOW occupancy: each HIGH row contributes one consecutive LOW slice. This removes random 4-byte gathers, but still produces many short row copies. v4 addresses this with LOW-mask batching.
 
 ## Build and regression
 
@@ -69,13 +77,13 @@ First regression (`n=21`, `W=22`, default `LOW=11`, `HIGH=10`):
 ```bash
 N=21 ARCH=native bash scripts/build/gridfp-ramstream32-factorized.sh
 ./build/oneesan_cuda_gridfp_ramstream32_factorized_n21 \
-  21 4294967291 2048 11 16
+  21 4294967291 256 16
 ```
 
-Arguments are
+Runtime arguments are
 
 ```text
-n modulus scratch_target_mib max_window cpu_threads
+n modulus scratch_target_mib cpu_threads
 ```
 
 The expected residue is
@@ -84,24 +92,33 @@ The expected residue is
 998035516
 ```
 
-For `n=27` the default split is `LOW=14`, `HIGH=13`:
+For `n=27`, the default split is `LOW=14`, `HIGH=13`:
 
 ```bash
 N=27 ARCH=native bash scripts/build/gridfp-ramstream32-factorized.sh
 ./build/oneesan_cuda_gridfp_ramstream32_factorized_n27 \
-  27 4294967291 4096 14 32
+  27 4294967291 16384 32
 ```
 
-The `scratch_target_mib` limit covers the main/blocked GPU work buffers. Factorized lookup tables consume additional VRAM; for `n=27` the dense LOW/HIGH packed-rank tables are about 1 GiB and 256 MiB respectively.
+The strict two-window maxima for `n=27` are approximately
+
+```text
+LOW occupancy fixed  (HIGH window):  9.65 GiB scratch
+HIGH occupancy fixed (LOW window):  14.77 GiB scratch
+```
+
+so a 16 GiB scratch target is the practical minimum for the current two-window v3. Factorized lookup tables consume additional VRAM; for `n=27` the dense LOW/HIGH packed-rank tables are about 1 GiB and 256 MiB respectively. In practice this profile therefore targets roughly 20--24 GiB or more of usable VRAM, with 24--32 GiB cards being the comfortable range.
+
+The packed-rank representation also remains valid at `n=27`: the largest LOW all-rank class is 232,323 (< 2^18, because 14 bits are reserved for mask-local rank), and the largest HIGH all-rank class is 149,019 (< 2^19).
 
 ## Memory hierarchy
 
 ```text
 ordinary system RAM
-  factorized main authoritative array
-  factorized blocked authoritative array
+  occupancy-major factorized main authoritative array
+  occupancy-major factorized blocked authoritative array
           |
-          | occupancy-major rectangular copies
+          | rectangular RAM copies
           v
 pinned group staging
           |
@@ -114,6 +131,8 @@ GPU factorized group scratch
 
 The authoritative mappings use `MADV_HUGEPAGE` where available and are not CUDA-pinned. `MAP_NORESERVE` only makes virtual reservation cheap; physical memory still has to exist when pages are touched.
 
+Current v3 still allocates a pinned staging area large enough for the largest resident group. This is much smaller than pinning the full authoritative array, but can still be several GiB at `n=27`. A slab-staging/pipelined variant is therefore another planned improvement alongside mask batching.
+
 ## Instrumentation
 
 v3 reports
@@ -125,6 +144,7 @@ v3 reports
 - `unpack_s`: staging -> authoritative RAM;
 - `memcpy_runs`: total contiguous RAM copy calls in pack + unpack;
 - `avg_memcpy_elems`: average 32-bit states per RAM copy;
+- `high_window_max_gib`, `low_window_max_gib`: strict two-window scratch maxima;
 - `wall_s`: total DP row-loop time.
 
 The comparison of interest is
@@ -135,7 +155,7 @@ v2 canonical interval pack
 v3 occupancy-major factorized pack
 ```
 
-under the same modulus, scratch target and window size.
+under the same modulus and feasible scratch budget.
 
 ## Capacity of the 32-bit authoritative arrays
 
@@ -154,7 +174,7 @@ Practical targets:
 - 128 GiB RAM + 24--32 GiB VRAM: `n=24`
 - 384--512 GiB RAM + 24--32 GiB VRAM: `n=25`
 - 1 TiB RAM + 24--32 GiB VRAM: `n=26`
-- comfortably above 2 TiB RAM: `n=27`
+- comfortably above 2 TiB RAM + 24--32 GiB VRAM: `n=27`
 
 For `n=27`, the exact factorized count check gives
 
@@ -164,7 +184,7 @@ blocked = 135015505407
 total   = 520735012027 states
 ```
 
-which is the same state count as the canonical authoritative representation; v3 changes only the permutation in memory.
+which is identical to the canonical authoritative state count.
 
 ## v4 direction: LOW-mask batching
 
@@ -176,7 +196,7 @@ mean    = 17.26 states
 maximum = 1001 states
 ```
 
-per HIGH row. A sequence of tiny row copies would waste CPU cycles even though the accesses are contiguous.
+per HIGH row. A sequence of tiny row copies wastes CPU cycles even though each individual access is contiguous.
 
 The proposed v4 solution is to process adjacent LOW masks in batches:
 
@@ -192,6 +212,6 @@ system RAM row
        individual factorized groups
 ```
 
-Adjacent occupancy classes are adjacent in v3 storage, so batching does not transfer extra authoritative states. It only moves the group-separation/repacking step from system RAM to HBM, where bandwidth is much higher. Batch size should be chosen from the available VRAM and measured PCIe/DRAM bandwidth.
+Adjacent occupancy classes are adjacent in v3 storage, so batching need not transfer unrelated authoritative states. It moves group separation/repacking from system RAM to HBM, where bandwidth is much higher. Batch size should be selected from available VRAM and measured RAM/PCIe bandwidth.
 
-After mask batching, the next optimization is a double/triple-buffered pipeline overlapping CPU RAM copies, H2D, GPU transitions, D2H and RAM writeback.
+After mask batching, the other major optimization is bounded slab staging plus double/triple buffering to overlap RAM copies, H2D, GPU transitions, D2H and RAM writeback without pinning multi-GiB staging buffers.
