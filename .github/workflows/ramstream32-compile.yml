@@ -1,3 +1,4 @@
+# CI probe branch: compile current main bidesc backend.
 name: ramstream32 CUDA compile
 
 on:
