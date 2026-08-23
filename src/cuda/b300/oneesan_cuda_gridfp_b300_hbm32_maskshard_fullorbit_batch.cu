@@ -480,6 +480,12 @@ int main(int argc, char** argv) {
 
         const auto wall0 = std::chrono::steady_clock::now();
         for (int row = 0; row < TARGET_W; ++row) {
+#ifdef MASKSHARD_ROW_DEPTH_FBLOCK_IO
+            for (int d = 0; d < ngpu; ++d) {
+                ck(cudaSetDevice(d), "fullorbit-batch row-depth set device");
+                maskshard_set_row_depth_fblock_io_row(row);
+            }
+#endif
             std::atomic<size_t> next_high{0};
             std::vector<std::thread> ts;
             ts.reserve(ngpu);
