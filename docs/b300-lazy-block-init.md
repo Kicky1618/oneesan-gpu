@@ -56,15 +56,17 @@ D * 4 * 28 = 13.753139324 TiB/residue local writes
 If work is balanced across eight GPUs, that is about 1.719 TiB/GPU/residue of
 local HBM writes avoided by v0.13.
 
-This is not a wall-time prediction. The current shared host still launches the
-gather-side BLOCKED kernel; in v0.13 that kernel immediately returns. Removing
-the launch itself is a separate host-side cleanup once fresh nvcc and B300
-measurement confirm the variant.
+This is not a wall-time prediction. The shared batch host now compiles out the
+gather-side BLOCKED kernel launch entirely when
+`MASKSHARD_LAZY_ZERO_BLOCK_INIT` is enabled, so v0.13 performs neither the P2P
+BLOCKED gather nor a zero-fill/no-op replacement launch. v0.12 and earlier keep
+their original gather behavior through the compile-time guard.
 
 ## Files
 
 - `src/cuda/b300/maskshard_lazy_block_init.cuh`
 - `src/cuda/b300/maskshard_zero_block_gather.cuh`
+- `src/cuda/b300/oneesan_cuda_gridfp_b300_hbm32_maskshard_fullorbit_batch.cu`
 - `src/cuda/b300/oneesan_cuda_gridfp_b300_hbm32_maskshard_blockorbit_compactaux_fullclosure_highrowpack16_lazyblockinit_batch_guarded.cu`
 - `src/cpp/probes/factor_lazyblock_firsthigh_semantics.cpp`
 - `scripts/bench/b300_maskshard_lazyblock_ab.py`
@@ -86,7 +88,7 @@ python3 scripts/bench/b300_maskshard_lazyblock_ab.py \
 ```
 
 v0.12 and v0.13 must return identical residues. The relevant phase is
-`high_io_sum_s`; `wall_s` decides whether eliminating the local zero write is
-worth keeping.
+`high_io_sum_s`; `wall_s` decides whether eliminating the local zero write and
+launch is worth keeping.
 
 Do not merge/promote before fresh nvcc and full-P2P correctness validation.
