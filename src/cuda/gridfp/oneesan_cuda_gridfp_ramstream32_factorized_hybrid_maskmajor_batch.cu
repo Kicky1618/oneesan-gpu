@@ -15,8 +15,7 @@ struct MaskBatch {
     uint32_t first = 0, last = 0; // [first,last)
     Code main_begin = 0, main_size = 0;
     Code block_begin = 0, block_size = 0;
-    Code alt_main = 0, alt_block = 0;
-    size_t data_bytes = 0;
+    size_t arena_bytes = 0;
 };
 
 static std::vector<int> make_g_for_low_mask(const WindowPlan& wp) {
@@ -42,32 +41,57 @@ static std::vector<int> make_g_for_low_mask(const WindowPlan& wp) {
     return out;
 }
 
-static std::vector<MaskBatch> make_mask_batches(
+struct MaskBatchPlan {
+    std::vector<MaskBatch> batches;
+    Code alt_main = 0;
+    Code alt_block = 0;
+    Code raw_peak = 0;
+    size_t arena_peak_bytes = 0;
+};
+
+// Allocate exactly two device arenas:
+//   raw = [batch main | batch blocked]
+//   alt = [largest main group | largest blocked group]
+// The alternate size is a global constant.  Batch only the raw payload into
+// the bytes left after reserving that alternate arena.  This makes the plan's
+// target an exact upper bound for cudaMalloc payload, even when the largest
+// main and blocked batches occur at different mask ranges.
+static MaskBatchPlan make_mask_batches(
     const LowMaskMajorLayout& mm, size_t target_bytes
 ) {
-    std::vector<MaskBatch> out;
+    MaskBatchPlan plan;
     const uint32_t NM = mm.masks;
+    for (uint32_t m = 0; m < NM; ++m) {
+        plan.alt_main = std::max(plan.alt_main, mm.main_mask_off[m + 1] - mm.main_mask_off[m]);
+        plan.alt_block = std::max(plan.alt_block, mm.block_mask_off[m + 1] - mm.block_mask_off[m]);
+    }
+    size_t alt_bytes = size_t(plan.alt_main + plan.alt_block) * sizeof(Count);
+    if (alt_bytes >= target_bytes) {
+        std::cerr << "alternate group arena alone exceeds target alt_gib="
+                  << double(alt_bytes) / double(1ULL << 30)
+                  << " target_gib=" << double(target_bytes) / double(1ULL << 30) << '\n';
+        std::exit(152);
+    }
+    size_t raw_target = target_bytes - alt_bytes;
+
     uint32_t a = 0;
     while (a < NM) {
         uint32_t b = a;
-        Code raw_m = 0, raw_d = 0, alt_m = 0, alt_d = 0;
+        Code raw = 0;
         while (b < NM) {
             Code gm = mm.main_mask_off[b + 1] - mm.main_mask_off[b];
             Code gd = mm.block_mask_off[b + 1] - mm.block_mask_off[b];
-            Code nm = raw_m + gm;
-            Code nd = raw_d + gd;
-            Code am = std::max(alt_m, gm);
-            Code ad = std::max(alt_d, gd);
-            size_t need = size_t(nm + nd + am + ad) * sizeof(Count);
-            if (need > target_bytes && b > a) break;
-            if (need > target_bytes) {
-                std::cerr << "single mask does not fit batched target mask=" << b
-                          << " need_gib=" << double(need) / double(1ULL << 30)
-                          << " target_gib=" << double(target_bytes) / double(1ULL << 30)
+            Code nr = raw + gm + gd;
+            size_t raw_bytes = size_t(nr) * sizeof(Count);
+            if (raw_bytes > raw_target && b > a) break;
+            if (raw_bytes > raw_target) {
+                std::cerr << "single mask raw payload does not fit target mask=" << b
+                          << " raw_gib=" << double(raw_bytes) / double(1ULL << 30)
+                          << " raw_target_gib=" << double(raw_target) / double(1ULL << 30)
                           << '\n';
-                std::exit(152);
+                std::exit(153);
             }
-            raw_m = nm; raw_d = nd; alt_m = am; alt_d = ad;
+            raw = nr;
             ++b;
         }
         MaskBatch z;
@@ -76,37 +100,37 @@ static std::vector<MaskBatch> make_mask_batches(
         z.main_size = mm.main_mask_off[b] - mm.main_mask_off[a];
         z.block_begin = mm.block_mask_off[a];
         z.block_size = mm.block_mask_off[b] - mm.block_mask_off[a];
-        z.alt_main = alt_m; z.alt_block = alt_d;
-        z.data_bytes = size_t(z.main_size + z.block_size + alt_m + alt_d) * sizeof(Count);
-        out.push_back(z);
+        z.arena_bytes = size_t(z.main_size + z.block_size + plan.alt_main + plan.alt_block)
+                      * sizeof(Count);
+        if (z.arena_bytes > target_bytes) std::exit(154);
+        plan.raw_peak = std::max(plan.raw_peak, z.main_size + z.block_size);
+        plan.arena_peak_bytes = std::max(plan.arena_peak_bytes, z.arena_bytes);
+        plan.batches.push_back(z);
         a = b;
     }
-    return out;
+    return plan;
 }
 
 struct MaskBatchCtx {
-    Count *raw_m = nullptr, *raw_d = nullptr, *alt_m = nullptr, *alt_d = nullptr;
-    Code raw_m_cap = 0, raw_d_cap = 0, alt_m_cap = 0, alt_d_cap = 0;
+    Count *raw = nullptr, *alt = nullptr;
+    Code raw_cap = 0, alt_main_cap = 0, alt_block_cap = 0;
     double h2d_s = 0, kernel_s = 0, d2h_s = 0;
     uint64_t batches = 0, groups = 0, pcie_calls = 0;
 
-    void init(const std::vector<MaskBatch>& batches, Count mod) {
-        for (const auto& b : batches) {
-            raw_m_cap = std::max(raw_m_cap, b.main_size);
-            raw_d_cap = std::max(raw_d_cap, b.block_size);
-            alt_m_cap = std::max(alt_m_cap, b.alt_main);
-            alt_d_cap = std::max(alt_d_cap, b.alt_block);
-        }
-        if (raw_m_cap) ck(cudaMalloc(&raw_m, size_t(raw_m_cap) * sizeof(Count)), "batch raw main");
-        if (raw_d_cap) ck(cudaMalloc(&raw_d, size_t(raw_d_cap) * sizeof(Count)), "batch raw block");
-        if (alt_m_cap) ck(cudaMalloc(&alt_m, size_t(alt_m_cap) * sizeof(Count)), "batch alt main");
-        if (alt_d_cap) ck(cudaMalloc(&alt_d, size_t(alt_d_cap) * sizeof(Count)), "batch alt block");
+    void init(const MaskBatchPlan& plan, Count mod) {
+        raw_cap = plan.raw_peak;
+        alt_main_cap = plan.alt_main;
+        alt_block_cap = plan.alt_block;
+        if (raw_cap) ck(cudaMalloc(&raw, size_t(raw_cap) * sizeof(Count)), "batch raw arena");
+        if (alt_main_cap || alt_block_cap)
+            ck(cudaMalloc(&alt, size_t(alt_main_cap + alt_block_cap) * sizeof(Count)),
+               "batch alt arena");
         ck(cudaMemcpyToSymbol(D_MOD, &mod, sizeof(mod)), "batch modulus");
     }
     void release() {
-        if (raw_m) cudaFree(raw_m); if (raw_d) cudaFree(raw_d);
-        if (alt_m) cudaFree(alt_m); if (alt_d) cudaFree(alt_d);
-        raw_m = raw_d = alt_m = alt_d = nullptr;
+        if (raw) cudaFree(raw);
+        if (alt) cudaFree(alt);
+        raw = alt = nullptr;
     }
 };
 
@@ -115,17 +139,20 @@ static void process_mask_batch(
     RamCounts& main_auth, RamCounts& block_auth,
     const LowMaskMajorLayout& mm, int W, const WindowPlan& wp, int gpu_threads
 ) {
+    Count* raw_m = c.raw;
+    Count* raw_d = c.raw + batch.main_size;
+    Count* alt_m = c.alt;
+    Count* alt_d = c.alt + c.alt_main_cap;
+
     auto t = std::chrono::steady_clock::now();
     if (batch.main_size) {
-        ck(cudaMemcpy(c.raw_m, main_auth.ptr + batch.main_begin,
+        ck(cudaMemcpy(raw_m, main_auth.ptr + batch.main_begin,
                       size_t(batch.main_size) * sizeof(Count), cudaMemcpyHostToDevice),
            "batch H2D main");
         ++c.pcie_calls;
     }
-    // Row-boundary blocked is exactly zero; initialize the whole raw blocked
-    // batch in HBM instead of transferring it from host RAM.
     if (batch.block_size)
-        ck(cudaMemset(c.raw_d, 0, size_t(batch.block_size) * sizeof(Count)),
+        ck(cudaMemset(raw_d, 0, size_t(batch.block_size) * sizeof(Count)),
            "batch zero blocked");
     c.h2d_s += ram_seconds_since(t);
 
@@ -137,19 +164,20 @@ static void process_mask_batch(
         uint32_t got_mask = 0;
         std::vector<FBlock> fmb, fdb;
         configure_factor_group(W, wp, g, ms, ds, fix_low, got_mask, fmb, fdb);
-        if (!fix_low || got_mask != mask) std::exit(153);
+        if (!fix_low || got_mask != mask) std::exit(155);
 
         Code moff = mm.main_mask_off[mask] - batch.main_begin;
         Code doff = mm.block_mask_off[mask] - batch.block_begin;
-        if (moff + ms.size > batch.main_size || doff + ds.size > batch.block_size)
-            std::exit(154);
+        if (moff + ms.size > batch.main_size || doff + ds.size > batch.block_size
+            || ms.size > c.alt_main_cap || ds.size > c.alt_block_cap)
+            std::exit(156);
 
-        Count* rawm = c.raw_m + moff;
-        Count* rawd = c.raw_d + doff;
-        Count* cur = rawm;
-        Count* nxt = c.alt_m;
-        Count* dcur = rawd;
-        Count* dnext = c.alt_d;
+        Count* gmraw = raw_m + moff;
+        Count* gdraw = raw_d + doff;
+        Count* cur = gmraw;
+        Count* nxt = alt_m;
+        Count* dcur = gdraw;
+        Count* dnext = alt_d;
         int bm = int(std::min<Code>(65535, (ms.size + gpu_threads - 1) / gpu_threads));
         int bd = int(std::min<Code>(65535, (ds.size + gpu_threads - 1) / gpu_threads));
 
@@ -167,13 +195,11 @@ static void process_mask_batch(
             std::swap(cur, nxt);
             std::swap(dcur, dnext);
         }
-        // W=28 uses 13 HIGH edges (odd), but keep this generic.  Put the final
-        // state back into the raw batch before moving to the next group.
-        if (ms.size && cur != rawm)
-            ck(cudaMemcpy(rawm, cur, size_t(ms.size) * sizeof(Count), cudaMemcpyDeviceToDevice),
+        if (ms.size && cur != gmraw)
+            ck(cudaMemcpy(gmraw, cur, size_t(ms.size) * sizeof(Count), cudaMemcpyDeviceToDevice),
                "batch commit main");
-        if (ds.size && dcur != rawd)
-            ck(cudaMemcpy(rawd, dcur, size_t(ds.size) * sizeof(Count), cudaMemcpyDeviceToDevice),
+        if (ds.size && dcur != gdraw)
+            ck(cudaMemcpy(gdraw, dcur, size_t(ds.size) * sizeof(Count), cudaMemcpyDeviceToDevice),
                "batch commit block");
         ck(cudaDeviceSynchronize(), "batch group sync");
         ++c.groups;
@@ -182,13 +208,13 @@ static void process_mask_batch(
 
     t = std::chrono::steady_clock::now();
     if (batch.main_size) {
-        ck(cudaMemcpy(main_auth.ptr + batch.main_begin, c.raw_m,
+        ck(cudaMemcpy(main_auth.ptr + batch.main_begin, raw_m,
                       size_t(batch.main_size) * sizeof(Count), cudaMemcpyDeviceToHost),
            "batch D2H main");
         ++c.pcie_calls;
     }
     if (batch.block_size) {
-        ck(cudaMemcpy(block_auth.ptr + batch.block_begin, c.raw_d,
+        ck(cudaMemcpy(block_auth.ptr + batch.block_begin, raw_d,
                       size_t(batch.block_size) * sizeof(Count), cudaMemcpyDeviceToHost),
            "batch D2H block");
         ++c.pcie_calls;
@@ -223,21 +249,13 @@ int main(int argc, char** argv) {
     WindowPlan high_wp = make_direct2d_window(true);
     WindowPlan low_wp = make_direct2d_window(false);
     size_t gpu_target = size_t(gpu_target_mib) << 20;
-    auto batches = make_mask_batches(mm, gpu_target);
+    MaskBatchPlan batch_plan = make_mask_batches(mm, gpu_target);
+    const auto& batches = batch_plan.batches;
     auto g_for_mask = make_g_for_low_mask(high_wp);
     auto cpu_jobs = make_cpu_low_jobs(W, low_wp);
 
-    size_t max_data = 0;
-    Code max_raw_m = 0, max_raw_d = 0, max_alt_m = 0, max_alt_d = 0;
     uint32_t max_masks = 0;
-    for (const auto& b : batches) {
-        max_data = std::max(max_data, b.data_bytes);
-        max_raw_m = std::max(max_raw_m, b.main_size);
-        max_raw_d = std::max(max_raw_d, b.block_size);
-        max_alt_m = std::max(max_alt_m, b.alt_main);
-        max_alt_d = std::max(max_alt_d, b.alt_block);
-        max_masks = std::max(max_masks, b.last - b.first);
-    }
+    for (const auto& b : batches) max_masks = std::max(max_masks, b.last - b.first);
 
     MateID init = MateID(R) << (2 * (W - 1));
     Code init_rank = lowmask_major_rank_main_host(init, storage, logical, mm);
@@ -265,11 +283,10 @@ int main(int argc, char** argv) {
             << " batches_per_row=" << batches.size()
             << " max_masks_per_batch=" << max_masks
             << " gpu_data_target_gib=" << double(gpu_target) / double(1ULL << 30)
-            << " gpu_data_peak_gib=" << double(max_data) / double(1ULL << 30)
-            << " raw_main_peak_gib=" << double(max_raw_m * sizeof(Count)) / double(1ULL << 30)
-            << " raw_block_peak_gib=" << double(max_raw_d * sizeof(Count)) / double(1ULL << 30)
-            << " alt_main_gib=" << double(max_alt_m * sizeof(Count)) / double(1ULL << 30)
-            << " alt_block_gib=" << double(max_alt_d * sizeof(Count)) / double(1ULL << 30)
+            << " gpu_arena_peak_gib=" << double(batch_plan.arena_peak_bytes) / double(1ULL << 30)
+            << " raw_peak_gib=" << double(batch_plan.raw_peak * sizeof(Count)) / double(1ULL << 30)
+            << " alt_main_gib=" << double(batch_plan.alt_main * sizeof(Count)) / double(1ULL << 30)
+            << " alt_block_gib=" << double(batch_plan.alt_block * sizeof(Count)) / double(1ULL << 30)
             << " gpu_high_desc_mib=" << highdesc_mib
             << " gpu_mask_mib=" << mask_mib
             << " cpu_sparse_mib=" << sparse_mib
@@ -303,7 +320,7 @@ int main(int argc, char** argv) {
     block_auth.alloc(mm.block_size, "mmap maskmajor-batch block");
     main_auth.ptr[init_rank] = 1;
 
-    MaskBatchCtx gpu; gpu.init(batches, mod);
+    MaskBatchCtx gpu; gpu.init(batch_plan, mod);
     CpuLowMaskMajorPool cpu(cpu_workers);
     int gpu_threads = 256;
     auto wall0 = std::chrono::steady_clock::now();
