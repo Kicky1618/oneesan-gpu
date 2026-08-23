@@ -5,6 +5,7 @@ on:
     paths:
       - 'src/cuda/b300/oneesan_cuda_gridfp_b300_hbm32_compact_resident.cu'
       - 'src/cuda/b300/oneesan_cuda_gridfp_b300_hbm32_compact_resident_rowtile.cu'
+      - 'src/cuda/b300/oneesan_cuda_gridfp_b300_hbm32_compact_resident_sparse.cu'
       - 'src/cuda/gridfp/probes/b300_n27_hbm_capacity_probe.cu'
       - 'src/cuda/gridfp/probes/b300_compact_io_selftest.cu'
       - 'src/cuda/gridfp/probes/b300_compact_kernel_compile.cu'
@@ -16,6 +17,8 @@ on:
       - 'src/cuda/gridfp/ramstream32_b300_compact_io.cuh'
       - 'src/cuda/gridfp/ramstream32_b300_rowkernels.cuh'
       - 'src/cuda/gridfp/ramstream32_b300_high_warp.cuh'
+      - 'src/cuda/gridfp/ramstream32_b300_sparse_actions.cuh'
+      - 'src/cuda/gridfp/ramstream32_b300_sparse_highwarp.cuh'
       - 'src/cuda/gridfp/ramstream32_b300_main_desc.cuh'
       - 'src/cuda/gridfp/ramstream32_lowdesc.cuh'
       - 'src/cuda/gridfp/ramstream32_highdesc.cuh'
@@ -98,3 +101,13 @@ jobs:
       - name: Plan n27 compact row-tile resident x8
         shell: bash
         run: build/b300_compact_resident_rowtile_w28 27 4294967291 8 256 --plan-only
+      - name: Compile W28 compact sparse resident backend
+        shell: bash
+        run: |
+          nvcc -O3 -std=c++17 -lineinfo -arch=sm_80 \
+            -DTARGET_W=28 -DLOW_LUT_K=14 -DHIGH_LUT_K=13 \
+            src/cuda/b300/oneesan_cuda_gridfp_b300_hbm32_compact_resident_sparse.cu \
+            -o build/b300_compact_resident_sparse_w28
+      - name: Plan n27 compact sparse resident x8
+        shell: bash
+        run: build/b300_compact_resident_sparse_w28 27 4294967291 8 256 --plan-only
