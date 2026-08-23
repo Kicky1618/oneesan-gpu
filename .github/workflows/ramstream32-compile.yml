@@ -12,6 +12,7 @@ on:
       - 'src/cuda/gridfp/ramstream32_highdesc.cuh'
       - 'src/cuda/gridfp/ramstream32_bidesc_compact.cuh'
       - 'src/cuda/b300/oneesan_cuda_gridfp_b300_hbm32_factorized_batch.cu'
+      - 'src/cpp/probes/factor_window_mask_components.cpp'
       - 'src/cuda/common/**'
       - 'scripts/build/gridfp-ramstream32-factorized*.sh'
       - '.github/workflows/ramstream32-compile.yml'
@@ -26,6 +27,7 @@ on:
       - 'src/cuda/gridfp/ramstream32_highdesc.cuh'
       - 'src/cuda/gridfp/ramstream32_bidesc_compact.cuh'
       - 'src/cuda/b300/oneesan_cuda_gridfp_b300_hbm32_factorized_batch.cu'
+      - 'src/cpp/probes/factor_window_mask_components.cpp'
       - 'src/cuda/common/**'
       - 'scripts/build/gridfp-ramstream32-factorized*.sh'
       - '.github/workflows/ramstream32-compile.yml'
@@ -99,3 +101,10 @@ jobs:
         run: |
           build/ramstream32_bidesc_compact_w${{ matrix.width }} \
             ${{ matrix.n }} 4294967291 16384 --plan-only
+      - name: Probe occupancy closure components
+        shell: bash
+        run: |
+          g++ -O3 -std=c++17 -include cstdlib \
+            src/cpp/probes/factor_window_mask_components.cpp \
+            -o build/factor_window_mask_components
+          build/factor_window_mask_components ${{ matrix.width }} ${{ matrix.low }}
