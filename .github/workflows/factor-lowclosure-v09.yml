@@ -5,6 +5,7 @@ on:
     paths:
       - 'src/cpp/probes/factor_lowclosure_columns.cpp'
       - 'src/cpp/probes/factor_lowclosure_taskmap.cpp'
+      - 'src/cpp/probes/factor_lowclosure_valid_columns.cpp'
       - 'src/cpp/probes/factor_v09_memory_delta.cpp'
       - 'src/cuda/b300/maskshard_lowclosure.cuh'
       - 'src/cuda/b300/maskshard_lowclosure_kernel.cuh'
@@ -15,6 +16,7 @@ on:
     paths:
       - 'src/cpp/probes/factor_lowclosure_columns.cpp'
       - 'src/cpp/probes/factor_lowclosure_taskmap.cpp'
+      - 'src/cpp/probes/factor_lowclosure_valid_columns.cpp'
       - 'src/cpp/probes/factor_v09_memory_delta.cpp'
       - 'src/cuda/b300/maskshard_lowclosure.cuh'
       - 'src/cuda/b300/maskshard_lowclosure_kernel.cuh'
@@ -36,6 +38,19 @@ jobs:
             -o build/factor_lowclosure_columns
       - name: Quantify n=27 LOW compact-column locality
         run: build/factor_lowclosure_columns 28 14
+
+  exact-membership:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build exact LOW closure validity probe
+        run: |
+          mkdir -p build
+          g++ -O3 -std=c++17 -Wall -Wextra -Werror \
+            src/cpp/probes/factor_lowclosure_valid_columns.cpp \
+            -o build/factor_lowclosure_valid_columns
+      - name: Verify all n=27 closure-pair columns are valid
+        run: build/factor_lowclosure_valid_columns 28 14
 
   taskmap:
     runs-on: ubuntu-latest
