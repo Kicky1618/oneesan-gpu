@@ -145,11 +145,14 @@ int main(int argc,char**argv){
              <<" shuffle="<<dt_batch_shuffle_name(shuffle_mode)
              <<" scratch_mib_per_gpu="<<(scratch_elems*sizeof(Count)/(1ull<<20));
     if(shuffle_mode==DTBatchShuffleMode::ReachPruned){
+        uint64_t max_port=prune_plan.max_gpu_port_bytes_per_residue();
         std::cerr<<" prune_launch_kib="<<prune_launch_kib
                  <<" prune_logical_tib="<<dt_tib((long double)prune_plan.logical_bytes_per_residue())
                  <<" prune_scheduled_tib="<<dt_tib((long double)prune_plan.scheduled_bytes_per_residue())
                  <<" prune_full_tib="<<dt_tib((long double)prune_plan.full_bytes_per_residue())
-                 <<" prune_launches="<<prune_plan.launches_per_residue();
+                 <<" prune_launches="<<prune_plan.launches_per_residue()
+                 <<" prune_max_gpu_port_tib="<<dt_tib((long double)max_port)
+                 <<" prune_ideal_1p8TBs_bidirectional_s="<<double((long double)max_port/1.8e12L);
     }
     std::cerr<<'\n';
 
