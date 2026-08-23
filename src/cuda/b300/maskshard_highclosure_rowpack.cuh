@@ -6,18 +6,55 @@
 #error "MASKSHARD_HIGH_CLOSURE_ROWPACK requires MASKSHARD_HIGH_CLOSURE_ROWS"
 #endif
 
-// v0.10 research: pack selected HIGH closure rows within each source FBlock.
-// The v0.8 kernel assigns one whole warp to one selected HIGH row, which wastes
-// lanes whenever the current fixed LOW occupancy-mask group has fewer than 32
-// columns. Here one warp owns 32 consecutive items in the compact row-major
-// stream (selected-row, LOW-column). A warp may span several selected rows.
-// __match_any_sync keeps the row-list and HighDesc loads at one per distinct
-// row represented in that warp rather than one per lane.
-__global__ void maskshard_main_highdesc_closure_rowpack_inplace_kernel(
-    Count* mainv, Count* blockv, Code n, int p
+// v0.10/v0.11 research: pack selected HIGH closure rows within each source
+// FBlock. With MASKSHARD_HIGH_CLOSURE_ROWPACK_THRESHOLD defined, only FBlocks
+// whose fixed LOW-mask width is smaller than that threshold are packed; wider
+// blocks keep the v0.8 one-row-per-warp mapping. This allows a hybrid tradeoff
+// between warp-tail waste and row-list/HighDesc subgroup loads.
+__device__ __forceinline__ void maskshard_highclosure_rowpack_apply(
+    Count* mainv,
+    Count* blockv,
+    const FBlock& x,
+    uint32_t hr,
+    uint32_t desc,
+    uint32_t lr
 ) {
     constexpr int S = MAXW + 2;
     constexpr uint32_t LR_MASK = (1u << LOW_LUT_K) - 1u;
+    const Code i = x.off + Code(hr) * x.stride + lr;
+    const Count c = mainv[i];
+    if (!c) return;
+
+    const uint32_t kind = highdesc_kind(desc);
+    if (kind == HIGHDESC_BLOCK) {
+        const FBlock y = D_F_BLOCK_BLOCKS[highdesc_block(desc)];
+        const Code j = y.off + Code(highdesc_rank(desc)) * y.stride + lr;
+        atomic_add_mod(blockv + j, c);
+    } else if (kind == HIGHDESC_CROSS) {
+        const uint32_t la = D_F_LOW_MASK_OFF[size_t(D_F_MASK) * S + x.hs];
+        const uint32_t lc = D_F_LOW_MASK_CODES[la + lr];
+        const uint32_t lc2 = highdesc_flip_low(lc, highdesc_depth(desc));
+        if (lc2 == 0xffffffffu) return;
+        const uint32_t lp = D_F_LOW_PACKED_RANK[lc2];
+        const uint32_t lr2 = lp & LR_MASK;
+        const FBlock y = D_F_BLOCK_BLOCKS[highdesc_block(desc)];
+        const Code j = y.off + Code(highdesc_rank(desc)) * y.stride + lr2;
+        atomic_add_mod(blockv + j, c);
+    }
+}
+
+__device__ __forceinline__ bool maskshard_highclosure_pack_block(const FBlock& x) {
+#ifdef MASKSHARD_HIGH_CLOSURE_ROWPACK_THRESHOLD
+    return x.stride < uint32_t(MASKSHARD_HIGH_CLOSURE_ROWPACK_THRESHOLD);
+#else
+    (void)x;
+    return true;
+#endif
+}
+
+__global__ void maskshard_main_highdesc_closure_rowpack_inplace_kernel(
+    Count* mainv, Count* blockv, Code n, int p
+) {
     __shared__ Code prefix[65];
     const uint32_t pi = uint32_t((TARGET_W - 1) - p);
     const int nb = D_F_MAIN_NBLOCKS;
@@ -28,8 +65,13 @@ __global__ void maskshard_main_highdesc_closure_rowpack_inplace_kernel(
             const FBlock x = D_F_MAIN_BLOCKS[b];
             const uint32_t a = D_HIGHDESC_CLOSURE_BLOCK_OFF[size_t(pi) * 65 + b];
             const uint32_t z = D_HIGHDESC_CLOSURE_BLOCK_OFF[size_t(pi) * 65 + b + 1];
-            const Code items = x.stride ? Code(z - a) * Code(x.stride) : Code(0);
-            const Code tasks = (items + 31) >> 5;
+            const Code rows = Code(z - a);
+            Code tasks = 0;
+            if (x.stride && rows) {
+                tasks = maskshard_highclosure_pack_block(x)
+                    ? (rows * Code(x.stride) + 31) >> 5
+                    : rows;
+            }
             prefix[b + 1] = prefix[b] + tasks;
         }
     }
@@ -64,7 +106,29 @@ __global__ void maskshard_main_highdesc_closure_rowpack_inplace_kernel(
         const FBlock x = D_F_MAIN_BLOCKS[bid];
         const uint32_t a = D_HIGHDESC_CLOSURE_BLOCK_OFF[size_t(pi) * 65 + bid];
         const uint32_t z = D_HIGHDESC_CLOSURE_BLOCK_OFF[size_t(pi) * 65 + bid + 1];
-        const Code items = Code(z - a) * Code(x.stride);
+        const bool pack = maskshard_highclosure_pack_block(x);
+
+        if (!pack) {
+            const uint32_t row_local = uint32_t(local);
+            if (a + row_local >= z) continue;
+            uint32_t source = 0;
+            if (lane == 0) source = D_HIGHDESC_CLOSURE_ROWS[a + row_local];
+            source = __shfl_sync(active, source, 0);
+            const uint32_t hr = highdesc_rank(source);
+            uint32_t desc = 0;
+            if (lane == 0) {
+                desc = D_HIGHDESC_MAIN[
+                    size_t(pi) * D_HIGHDESC_MAIN_TOTAL
+                    + D_HIGHDESC_MAIN_BASE[bid] + hr];
+            }
+            desc = __shfl_sync(active, desc, 0);
+            for (uint32_t lr = uint32_t(lane); lr < x.stride; lr += 32u)
+                maskshard_highclosure_rowpack_apply(mainv, blockv, x, hr, desc, lr);
+            continue;
+        }
+
+        const Code rows = Code(z - a);
+        const Code items = rows * Code(x.stride);
         const Code item = (local << 5) + Code(lane);
         const bool valid = item < items;
         const unsigned valid_mask = __ballot_sync(active, valid);
@@ -76,11 +140,9 @@ __global__ void maskshard_main_highdesc_closure_rowpack_inplace_kernel(
         const int leader = __ffs(int(row_mask)) - 1;
 
         uint32_t source = 0;
-        if (lane == leader)
-            source = D_HIGHDESC_CLOSURE_ROWS[a + row_local];
+        if (lane == leader) source = D_HIGHDESC_CLOSURE_ROWS[a + row_local];
         source = __shfl_sync(row_mask, source, leader);
         const uint32_t hr = highdesc_rank(source);
-
         uint32_t desc = 0;
         if (lane == leader) {
             desc = D_HIGHDESC_MAIN[
@@ -88,27 +150,7 @@ __global__ void maskshard_main_highdesc_closure_rowpack_inplace_kernel(
                 + D_HIGHDESC_MAIN_BASE[bid] + hr];
         }
         desc = __shfl_sync(row_mask, desc, leader);
-        const uint32_t kind = highdesc_kind(desc);
-
-        const Code i = x.off + Code(hr) * x.stride + lr;
-        const Count c = mainv[i];
-        if (!c) continue;
-
-        if (kind == HIGHDESC_BLOCK) {
-            const FBlock y = D_F_BLOCK_BLOCKS[highdesc_block(desc)];
-            const Code j = y.off + Code(highdesc_rank(desc)) * y.stride + lr;
-            atomic_add_mod(blockv + j, c);
-        } else if (kind == HIGHDESC_CROSS) {
-            const uint32_t la = D_F_LOW_MASK_OFF[size_t(D_F_MASK) * S + x.hs];
-            const uint32_t lc = D_F_LOW_MASK_CODES[la + lr];
-            const uint32_t lc2 = highdesc_flip_low(lc, highdesc_depth(desc));
-            if (lc2 == 0xffffffffu) continue;
-            const uint32_t lp = D_F_LOW_PACKED_RANK[lc2];
-            const uint32_t lr2 = lp & LR_MASK;
-            const FBlock y = D_F_BLOCK_BLOCKS[highdesc_block(desc)];
-            const Code j = y.off + Code(highdesc_rank(desc)) * y.stride + lr2;
-            atomic_add_mod(blockv + j, c);
-        }
+        maskshard_highclosure_rowpack_apply(mainv, blockv, x, hr, desc, lr);
     }
     (void)n;
 }
