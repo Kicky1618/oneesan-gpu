@@ -52,11 +52,20 @@ static int pair_at(std::uint32_t high_code, int center, int q) {
     return int((active >> (2 * (q - 1))) & 15u);
 }
 
+static U64 capped_blocks(U128 items, U64 units_per_block) {
+    if (!items) return 0;
+    const U128 blocks = (items + units_per_block - 1) / units_per_block;
+    return U64(blocks > U128(65535) ? U128(65535) : blocks);
+}
+
 int main(int argc, char** argv) {
     const int W = argc > 1 ? std::atoi(argv[1]) : 28;
     const int low = argc > 2 ? std::atoi(argv[2]) : 14;
+    const int threads = argc > 3 ? std::atoi(argv[3]) : 256;
     const int high = W - 1 - low;
-    if (W < 4 || W > 30 || low < 1 || high < 1 || high >= 16) return 1;
+    if (W < 4 || W > 30 || low < 1 || high < 1 || high >= 16
+        || threads < 1 || threads > 1024) return 1;
+    const U64 warps_per_block = U64((threads + 31) / 32);
 
     std::vector<std::vector<std::uint32_t>> hc(high + 3);
     auto rec = [&](auto&& self, int pos, int h, std::uint32_t code) -> void {
@@ -77,18 +86,19 @@ int main(int argc, char** argv) {
     U128 closure_rows = 0;
     U128 candidate_rows = 0;
     U128 warp_slots = 0;
+    U128 old_launch_blocks = 0;
+    U128 compact_launch_blocks = 0;
     U64 global_rows_per_p = 0;
     bool first = true;
 
     for (int q = 1; q <= high; ++q) {
         U128 q_states = 0, q_rows = 0, q_candidates = 0, q_warps = 0, q_full = 0;
         U64 q_global_rows = 0;
+        std::vector<U128> group_main(low + 1), group_rows(low + 1);
         for (int he = 0; he < int(hc.size()); ++he) {
             if (hc[he].empty()) continue;
             for (int cv = 0; cv < 3; ++cv) {
                 const int hs = he + (cv == 2 ? 1 : cv == 1 ? -1 : 0);
-                // A LOW segment of length `low` cannot descend from low+1 to 0.
-                // Exclude the empty FBlock exactly as the storage layout does.
                 if (hs < 0 || hs > low) continue;
                 U64 cr = 0;
                 for (std::uint32_t code : hc[he]) {
@@ -100,7 +110,10 @@ int main(int argc, char** argv) {
                     const U64 cols = lc[k][hs];
                     if (!cols) continue;
                     const U64 groups = choose_u64(low, k);
-                    q_full += U128(groups) * hc[he].size() * cols;
+                    const U128 block_main = U128(hc[he].size()) * cols;
+                    group_main[k] += block_main;
+                    group_rows[k] += cr;
+                    q_full += U128(groups) * block_main;
                     q_candidates += U128(groups) * hc[he].size();
                     q_rows += U128(groups) * cr;
                     q_states += U128(groups) * cr * cols;
@@ -114,6 +127,12 @@ int main(int argc, char** argv) {
                       << " vs " << global_rows_per_p << '\n';
             return 2;
         }
+        for (int k = 0; k <= low; ++k) {
+            const U64 groups = choose_u64(low, k);
+            old_launch_blocks += U128(groups) * capped_blocks(group_main[k], U64(threads));
+            compact_launch_blocks += U128(groups)
+                * capped_blocks(group_rows[k], warps_per_block);
+        }
         full_state_threads += q_full;
         closure_states += q_states;
         closure_rows += q_rows;
@@ -124,9 +143,12 @@ int main(int argc, char** argv) {
     const U128 residue_full = full_state_threads * U128(W);
     const U128 residue_closure = closure_states * U128(W);
     const U128 residue_warp_slots = warp_slots * U128(W);
+    const U128 residue_old_blocks = old_launch_blocks * U128(W);
+    const U128 residue_compact_blocks = compact_launch_blocks * U128(W);
 
     std::cout << std::fixed << std::setprecision(6)
-              << "highclosure-rows W=" << W << " low=" << low << " high=" << high << '\n'
+              << "highclosure-rows W=" << W << " low=" << low << " high=" << high
+              << " threads=" << threads << '\n'
               << "global_closure_rows_per_p=" << global_rows_per_p
               << " compact_row_table_mib="
               << double((long double)global_rows_per_p * high * 4 / (1ULL << 20)) << '\n'
@@ -140,9 +162,15 @@ int main(int argc, char** argv) {
               << " warp_lane_ratio=" << double(as_ld(warp_slots) / as_ld(full_state_threads))
               << " useful_lane_fraction=" << double(as_ld(closure_states) / as_ld(warp_slots))
               << '\n'
+              << "old_launch_blocks=" << u128_string(old_launch_blocks)
+              << " compact_launch_blocks=" << u128_string(compact_launch_blocks)
+              << " launch_block_ratio="
+              << double(as_ld(compact_launch_blocks) / as_ld(old_launch_blocks)) << '\n'
               << "per_residue_full_state_threads=" << u128_string(residue_full)
               << " per_residue_closure_states=" << u128_string(residue_closure)
-              << " per_residue_warp_lane_slots=" << u128_string(residue_warp_slots)
+              << " per_residue_warp_lane_slots=" << u128_string(residue_warp_slots) << '\n'
+              << "per_residue_old_launch_blocks=" << u128_string(residue_old_blocks)
+              << " per_residue_compact_launch_blocks=" << u128_string(residue_compact_blocks)
               << '\n';
     return 0;
 }
