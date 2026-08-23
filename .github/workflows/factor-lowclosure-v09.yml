@@ -4,6 +4,7 @@ on:
   push:
     paths:
       - 'src/cpp/probes/factor_lowclosure_columns.cpp'
+      - 'src/cpp/probes/factor_lowclosure_launch.cpp'
       - 'src/cpp/probes/factor_lowclosure_taskmap.cpp'
       - 'src/cpp/probes/factor_lowclosure_valid_columns.cpp'
       - 'src/cpp/probes/factor_v09_memory_delta.cpp'
@@ -15,6 +16,7 @@ on:
   pull_request:
     paths:
       - 'src/cpp/probes/factor_lowclosure_columns.cpp'
+      - 'src/cpp/probes/factor_lowclosure_launch.cpp'
       - 'src/cpp/probes/factor_lowclosure_taskmap.cpp'
       - 'src/cpp/probes/factor_lowclosure_valid_columns.cpp'
       - 'src/cpp/probes/factor_v09_memory_delta.cpp'
@@ -38,6 +40,19 @@ jobs:
             -o build/factor_lowclosure_columns
       - name: Quantify n=27 LOW compact-column locality
         run: build/factor_lowclosure_columns 28 14
+
+  launch-model:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build LOW closure launch model
+        run: |
+          mkdir -p build
+          g++ -O3 -std=c++17 -Wall -Wextra -Werror \
+            src/cpp/probes/factor_lowclosure_launch.cpp \
+            -o build/factor_lowclosure_launch
+      - name: Quantify n=27 LOW compact-column launch grid
+        run: build/factor_lowclosure_launch 28 14 256
 
   exact-membership:
     runs-on: ubuntu-latest
