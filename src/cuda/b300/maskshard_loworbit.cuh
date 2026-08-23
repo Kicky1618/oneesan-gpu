@@ -96,7 +96,12 @@ __global__ void maskshard_main_block_loworbit_kernel(
 
         const size_t sdi = size_t(pi) * D_LOWDESC_MAIN_TOTAL
                          + D_LOWDESC_MAIN_BASE[sbid] + slr;
+#ifdef MASKSHARD_BLOCK_ORBIT_AUX
+        // v0.7 compact aux follows block_desc coordinates exactly.
+        const uint32_t aux = D_MS_LOW_ORBIT_AUX[bdi];
+#else
         const uint32_t aux = D_MS_LOW_ORBIT_AUX[sdi];
+#endif
         const uint32_t ak = maskshard_orbit_aux_kind(aux);
         if (ak == MS_ORBIT_AUX_INVALID) continue;
 
