@@ -134,6 +134,10 @@ def finish(work: Path, n: int, path_bound: int, prefix: list[int], residues: dic
     x, m, total_wall = reconstruct(prefix, residues)
     if m <= path_bound:
         raise RuntimeError("finish called before CRT capacity reached")
+    if x > path_bound:
+        raise RuntimeError(
+            f"CRT reconstruction exceeds rigorous path bound: exact={x} > bound={path_bound}"
+        )
     used = 0
     mm = 1
     for p in prefix:
