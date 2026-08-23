@@ -7,12 +7,12 @@ on:
       - 'src/cuda/gridfp/oneesan_cuda_gridfp_ramstream32_factorized_direct2d.cu'
       - 'src/cuda/gridfp/oneesan_cuda_gridfp_ramstream32_factorized_lowdesc.cu'
       - 'src/cuda/gridfp/oneesan_cuda_gridfp_ramstream32_factorized_bidesc*.cu'
-      - 'src/cuda/gridfp/oneesan_cuda_gridfp_ramstream32_factorized_hybrid.cu'
+      - 'src/cuda/gridfp/oneesan_cuda_gridfp_ramstream32_factorized_hybrid*.cu'
       - 'src/cuda/gridfp/ramstream32_factorized_storage.hpp'
       - 'src/cuda/gridfp/ramstream32_lowdesc.cuh'
       - 'src/cuda/gridfp/ramstream32_highdesc.cuh'
       - 'src/cuda/gridfp/ramstream32_bidesc_compact.cuh'
-      - 'src/cuda/gridfp/ramstream32_cpu_low.hpp'
+      - 'src/cuda/gridfp/ramstream32_cpu_low*.hpp'
       - 'src/cuda/gridfp/probes/ramstream32_cpu_low_selftest.cu'
       - 'src/cuda/b300/oneesan_cuda_gridfp_b300_hbm32_factorized_batch.cu'
       - 'src/cpp/probes/factor_window_mask_components.cpp'
@@ -25,12 +25,12 @@ on:
       - 'src/cuda/gridfp/oneesan_cuda_gridfp_ramstream32_factorized_direct2d.cu'
       - 'src/cuda/gridfp/oneesan_cuda_gridfp_ramstream32_factorized_lowdesc.cu'
       - 'src/cuda/gridfp/oneesan_cuda_gridfp_ramstream32_factorized_bidesc*.cu'
-      - 'src/cuda/gridfp/oneesan_cuda_gridfp_ramstream32_factorized_hybrid.cu'
+      - 'src/cuda/gridfp/oneesan_cuda_gridfp_ramstream32_factorized_hybrid*.cu'
       - 'src/cuda/gridfp/ramstream32_factorized_storage.hpp'
       - 'src/cuda/gridfp/ramstream32_lowdesc.cuh'
       - 'src/cuda/gridfp/ramstream32_highdesc.cuh'
       - 'src/cuda/gridfp/ramstream32_bidesc_compact.cuh'
-      - 'src/cuda/gridfp/ramstream32_cpu_low.hpp'
+      - 'src/cuda/gridfp/ramstream32_cpu_low*.hpp'
       - 'src/cuda/gridfp/probes/ramstream32_cpu_low_selftest.cu'
       - 'src/cuda/b300/oneesan_cuda_gridfp_b300_hbm32_factorized_batch.cu'
       - 'src/cpp/probes/factor_window_mask_components.cpp'
@@ -120,6 +120,20 @@ jobs:
         shell: bash
         run: |
           build/ramstream32_hybrid_w${{ matrix.width }} \
+            ${{ matrix.n }} 4294967291 12288 4 --plan-only
+      - name: Compile hybrid in-place backend
+        shell: bash
+        run: |
+          nvcc -O3 -std=c++17 -lineinfo -arch=sm_80 \
+            -DTARGET_W=${{ matrix.width }} \
+            -DLOW_LUT_K=${{ matrix.low }} \
+            -DHIGH_LUT_K=${{ matrix.high }} \
+            src/cuda/gridfp/oneesan_cuda_gridfp_ramstream32_factorized_hybrid_inplace.cu \
+            -o build/ramstream32_hybrid_inplace_w${{ matrix.width }}
+      - name: Validate hybrid in-place plan
+        shell: bash
+        run: |
+          build/ramstream32_hybrid_inplace_w${{ matrix.width }} \
             ${{ matrix.n }} 4294967291 12288 4 --plan-only
       - name: Validate CPU low-window executor
         if: matrix.width == 22
