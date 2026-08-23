@@ -108,5 +108,7 @@ jobs:
       - uses: actions/checkout@v4
       - name: Syntax-check B300 A/B driver
         run: python3 -m py_compile scripts/bench/b300_maskshard_ab.py
+      - name: Exercise A/B result parser and strict identity checks
+        run: python3 scripts/bench/b300_maskshard_ab.py --self-test
       - name: Validate default A/B command construction
         run: python3 scripts/bench/b300_maskshard_ab.py --dry-run --result-dir build/ab-dry-run
