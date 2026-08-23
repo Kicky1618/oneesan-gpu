@@ -8,6 +8,8 @@ on:
       - 'src/cpp/probes/factor_blockorbit_semantics.cpp'
       - 'src/cpp/probes/factor_blockorbit_compactaux_semantics.cpp'
       - 'src/cpp/probes/factor_highclosure_rows.cpp'
+      - 'src/cpp/probes/factor_highclosure_rowpack.cpp'
+      - 'src/cpp/probes/factor_highclosure_cross.cpp'
       - 'src/cuda/b300/probes/maskshard_orbitaux_hostplan.cu'
       - 'src/cuda/b300/probes/maskshard_blockorbitaux_hostplan.cu'
       - 'src/cuda/b300/probes/maskshard_highclosure_rows_hostplan.cu'
@@ -25,6 +27,8 @@ on:
       - 'src/cpp/probes/factor_blockorbit_semantics.cpp'
       - 'src/cpp/probes/factor_blockorbit_compactaux_semantics.cpp'
       - 'src/cpp/probes/factor_highclosure_rows.cpp'
+      - 'src/cpp/probes/factor_highclosure_rowpack.cpp'
+      - 'src/cpp/probes/factor_highclosure_cross.cpp'
       - 'src/cuda/b300/probes/maskshard_orbitaux_hostplan.cu'
       - 'src/cuda/b300/probes/maskshard_blockorbitaux_hostplan.cu'
       - 'src/cuda/b300/probes/maskshard_highclosure_rows_hostplan.cu'
@@ -102,6 +106,32 @@ jobs:
             -o build/factor_highclosure_rows
       - name: Quantify n=27 HIGH row traversal and launch grids
         run: build/factor_highclosure_rows 28 14 256
+
+  highclosure-rowpack:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build HIGH closure row-packing probe
+        run: |
+          mkdir -p build
+          g++ -O3 -std=c++17 -Wall -Wextra -Werror \
+            src/cpp/probes/factor_highclosure_rowpack.cpp \
+            -o build/factor_highclosure_rowpack
+      - name: Quantify n=27 packed HIGH closure work
+        run: build/factor_highclosure_rowpack 28 14 256
+
+  highclosure-cross:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build HIGH closure CROSS probe
+        run: |
+          mkdir -p build
+          g++ -O3 -std=c++17 -Wall -Wextra -Werror \
+            src/cpp/probes/factor_highclosure_cross.cpp \
+            -o build/factor_highclosure_cross
+      - name: Quantify n=27 CROSS depths and target-table options
+        run: build/factor_highclosure_cross 28 14
 
   savings:
     runs-on: ubuntu-latest
