@@ -90,6 +90,14 @@ jobs:
             src/cuda/gridfp/probes/b300_dual_tile_pruned_plan_probe.cu \
             -o build/b300_dual_tile_pruned_plan_probe
           build/b300_dual_tile_pruned_plan_probe
+      - name: W28 reversed split pruned screen
+        shell: bash
+        run: |
+          nvcc -O3 -std=c++17 -arch=sm_80 \
+            -DTARGET_W=28 -DLOW_LUT_K=13 -DHIGH_LUT_K=14 \
+            src/cuda/gridfp/probes/b300_dual_tile_pruned_plan_probe.cu \
+            -o build/b300_dual_tile_pruned_plan_probe_rev
+          build/b300_dual_tile_pruned_plan_probe_rev
       - name: W28 mixed-orientation screening probe
         shell: bash
         run: |
