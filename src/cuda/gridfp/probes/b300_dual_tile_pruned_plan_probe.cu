@@ -35,14 +35,28 @@ int main(){
         uint64_t full=p.full_bytes_per_residue();
         if(!logical_ref){logical_ref=logical;full_ref=full;}
         if(logical!=logical_ref||full!=full_ref){std::cerr<<"pruned plan invariant changed with penalty\n";return 670;}
+        auto ports=p.gpu_port_bytes_per_residue();
+        uint64_t port_sum=0;for(int g=0;g<NG;++g)port_sum+=ports[g];
+        if(port_sum!=2*scheduled){
+            std::cerr<<"peer port accounting mismatch scheduled="<<scheduled
+                     <<" port_sum="<<port_sum<<'\n';return 671;
+        }
+        uint64_t max_port=p.max_gpu_port_bytes_per_residue();
+        long double avg_port=(2.0L*scheduled)/NG;
         std::cout<<"pruned_pareto penalty_mib="<<double(penalty)/double(mib)
                  <<" logical_tib="<<tib(logical)
                  <<" scheduled_tib="<<tib(scheduled)
                  <<" full_tib="<<tib(full)
                  <<" launches="<<p.launches_per_residue()
+                 <<" max_gpu_port_tib="<<tib(max_port)
+                 <<" port_max_over_avg="<<(avg_port?double(max_port/avg_port):0.0)
+                 <<" ideal_1p8TBs_bidirectional_seconds="<<double((long double)max_port/1.8e12L)
                  <<" logical_reduction="<<(full?1.0-double(logical)/double(full):0.0)
                  <<" scheduled_reduction="<<(full?1.0-double(scheduled)/double(full):0.0)
                  <<'\n';
+        for(int g=0;g<NG;++g)
+            std::cout<<"pruned_port penalty_mib="<<double(penalty)/double(mib)
+                     <<" gpu="<<g<<" tib="<<tib(ports[g])<<'\n';
     }
     return 0;
 }
