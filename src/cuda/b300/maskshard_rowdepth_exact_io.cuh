@@ -119,6 +119,22 @@ static MaskShardRowDepthExactCache& maskshard_row_depth_exact_cache() {
     return cache;
 }
 
+// report_high_mask_shard_layout() is called exactly once after ngpu and peer
+// access are established but before authoritative arenas and setup_s are
+// finalized. Intercept that setup call only for v0.15 so CPU peak construction
+// and the tiny per-GPU metadata upload are attributed to setup, not the first DP
+// row's wall_s/high-I/O measurement.
+static void maskshard_report_high_mask_shard_layout_exact(const MaskShardLayout& s) {
+    report_high_mask_shard_layout(s);
+    MaskShardRowDepthExactCache& cache = maskshard_row_depth_exact_cache();
+    cache.build();
+    for (int d = 0; d < s.ngpu; ++d) {
+        ck(cudaSetDevice(d), "row-depth exact setup device");
+        cache.install_current_device();
+    }
+}
+#define report_high_mask_shard_layout maskshard_report_high_mask_shard_layout_exact
+
 static void maskshard_set_row_depth_exact_io_row(int zero_based_row) {
     maskshard_row_depth_exact_cache().install_current_device();
     ck(cudaMemcpyToSymbol(D_MS_ROW_DEPTH_INDEX, &zero_based_row,
