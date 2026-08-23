@@ -13,26 +13,21 @@
 // streams.
 //
 // v4.4 compacts an orbit operation from 12 to 8 bytes. The source block and p
-// already determine both destination factor blocks:
-//   * drop-N always keeps HIGH unchanged, hence dblock = source.he;
-//   * below the LOW/center boundary, the partner keeps the center unchanged,
-//     hence jblock = source block;
-//   * at p=LOW_LUT_K the source center is N and the orbit kind uniquely gives
-//     the partner center (NN/NL -> L, NR -> R).
-// Only the three LOW ranks and the orbit kind need to be streamed at runtime.
+// already determine both destination factor blocks.
 //
-// v4.5 pre-ranks LOWDESC_CROSS on the inactive HIGH half. A CROSS update
-// preserves the HIGH occupancy mask and only flips one L to R, so the target
-// mask-local HIGH rank depends solely on (source HIGH code, matching depth).
-// Runtime replaces an O(H) bracket scan plus binary search with one uint16_t
-// lookup. HIGH_LUT_K <= 15 leaves 0xffff as an invalid sentinel.
+// v4.5 pre-ranks LOWDESC_CROSS on the inactive HIGH half, replacing an O(H)
+// bracket scan plus binary search with one uint16_t lookup.
 //
-// v4.6 separates closure operations into LOCAL and CROSS streams. For a local
-// closure, destination storage is determined entirely by p: p=1 writes main,
-// p>1 writes blocked. The builder asserts this invariant while the dense
-// descriptor still exists. Runtime therefore has no per-closure kind branch;
-// CROSS operations likewise execute in a separate loop with the p branch
-// hoisted outside the operation loop.
+// v4.6 separates closure operations into LOCAL and CROSS streams. Local
+// destination storage is determined entirely by p: p=1 writes main, p>1 writes
+// blocked. CROSS operations run in a separate branch-free loop.
+//
+// v4.7 separates N* orbit representatives into NN, NR and NL streams. These
+// three classes are disjoint local orbits: the partner states are LR, RN and LN
+// respectively, none of which is another N* representative. Reordering the
+// representatives by class therefore preserves the in-place orbit algebra.
+// Runtime no longer decodes orbit kind or branches on it. The p==1 split for
+// NR/NL is also hoisted outside the operation loop.
 using CpuLowSparseOrbitOp = uint64_t;
 using CpuLowSparseClosureOp = uint64_t;
 static_assert(sizeof(CpuLowSparseOrbitOp) == 8);
@@ -115,11 +110,20 @@ static inline uint32_t cpu_sparse_closure_depth(CpuLowSparseClosureOp z) {
 }
 
 struct CpuLowSparseHost {
+    // v4.7 split orbit streams. The legacy aggregate vector is intentionally
+    // kept empty for source compatibility with older probes; production code
+    // uses the three split streams below.
     std::vector<CpuLowSparseOrbitOp> orbit_ops;
+    std::vector<CpuLowSparseOrbitOp> nn_orbit_ops;
+    std::vector<CpuLowSparseOrbitOp> nr_orbit_ops;
+    std::vector<CpuLowSparseOrbitOp> nl_orbit_ops;
     std::vector<CpuLowSparseClosureOp> local_closure_ops;
     std::vector<CpuLowSparseClosureOp> cross_closure_ops;
+
     // flattened [pi * (nblocks+1) + bid]
-    std::vector<uint32_t> orbit_off;
+    std::vector<uint32_t> nn_orbit_off;
+    std::vector<uint32_t> nr_orbit_off;
+    std::vector<uint32_t> nl_orbit_off;
     std::vector<uint32_t> local_closure_off;
     std::vector<uint32_t> cross_closure_off;
     uint32_t nblocks = 0;
@@ -129,6 +133,10 @@ struct CpuLowSparseHost {
     // exists. G_FACTOR.high_mask_codes supplies the source indexing.
     std::vector<uint16_t> high_cross_rank;
     uint32_t high_cross_pitch = 0;
+
+    size_t orbit_count() const {
+        return nn_orbit_ops.size() + nr_orbit_ops.size() + nl_orbit_ops.size();
+    }
 };
 
 static CpuLowSparseHost build_cpu_low_sparse(
@@ -138,18 +146,23 @@ static CpuLowSparseHost build_cpu_low_sparse(
     CpuLowSparseHost s;
     s.nblocks = uint32_t(layout.main_blocks.size());
     size_t pitch = size_t(s.nblocks) + 1;
-    s.orbit_off.resize(size_t(LOW_LUT_K) * pitch);
-    s.local_closure_off.resize(size_t(LOW_LUT_K) * pitch);
-    s.cross_closure_off.resize(size_t(LOW_LUT_K) * pitch);
+    size_t noff = size_t(LOW_LUT_K) * pitch;
+    s.nn_orbit_off.resize(noff);
+    s.nr_orbit_off.resize(noff);
+    s.nl_orbit_off.resize(noff);
+    s.local_closure_off.resize(noff);
+    s.cross_closure_off.resize(noff);
 
     for (int p = LOW_LUT_K; p >= 1; --p) {
         uint32_t pi = uint32_t(LOW_LUT_K - p);
         for (uint32_t bid = 0; bid < s.nblocks; ++bid) {
-            s.orbit_off[size_t(pi) * pitch + bid] = uint32_t(s.orbit_ops.size());
-            s.local_closure_off[size_t(pi) * pitch + bid]
-                = uint32_t(s.local_closure_ops.size());
-            s.cross_closure_off[size_t(pi) * pitch + bid]
-                = uint32_t(s.cross_closure_ops.size());
+            size_t oi = size_t(pi) * pitch + bid;
+            s.nn_orbit_off[oi] = uint32_t(s.nn_orbit_ops.size());
+            s.nr_orbit_off[oi] = uint32_t(s.nr_orbit_ops.size());
+            s.nl_orbit_off[oi] = uint32_t(s.nl_orbit_ops.size());
+            s.local_closure_off[oi] = uint32_t(s.local_closure_ops.size());
+            s.cross_closure_off[oi] = uint32_t(s.cross_closure_ops.size());
+
             uint32_t cols = layout.main_blocks[bid].cols;
             for (uint32_t lr = 0; lr < cols; ++lr) {
                 uint64_t ow = orbit.rec[
@@ -170,8 +183,11 @@ static CpuLowSparseHost build_cpu_low_sparse(
                                   << '\n';
                         std::exit(102);
                     }
-                    s.orbit_ops.push_back(cpu_sparse_orbit_pack(
-                        lr, k, cpu_orbit_jlr(ow), cpu_orbit_dlr(ow)));
+                    CpuLowSparseOrbitOp op = cpu_sparse_orbit_pack(
+                        lr, k, cpu_orbit_jlr(ow), cpu_orbit_dlr(ow));
+                    if (k == CPU_ORBIT_NN) s.nn_orbit_ops.push_back(op);
+                    else if (k == CPU_ORBIT_NR) s.nr_orbit_ops.push_back(op);
+                    else s.nl_orbit_ops.push_back(op);
                 } else if (k == CPU_ORBIT_CLOSURE) {
                     uint32_t dw = desc.main_desc[
                         size_t(pi) * desc.main_total + desc.main_base[bid] + lr];
@@ -200,11 +216,12 @@ static CpuLowSparseHost build_cpu_low_sparse(
                 }
             }
         }
-        s.orbit_off[size_t(pi) * pitch + s.nblocks] = uint32_t(s.orbit_ops.size());
-        s.local_closure_off[size_t(pi) * pitch + s.nblocks]
-            = uint32_t(s.local_closure_ops.size());
-        s.cross_closure_off[size_t(pi) * pitch + s.nblocks]
-            = uint32_t(s.cross_closure_ops.size());
+        size_t end = size_t(pi) * pitch + s.nblocks;
+        s.nn_orbit_off[end] = uint32_t(s.nn_orbit_ops.size());
+        s.nr_orbit_off[end] = uint32_t(s.nr_orbit_ops.size());
+        s.nl_orbit_off[end] = uint32_t(s.nl_orbit_ops.size());
+        s.local_closure_off[end] = uint32_t(s.local_closure_ops.size());
+        s.cross_closure_off[end] = uint32_t(s.cross_closure_ops.size());
     }
 
     // Pre-rank every possible inactive-HIGH CROSS operation. The dense storage
@@ -234,13 +251,17 @@ static CpuLowSparseHost build_cpu_low_sparse(
         }
     }
 
-    std::cerr << "cpu_low_sparse orbit_ops=" << s.orbit_ops.size()
+    std::cerr << "cpu_low_sparse"
+              << " nn_orbit_ops=" << s.nn_orbit_ops.size()
+              << " nr_orbit_ops=" << s.nr_orbit_ops.size()
+              << " nl_orbit_ops=" << s.nl_orbit_ops.size()
+              << " orbit_ops=" << s.orbit_count()
               << " local_closure_ops=" << s.local_closure_ops.size()
               << " cross_closure_ops=" << s.cross_closure_ops.size()
               << " orbit_op_bytes=" << sizeof(CpuLowSparseOrbitOp)
               << " closure_op_bytes=" << sizeof(CpuLowSparseClosureOp)
               << " orbit_mib="
-              << double(s.orbit_ops.size() * sizeof(CpuLowSparseOrbitOp)) / (1<<20)
+              << double(s.orbit_count() * sizeof(CpuLowSparseOrbitOp)) / (1<<20)
               << " local_closure_mib="
               << double(s.local_closure_ops.size() * sizeof(CpuLowSparseClosureOp)) / (1<<20)
               << " cross_closure_mib="
@@ -287,36 +308,121 @@ static void process_cpu_low_group_sparse(
             const FBlock& x = job.main_blocks[bid];
             Count* xb = mp[bid];
             if (!xb || !x.stride) continue;
-            auto [oa, ob] = cpu_sparse_range(sparse.orbit_off, sparse.nblocks, pi, bid);
-            if (oa == ob) continue;
             uint32_t dbid = uint32_t(x.he);
             Code rows = (x.end - x.off) / x.stride;
-            for (Code hr = 0; hr < rows; ++hr) {
-                Count* xr = xb + hr * x.stride;
-                for (uint32_t q = oa; q < ob; ++q) {
-                    CpuLowSparseOrbitOp op = sparse.orbit_ops[q];
-                    uint32_t kind = cpu_sparse_kind(op);
-                    uint32_t jbid = cpu_sparse_jblock(bid, x, p, kind);
-                    Count* ip = xr + cpu_sparse_src(op);
-                    Count* jp = mp[jbid] + hr * job.main_blocks[jbid].stride
-                        + cpu_sparse_jlr(op);
-                    Count* dd = dp[dbid] + hr * job.block_blocks[dbid].stride
-                        + cpu_sparse_dlr(op);
-                    Count c = *ip;
-                    Count d = *dd;
-                    if (kind == CPU_ORBIT_NN) {
+
+            auto [na, nb] = cpu_sparse_range(
+                sparse.nn_orbit_off, sparse.nblocks, pi, bid);
+            if (na != nb) {
+                uint32_t jbid = cpu_sparse_jblock(bid, x, p, CPU_ORBIT_NN);
+                const FBlock& jy = job.main_blocks[jbid];
+                const FBlock& dy = job.block_blocks[dbid];
+                for (Code hr = 0; hr < rows; ++hr) {
+                    Count* xr = xb + hr * x.stride;
+                    Count* jr = mp[jbid] + hr * jy.stride;
+                    Count* dr = dp[dbid] + hr * dy.stride;
+                    for (uint32_t q = na; q < nb; ++q) {
+                        CpuLowSparseOrbitOp op = sparse.nn_orbit_ops[q];
+                        Count* ip = xr + cpu_sparse_src(op);
+                        Count* jp = jr + cpu_sparse_jlr(op);
+                        Count* dd = dr + cpu_sparse_dlr(op);
+                        Count c = *ip;
+                        Count d = *dd;
                         *jp = cpu_low_add(*jp, c, mod);
                         *ip = cpu_low_add(c, d, mod);
                         *dd = 0;
-                    } else {
-                        Count cc = *jp;
-                        Count all = cpu_low_add(cpu_low_add(c, cc, mod), d, mod);
-                        if (p == 1) {
-                            *ip = all;
+                    }
+                }
+            }
+
+            auto [ra, rb] = cpu_sparse_range(
+                sparse.nr_orbit_off, sparse.nblocks, pi, bid);
+            auto [la, lb] = cpu_sparse_range(
+                sparse.nl_orbit_off, sparse.nblocks, pi, bid);
+            if (p == 1) {
+                if (ra != rb) {
+                    uint32_t jbid = cpu_sparse_jblock(bid, x, p, CPU_ORBIT_NR);
+                    const FBlock& jy = job.main_blocks[jbid];
+                    const FBlock& dy = job.block_blocks[dbid];
+                    for (Code hr = 0; hr < rows; ++hr) {
+                        Count* xr = xb + hr * x.stride;
+                        Count* jr = mp[jbid] + hr * jy.stride;
+                        Count* dr = dp[dbid] + hr * dy.stride;
+                        for (uint32_t q = ra; q < rb; ++q) {
+                            CpuLowSparseOrbitOp op = sparse.nr_orbit_ops[q];
+                            Count* ip = xr + cpu_sparse_src(op);
+                            Count* jp = jr + cpu_sparse_jlr(op);
+                            Count* dd = dr + cpu_sparse_dlr(op);
+                            Count c = *ip;
+                            Count cc = *jp;
+                            Count d = *dd;
+                            *ip = cpu_low_add(cpu_low_add(c, cc, mod), d, mod);
                             *jp = cpu_low_add(c, cc, mod);
                             *dd = 0;
-                        } else {
-                            *ip = all;
+                        }
+                    }
+                }
+                if (la != lb) {
+                    uint32_t jbid = cpu_sparse_jblock(bid, x, p, CPU_ORBIT_NL);
+                    const FBlock& jy = job.main_blocks[jbid];
+                    const FBlock& dy = job.block_blocks[dbid];
+                    for (Code hr = 0; hr < rows; ++hr) {
+                        Count* xr = xb + hr * x.stride;
+                        Count* jr = mp[jbid] + hr * jy.stride;
+                        Count* dr = dp[dbid] + hr * dy.stride;
+                        for (uint32_t q = la; q < lb; ++q) {
+                            CpuLowSparseOrbitOp op = sparse.nl_orbit_ops[q];
+                            Count* ip = xr + cpu_sparse_src(op);
+                            Count* jp = jr + cpu_sparse_jlr(op);
+                            Count* dd = dr + cpu_sparse_dlr(op);
+                            Count c = *ip;
+                            Count cc = *jp;
+                            Count d = *dd;
+                            *ip = cpu_low_add(cpu_low_add(c, cc, mod), d, mod);
+                            *jp = cpu_low_add(c, cc, mod);
+                            *dd = 0;
+                        }
+                    }
+                }
+            } else {
+                if (ra != rb) {
+                    uint32_t jbid = cpu_sparse_jblock(bid, x, p, CPU_ORBIT_NR);
+                    const FBlock& jy = job.main_blocks[jbid];
+                    const FBlock& dy = job.block_blocks[dbid];
+                    for (Code hr = 0; hr < rows; ++hr) {
+                        Count* xr = xb + hr * x.stride;
+                        Count* jr = mp[jbid] + hr * jy.stride;
+                        Count* dr = dp[dbid] + hr * dy.stride;
+                        for (uint32_t q = ra; q < rb; ++q) {
+                            CpuLowSparseOrbitOp op = sparse.nr_orbit_ops[q];
+                            Count* ip = xr + cpu_sparse_src(op);
+                            Count* jp = jr + cpu_sparse_jlr(op);
+                            Count* dd = dr + cpu_sparse_dlr(op);
+                            Count c = *ip;
+                            Count cc = *jp;
+                            Count d = *dd;
+                            *ip = cpu_low_add(cpu_low_add(c, cc, mod), d, mod);
+                            *dd = c;
+                        }
+                    }
+                }
+                if (la != lb) {
+                    uint32_t jbid = cpu_sparse_jblock(bid, x, p, CPU_ORBIT_NL);
+                    const FBlock& jy = job.main_blocks[jbid];
+                    const FBlock& dy = job.block_blocks[dbid];
+                    for (Code hr = 0; hr < rows; ++hr) {
+                        Count* xr = xb + hr * x.stride;
+                        Count* jr = mp[jbid] + hr * jy.stride;
+                        Count* dr = dp[dbid] + hr * dy.stride;
+                        for (uint32_t q = la; q < lb; ++q) {
+                            CpuLowSparseOrbitOp op = sparse.nl_orbit_ops[q];
+                            Count* ip = xr + cpu_sparse_src(op);
+                            Count* jp = jr + cpu_sparse_jlr(op);
+                            Count* dd = dr + cpu_sparse_dlr(op);
+                            Count c = *ip;
+                            Count cc = *jp;
+                            Count d = *dd;
+                            *ip = cpu_low_add(cpu_low_add(c, cc, mod), d, mod);
                             *dd = c;
                         }
                     }
