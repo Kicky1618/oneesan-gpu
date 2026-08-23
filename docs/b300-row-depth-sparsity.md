@@ -119,17 +119,22 @@ with modulus 4294967291 twice:
 2. a simulated v0.14 path that zeros excluded gather states and drops excluded
    scatter states at every HIGH window.
 
-The local validation command
+Local validation completed with `g++ -O3 -std=c++17 -Wall -Wextra -Werror`:
 
-```bash
-g++ -O3 -std=c++17 -Wall -Wextra -Werror \
-  src/cpp/probes/factor_row_depth_fblock_semantics.cpp \
-  -o build/factor_row_depth_fblock_semantics
-build/factor_row_depth_fblock_semantics 12
+```text
+factor-row-depth-fblock W=28 low=14 high=13
+main=385719506620 blocked=135015505407
+dense_words=25380726522116 fblock_cap_words=23264294823853
+logical_tib=84.635011531 balanced_7of8_peer_tib=74.055635090
+
+row-depth-fblock-semantics OK W=6  low=3
+row-depth-fblock-semantics OK W=8  low=4
+row-depth-fblock-semantics OK W=10 low=5
+row-depth-fblock-semantics OK W=12 low=6
 ```
 
-passed for W=6,8,10,12. The traffic probe also passed locally and reproduced the
-n=27 pinned values above.
+The current GitHub Actions runner outage is separate; fresh nvcc execution is
+still required before promotion.
 
 ## Runtime candidate
 
