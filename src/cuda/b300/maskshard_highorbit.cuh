@@ -89,9 +89,6 @@ __global__ void maskshard_main_block_highorbit_kernel(
     const uint32_t pi = uint32_t((TARGET_W - 1) - p);
 
 #ifdef MASKSHARD_BLOCK_ORBIT
-    // Every blocked state has exactly one excluded target obtained by inserting
-    // N at p; that target is exactly one NN/NR/NL orbit representative. Iterate
-    // blocked states instead of scanning all main states and rejecting ~65%.
     const int last_bid = D_F_BLOCK_NBLOCKS - 1;
     if (last_bid < 0) return;
     const Code block_n = D_F_BLOCK_BLOCKS[last_bid].end;
@@ -114,7 +111,6 @@ __global__ void maskshard_main_block_highorbit_kernel(
         const size_t sdi = size_t(pi) * D_HIGHDESC_MAIN_TOTAL
                          + D_HIGHDESC_MAIN_BASE[sbid] + shr;
 #ifdef MASKSHARD_BLOCK_ORBIT_AUX
-        // v0.7 compact aux has exactly the same coordinate system as block_desc.
         const uint32_t aux = D_MS_HIGH_ORBIT_AUX[bdi];
 #else
         const uint32_t aux = D_MS_HIGH_ORBIT_AUX[sdi];
@@ -253,57 +249,40 @@ __global__ void maskshard_main_highdesc_closure_inplace_kernel(
 }
 
 #ifdef MASKSHARD_HIGH_CLOSURE_ROWS
-// v0.8: HIGH transition kind is a property of (FBlock, HIGH row, p), not of
-// the passive LOW column. One warp therefore classifies a HIGH row once and
-// processes its LOW columns coalesced. This adds no descriptor/HBM table.
+// v0.8: compact HighDesc closure-row list removes both the all-main scan and
+// repeated per-column HIGH classification. One listed HIGH row is assigned to
+// one warp; its passive LOW columns are contiguous and processed coalesced.
 __global__ void maskshard_main_highdesc_closure_rows_inplace_kernel(
     Count* mainv, Count* blockv, Code n, int p
 ) {
     constexpr int S = MAXW + 2;
     constexpr uint32_t LR_MASK = (1u << LOW_LUT_K) - 1u;
     const uint32_t pi = uint32_t((TARGET_W - 1) - p);
+    const uint32_t begin = D_HIGHDESC_CLOSURE_OFF[pi];
+    const uint32_t end = D_HIGHDESC_CLOSURE_OFF[pi + 1];
     const unsigned active = __activemask();
     const int lane = int(threadIdx.x & 31);
     const int warp_in_block = int(threadIdx.x >> 5);
     const int warps_per_block = int((blockDim.x + 31) >> 5);
-    Code row = Code(blockIdx.x) * Code(warps_per_block) + Code(warp_in_block);
-    const Code row_step = Code(gridDim.x) * Code(warps_per_block);
+    Code qi = Code(begin) + Code(blockIdx.x) * Code(warps_per_block)
+            + Code(warp_in_block);
+    const Code qstep = Code(gridDim.x) * Code(warps_per_block);
 
-    for (;; row += row_step) {
-        int bid = -1;
-        uint32_t hr = 0;
-        if (lane == 0) {
-            Code r = row;
-            for (int b = 0; b < D_F_MAIN_NBLOCKS; ++b) {
-                const FBlock z = D_F_MAIN_BLOCKS[b];
-                if (!z.stride) continue;
-                const Code rows = (z.end - z.off) / Code(z.stride);
-                if (r < rows) {
-                    bid = b;
-                    hr = uint32_t(r);
-                    break;
-                }
-                r -= rows;
-            }
-        }
-        bid = __shfl_sync(active, bid, 0);
-        if (bid < 0) break;
-        hr = __shfl_sync(active, hr, 0);
+    for (; qi < Code(end); qi += qstep) {
+        uint32_t source = 0;
+        if (lane == 0) source = D_HIGHDESC_CLOSURE_ROWS[qi];
+        source = __shfl_sync(active, source, 0);
+        const uint32_t bid = highdesc_block(source);
+        const uint32_t hr = highdesc_rank(source);
         const FBlock x = D_F_MAIN_BLOCKS[bid];
+        if (!x.stride) continue; // this LOW occupancy mask has no such row
 
-        int is_closure = 0;
         uint32_t desc = 0;
         if (lane == 0) {
-            const MateValuePair w = maskshard_high_pair(x, hr, p);
-            is_closure = (w == LL || w == RR || w == RL);
-            if (is_closure) {
-                desc = D_HIGHDESC_MAIN[
-                    size_t(pi) * D_HIGHDESC_MAIN_TOTAL
-                    + D_HIGHDESC_MAIN_BASE[bid] + hr];
-            }
+            desc = D_HIGHDESC_MAIN[
+                size_t(pi) * D_HIGHDESC_MAIN_TOTAL
+                + D_HIGHDESC_MAIN_BASE[bid] + hr];
         }
-        is_closure = __shfl_sync(active, is_closure, 0);
-        if (!is_closure) continue;
         desc = __shfl_sync(active, desc, 0);
         const uint32_t kind = highdesc_kind(desc);
         if (kind != HIGHDESC_BLOCK && kind != HIGHDESC_CROSS) continue;
@@ -332,8 +311,6 @@ __global__ void maskshard_main_highdesc_closure_rows_inplace_kernel(
     (void)n;
 }
 
-// The batch source keeps calling the historical symbol; select the row executor
-// at preprocessing time without touching v0.4-v0.7 call sites.
 #define maskshard_main_highdesc_closure_inplace_kernel \
         maskshard_main_highdesc_closure_rows_inplace_kernel
 #endif
