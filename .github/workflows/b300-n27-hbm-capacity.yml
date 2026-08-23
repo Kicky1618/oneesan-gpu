@@ -4,6 +4,7 @@ on:
   pull_request:
     paths:
       - 'src/cuda/b300/oneesan_cuda_gridfp_b300_hbm32_compact_resident.cu'
+      - 'src/cuda/b300/oneesan_cuda_gridfp_b300_hbm32_compact_resident_rowtile.cu'
       - 'src/cuda/gridfp/probes/b300_n27_hbm_capacity_probe.cu'
       - 'src/cuda/gridfp/probes/b300_compact_io_selftest.cu'
       - 'src/cuda/gridfp/probes/b300_compact_kernel_compile.cu'
@@ -58,3 +59,13 @@ jobs:
       - name: Plan n27 compact resident x8
         shell: bash
         run: build/b300_compact_resident_w28 27 4294967291 8 256 --plan-only
+      - name: Compile W28 compact row-tile resident backend
+        shell: bash
+        run: |
+          nvcc -O3 -std=c++17 -lineinfo -arch=sm_80 \
+            -DTARGET_W=28 -DLOW_LUT_K=14 -DHIGH_LUT_K=13 \
+            src/cuda/b300/oneesan_cuda_gridfp_b300_hbm32_compact_resident_rowtile.cu \
+            -o build/b300_compact_resident_rowtile_w28
+      - name: Plan n27 compact row-tile resident x8
+        shell: bash
+        run: build/b300_compact_resident_rowtile_w28 27 4294967291 8 256 --plan-only
