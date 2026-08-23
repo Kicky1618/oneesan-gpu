@@ -6,8 +6,10 @@ on:
       - 'src/cuda/gridfp/oneesan_cuda_gridfp_ramstream32_factorized_forced2.cu'
       - 'src/cuda/gridfp/oneesan_cuda_gridfp_ramstream32_factorized_direct2d.cu'
       - 'src/cuda/gridfp/oneesan_cuda_gridfp_ramstream32_factorized_lowdesc.cu'
+      - 'src/cuda/gridfp/oneesan_cuda_gridfp_ramstream32_factorized_bidesc.cu'
       - 'src/cuda/gridfp/ramstream32_factorized_storage.hpp'
       - 'src/cuda/gridfp/ramstream32_lowdesc.cuh'
+      - 'src/cuda/gridfp/ramstream32_highdesc.cuh'
       - 'src/cuda/b300/oneesan_cuda_gridfp_b300_hbm32_factorized_batch.cu'
       - 'src/cuda/common/**'
       - 'scripts/build/gridfp-ramstream32-factorized*.sh'
@@ -17,8 +19,10 @@ on:
       - 'src/cuda/gridfp/oneesan_cuda_gridfp_ramstream32_factorized_forced2.cu'
       - 'src/cuda/gridfp/oneesan_cuda_gridfp_ramstream32_factorized_direct2d.cu'
       - 'src/cuda/gridfp/oneesan_cuda_gridfp_ramstream32_factorized_lowdesc.cu'
+      - 'src/cuda/gridfp/oneesan_cuda_gridfp_ramstream32_factorized_bidesc.cu'
       - 'src/cuda/gridfp/ramstream32_factorized_storage.hpp'
       - 'src/cuda/gridfp/ramstream32_lowdesc.cuh'
+      - 'src/cuda/gridfp/ramstream32_highdesc.cuh'
       - 'src/cuda/b300/oneesan_cuda_gridfp_b300_hbm32_factorized_batch.cu'
       - 'src/cuda/common/**'
       - 'scripts/build/gridfp-ramstream32-factorized*.sh'
@@ -68,3 +72,12 @@ jobs:
             -DHIGH_LUT_K=${{ matrix.high }} \
             src/cuda/gridfp/oneesan_cuda_gridfp_ramstream32_factorized_lowdesc.cu \
             -o build/ramstream32_lowdesc_w${{ matrix.width }}
+      - name: Compile bidesc factorized RAM backend
+        shell: bash
+        run: |
+          nvcc -O3 -std=c++17 -lineinfo -arch=sm_80 \
+            -DTARGET_W=${{ matrix.width }} \
+            -DLOW_LUT_K=${{ matrix.low }} \
+            -DHIGH_LUT_K=${{ matrix.high }} \
+            src/cuda/gridfp/oneesan_cuda_gridfp_ramstream32_factorized_bidesc.cu \
+            -o build/ramstream32_bidesc_w${{ matrix.width }}
