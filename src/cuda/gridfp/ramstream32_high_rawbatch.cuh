@@ -12,7 +12,7 @@
 // needed.  One CUDA block owns one contiguous chunk of a (mask,main-block)
 // rectangle; threads stream through that chunk.
 struct HighRawTask {
-    uint32_t elem0 = 0;   // element offset inside logical main factor block
+    uint32_t elem0 = 0;
     uint32_t count = 0;
     uint16_t mask = 0;
     uint8_t bid = 0;
@@ -136,6 +136,25 @@ __device__ __forceinline__ uint32_t mm_low_width_dev(uint32_t mask, uint32_t hs)
     return D_F_LOW_MASK_OFF[ix + 1] - D_F_LOW_MASK_OFF[ix];
 }
 
+// Unlike bidesc_low_mask_rank(), raw-batch execution has many LOW masks live in
+// one kernel launch and therefore must not read the single per-group D_F_MASK
+// constant.  Make the mask an explicit argument.
+__device__ __forceinline__ uint32_t rawbatch_low_mask_rank(
+    uint32_t mask, uint32_t code, int h
+) {
+    constexpr int S = MAXW + 2;
+    uint32_t a = D_F_LOW_MASK_OFF[size_t(mask) * S + h];
+    uint32_t b = D_F_LOW_MASK_OFF[size_t(mask) * S + h + 1];
+    uint32_t lo = a, hi = b;
+    while (lo < hi) {
+        uint32_t mid = lo + ((hi - lo) >> 1);
+        uint32_t v = D_F_LOW_MASK_CODES[mid];
+        if (v < code) lo = mid + 1;
+        else hi = mid;
+    }
+    return (lo < b && D_F_LOW_MASK_CODES[lo] == code) ? lo - a : 0xffffffffu;
+}
+
 __global__ void high_rawbatch_orbit_kernel(
     Count* mainv, Count* blockv,
     const HighRawTask* tasks, uint32_t ntasks,
@@ -219,7 +238,7 @@ __global__ void high_rawbatch_closure_kernel(
             uint32_t lc = D_F_LOW_MASK_CODES[a + lr];
             uint32_t lc2 = highdesc_flip_low(lc, highdesc_depth(desc));
             if (lc2 == 0xffffffffu) continue;
-            uint32_t lr2 = bidesc_low_mask_rank(lc2, D_MM_BLOCK_HS[dbid]);
+            uint32_t lr2 = rawbatch_low_mask_rank(mask, lc2, D_MM_BLOCK_HS[dbid]);
             if (lr2 == 0xffffffffu) continue;
             atomic_add_mod(blockv + db + Code(highdesc_rank(desc)) * dw + lr2, c);
         } else {
