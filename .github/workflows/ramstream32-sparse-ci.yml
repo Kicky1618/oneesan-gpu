@@ -8,6 +8,7 @@ on:
       - 'src/cuda/gridfp/ramstream32_cpu_low_direct.hpp'
       - 'src/cuda/gridfp/ramstream32_cpu_low_inplace.hpp'
       - 'src/cuda/gridfp/ramstream32_cpu_high.hpp'
+      - 'src/cuda/gridfp/ramstream32_cpu_high_direct.hpp'
       - 'src/cuda/gridfp/probes/ramstream32_cpu_low_selftest.cu'
       - 'scripts/build/gridfp-ramstream32-factorized-hybrid-sparse.sh'
       - '.github/workflows/ramstream32-sparse-ci.yml'
@@ -18,6 +19,7 @@ on:
       - 'src/cuda/gridfp/ramstream32_cpu_low_direct.hpp'
       - 'src/cuda/gridfp/ramstream32_cpu_low_inplace.hpp'
       - 'src/cuda/gridfp/ramstream32_cpu_high.hpp'
+      - 'src/cuda/gridfp/ramstream32_cpu_high_direct.hpp'
       - 'src/cuda/gridfp/probes/ramstream32_cpu_low_selftest.cu'
       - 'scripts/build/gridfp-ramstream32-factorized-hybrid-sparse.sh'
       - '.github/workflows/ramstream32-sparse-ci.yml'
@@ -55,13 +57,24 @@ jobs:
         run: |
           build/ramstream32_hybrid_sparse_w${{ matrix.width }} \
             ${{ matrix.n }} 4294967291 12288 4 --plan-only
-      - name: Validate n27 CPU HIGH partition plan
+      - name: Validate n27 CPU HIGH scratch partition plan
         if: matrix.width == 28
         shell: bash
         run: |
-          CPU_HIGH_MAX_MIB=256 build/ramstream32_hybrid_sparse_w28 \
-            27 4294967291 12288 4 --plan-only | tee /tmp/high-offload-plan.txt
-          grep -Fq 'cpu_high_groups=12911' /tmp/high-offload-plan.txt
+          CPU_HIGH_MAX_MIB=256 CPU_HIGH_MODE=scratch \
+            build/ramstream32_hybrid_sparse_w28 \
+            27 4294967291 12288 4 --plan-only | tee /tmp/high-offload-scratch.txt
+          grep -Fq 'cpu_high_groups=12911' /tmp/high-offload-scratch.txt
+          grep -Fq 'cpu_high_mode=scratch' /tmp/high-offload-scratch.txt
+      - name: Validate n27 CPU HIGH direct metadata plan
+        if: matrix.width == 28
+        shell: bash
+        run: |
+          CPU_HIGH_MAX_MIB=256 CPU_HIGH_MODE=direct \
+            build/ramstream32_hybrid_sparse_w28 \
+            27 4294967291 12288 4 --plan-only | tee /tmp/high-offload-direct.txt
+          grep -Fq 'cpu_high_groups=12911' /tmp/high-offload-direct.txt
+          grep -Fq 'cpu_high_mode=direct' /tmp/high-offload-direct.txt
       - name: Validate CPU LOW/HIGH executors against reference
         if: matrix.width == 22
         shell: bash
