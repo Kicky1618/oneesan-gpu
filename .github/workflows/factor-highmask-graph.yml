@@ -4,11 +4,13 @@ on:
   push:
     paths:
       - 'src/cpp/probes/factor_highmask_graph_export.cpp'
+      - 'src/cpp/probes/factor_highupdate_aggregation.cpp'
       - 'scripts/research/highmask_spectral_partition.py'
       - '.github/workflows/factor-highmask-graph.yml'
   pull_request:
     paths:
       - 'src/cpp/probes/factor_highmask_graph_export.cpp'
+      - 'src/cpp/probes/factor_highupdate_aggregation.cpp'
       - 'scripts/research/highmask_spectral_partition.py'
       - '.github/workflows/factor-highmask-graph.yml'
   workflow_dispatch:
@@ -28,3 +30,16 @@ jobs:
         run: build/factor_highmask_graph_export 28 14
       - name: Syntax-check nonlinear partition research script
         run: python3 -m py_compile scripts/research/highmask_spectral_partition.py
+
+  destination-aggregation:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build HIGH destination aggregation probe
+        run: |
+          mkdir -p build
+          g++ -O3 -std=c++17 -Wall -Wextra -Werror \
+            src/cpp/probes/factor_highupdate_aggregation.cpp \
+            -o build/factor_highupdate_aggregation
+      - name: Verify small-width image decomposition and n=27 counts
+        run: build/factor_highupdate_aggregation 28 14 13
