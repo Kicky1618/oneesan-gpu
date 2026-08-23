@@ -9,6 +9,7 @@ on:
       - 'scripts/tools/profile_high_group_transfer.py'
       - 'docs/ramstream32-factorized-ab.md'
       - 'docs/ramstream32-hybrid-sparse.md'
+      - 'docs/ramstream32-cpu-high.md'
       - '.github/workflows/ramstream32-bench-script-ci.yml'
   pull_request:
     paths:
@@ -18,6 +19,7 @@ on:
       - 'scripts/tools/profile_high_group_transfer.py'
       - 'docs/ramstream32-factorized-ab.md'
       - 'docs/ramstream32-hybrid-sparse.md'
+      - 'docs/ramstream32-cpu-high.md'
       - '.github/workflows/ramstream32-bench-script-ci.yml'
   workflow_dispatch:
 
@@ -46,6 +48,7 @@ jobs:
           grep -Fq 'scripts/bench/ramstream32-factorized-ab.sh' \
             docs/ramstream32-factorized-ab.md
           grep -Fq 'scripts/bench/ramstream32-cpu-high-sweep.sh' \
-            docs/ramstream32-hybrid-sparse.md || true
+            docs/ramstream32-cpu-high.md
+          grep -Fq 'CPU_HIGH_MODE=direct' docs/ramstream32-cpu-high.md
           grep -Fq 'c8de8d73af1c44f075aee937bc8f37e8b7b79d27' \
             docs/ramstream32-hybrid-sparse.md
