@@ -130,19 +130,46 @@ Validation is wired into `.github/workflows/ramstream32-sparse-ci.yml`:
 - compile and `--plan-only` for W=28 / n=27;
 - exhaustive W=10 comparison of out-of-place, in-place, direct, and sparse CPU LOW executors against the full reference recurrence.
 
+## v4.7: split NN/NR/NL orbit streams
+
+The remaining hot-loop dispatch in v4.6 was the orbit kind. Every N* representative carried two kind bits and runtime executed a per-operation branch between NN and NR/NL behavior.
+
+The three N* classes form disjoint local orbits:
+
+- NN pairs with LR;
+- NR pairs with RN;
+- NL pairs with LN.
+
+None of `LR`, `RN`, or `LN` is itself an N* representative at the same active position, and dropping the N produces distinct blocked states because the lower symbol is retained. The in-place orbit updates can therefore be reordered by class without changing the algebra.
+
+v4.7 builds three independent 64-bit orbit streams per `(p, factor block)`:
+
+- `nn_orbit_ops`;
+- `nr_orbit_ops`;
+- `nl_orbit_ops`.
+
+The operation record remains 8 bytes to keep the representation simple and preserve the existing rank fields. Runtime no longer decodes `kind` and no longer branches on `kind == NN`. For NR/NL, `p == 1` versus `p > 1` is also hoisted outside the operation loop.
+
+The cost is two additional small offset tables and potentially more row passes when all three classes are present. Consequently v4.7 is explicitly an empirical CPU microarchitecture experiment rather than an assumed improvement. The relevant comparison is v4.6 versus v4.7 on the same host, with `cpu_wall_s`, `cpu_kernel_sum_s`, instructions, branch misses, LLC misses, and memory bandwidth recorded.
+
+The backend identifies itself as `gridfp-ramstream32-factorized-hybrid-sparse-v4.7` and reports NN/NR/NL orbit MiB separately. The W=10 full-state selftest also checks that the three stream counts sum to the total sparse orbit count before comparing the final main/blocked arrays against the reference recurrence.
+
 ## Current bottlenecks and next experiments
 
-v4.6 removes one remaining descriptor-dispatch cost, but does not alter the dominant data movement bound.
+v4.7 removes the remaining orbit-kind dispatch, but does not alter the dominant data movement bound. It may improve or regress CPU LOW time depending on whether branch savings outweigh the extra row traversals.
 
-The next measurements should compare v4.5 and v4.6 on a high-memory many-core host using at least the following counters:
+The immediate measurement should compare the v4.6 commit `c8de8d73af1c44f075aee937bc8f37e8b7b79d27` with v4.7 under identical conditions. At minimum record:
 
 - `cpu_wall_s` and `cpu_kernel_sum_s`;
 - CPU cycles/instructions and branch misses;
 - LLC misses and memory bandwidth;
+- NN/NR/NL orbit operation counts;
 - LOCAL/CROSS closure operation counts;
 - full `wall_s`, to determine whether LOW-side savings remain visible behind HIGH-side PCIe traffic.
 
-After that, the more consequential directions are:
+If v4.7 does not win, the likely better compromise is a two-stream layout: NN versus NR+NL, retaining only one predictable branch or one small center-selection operation while avoiding a third row traversal.
+
+After the microarchitectural choice is settled, the more consequential directions are:
 
 1. increase the CPU/System-RAM fraction so fewer HIGH states cross PCIe;
 2. partition HIGH work across aggregate multi-GPU memory and keep partitions resident for more than one local step;
