@@ -4,6 +4,7 @@
 #include <cstring>
 #include <iostream>
 #include <random>
+#include <thread>
 #include <unordered_map>
 #include <utility>
 #include <vector>
@@ -182,6 +183,27 @@ int main() {
     if (!compare_factor("cpu-high-direct", main_auth, block_auth, main_states, block_states,
                         high_rm, high_rd, storage, layout)) return 16;
 
+    // Simulate CPU/GPU overlap with two CPU direct pools touching disjoint LOW
+    // occupancy groups. Their concurrent result must equal the same HIGH window.
+    std::vector<const CpuHighJob*> high_jobs_a, high_jobs_b;
+    for (const CpuHighJob* job : high_job_ptrs) {
+        ((job->mask & 1u) ? high_jobs_a : high_jobs_b).push_back(job);
+    }
+    fill_factor(main_auth, block_auth, main_states, block_states, init_m, init_d, storage, layout);
+    CpuHighDirectPool high_parallel_a(1), high_parallel_b(1);
+    std::thread ta([&] {
+        high_parallel_a.run(high_jobs_a, main_auth, block_auth,
+                            storage, layout, highdirect, highcross, mod);
+    });
+    std::thread tb([&] {
+        high_parallel_b.run(high_jobs_b, main_auth, block_auth,
+                            storage, layout, highdirect, highcross, mod);
+    });
+    ta.join(); tb.join();
+    if (!compare_factor("cpu-high-parallel-partition", main_auth, block_auth,
+                        main_states, block_states, high_rm, high_rd,
+                        storage, layout)) return 17;
+
     double sparse_meta_mib = double(
         sparse_orbit_ops*sizeof(CpuLowSparseOrbitOp)
         + sparse.local_closure_ops.size()*sizeof(CpuLowSparseClosureOp)
@@ -194,6 +216,8 @@ int main() {
               << " direct_groups=" << direct_pool.groups() << " sparse_groups=" << sparse_pool.groups()
               << " cpu_high_groups=" << high_pool.groups()
               << " cpu_high_direct_groups=" << high_direct_pool.groups()
+              << " cpu_high_parallel_groups="
+              << (high_parallel_a.groups()+high_parallel_b.groups())
               << " out_scratch_mib=" << double(out_pool.peak_scratch_bytes()) / (1 << 20)
               << " in_scratch_mib=" << double(in_pool.peak_scratch_bytes()) / (1 << 20)
               << " cpu_high_scratch_mib=" << double(high_pool.peak_scratch_bytes()) / (1 << 20)
