@@ -65,11 +65,15 @@ int main(int argc, char** argv) {
     Code answer_rank = storage_rank_main_host(MateID(R), storage, layout);
 
     double highdesc_mib = double((highdesc.main_desc.size()+highdesc.block_desc.size())*sizeof(uint32_t))/(1<<20);
-    double sparse_orbit_mib = double(sparse.orbit_ops.size()*sizeof(CpuLowSparseOrbitOp))/(1<<20);
+    double sparse_nn_orbit_mib = double(sparse.nn_orbit_ops.size()*sizeof(CpuLowSparseOrbitOp))/(1<<20);
+    double sparse_nr_orbit_mib = double(sparse.nr_orbit_ops.size()*sizeof(CpuLowSparseOrbitOp))/(1<<20);
+    double sparse_nl_orbit_mib = double(sparse.nl_orbit_ops.size()*sizeof(CpuLowSparseOrbitOp))/(1<<20);
+    double sparse_orbit_mib = sparse_nn_orbit_mib + sparse_nr_orbit_mib + sparse_nl_orbit_mib;
     double sparse_local_closure_mib = double(sparse.local_closure_ops.size()*sizeof(CpuLowSparseClosureOp))/(1<<20);
     double sparse_cross_closure_mib = double(sparse.cross_closure_ops.size()*sizeof(CpuLowSparseClosureOp))/(1<<20);
     double sparse_closure_mib = sparse_local_closure_mib + sparse_cross_closure_mib;
-    double sparse_offsets_mib = double((sparse.orbit_off.size()+sparse.local_closure_off.size()
+    double sparse_offsets_mib = double((sparse.nn_orbit_off.size()+sparse.nr_orbit_off.size()
+        +sparse.nl_orbit_off.size()+sparse.local_closure_off.size()
         +sparse.cross_closure_off.size())*sizeof(uint32_t))/(1<<20);
     double sparse_cross_mib = double(sparse.high_cross_rank.size()*sizeof(uint16_t))/(1<<20);
     double mask_mib = double((G_FACTOR.low_mask_codes.size()+G_FACTOR.low_mask_off.size()
@@ -86,10 +90,13 @@ int main(int argc, char** argv) {
 
     if (plan_only) {
         std::cout
-            << "backend=gridfp-ramstream32-factorized-hybrid-sparse-v4.6-plan"
+            << "backend=gridfp-ramstream32-factorized-hybrid-sparse-v4.7-plan"
             << " n=" << n
             << " gpu_high_desc_mib=" << highdesc_mib
             << " gpu_mask_mib=" << mask_mib
+            << " cpu_sparse_nn_orbit_mib=" << sparse_nn_orbit_mib
+            << " cpu_sparse_nr_orbit_mib=" << sparse_nr_orbit_mib
+            << " cpu_sparse_nl_orbit_mib=" << sparse_nl_orbit_mib
             << " cpu_sparse_orbit_mib=" << sparse_orbit_mib
             << " cpu_sparse_local_closure_mib=" << sparse_local_closure_mib
             << " cpu_sparse_cross_closure_mib=" << sparse_cross_closure_mib
@@ -141,9 +148,12 @@ int main(int argc, char** argv) {
     double wall_s=ram_seconds_since(wall0);
     Count answer=main_auth.ptr[answer_rank];
     std::cout
-        << "backend=gridfp-ramstream32-factorized-hybrid-sparse-v4.6"
+        << "backend=gridfp-ramstream32-factorized-hybrid-sparse-v4.7"
         << " n="<<n<<" residue="<<answer<<" modulus="<<mod
         << " gpu_high_desc_mib="<<highdesc_mib<<" gpu_mask_mib="<<mask_mib
+        << " cpu_sparse_nn_orbit_mib="<<sparse_nn_orbit_mib
+        << " cpu_sparse_nr_orbit_mib="<<sparse_nr_orbit_mib
+        << " cpu_sparse_nl_orbit_mib="<<sparse_nl_orbit_mib
         << " cpu_sparse_orbit_mib="<<sparse_orbit_mib
         << " cpu_sparse_local_closure_mib="<<sparse_local_closure_mib
         << " cpu_sparse_cross_closure_mib="<<sparse_cross_closure_mib
