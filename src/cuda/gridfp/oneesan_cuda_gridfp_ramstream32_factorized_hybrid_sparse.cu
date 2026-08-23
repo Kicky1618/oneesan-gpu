@@ -13,6 +13,7 @@
 
 #include "ramstream32_cpu_low_sparse.hpp"
 #include "ramstream32_cpu_high.hpp"
+#include "ramstream32_cpu_high_direct.hpp"
 
 static void hybrid_sparse_release_dense_host(StorageFactorHost& storage) {
     storage.low_packed_rank.clear(); storage.low_packed_rank.shrink_to_fit();
@@ -59,6 +60,17 @@ int main(int argc, char** argv) {
     bool plan_only = argc > 5 && std::strcmp(argv[5], "--plan-only") == 0;
     double cpu_high_max_mib = env_nonnegative_double("CPU_HIGH_MAX_MIB", 0.0);
     int cpu_high_workers = env_positive_int("CPU_HIGH_WORKERS", cpu_workers);
+    const char* cpu_high_mode_env = std::getenv("CPU_HIGH_MODE");
+    bool cpu_high_direct_mode = cpu_high_mode_env
+        && std::strcmp(cpu_high_mode_env, "direct") == 0;
+    if (cpu_high_mode_env && *cpu_high_mode_env
+        && std::strcmp(cpu_high_mode_env, "scratch") != 0
+        && std::strcmp(cpu_high_mode_env, "direct") != 0) {
+        std::cerr << "CPU_HIGH_MODE must be scratch or direct\n";
+        return 2;
+    }
+    const char* cpu_high_mode = cpu_high_direct_mode ? "direct" : "scratch";
+
     int W = n + 1;
     if (W != TARGET_W || n < 2 || W > MAXW) return 1;
     if (gpu_target_mib <= 0 || cpu_workers <= 0) return 1;
@@ -90,6 +102,7 @@ int main(int argc, char** argv) {
     size_t cpu_high_limit_bytes = cpu_high_max_mib > 0.0
         ? size_t(cpu_high_max_mib * double(1ULL << 20)) : 0;
     size_t gpu_high_max_bytes = 0;
+    size_t gpu_high_nonempty_groups = 0;
 
     for (const auto& job : all_cpu_high_jobs) {
         if (!job.main_size && !job.block_size) continue;
@@ -100,6 +113,7 @@ int main(int argc, char** argv) {
             cpu_high_removed_bytes_per_row += job.scratch_bytes;
         } else {
             gpu_high_max_bytes = std::max(gpu_high_max_bytes, job.scratch_bytes);
+            ++gpu_high_nonempty_groups;
         }
     }
 
@@ -110,6 +124,14 @@ int main(int argc, char** argv) {
                   << " target_gib=" << double(gpu_target) / double(1ULL << 30)
                   << " cpu_high_max_mib=" << cpu_high_max_mib << '\n';
         return 4;
+    }
+
+    CpuHighDirectHost cpu_high_direct_meta;
+    double cpu_high_direct_meta_build_s = 0.0;
+    if (!selected_cpu_high_jobs.empty() && cpu_high_direct_mode) {
+        auto t = std::chrono::steady_clock::now();
+        cpu_high_direct_meta = build_cpu_high_direct(storage, layout, highdesc);
+        cpu_high_direct_meta_build_s = ram_seconds_since(t);
     }
 
     MateID init = MateID(R) << (2 * (W - 1));
@@ -130,6 +152,10 @@ int main(int argc, char** argv) {
     double sparse_cross_mib = double(sparse.high_cross_rank.size()*sizeof(uint16_t))/(1<<20);
     double cpu_high_cross_mib_est = selected_cpu_high_jobs.empty() ? 0.0
         : double(size_t(LOW_LUT_K) * G_FACTOR.low_mask_codes.size() * sizeof(uint16_t))/(1<<20);
+    double cpu_high_direct_meta_mib = double(
+        cpu_high_direct_meta.orbit_ops.size()*sizeof(CpuHighOrbitOp)
+        + cpu_high_direct_meta.closure_ops.size()*sizeof(CpuHighClosureOp)
+        + (cpu_high_direct_meta.orbit_off.size()+cpu_high_direct_meta.closure_off.size())*sizeof(uint32_t))/(1<<20);
     double mask_mib = double((G_FACTOR.low_mask_codes.size()+G_FACTOR.low_mask_off.size()
         +G_FACTOR.high_mask_codes.size()+G_FACTOR.high_mask_off.size())*sizeof(uint32_t))/(1<<20);
     double dense_host_release_mib = double((storage.low_packed_rank.size()+storage.high_packed_rank.size()
@@ -150,7 +176,7 @@ int main(int argc, char** argv) {
 
     if (plan_only) {
         std::cout
-            << "backend=gridfp-ramstream32-factorized-hybrid-sparse-v4.8-plan"
+            << "backend=gridfp-ramstream32-factorized-hybrid-sparse-v4.9-plan"
             << " n=" << n
             << " gpu_high_desc_mib=" << highdesc_mib
             << " gpu_mask_mib=" << mask_mib
@@ -164,15 +190,18 @@ int main(int argc, char** argv) {
             << " cpu_sparse_offsets_mib=" << sparse_offsets_mib
             << " cpu_sparse_cross_rank_mib=" << sparse_cross_mib
             << " cpu_high_cross_rank_mib=" << cpu_high_cross_mib_est
+            << " cpu_high_direct_meta_mib=" << cpu_high_direct_meta_mib
+            << " cpu_high_direct_meta_build_s=" << cpu_high_direct_meta_build_s
             << " cpu_dense_meta_replaced_mib=" << dense_cpu_meta_mib
             << " dense_host_release_mib=" << dense_host_release_mib
             << " meta_build_s=" << meta_build_s
             << " gpu_high_window_max_gib=" << double(gpu_high_max_bytes)/double(1ULL<<30)
             << " cpu_workers=" << cpu_workers
             << " cpu_high_workers=" << cpu_high_workers
+            << " cpu_high_mode=" << cpu_high_mode
             << " cpu_high_max_mib=" << cpu_high_max_mib
             << " cpu_high_groups=" << selected_cpu_high_jobs.size()
-            << " gpu_high_groups=" << (high_group_count - selected_cpu_high_jobs.size())
+            << " gpu_high_groups=" << gpu_high_nonempty_groups
             << " pcie_baseline_tib_per_residue=" << pcie_baseline_tib
             << " pcie_removed_tib_per_residue=" << pcie_removed_tib
             << " pcie_remaining_tib_per_residue=" << pcie_remaining_tib
@@ -194,7 +223,7 @@ int main(int argc, char** argv) {
     HighDescDeviceTables highdesc_tables; highdesc_tables.install(highdesc);
 
     hybrid_sparse_release_dense_host(storage);
-    if (selected_cpu_high_jobs.empty()) {
+    if (selected_cpu_high_jobs.empty() || cpu_high_direct_mode) {
         highdesc.main_desc.clear(); highdesc.main_desc.shrink_to_fit();
         highdesc.block_desc.clear(); highdesc.block_desc.shrink_to_fit();
     }
@@ -209,7 +238,8 @@ int main(int argc, char** argv) {
 
     Direct2DCtx gpu; gpu.init(mod);
     CpuLowSparsePool cpu_low(cpu_workers);
-    CpuHighPool cpu_high(cpu_high_workers);
+    CpuHighPool cpu_high_scratch(cpu_high_workers);
+    CpuHighDirectPool cpu_high_direct(cpu_high_workers);
     int gpu_threads=256;
     auto wall0=std::chrono::steady_clock::now();
     for(int row=0;row<W;++row){
@@ -218,20 +248,40 @@ int main(int argc, char** argv) {
             process_group_bidesc_compact(
                 gpu,main_auth,block_auth,storage,layout,W,high_wp,job.g,gpu_threads);
         }
-        if (!selected_cpu_high_jobs.empty())
-            cpu_high.run(selected_cpu_high_jobs, main_auth, block_auth,
-                         storage, layout, highdesc, cpu_high_cross, mod);
+        if (!selected_cpu_high_jobs.empty()) {
+            if (cpu_high_direct_mode) {
+                cpu_high_direct.run(selected_cpu_high_jobs, main_auth, block_auth,
+                                    storage, layout, cpu_high_direct_meta,
+                                    cpu_high_cross, mod);
+            } else {
+                cpu_high_scratch.run(selected_cpu_high_jobs, main_auth, block_auth,
+                                     storage, layout, highdesc, cpu_high_cross, mod);
+            }
+        }
         cpu_low.run(cpu_low_jobs,main_auth,block_auth,storage,layout,sparse,mod);
+        uint64_t cpu_high_groups = cpu_high_direct_mode
+            ? cpu_high_direct.groups() : cpu_high_scratch.groups();
         std::cerr<<"row "<<row+1<<'/'<<W
                  <<" gpu_groups="<<gpu.groups
-                 <<" cpu_high_groups="<<cpu_high.groups()
+                 <<" cpu_high_groups="<<cpu_high_groups
                  <<" cpu_low_groups="<<cpu_low.groups()<<'\n';
     }
 
     double wall_s=ram_seconds_since(wall0);
     Count answer=main_auth.ptr[answer_rank];
+    uint64_t cpu_high_groups = cpu_high_direct_mode
+        ? cpu_high_direct.groups() : cpu_high_scratch.groups();
+    double cpu_high_wall_s = cpu_high_direct_mode
+        ? cpu_high_direct.wall_s : cpu_high_scratch.wall_s;
+    double cpu_high_kernel_sum_s = cpu_high_direct_mode
+        ? cpu_high_direct.kernel_s() : cpu_high_scratch.kernel_s();
+    double cpu_high_pack_sum_s = cpu_high_direct_mode ? 0.0 : cpu_high_scratch.pack_s();
+    double cpu_high_unpack_sum_s = cpu_high_direct_mode ? 0.0 : cpu_high_scratch.unpack_s();
+    double cpu_high_peak_scratch_mib = cpu_high_direct_mode ? 0.0
+        : double(cpu_high_scratch.peak_scratch_bytes())/double(1<<20);
+
     std::cout
-        << "backend=gridfp-ramstream32-factorized-hybrid-sparse-v4.8"
+        << "backend=gridfp-ramstream32-factorized-hybrid-sparse-v4.9"
         << " n="<<n<<" residue="<<answer<<" modulus="<<mod
         << " gpu_high_desc_mib="<<highdesc_mib<<" gpu_mask_mib="<<mask_mib
         << " cpu_sparse_nn_orbit_mib="<<sparse_nn_orbit_mib
@@ -243,19 +293,20 @@ int main(int argc, char** argv) {
         << " cpu_sparse_closure_mib="<<sparse_closure_mib
         << " cpu_sparse_cross_rank_mib="<<sparse_cross_mib
         << " cpu_high_cross_rank_mib="<<cpu_high_cross_mib_est
+        << " cpu_high_direct_meta_mib="<<cpu_high_direct_meta_mib
         << " gpu_groups="<<gpu.groups
-        << " cpu_high_groups="<<cpu_high.groups()
+        << " cpu_high_groups="<<cpu_high_groups
         << " cpu_low_groups="<<cpu_low.groups()
         << " cpu_workers="<<cpu_workers
         << " cpu_high_workers="<<cpu_high_workers
+        << " cpu_high_mode="<<cpu_high_mode
         << " cpu_high_max_mib="<<cpu_high_max_mib
-        << " cpu_high_peak_worker_scratch_mib="
-        << double(cpu_high.peak_scratch_bytes())/double(1<<20)
+        << " cpu_high_peak_worker_scratch_mib="<<cpu_high_peak_scratch_mib
         << " h2d_s="<<gpu.h2d_s<<" gpu_kernel_s="<<gpu.kernel_s<<" d2h_s="<<gpu.d2h_s
-        << " cpu_high_pack_sum_s="<<cpu_high.pack_s()
-        << " cpu_high_kernel_sum_s="<<cpu_high.kernel_s()
-        << " cpu_high_unpack_sum_s="<<cpu_high.unpack_s()
-        << " cpu_high_wall_s="<<cpu_high.wall_s
+        << " cpu_high_pack_sum_s="<<cpu_high_pack_sum_s
+        << " cpu_high_kernel_sum_s="<<cpu_high_kernel_sum_s
+        << " cpu_high_unpack_sum_s="<<cpu_high_unpack_sum_s
+        << " cpu_high_wall_s="<<cpu_high_wall_s
         << " cpu_low_kernel_sum_s="<<cpu_low.kernel_s()<<" cpu_low_wall_s="<<cpu_low.wall_s
         << " pcie_baseline_tib_per_residue="<<pcie_baseline_tib
         << " pcie_removed_tib_per_residue="<<pcie_removed_tib
@@ -263,7 +314,7 @@ int main(int argc, char** argv) {
         << " pcie_fraction_removed="<<pcie_fraction_removed
         << " wall_s="<<wall_s<<'\n';
 
-    cpu_high.release();
+    cpu_high_scratch.release();
     gpu.destroy(); highdesc_tables.release(); mask_tables.release();
     main_auth.release(); block_auth.release();
     return 0;
