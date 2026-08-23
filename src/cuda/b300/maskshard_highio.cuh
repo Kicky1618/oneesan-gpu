@@ -112,12 +112,16 @@ __device__ __forceinline__ uint32_t maskshard_low_all_rank(
     uint32_t low_mask, uint32_t hs, uint32_t low_mask_rank
 ) {
     constexpr int S = MAXW + 2;
-    constexpr uint32_t LOW_RANK_MASK = (1u << LOW_LUT_K) - 1u;
-    const uint32_t p = D_F_LOW_MASK_OFF[size_t(low_mask) * S + hs] + low_mask_rank;
-    const uint32_t code = D_F_LOW_MASK_CODES[p];
-    const uint32_t packed = D_F_LOW_PACKED_RANK[code];
-    (void)LOW_RANK_MASK;
-    return packed >> LOW_LUT_K;
+    // StorageFactorHost orders each height by (occupancy mask, mask-local rank).
+    // Thus one fixed LOW mask occupies a contiguous interval.  Resolve only the
+    // first code of that interval; all following columns are simply base+rank.
+    // Compared with looking up the code and dense packed-rank for every element,
+    // the large dense-rank access is now identical for the whole FBlock and is
+    // therefore cache-friendly.
+    const uint32_t p0 = D_F_LOW_MASK_OFF[size_t(low_mask) * S + hs];
+    const uint32_t code0 = D_F_LOW_MASK_CODES[p0];
+    const uint32_t base = D_F_LOW_PACKED_RANK[code0] >> LOW_LUT_K;
+    return base + low_mask_rank;
 }
 
 __device__ __forceinline__ void maskshard_high_route(
