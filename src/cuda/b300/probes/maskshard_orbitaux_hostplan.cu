@@ -1,5 +1,6 @@
 #include <cuda_runtime.h>
 
+#include <algorithm>
 #include <cstdint>
 #include <cstdlib>
 #include <iostream>
@@ -27,8 +28,6 @@ static bool orbit_rep(MateValuePair w) { return w == NN || w == NR || w == NL; }
 int main(int argc, char** argv) {
     constexpr int L = LOW_LUT_K;
     constexpr int H = HIGH_LUT_K;
-    constexpr uint32_t LM = (1u << L) - 1u;
-    constexpr uint32_t HM = (1u << H) - 1u;
     constexpr uint64_t LOW_CODE_MASK = (uint64_t(1) << (2 * L)) - 1u;
     constexpr uint64_t HIGH_CODE_MASK = (uint64_t(1) << (2 * H)) - 1u;
 
@@ -53,8 +52,6 @@ int main(int argc, char** argv) {
 
     uint64_t h_nn = 0, h_pair = 0, l_nn = 0, l_pair = 0, l_p1_pair = 0;
 
-    // Validate the ACTUAL generated HIGH aux entries against the exact Grid-FP
-    // transition, including storage-order destination rank reconstruction.
     for (int p = TARGET_W - 1; p >= L + 1; --p) {
         const uint32_t pi = uint32_t((TARGET_W - 1) - p);
         for (size_t bid = 0; bid < layout.main_blocks.size(); ++bid) {
@@ -106,8 +103,6 @@ int main(int argc, char** argv) {
         }
     }
 
-    // Validate the ACTUAL generated LOW aux entries. p=1 NR/NL is special:
-    // LowDesc is companion MAIN and aux is old BLOCK; for p>1 the roles swap.
     for (int p = L; p >= 1; --p) {
         const uint32_t pi = uint32_t(L - p);
         for (size_t bid = 0; bid < layout.main_blocks.size(); ++bid) {
@@ -180,7 +175,6 @@ int main(int argc, char** argv) {
               << " high_nn=" << h_nn << " high_pair=" << h_pair
               << " low_nn=" << l_nn << " low_pair=" << l_pair
               << " low_p1_pair=" << l_p1_pair
-              << " max_high_storage_rank=" << *std::max_element(hd.main_base.begin(), hd.main_base.end())
               << " masks=" << (1u << H) << '/' << (1u << L) << '\n';
     return 0;
 }
