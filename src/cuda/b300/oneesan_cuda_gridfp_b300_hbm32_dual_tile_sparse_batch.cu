@@ -5,14 +5,33 @@
 #include "oneesan_cuda_gridfp_b300_hbm32_dual_tile_sparse.cu"
 #undef main
 #include "../gridfp/ramstream32_b300_dual_tile_peer_swap.cuh"
+#include "../gridfp/ramstream32_b300_dual_tile_pruned_peer.cuh"
 
 static int dt_env_int(const char* name,int fallback,int lo){
     const char* s=std::getenv(name);if(!s||!*s)return fallback;
     return std::max(lo,std::atoi(s));
 }
-static bool dt_env_peer_shuffle(){
+
+enum class DTBatchShuffleMode { CopyPipeline, PeerKernel, ReachPruned };
+static DTBatchShuffleMode dt_batch_shuffle_mode(){
     const char* s=std::getenv("ONEESAN_DUAL_SHUFFLE");
-    return s && (std::strcmp(s,"peer-kernel")==0 || std::strcmp(s,"peer")==0);
+    if(!s||!*s)return DTBatchShuffleMode::CopyPipeline;
+    if(std::strcmp(s,"peer-kernel")==0||std::strcmp(s,"peer")==0)
+        return DTBatchShuffleMode::PeerKernel;
+    if(std::strcmp(s,"peer-pruned")==0||std::strcmp(s,"pruned")==0
+       ||std::strcmp(s,"reachability")==0)
+        return DTBatchShuffleMode::ReachPruned;
+    std::cerr<<"unknown ONEESAN_DUAL_SHUFFLE="<<s
+             <<" (use copy-pipeline, peer-kernel, or peer-pruned)\n";
+    std::exit(656);
+}
+static const char* dt_batch_shuffle_name(DTBatchShuffleMode m){
+    switch(m){
+        case DTBatchShuffleMode::CopyPipeline:return "copy-pipeline";
+        case DTBatchShuffleMode::PeerKernel:return "peer-kernel";
+        case DTBatchShuffleMode::ReachPruned:return "peer-pruned";
+    }
+    return "unknown";
 }
 
 static void dt_batch_zero_state(
@@ -49,7 +68,8 @@ int main(int argc,char**argv){
     int ngpu=std::max(1,std::atoi(argv[4]));
     int threads=dt_env_int("ONEESAN_DUAL_THREADS",256,32);
     int chunk_mib=dt_env_int("ONEESAN_DUAL_CHUNK_MIB",512,64);
-    bool peer_shuffle=dt_env_peer_shuffle();
+    DTBatchShuffleMode shuffle_mode=dt_batch_shuffle_mode();
+    bool peer_family=shuffle_mode!=DTBatchShuffleMode::CopyPipeline;
     int W=n+1;
     if(W!=TARGET_W||W>MAXW||n<2||ngpu>MAXGPU)return 1;
     if constexpr(LOW_LUT_K+HIGH_LUT_K+1!=TARGET_W)return 1;
@@ -70,8 +90,13 @@ int main(int argc,char**argv){
     LowOrbitHost lo=build_cpu_low_orbit(f,l,ld);HighOrbitHost ho=build_high_orbit(f,l);
     B300SparseActionsHost sparse=build_b300_sparse_actions(l,ld,lo,hd,ho);
     B300DualTileHost dual=build_b300_dual_tile_layout_w28_precomputed(f,l,ngpu);
+    B300DualReachSchedule reach;
+    if(shuffle_mode==DTBatchShuffleMode::ReachPruned)
+        reach=build_b300_dual_reach_schedule(sparse,f,l,dual);
+
     Code chunk_elems=Code(chunk_mib)*(1ull<<20)/sizeof(Count);
-    Code scratch_elems=peer_shuffle?Code(0):chunk_elems;
+    // Peer-kernel and reachability-pruned engines are genuinely scratch-free.
+    Code scratch_elems=peer_family?Code(0):chunk_elems;
 
     DTMainLoc init=dt_main_loc_host(MateID(R)<<(2*(W-1)),f,l,dual);
     DTMainLoc answer=dt_main_loc_host(MateID(R),f,l,dual);
@@ -94,7 +119,10 @@ int main(int argc,char**argv){
 
     B300DualShuffleContext copy_ctx;
     B300DualPeerSwapContext peer_ctx;
-    if(peer_shuffle) peer_ctx.init(ngpu); else copy_ctx.init(ngpu);
+    B300DualPrunedPeerContext pruned_ctx;
+    if(shuffle_mode==DTBatchShuffleMode::CopyPipeline)copy_ctx.init(ngpu);
+    else if(shuffle_mode==DTBatchShuffleMode::PeerKernel)peer_ctx.init(ngpu);
+    else pruned_ctx.init(ngpu);
 
     ld.main_desc.clear();ld.main_desc.shrink_to_fit();
     ld.block_desc.clear();ld.block_desc.shrink_to_fit();
@@ -109,7 +137,8 @@ int main(int argc,char**argv){
     double setup_s=ram_seconds_since(setup0);
     std::cerr<<"dual-batch setup_s="<<setup_s<<" moduli="<<mods.size()
              <<" gpus="<<ngpu<<" threads="<<threads<<" chunk_mib="<<chunk_mib
-             <<" shuffle="<<(peer_shuffle?"peer-kernel":"copy-pipeline")<<'\n';
+             <<" shuffle="<<dt_batch_shuffle_name(shuffle_mode)
+             <<" scratch_mib_per_gpu="<<(scratch_elems*sizeof(Count)/(1ull<<20))<<'\n';
 
     double all_wall=0.0;
     for(size_t mi=0;mi<mods.size();++mi){
@@ -125,15 +154,20 @@ int main(int argc,char**argv){
         B300DualShuffleStats sh{};
         for(int row=0;row<W;++row){
             dt_run_high_local(sparse,ngpu,threads);
-            if(peer_shuffle)
+            if(shuffle_mode==DTBatchShuffleMode::PeerKernel)
                 b300_dt_peer_low_to_high(dual,mp.data(),bp.data(),peer_ctx,&sh);
+            else if(shuffle_mode==DTBatchShuffleMode::ReachPruned)
+                b300_dt_pruned_low_to_high(dual,l,mp.data(),bp.data(),reach.l2h[row],pruned_ctx,&sh);
             else
                 b300_dt_low_to_high(dual,mp.data(),bp.data(),sp.data(),chunk_elems,&sh,&copy_ctx);
+
             dt_run_low_local(sparse,ngpu,threads);
             if(row+1<W){
                 b300_dt_zero_block_arenas(dual,bp.data());
-                if(peer_shuffle)
+                if(shuffle_mode==DTBatchShuffleMode::PeerKernel)
                     b300_dt_peer_high_to_low_main(dual,mp.data(),peer_ctx,&sh);
+                else if(shuffle_mode==DTBatchShuffleMode::ReachPruned)
+                    b300_dt_pruned_high_to_low_main(dual,l,mp.data(),reach.h2l[row],pruned_ctx,&sh);
                 else
                     b300_dt_high_to_low_main(dual,mp.data(),sp.data(),chunk_elems,&sh,&copy_ctx);
             }
@@ -148,14 +182,16 @@ int main(int argc,char**argv){
                  <<" residue="<<ans<<" modulus="<<mod
                  <<" wall_s="<<wall
                  <<" ordinal="<<(mi+1)<<'/'<<mods.size()
-                 <<" shuffle_mode="<<(peer_shuffle?"peer-kernel":"copy-pipeline")
+                 <<" shuffle_mode="<<dt_batch_shuffle_name(shuffle_mode)
                  <<" shuffle_tib="<<dt_tib(sh.main_bytes+sh.block_bytes)<<'\n';
         std::cout.flush();
     }
 
     std::cerr<<"dual-batch complete residues="<<mods.size()
              <<" setup_s="<<setup_s<<" solver_wall_s_sum="<<all_wall<<'\n';
-    if(peer_shuffle) peer_ctx.release(); else copy_ctx.release();
+    if(shuffle_mode==DTBatchShuffleMode::CopyPipeline)copy_ctx.release();
+    else if(shuffle_mode==DTBatchShuffleMode::PeerKernel)peer_ctx.release();
+    else pruned_ctx.release();
     for(auto&c:gpu)c->release();
     return 0;
 }
