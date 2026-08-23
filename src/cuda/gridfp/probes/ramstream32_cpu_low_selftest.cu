@@ -13,6 +13,7 @@
 #undef RAMSTREAM_BIDESC_COMPACT_NO_MAIN
 #include "../ramstream32_cpu_low_sparse.hpp"
 #include "../ramstream32_cpu_high.hpp"
+#include "../ramstream32_cpu_high_direct.hpp"
 
 static void enum_states_rec(int pos, int h, MateID m, std::vector<MateID>& out) {
     if (pos < 0) { if (h == 0) out.push_back(m); return; }
@@ -107,6 +108,7 @@ int main() {
     LowOrbitHost orbit = build_cpu_low_orbit(storage, layout, lowdesc);
     CpuLowSparseHost sparse = build_cpu_low_sparse(storage, layout, lowdesc, orbit);
     CpuHighCrossHost highcross = build_cpu_high_cross(storage);
+    CpuHighDirectHost highdirect = build_cpu_high_direct(storage, layout, highdesc);
 
     auto main_states = enum_states(W);
     auto block_states = enum_states(W - 1);
@@ -173,6 +175,13 @@ int main() {
     if (!compare_factor("cpu-high", main_auth, block_auth, main_states, block_states,
                         high_rm, high_rd, storage, layout)) return 15;
 
+    fill_factor(main_auth, block_auth, main_states, block_states, init_m, init_d, storage, layout);
+    CpuHighDirectPool high_direct_pool(2);
+    high_direct_pool.run(high_job_ptrs, main_auth, block_auth,
+                         storage, layout, highdirect, highcross, mod);
+    if (!compare_factor("cpu-high-direct", main_auth, block_auth, main_states, block_states,
+                        high_rm, high_rd, storage, layout)) return 16;
+
     double sparse_meta_mib = double(
         sparse_orbit_ops*sizeof(CpuLowSparseOrbitOp)
         + sparse.local_closure_ops.size()*sizeof(CpuLowSparseClosureOp)
@@ -184,10 +193,11 @@ int main() {
               << " out_groups=" << out_pool.groups() << " in_groups=" << in_pool.groups()
               << " direct_groups=" << direct_pool.groups() << " sparse_groups=" << sparse_pool.groups()
               << " cpu_high_groups=" << high_pool.groups()
+              << " cpu_high_direct_groups=" << high_direct_pool.groups()
               << " out_scratch_mib=" << double(out_pool.peak_scratch_bytes()) / (1 << 20)
               << " in_scratch_mib=" << double(in_pool.peak_scratch_bytes()) / (1 << 20)
               << " cpu_high_scratch_mib=" << double(high_pool.peak_scratch_bytes()) / (1 << 20)
-              << " direct_scratch_mib=0 sparse_scratch_mib=0"
+              << " direct_scratch_mib=0 sparse_scratch_mib=0 cpu_high_direct_scratch_mib=0"
               << " dense_orbit_mib=" << double(orbit.rec.size() * sizeof(uint64_t)) / (1 << 20)
               << " sparse_nn_orbit_ops=" << sparse.nn_orbit_ops.size()
               << " sparse_nr_orbit_ops=" << sparse.nr_orbit_ops.size()
@@ -197,6 +207,10 @@ int main() {
               << " sparse_meta_mib=" << sparse_meta_mib
               << " cpu_high_cross_mib="
               << double(highcross.low_cross_rank.size()*sizeof(uint16_t))/(1<<20)
+              << " cpu_high_direct_orbit_mib="
+              << double(highdirect.orbit_ops.size()*sizeof(CpuHighOrbitOp))/(1<<20)
+              << " cpu_high_direct_closure_mib="
+              << double(highdirect.closure_ops.size()*sizeof(CpuHighClosureOp))/(1<<20)
               << '\n';
 
     high_pool.release();
