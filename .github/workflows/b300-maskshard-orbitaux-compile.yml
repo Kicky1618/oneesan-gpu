@@ -7,11 +7,13 @@ on:
       - 'src/cuda/b300/oneesan_cuda_gridfp_b300_hbm32_maskshard_fullorbit_batch_guarded.cu'
       - 'src/cuda/b300/oneesan_cuda_gridfp_b300_hbm32_maskshard_fullorbit_aux_batch_guarded.cu'
       - 'src/cuda/b300/oneesan_cuda_gridfp_b300_hbm32_maskshard_blockorbit_aux_batch_guarded.cu'
+      - 'src/cuda/b300/oneesan_cuda_gridfp_b300_hbm32_maskshard_blockorbit_compactaux_batch_guarded.cu'
       - 'src/cuda/b300/maskshard_highio.cuh'
       - 'src/cuda/b300/maskshard_highorbit.cuh'
       - 'src/cuda/b300/maskshard_loworbit.cuh'
       - 'src/cuda/b300/maskshard_index.cuh'
       - 'src/cuda/b300/probes/maskshard_orbitaux_hostplan.cu'
+      - 'src/cuda/b300/probes/maskshard_blockorbitaux_hostplan.cu'
       - 'src/cuda/gridfp/ramstream32_factorized_storage.hpp'
       - 'src/cuda/gridfp/ramstream32_highdesc.cuh'
       - 'src/cuda/gridfp/ramstream32_lowdesc.cuh'
@@ -22,11 +24,13 @@ on:
       - 'src/cuda/b300/oneesan_cuda_gridfp_b300_hbm32_maskshard_fullorbit_batch_guarded.cu'
       - 'src/cuda/b300/oneesan_cuda_gridfp_b300_hbm32_maskshard_fullorbit_aux_batch_guarded.cu'
       - 'src/cuda/b300/oneesan_cuda_gridfp_b300_hbm32_maskshard_blockorbit_aux_batch_guarded.cu'
+      - 'src/cuda/b300/oneesan_cuda_gridfp_b300_hbm32_maskshard_blockorbit_compactaux_batch_guarded.cu'
       - 'src/cuda/b300/maskshard_highio.cuh'
       - 'src/cuda/b300/maskshard_highorbit.cuh'
       - 'src/cuda/b300/maskshard_loworbit.cuh'
       - 'src/cuda/b300/maskshard_index.cuh'
       - 'src/cuda/b300/probes/maskshard_orbitaux_hostplan.cu'
+      - 'src/cuda/b300/probes/maskshard_blockorbitaux_hostplan.cu'
       - 'src/cuda/gridfp/ramstream32_factorized_storage.hpp'
       - 'src/cuda/gridfp/ramstream32_highdesc.cuh'
       - 'src/cuda/gridfp/ramstream32_lowdesc.cuh'
@@ -69,7 +73,16 @@ jobs:
             -DHIGH_LUT_K=${{ matrix.high }} \
             src/cuda/b300/oneesan_cuda_gridfp_b300_hbm32_maskshard_blockorbit_aux_batch_guarded.cu \
             -o build/b300_maskshard_blockorbit_w${{ matrix.width }}
-      - name: Compile actual orbit-aux host-plan probe
+      - name: Compile guarded v0.7 compact blocked-domain aux batch
+        shell: bash
+        run: |
+          nvcc -O3 -std=c++17 -lineinfo -arch=sm_80 \
+            -DTARGET_W=${{ matrix.width }} \
+            -DLOW_LUT_K=${{ matrix.low }} \
+            -DHIGH_LUT_K=${{ matrix.high }} \
+            src/cuda/b300/oneesan_cuda_gridfp_b300_hbm32_maskshard_blockorbit_compactaux_batch_guarded.cu \
+            -o build/b300_maskshard_blockorbit_compactaux_w${{ matrix.width }}
+      - name: Compile actual main-coordinate orbit-aux host-plan probe
         shell: bash
         run: |
           nvcc -O3 -std=c++17 -lineinfo -arch=sm_80 \
@@ -78,6 +91,18 @@ jobs:
             -DHIGH_LUT_K=${{ matrix.high }} \
             src/cuda/b300/probes/maskshard_orbitaux_hostplan.cu \
             -o build/maskshard_orbitaux_hostplan_w${{ matrix.width }}
-      - name: Build and validate actual host-side aux tables
+      - name: Validate actual main-coordinate aux tables
         shell: bash
         run: build/maskshard_orbitaux_hostplan_w${{ matrix.width }} ${{ matrix.n }}
+      - name: Compile actual compact blocked-coordinate aux host-plan probe
+        shell: bash
+        run: |
+          nvcc -O3 -std=c++17 -lineinfo -arch=sm_80 \
+            -DTARGET_W=${{ matrix.width }} \
+            -DLOW_LUT_K=${{ matrix.low }} \
+            -DHIGH_LUT_K=${{ matrix.high }} \
+            src/cuda/b300/probes/maskshard_blockorbitaux_hostplan.cu \
+            -o build/maskshard_blockorbitaux_hostplan_w${{ matrix.width }}
+      - name: Validate actual compact blocked-coordinate aux tables
+        shell: bash
+        run: build/maskshard_blockorbitaux_hostplan_w${{ matrix.width }} ${{ matrix.n }}
