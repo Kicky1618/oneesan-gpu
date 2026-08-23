@@ -9,7 +9,7 @@
 #undef RAMSTREAM_BIDESC_COMPACT_NO_MAIN
 #include "../ramstream32_high_orbit.cuh"
 #include "../ramstream32_cpu_low_inplace.hpp"
-#include "../ramstream32_b300_dual_tile_pruned_peer.cuh"
+#include "../ramstream32_b300_dual_tile_pruned_plan.cuh"
 
 namespace {
 
@@ -59,6 +59,22 @@ static void pruned_swap_cpu(
     }
 }
 
+static void planned_swap_cpu(
+    const B300DualTileHost&z,Arena&v,const B300DualPrunedArrayPlan&p
+){
+    const auto&bs=p.blocked?z.block_slot_base:z.main_slot_base;
+    for(const auto&pair:p.pairs)for(const auto&r:pair.runs){
+        int a=pair.a,b=pair.b;
+        for(Code q=0;q<r.n;++q){Code i=r.begin+q;
+            uint64_t&A=v[a][size_t(bs[a][b]+i)],&B=v[b][size_t(bs[b][a]+i)];
+            if(r.mode==3){uint64_t t=A;A=B;B=t;}
+            else if(r.mode==1){B=A;A=0;}
+            else if(r.mode==2){A=B;B=0;}
+            else return; // plan must never materialize mode zero.
+        }
+    }
+}
+
 static uint64_t value_for(bool blocked,int bid,int hi,int lo,Code q){
     uint64_t x=uint64_t(q)+1;
     x^=uint64_t(bid+1)*0x9e3779b97f4a7c15ULL;
@@ -89,7 +105,7 @@ static void materialize_stage(
 
 static bool compare_logical_target(
     const B300DualTileHost&z,const StorageLayout&l,const Arena&a,const Arena&b,
-    bool blocked,bool high_orientation
+    bool blocked,bool high_orientation,const char*tag
 ){
     const int nb=blocked?int(l.block_blocks.size()):int(l.main_blocks.size());
     const auto&bs=blocked?z.block_slot_base:z.main_slot_base;
@@ -101,10 +117,39 @@ static bool compare_logical_target(
             Code off=b300_dt_pruned_seg_off(z,blocked,nb,hi,lo,bid);
             for(Code q=0;q<n;++q){Code ix=bs[owner][peer]+off+q;
                 if(a[owner][size_t(ix)]!=b[owner][size_t(ix)]){
-                    std::cerr<<"logical target mismatch blocked="<<blocked
+                    std::cerr<<"logical target mismatch tag="<<tag<<" blocked="<<blocked
                              <<" high="<<high_orientation<<" bid="<<bid
                              <<" hi="<<hi<<" lo="<<lo<<" q="<<q<<'\n';return false;}
             }
+        }
+    }
+    return true;
+}
+
+static bool run_plan_case(
+    const B300DualTileHost&z,const StorageLayout&l,
+    const B300DualReachSchedule&reach,const B300DualPrunedSchedulePlan&plan,
+    const char*tag
+){
+    if(plan.l2h_main.size()!=TARGET_W||plan.l2h_block.size()!=TARGET_W
+       ||plan.h2l_main.size()!=TARGET_W-1)return false;
+    for(int row=0;row<TARGET_W;++row){
+        Arena m=make_arena(z.main_count,z.ngpu),b=make_arena(z.block_count,z.ngpu);
+        materialize_stage(z,l,reach.l2h[row],m,false,false);
+        materialize_stage(z,l,reach.l2h[row],b,true,false);
+        Arena mf=m,bf=b,mp=m,bp=b;
+        full_swap_cpu(z,mf,false,true);full_swap_cpu(z,bf,true,true);
+        planned_swap_cpu(z,mp,plan.l2h_main[row]);
+        planned_swap_cpu(z,bp,plan.l2h_block[row]);
+        if(!compare_logical_target(z,l,mf,mp,false,true,tag))return false;
+        if(!compare_logical_target(z,l,bf,bp,true,true,tag))return false;
+        if(row+1<TARGET_W){
+            Arena x=make_arena(z.main_count,z.ngpu);
+            materialize_stage(z,l,reach.h2l[row],x,false,true);
+            Arena xf=x,xp=x;
+            full_swap_cpu(z,xf,false,false);
+            planned_swap_cpu(z,xp,plan.h2l_main[row]);
+            if(!compare_logical_target(z,l,xf,xp,false,false,tag))return false;
         }
     }
     return true;
@@ -123,6 +168,7 @@ int main(){
     B300DualReachSchedule reach=build_b300_dual_reach_schedule(sparse,f,l,z);
     if(reach.l2h.size()!=TARGET_W||reach.h2l.size()!=TARGET_W-1)return 660;
 
+    // Raw elementary pruning equivalence.
     for(int row=0;row<TARGET_W;++row){
         Arena m=make_arena(z.main_count,NG),b=make_arena(z.block_count,NG);
         materialize_stage(z,l,reach.l2h[row],m,false,false);
@@ -131,19 +177,33 @@ int main(){
         full_swap_cpu(z,mf,false,true);full_swap_cpu(z,bf,true,true);
         pruned_swap_cpu(z,l,mp,false,true,reach.l2h[row]);
         pruned_swap_cpu(z,l,bp,true,true,reach.l2h[row]);
-        if(!compare_logical_target(z,l,mf,mp,false,true))return 661;
-        if(!compare_logical_target(z,l,bf,bp,true,true))return 662;
-
+        if(!compare_logical_target(z,l,mf,mp,false,true,"raw"))return 661;
+        if(!compare_logical_target(z,l,bf,bp,true,true,"raw"))return 662;
         if(row+1<TARGET_W){
             Arena x=make_arena(z.main_count,NG);
             materialize_stage(z,l,reach.h2l[row],x,false,true);
             Arena xf=x,xp=x;
             full_swap_cpu(z,xf,false,false);
             pruned_swap_cpu(z,l,xp,false,false,reach.h2l[row]);
-            if(!compare_logical_target(z,l,xf,xp,false,false))return 663;
+            if(!compare_logical_target(z,l,xf,xp,false,false,"raw"))return 663;
         }
     }
+
+    // Verify the launch-aware DP, including aggressive OR-merging across zero
+    // gaps.  penalty=0 must realize the logical minimum; the huge penalty case
+    // deliberately coalesces many elementary intervals.
+    auto p0=build_b300_dual_pruned_schedule_plan(z,l,reach,0);
+    if(p0.scheduled_bytes_per_residue()!=p0.logical_bytes_per_residue())return 664;
+    if(!run_plan_case(z,l,reach,p0,"plan0"))return 665;
+    auto pbig=build_b300_dual_pruned_schedule_plan(z,l,reach,1ull<<30);
+    if(pbig.scheduled_bytes_per_residue()>pbig.full_bytes_per_residue())return 666;
+    if(!run_plan_case(z,l,reach,pbig,"plan-big"))return 667;
+
     std::cout<<"b300-dual-tile-pruned-selftest OK W="<<TARGET_W
-             <<" gpus="<<NG<<" rows="<<TARGET_W<<'\n';
+             <<" gpus="<<NG<<" rows="<<TARGET_W
+             <<" min_bytes="<<p0.scheduled_bytes_per_residue()
+             <<" min_launches="<<p0.launches_per_residue()
+             <<" merged_bytes="<<pbig.scheduled_bytes_per_residue()
+             <<" merged_launches="<<pbig.launches_per_residue()<<'\n';
     return 0;
 }
