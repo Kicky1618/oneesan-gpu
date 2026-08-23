@@ -25,10 +25,10 @@ static int high_owner(const B300DualTileHost& z,const StorageFactorHost& f,
     return z.high.high_owner[f.high_all_off[b.he]+hr];
 }
 
-// Three read-modify-write variables in every orbit operation.  Choose the
-// execution GPU among their owners to minimize remote variables.  One remote
+// Three read-modify-write variables in every orbit operation. Choose the
+// execution GPU among their owners to minimize remote variables. One remote
 // uint32 variable costs a peer read + peer write = 8 bytes per opposite-axis
-// element.  This is a byte-traffic model, not a latency model.
+// element. This is a byte-traffic model, not a latency model.
 static int remote_vars3(int a,int b,int c){
     int best=3;
     const int cand[3]={a,b,c};
@@ -64,9 +64,7 @@ int main(){
     B300DualTileHost z=build_b300_dual_tile_layout_w28_precomputed(f,l,NG);
 
     std::array<long double,64> low_wrong_main{};  // LOW window while still LOW-owned
-    std::array<long double,32> low_wrong_block{};
     std::array<long double,64> high_wrong_main{}; // HIGH window while still HIGH-owned
-    std::array<long double,32> high_wrong_block{};
 
     // LOW orbit: owners are determined by LOW all-ranks while every operation
     // spans all HIGH rows. Attribute the operation to its source main block.
@@ -76,23 +74,28 @@ int main(){
         int a=low_owner(z,f,x,b300_sparse_src(op));
         int b=low_owner(z,f,y,b300_sparse_jrank(op));
         int c=low_owner(z,f,d,b300_sparse_drank(op));
-        long double bytes=(long double)remote_vars3(a,b,c)*8.0L*x.rows;
-        low_wrong_main[sb]+=bytes;
+        low_wrong_main[sb]+=(long double)remote_vars3(a,b,c)*8.0L*x.rows;
     }
-    // LOW closure: execute on destination owner.  If owners differ, only the
-    // source value crosses NVLink (4 bytes); destination atomic is local.
-    for(uint64_t op:s.low_closure){
-        uint32_t sb=b300_sparse_closure_sblock(op),src=b300_sparse_closure_src(op);
-        uint32_t desc=b300_sparse_closure_desc(op),kind=b300_host_low_kind(desc);
-        uint32_t db=(desc>>LOWDESC_BLOCK_SHIFT)&LOWDESC_BLOCK_MASK;
-        const auto&x=l.main_blocks[sb];
-        const StorageBlock* y=nullptr;
-        if(kind==LOWDESC_MAIN)y=&l.main_blocks[db];
-        else if(kind==LOWDESC_BLOCK||kind==LOWDESC_CROSS)y=&l.block_blocks[db];
-        if(!y)continue;
-        int a=low_owner(z,f,x,src);
-        int b=low_owner(z,f,*y,desc&LOWDESC_LR_MASK);
-        if(a!=b)low_wrong_main[sb]+=(long double)4*x.rows;
+    // LOW closure: execute on destination owner. CROSS changes target storage
+    // class at p=1: p=1 targets MAIN, while p>1 targets BLOCKED. Therefore the
+    // flat stream must be decoded edge-by-edge rather than as one undifferentiated list.
+    for(int p=LOW_LUT_K;p>=1;--p){
+        uint32_t pi=uint32_t(LOW_LUT_K-p);
+        for(uint32_t q=s.low_closure_off[pi];q<s.low_closure_off[pi+1];++q){
+            uint64_t op=s.low_closure[q];
+            uint32_t sb=b300_sparse_closure_sblock(op),src=b300_sparse_closure_src(op);
+            uint32_t desc=b300_sparse_closure_desc(op),kind=b300_host_low_kind(desc);
+            uint32_t db=(desc>>LOWDESC_BLOCK_SHIFT)&LOWDESC_BLOCK_MASK;
+            const auto&x=l.main_blocks[sb];
+            const StorageBlock* y=nullptr;
+            if(kind==LOWDESC_MAIN)y=&l.main_blocks[db];
+            else if(kind==LOWDESC_BLOCK)y=&l.block_blocks[db];
+            else if(kind==LOWDESC_CROSS)y=(p==1?&l.main_blocks[db]:&l.block_blocks[db]);
+            if(!y)continue;
+            int a=low_owner(z,f,x,src);
+            int b=low_owner(z,f,*y,desc&LOWDESC_LR_MASK);
+            if(a!=b)low_wrong_main[sb]+=(long double)4*x.rows;
+        }
     }
 
     // HIGH orbit: symmetric model in HIGH all-ranks, spanning LOW columns.
@@ -102,8 +105,7 @@ int main(){
         int a=high_owner(z,f,x,b300_sparse_src(op));
         int b=high_owner(z,f,y,b300_sparse_jrank(op));
         int c=high_owner(z,f,d,b300_sparse_drank(op));
-        long double bytes=(long double)remote_vars3(a,b,c)*8.0L*x.cols;
-        high_wrong_main[sb]+=bytes;
+        high_wrong_main[sb]+=(long double)remote_vars3(a,b,c)*8.0L*x.cols;
     }
     for(uint64_t op:s.high_closure){
         uint32_t sb=b300_sparse_closure_sblock(op),src=b300_sparse_closure_src(op);
@@ -116,11 +118,11 @@ int main(){
         if(a!=b)high_wrong_main[sb]+=(long double)4*x.cols;
     }
 
-    // A block kept permanently in LOW orientation saves its own L2H plus H2L
-    // transposes.  A block kept permanently HIGH does the same but pays HIGH
-    // wrong-orientation access instead.  These are screening ratios only:
-    // mixed-orientation actions couple blocks, so candidates must later be
-    // evaluated together before any runtime pruning is enabled.
+    // A MAIN block kept permanently LOW saves all of its L2H and H2L moves and
+    // pays wrong-orientation peer traffic only during the LOW window. Symmetric
+    // for a permanently HIGH block. These ratios are only a screen: actions
+    // couple source/partner/destination blocks, so candidates must be solved as
+    // a joint mixed-orientation problem before runtime use.
     long double low_candidate_saved=0,low_candidate_peer=0;
     long double high_candidate_saved=0,high_candidate_peer=0;
     int low_candidates=0,high_candidates=0;
@@ -134,7 +136,7 @@ int main(){
         if(highpeer<saved){++high_candidates;high_candidate_saved+=saved;high_candidate_peer+=highpeer;}
         std::cout<<std::fixed<<std::setprecision(6)
             <<"hybrid_main_block="<<bid
-            <<" transpose_gib_19switch="<<gib(saved)
+            <<" transpose_gib_per_residue="<<gib(saved)
             <<" low_wrong_peer_gib="<<gib(lowpeer)
             <<" low_ratio="<<(saved?double(lowpeer/saved):0.0)
             <<" high_wrong_peer_gib="<<gib(highpeer)
