@@ -11,6 +11,7 @@ on:
       - 'src/cuda/b300/maskshard_lowlocal.cuh'
       - 'src/cuda/b300/maskshard_highio.cuh'
       - 'src/cuda/gridfp/ramstream32_factorized_storage.hpp'
+      - 'src/cuda/gridfp/ramstream32_highdesc.cuh'
       - 'src/cuda/b300/oneesan_cuda_gridfp_b300_hbm32_factorized_batch.cu'
       - '.github/workflows/b300-maskshard-compile.yml'
   pull_request:
@@ -23,6 +24,7 @@ on:
       - 'src/cuda/b300/maskshard_lowlocal.cuh'
       - 'src/cuda/b300/maskshard_highio.cuh'
       - 'src/cuda/gridfp/ramstream32_factorized_storage.hpp'
+      - 'src/cuda/gridfp/ramstream32_highdesc.cuh'
       - 'src/cuda/b300/oneesan_cuda_gridfp_b300_hbm32_factorized_batch.cu'
       - '.github/workflows/b300-maskshard-compile.yml'
   workflow_dispatch:
