@@ -18,6 +18,7 @@
 #include "../gridfp/ramstream32_cpu_low_inplace.hpp"
 #include "../gridfp/ramstream32_b300_dual_tile_kernels.cuh"
 #include "../gridfp/ramstream32_b300_dual_tile_shuffle.cuh"
+#include "../gridfp/ramstream32_b300_dual_tile_precomputed_w28.cuh"
 
 struct DTMainLoc { uint32_t bid=0,hr=0,lr=0; int hi=0,lo=0; Code high_index=0,low_index=0; };
 
@@ -159,7 +160,7 @@ int main(int argc,char**argv){
     LowDescHost ld=build_low_descriptors(f,l);HighDescHost hd=build_high_descriptors(f,l);
     LowOrbitHost lo=build_cpu_low_orbit(f,l,ld);HighOrbitHost ho=build_high_orbit(f,l);
     B300SparseActionsHost sparse=build_b300_sparse_actions(l,ld,lo,hd,ho);
-    B300DualTileHost dual=build_b300_dual_tile_layout(f,l,ngpu);
+    B300DualTileHost dual=build_b300_dual_tile_layout_w28_precomputed(f,l,ngpu);
 
     Code chunk_elems=Code(chunk_mib)*(1ull<<20)/sizeof(Count);
     long double chunk_bytes=(long double)chunk_elems*sizeof(Count);
@@ -202,6 +203,7 @@ int main(int argc,char**argv){
     if(plan){
         std::cout<<std::fixed<<std::setprecision(6)
             <<"backend=gridfp-b300-hbm32-dual-tile-sparse-plan n="<<n<<" gpus="<<ngpu
+            <<" ownership_policy="<<((W==28&&ngpu==8)?"w28-popcount-milp-tight":"lpt-fallback")
             <<" runtime_groups=0 kernel_peer_access=0 remote_system_atomics=0"
             <<" chunk_mib="<<chunk_mib
             <<" pairslot_arena_min_gib="<<dt_gib(min_arena)
@@ -280,10 +282,11 @@ int main(int argc,char**argv){
     ck(cudaMemcpy(&ans,mp[answer.hi]+answer.high_index,sizeof(ans),cudaMemcpyDeviceToHost),"dual answer");
     std::cout<<"backend=gridfp-b300-hbm32-dual-tile-sparse n="<<n
              <<" residue="<<ans<<" modulus="<<mod<<" gpus="<<ngpu
+             <<" ownership_policy="<<((W==28&&ngpu==8)?"w28-popcount-milp-tight":"lpt-fallback")
              <<" kernel_peer_access=0 remote_system_atomics=0"
              <<" high_s="<<high_s<<" low_s="<<low_s<<" shuffle_s="<<shuffle_s<<" zero_s="<<zero_s
              <<" shuffle_tib="<<dt_tib(sh.main_bytes+sh.block_bytes)
-             <<" shuffle_rounds="<<sh.rounds<<" chunk_barriers="<<sh.chunk_barriers
+             <<" shuffle_rounds="<<sh.rounds<<" chunk_steps="<<sh.chunk_barriers
              <<" wall_s="<<wall_s<<'\n';
     for(auto&c:gpu)c->release();
     return 0;
