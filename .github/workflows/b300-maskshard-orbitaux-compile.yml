@@ -10,8 +10,10 @@ on:
       - 'src/cuda/b300/oneesan_cuda_gridfp_b300_hbm32_maskshard_blockorbit_compactaux_batch_guarded.cu'
       - 'src/cuda/b300/oneesan_cuda_gridfp_b300_hbm32_maskshard_blockorbit_compactaux_highclosurerows_batch_guarded.cu'
       - 'src/cuda/b300/oneesan_cuda_gridfp_b300_hbm32_maskshard_blockorbit_compactaux_fullclosurerows_batch_guarded.cu'
+      - 'src/cuda/b300/oneesan_cuda_gridfp_b300_hbm32_maskshard_blockorbit_compactaux_fullclosure_highrowpack_batch_guarded.cu'
       - 'src/cuda/b300/maskshard_highio.cuh'
       - 'src/cuda/b300/maskshard_highorbit.cuh'
+      - 'src/cuda/b300/maskshard_highclosure_rowpack.cuh'
       - 'src/cuda/b300/maskshard_loworbit.cuh'
       - 'src/cuda/b300/maskshard_lowclosure.cuh'
       - 'src/cuda/b300/maskshard_lowclosure_kernel.cuh'
@@ -33,8 +35,10 @@ on:
       - 'src/cuda/b300/oneesan_cuda_gridfp_b300_hbm32_maskshard_blockorbit_compactaux_batch_guarded.cu'
       - 'src/cuda/b300/oneesan_cuda_gridfp_b300_hbm32_maskshard_blockorbit_compactaux_highclosurerows_batch_guarded.cu'
       - 'src/cuda/b300/oneesan_cuda_gridfp_b300_hbm32_maskshard_blockorbit_compactaux_fullclosurerows_batch_guarded.cu'
+      - 'src/cuda/b300/oneesan_cuda_gridfp_b300_hbm32_maskshard_blockorbit_compactaux_fullclosure_highrowpack_batch_guarded.cu'
       - 'src/cuda/b300/maskshard_highio.cuh'
       - 'src/cuda/b300/maskshard_highorbit.cuh'
+      - 'src/cuda/b300/maskshard_highclosure_rowpack.cuh'
       - 'src/cuda/b300/maskshard_loworbit.cuh'
       - 'src/cuda/b300/maskshard_lowclosure.cuh'
       - 'src/cuda/b300/maskshard_lowclosure_kernel.cuh'
@@ -112,6 +116,15 @@ jobs:
             -DHIGH_LUT_K=${{ matrix.high }} \
             src/cuda/b300/oneesan_cuda_gridfp_b300_hbm32_maskshard_blockorbit_compactaux_fullclosurerows_batch_guarded.cu \
             -o build/b300_maskshard_v09_w${{ matrix.width }}
+      - name: Compile guarded v0.10 HIGH-row-pack batch
+        shell: bash
+        run: |
+          nvcc -O3 -std=c++17 -lineinfo -arch=sm_80 \
+            -DTARGET_W=${{ matrix.width }} \
+            -DLOW_LUT_K=${{ matrix.low }} \
+            -DHIGH_LUT_K=${{ matrix.high }} \
+            src/cuda/b300/oneesan_cuda_gridfp_b300_hbm32_maskshard_blockorbit_compactaux_fullclosure_highrowpack_batch_guarded.cu \
+            -o build/b300_maskshard_v10_w${{ matrix.width }}
       - name: Compile actual main-coordinate orbit-aux host-plan probe
         shell: bash
         run: |
