@@ -7,12 +7,15 @@ on:
       - 'src/cpp/probes/factor_orbitaux_savings.cpp'
       - 'src/cpp/probes/factor_blockorbit_semantics.cpp'
       - 'src/cpp/probes/factor_blockorbit_compactaux_semantics.cpp'
+      - 'src/cpp/probes/factor_highclosure_rows.cpp'
       - 'src/cuda/b300/probes/maskshard_orbitaux_hostplan.cu'
       - 'src/cuda/b300/probes/maskshard_blockorbitaux_hostplan.cu'
+      - 'src/cuda/b300/probes/maskshard_highclosure_rows_hostplan.cu'
       - 'src/cuda/b300/maskshard_highio.cuh'
       - 'src/cuda/b300/maskshard_highorbit.cuh'
       - 'src/cuda/b300/maskshard_loworbit.cuh'
       - 'src/cuda/b300/maskshard_index.cuh'
+      - 'src/cuda/gridfp/ramstream32_highdesc.cuh'
       - 'src/cpp/probes/factor_maskshard_memory.cpp'
       - '.github/workflows/factor-orbit-aux.yml'
   pull_request:
@@ -21,12 +24,15 @@ on:
       - 'src/cpp/probes/factor_orbitaux_savings.cpp'
       - 'src/cpp/probes/factor_blockorbit_semantics.cpp'
       - 'src/cpp/probes/factor_blockorbit_compactaux_semantics.cpp'
+      - 'src/cpp/probes/factor_highclosure_rows.cpp'
       - 'src/cuda/b300/probes/maskshard_orbitaux_hostplan.cu'
       - 'src/cuda/b300/probes/maskshard_blockorbitaux_hostplan.cu'
+      - 'src/cuda/b300/probes/maskshard_highclosure_rows_hostplan.cu'
       - 'src/cuda/b300/maskshard_highio.cuh'
       - 'src/cuda/b300/maskshard_highorbit.cuh'
       - 'src/cuda/b300/maskshard_loworbit.cuh'
       - 'src/cuda/b300/maskshard_index.cuh'
+      - 'src/cuda/gridfp/ramstream32_highdesc.cuh'
       - 'src/cpp/probes/factor_maskshard_memory.cpp'
       - '.github/workflows/factor-orbit-aux.yml'
   workflow_dispatch:
@@ -84,6 +90,19 @@ jobs:
       - name: Verify one-word compact aux reproduces canonical update
         run: build/factor_blockorbit_compactaux_semantics ${{ matrix.width }}
 
+  highclosure-rows:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build HIGH closure row work-model probe
+        run: |
+          mkdir -p build
+          g++ -O3 -std=c++17 -Wall -Wextra -Werror \
+            src/cpp/probes/factor_highclosure_rows.cpp \
+            -o build/factor_highclosure_rows
+      - name: Quantify n=27 HIGH row traversal
+        run: build/factor_highclosure_rows 28 14
+
   savings:
     runs-on: ubuntu-latest
     steps:
@@ -107,5 +126,5 @@ jobs:
           g++ -O3 -std=c++17 -Wall -Wextra -Werror \
             src/cpp/probes/factor_maskshard_memory.cpp \
             -o build/factor_maskshard_memory
-      - name: Verify n=27 v0.7 HBM budget
+      - name: Verify n=27 v0.7 base HBM budget
         run: build/factor_maskshard_memory 28 14 8 268.59
