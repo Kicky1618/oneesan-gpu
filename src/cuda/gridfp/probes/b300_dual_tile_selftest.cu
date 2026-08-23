@@ -12,6 +12,25 @@
 #include "../ramstream32_b300_dual_tile_layout.cuh"
 #include "../ramstream32_b300_sparse_actions.cuh"
 
+static uint32_t dt_flip_low_host(uint32_t lc,uint32_t depth){
+    int s=int(depth);
+    for(int pos=LOW_LUT_K-1;pos>=0;--pos){
+        MateValue v=MateValue((lc>>(2*pos))&3u);
+        if(v==::L)++s;
+        else if(v==R&&--s==0){uint32_t z=3u<<(2*pos);return(lc&~z)|(uint32_t(::L)<<(2*pos));}
+    }
+    return 0xffffffffu;
+}
+static uint32_t dt_flip_high_host(uint32_t hc,uint32_t depth){
+    int s=int(depth);
+    for(int pos=0;pos<HIGH_LUT_K;++pos){
+        MateValue v=MateValue((hc>>(2*pos))&3u);
+        if(v==::L){if(--s==0){uint32_t z=3u<<(2*pos);return(hc&~z)|(uint32_t(R)<<(2*pos));}}
+        else if(v==R)++s;
+    }
+    return 0xffffffffu;
+}
+
 static Code dt_host_main_index(
     const B300DualTileHost& z,const StorageFactorHost& f,const StorageLayout& l,
     int bid,uint32_t hr,uint32_t lr,bool high,int& owner
@@ -92,12 +111,26 @@ int main(){
     // CROSS changes topology but not occupancy on the inactive segment.  This
     // is the invariant that makes both windows completely local after a shuffle.
     uint64_t hc=0,lc=0;
-    for(uint64_t op:sparse.high_closure){uint32_t sb=b300_sparse_closure_sblock(op),desc=b300_sparse_closure_desc(op);if(highdesc_kind(desc)!=HIGHDESC_CROSS)continue;
-        const auto&x=l.main_blocks[sb];for(uint32_t lr=0;lr<x.cols;++lr){uint32_t c=f.low_all_codes[f.low_all_off[x.hs]+lr];uint32_t d=highdesc_flip_low(c,highdesc_depth(desc));
-            if(d!=0xffffffffu&&seg_occ(c,LOW_LUT_K)!=seg_occ(d,LOW_LUT_K)){std::cerr<<"HIGH CROSS changed LOW occupancy\n";return 545;}++hc;}}
-    for(uint64_t op:sparse.low_closure){uint32_t sb=b300_sparse_closure_sblock(op),desc=b300_sparse_closure_desc(op);if(lowdesc_kind(desc)!=LOWDESC_CROSS)continue;
-        const auto&x=l.main_blocks[sb];for(uint32_t hr=0;hr<x.rows;++hr){uint32_t c=f.high_all_codes[f.high_all_off[x.he]+hr];uint32_t d=lowdesc_flip_high(c,lowdesc_depth(desc));
-            if(d!=0xffffffffu&&seg_occ(c,HIGH_LUT_K)!=seg_occ(d,HIGH_LUT_K)){std::cerr<<"LOW CROSS changed HIGH occupancy\n";return 546;}++lc;}}
+    for(uint64_t op:sparse.high_closure){
+        uint32_t sb=b300_sparse_closure_sblock(op),desc=b300_sparse_closure_desc(op);
+        if(b300_host_high_kind(desc)!=HIGHDESC_CROSS)continue;
+        uint32_t depth=(desc>>HIGHDESC_DEPTH_SHIFT)&HIGHDESC_DEPTH_MASK;
+        const auto&x=l.main_blocks[sb];
+        for(uint32_t lr=0;lr<x.cols;++lr){
+            uint32_t c=f.low_all_codes[f.low_all_off[x.hs]+lr];uint32_t d=dt_flip_low_host(c,depth);
+            if(d!=0xffffffffu&&seg_occ(c,LOW_LUT_K)!=seg_occ(d,LOW_LUT_K)){std::cerr<<"HIGH CROSS changed LOW occupancy\n";return 545;}++hc;
+        }
+    }
+    for(uint64_t op:sparse.low_closure){
+        uint32_t sb=b300_sparse_closure_sblock(op),desc=b300_sparse_closure_desc(op);
+        if(b300_host_low_kind(desc)!=LOWDESC_CROSS)continue;
+        uint32_t depth=(desc>>LOWDESC_DEPTH_SHIFT)&LOWDESC_DEPTH_MASK;
+        const auto&x=l.main_blocks[sb];
+        for(uint32_t hr=0;hr<x.rows;++hr){
+            uint32_t c=f.high_all_codes[f.high_all_off[x.he]+hr];uint32_t d=dt_flip_high_host(c,depth);
+            if(d!=0xffffffffu&&seg_occ(c,HIGH_LUT_K)!=seg_occ(d,HIGH_LUT_K)){std::cerr<<"LOW CROSS changed HIGH occupancy\n";return 546;}++lc;
+        }
+    }
 
     std::cout<<"b300-dual-tile-selftest OK W="<<TARGET_W<<" gpus="<<NG
              <<" main="<<l.main_size<<" block="<<l.block_size
