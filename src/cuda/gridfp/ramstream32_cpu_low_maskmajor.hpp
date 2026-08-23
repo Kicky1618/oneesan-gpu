@@ -10,24 +10,15 @@
 #include <thread>
 #include <vector>
 
-// For LOW14 the largest (occupancy,height) class has only 1001 states.  Reserve
-// 10 bits for rank-inside-mask and 14 bits for occupancy: a physical LOW
-// location fits in 24 bits.  Runtime construction checks this bound so a future
-// split cannot silently truncate ranks.
 static constexpr int CPU_MM_LOCAL_BITS = 10;
 static constexpr uint32_t CPU_MM_LOCAL_MASK = (1u << CPU_MM_LOCAL_BITS) - 1u;
 static constexpr uint32_t CPU_MM_LOC_MASK = (1u << 24) - 1u;
 static_assert(LOW_LUT_K <= 14, "24-bit LOW-mask-major loc assumes LOW_LUT_K<=14");
+static_assert(HIGH_LUT_K <= 15, "uint16 cross-rank cache assumes HIGH_LUT_K<=15");
 
-// Three 24-bit locations + kind + destination block ids fit in 96 bits.
-struct CpuLowMaskOrbitOp {
-    uint32_t w0 = 0, w1 = 0, w2 = 0;
-};
+struct CpuLowMaskOrbitOp { uint32_t w0 = 0, w1 = 0, w2 = 0; };
 static_assert(sizeof(CpuLowMaskOrbitOp) == 12);
-// Two 24-bit locations + kind/block/depth fit in 64 bits.
-struct CpuLowMaskClosureOp {
-    uint32_t w0 = 0, w1 = 0;
-};
+struct CpuLowMaskClosureOp { uint32_t w0 = 0, w1 = 0; };
 static_assert(sizeof(CpuLowMaskClosureOp) == 8);
 
 static inline CpuLowMaskOrbitOp cpu_mm_make_orbit(
@@ -76,6 +67,11 @@ struct CpuLowMaskSparseHost {
     std::vector<CpuLowMaskClosureOp> closure_ops;
     std::vector<uint32_t> orbit_off;
     std::vector<uint32_t> closure_off;
+    // depth-major table.  Source index is the index into
+    // G_FACTOR.high_mask_codes; value is target rank inside the same HIGH
+    // occupancy class after the boundary mate flip.  0xffff = invalid.
+    std::vector<uint16_t> high_cross_rank;
+    uint32_t high_cross_stride = 0;
     uint32_t nblocks = 0;
 };
 
@@ -122,8 +118,7 @@ static CpuLowMaskSparseHost build_cpu_low_maskmajor_sparse(
             s.orbit_off[size_t(pi) * pitch + bid] = uint32_t(s.orbit_ops.size());
             s.closure_off[size_t(pi) * pitch + bid] = uint32_t(s.closure_ops.size());
             const StorageBlock& xb = logical.main_blocks[bid];
-            uint32_t cols = xb.cols;
-            for (uint32_t lr = 0; lr < cols; ++lr) {
+            for (uint32_t lr = 0; lr < xb.cols; ++lr) {
                 uint64_t ow = orbit.rec[
                     size_t(pi) * orbit.main_total + orbit.main_base[bid] + lr];
                 uint32_t k = cpu_orbit_kind(ow);
@@ -163,10 +158,32 @@ static CpuLowMaskSparseHost build_cpu_low_maskmajor_sparse(
         s.closure_off[size_t(pi) * pitch + s.nblocks] = uint32_t(s.closure_ops.size());
     }
 
+    // CPU LOW cross transitions used to scan the HIGH mate then binary-search
+    // the target occupancy class for every state.  The source high-mask entry
+    // is already known as (high0+hr), so precompute the target local rank for
+    // all 15 possible boundary depths.  At H=13 this costs ~24 MiB instead of
+    // retaining the 256-MiB dense 4^H packed-rank table.
+    s.high_cross_stride = uint32_t(G_FACTOR.high_mask_codes.size());
+    s.high_cross_rank.assign(size_t(16) * s.high_cross_stride, uint16_t(0xffff));
+    constexpr uint32_t HR_MASK = (1u << HIGH_LUT_K) - 1u;
+    for (uint32_t ix = 0; ix < s.high_cross_stride; ++ix) {
+        uint32_t hc = G_FACTOR.high_mask_codes[ix];
+        for (uint32_t depth = 1; depth < 16; ++depth) {
+            uint32_t hc2 = cpu_low_flip_high(hc, depth);
+            if (hc2 == 0xffffffffu) continue;
+            uint32_t packed = storage.high_packed_rank[hc2];
+            if (packed == 0xffffffffu) continue;
+            uint32_t hr2 = packed & HR_MASK;
+            if (hr2 >= 0xffffu) std::exit(127);
+            s.high_cross_rank[size_t(depth) * s.high_cross_stride + ix] = uint16_t(hr2);
+        }
+    }
+
     std::cerr << "cpu_low_maskmajor_sparse orbit_ops=" << s.orbit_ops.size()
               << " closure_ops=" << s.closure_ops.size()
               << " orbit_mib=" << double(s.orbit_ops.size() * sizeof(CpuLowMaskOrbitOp)) / (1<<20)
               << " closure_mib=" << double(s.closure_ops.size() * sizeof(CpuLowMaskClosureOp)) / (1<<20)
+              << " cross_rank_mib=" << double(s.high_cross_rank.size() * sizeof(uint16_t)) / (1<<20)
               << '\n';
     return s;
 }
@@ -177,51 +194,52 @@ static inline std::pair<uint32_t,uint32_t> cpu_mm_range(
     size_t pitch = size_t(nblocks) + 1;
     return {off[size_t(pi) * pitch + bid], off[size_t(pi) * pitch + bid + 1]};
 }
-
 static inline uint32_t cpu_mm_loc_mask(uint32_t loc) { return loc >> CPU_MM_LOCAL_BITS; }
 static inline uint32_t cpu_mm_loc_rank(uint32_t loc) { return loc & CPU_MM_LOCAL_MASK; }
+static inline uint32_t cpu_mm_cross_rank(
+    const CpuLowMaskSparseHost& s, uint32_t source_ix, uint32_t depth
+) {
+    if (depth >= 16 || source_ix >= s.high_cross_stride) return 0xffffffffu;
+    uint16_t z = s.high_cross_rank[size_t(depth) * s.high_cross_stride + source_ix];
+    return z == uint16_t(0xffff) ? 0xffffffffu : uint32_t(z);
+}
+static inline size_t cpu_mm_sparse_bytes(const CpuLowMaskSparseHost& s) {
+    return s.orbit_ops.size() * sizeof(CpuLowMaskOrbitOp)
+         + s.closure_ops.size() * sizeof(CpuLowMaskClosureOp)
+         + (s.orbit_off.size() + s.closure_off.size()) * sizeof(uint32_t)
+         + s.high_cross_rank.size() * sizeof(uint16_t);
+}
 
-struct CpuMmColumn {
-    Count* base = nullptr;
-    uint32_t stride = 0;
-};
+struct CpuMmColumn { Count* base = nullptr; uint32_t stride = 0; };
 
 static inline CpuMmColumn cpu_mm_main_col(
     RamCounts& auth, const LowMaskMajorLayout& mm,
     const StorageLayout& logical, uint32_t row0,
     uint32_t bid, uint32_t loc
 ) {
-    if (bid >= logical.main_blocks.size()) std::exit(127);
+    if (bid >= logical.main_blocks.size()) std::exit(128);
     const StorageBlock& b = logical.main_blocks[bid];
     uint32_t low_mask = cpu_mm_loc_mask(loc);
     uint32_t lr = cpu_mm_loc_rank(loc);
     uint32_t w = lowmask_major_width(low_mask, b.hs);
-    if (!w || lr >= w || row0 >= b.rows) std::exit(128);
-    CpuMmColumn c;
-    c.base = auth.ptr + lowmask_major_main_block_base(mm, low_mask, bid)
-        + Code(row0) * w + lr;
-    c.stride = w;
-    return c;
+    if (!w || lr >= w || row0 >= b.rows) std::exit(129);
+    return {auth.ptr + lowmask_major_main_block_base(mm, low_mask, bid)
+                    + Code(row0) * w + lr, w};
 }
-
 static inline CpuMmColumn cpu_mm_block_col(
     RamCounts& auth, const LowMaskMajorLayout& mm,
     const StorageLayout& logical, uint32_t row0,
     uint32_t bid, uint32_t loc
 ) {
-    if (bid >= logical.block_blocks.size()) std::exit(129);
+    if (bid >= logical.block_blocks.size()) std::exit(130);
     const StorageBlock& b = logical.block_blocks[bid];
     uint32_t low_mask = cpu_mm_loc_mask(loc);
     uint32_t lr = cpu_mm_loc_rank(loc);
     uint32_t w = lowmask_major_width(low_mask, b.hs);
-    if (!w || lr >= w || row0 >= b.rows) std::exit(130);
-    CpuMmColumn c;
-    c.base = auth.ptr + lowmask_major_block_block_base(mm, low_mask, bid)
-        + Code(row0) * w + lr;
-    c.stride = w;
-    return c;
+    if (!w || lr >= w || row0 >= b.rows) std::exit(131);
+    return {auth.ptr + lowmask_major_block_block_base(mm, low_mask, bid)
+                    + Code(row0) * w + lr, w};
 }
-
 static inline Count* cpu_mm_main_ptr_row0(
     RamCounts& auth, const LowMaskMajorLayout& mm,
     const StorageLayout& logical, uint32_t row0,
@@ -230,7 +248,6 @@ static inline Count* cpu_mm_main_ptr_row0(
     CpuMmColumn c = cpu_mm_main_col(auth, mm, logical, row0, bid, loc);
     return c.base + hr * c.stride;
 }
-
 static inline Count* cpu_mm_block_ptr_row0(
     RamCounts& auth, const LowMaskMajorLayout& mm,
     const StorageLayout& logical, uint32_t row0,
@@ -240,36 +257,11 @@ static inline Count* cpu_mm_block_ptr_row0(
     return c.base + hr * c.stride;
 }
 
-static inline Count* cpu_mm_main_ptr(
-    RamCounts& auth, const LowMaskMajorLayout& mm,
-    const StorageFactorHost& storage, const StorageLayout& logical,
-    uint32_t high_mask, uint32_t bid, uint32_t loc, Code hr
-) {
-    if (bid >= logical.main_blocks.size()) std::exit(131);
-    const StorageBlock& b = logical.main_blocks[bid];
-    uint32_t row0 = storage.high_mask_begin[
-        size_t(high_mask) * StorageFactorHost::S + b.he];
-    if (Code(row0) + hr >= b.rows) std::exit(132);
-    return cpu_mm_main_ptr_row0(auth, mm, logical, row0, bid, loc, hr);
-}
-
-static inline Count* cpu_mm_block_ptr(
-    RamCounts& auth, const LowMaskMajorLayout& mm,
-    const StorageFactorHost& storage, const StorageLayout& logical,
-    uint32_t high_mask, uint32_t bid, uint32_t loc, Code hr
-) {
-    if (bid >= logical.block_blocks.size()) std::exit(133);
-    const StorageBlock& b = logical.block_blocks[bid];
-    uint32_t row0 = storage.high_mask_begin[
-        size_t(high_mask) * StorageFactorHost::S + b.he];
-    if (Code(row0) + hr >= b.rows) std::exit(134);
-    return cpu_mm_block_ptr_row0(auth, mm, logical, row0, bid, loc, hr);
-}
-
 struct CpuLowMaskMajorStats {
     double kernel_s = 0.0;
     uint64_t groups = 0;
     uint64_t orbit_columns = 0;
+    uint64_t closure_columns = 0;
 };
 
 static void process_cpu_low_group_maskmajor(
@@ -280,9 +272,6 @@ static void process_cpu_low_group_maskmajor(
 ) {
     if (!job.main_size && !job.block_size) return;
 
-    // The HIGH occupancy mask is fixed during the LOW window.  Cache the first
-    // HIGH row of every factor block once per group instead of repeating the
-    // high_mask_begin lookup for every sparse instruction and row.
     std::array<uint32_t, 3 * (MAXW + 2)> main_row0{};
     std::array<uint32_t, MAXW + 2> block_row0{};
     for (uint32_t bid = 0; bid < logical.main_blocks.size(); ++bid) {
@@ -300,11 +289,8 @@ static void process_cpu_low_group_maskmajor(
     for (int p = LOW_LUT_K; p >= 1; --p) {
         uint32_t pi = uint32_t(LOW_LUT_K - p);
 
-        // N* orbit transitions never change the HIGH code: source, paired main
-        // state, and blocked state all use the same HIGH-row index.  Therefore
-        // rows are independent and we may interchange (row,op) -> (op,row)
-        // without changing the per-row operation order.  Resolve the three
-        // physical columns once per instruction, then stream down the rows.
+        // N* owner orbits preserve HIGH, so resolve each physical column once
+        // and stream through all HIGH rows.
         for (uint32_t bid = 0; bid < sparse.nblocks; ++bid) {
             const FBlock& xb = job.main_blocks[bid];
             if (!xb.stride || xb.end == xb.off) continue;
@@ -322,7 +308,6 @@ static void process_cpu_low_group_maskmajor(
                 CpuMmColumn dc = cpu_mm_block_col(
                     block_auth, mm, logical, block_row0[dbid], dbid, cpu_mm_orbit_d(op));
                 ++stats.orbit_columns;
-
                 for (Code hr = 0; hr < rows; ++hr) {
                     Count* ip = ic.base + hr * ic.stride;
                     Count* jp = jc.base + hr * jc.stride;
@@ -349,10 +334,68 @@ static void process_cpu_low_group_maskmajor(
             }
         }
 
-        // Closure transitions can flip a HIGH mate and therefore may move from
-        // one HIGH row to another.  Keep the proven row-major order here; only
-        // hoist the per-block row0 lookup.  A future reordering must establish a
-        // topological/order-independence proof for the cross-row subset first.
+        // For p>1 every closure reads main and only accumulates into blocked.
+        // No closure can change another closure source, and modular addition is
+        // commutative, so op/row loop interchange is exact.  p=1 can target
+        // main and retains the previously validated row-major order below.
+        if (p > 1) {
+            for (uint32_t bid = 0; bid < sparse.nblocks; ++bid) {
+                const FBlock& xb = job.main_blocks[bid];
+                if (!xb.stride || xb.end == xb.off) continue;
+                Code rows = (xb.end - xb.off) / xb.stride;
+                auto [ca, cb] = cpu_mm_range(sparse.closure_off, sparse.nblocks, pi, bid);
+                uint32_t high0 = G_FACTOR.high_mask_off[
+                    size_t(job.mask) * FactorTablesHost::STRIDE + xb.he];
+                for (uint32_t q = ca; q < cb; ++q) {
+                    const CpuLowMaskClosureOp& op = sparse.closure_ops[q];
+                    uint32_t kind = cpu_mm_closure_kind(op);
+                    uint32_t dbid = cpu_mm_closure_block(op);
+                    uint32_t dst = cpu_mm_closure_dst(op);
+                    CpuMmColumn sc = cpu_mm_main_col(
+                        main_auth, mm, logical, main_row0[bid], bid, cpu_mm_closure_src(op));
+                    ++stats.closure_columns;
+                    if (kind == LOWDESC_BLOCK) {
+                        CpuMmColumn dc = cpu_mm_block_col(
+                            block_auth, mm, logical, block_row0[dbid], dbid, dst);
+                        for (Code hr = 0; hr < rows; ++hr) {
+                            Count c = sc.base[hr * sc.stride];
+                            if (!c) continue;
+                            Count* j = dc.base + hr * dc.stride;
+                            *j = cpu_low_add(*j, c, mod);
+                        }
+                    } else if (kind == LOWDESC_CROSS) {
+                        CpuMmColumn dc = cpu_mm_block_col(
+                            block_auth, mm, logical, block_row0[dbid], dbid, dst);
+                        uint32_t depth = cpu_mm_closure_depth(op);
+                        for (Code hr = 0; hr < rows; ++hr) {
+                            Count c = sc.base[hr * sc.stride];
+                            if (!c) continue;
+                            uint32_t hr2 = cpu_mm_cross_rank(
+                                sparse, high0 + uint32_t(hr), depth);
+                            if (hr2 == 0xffffffffu) continue;
+                            Count* j = dc.base + Code(hr2) * dc.stride;
+                            *j = cpu_low_add(*j, c, mod);
+                        }
+                    } else if (kind == LOWDESC_MAIN) {
+                        // Defensive fallback; the mathematical p>1 closure
+                        // cases are blocked/cross, but keep semantics exact if
+                        // descriptor construction is extended later.
+                        CpuMmColumn dc = cpu_mm_main_col(
+                            main_auth, mm, logical, main_row0[dbid], dbid, dst);
+                        for (Code hr = 0; hr < rows; ++hr) {
+                            Count c = sc.base[hr * sc.stride];
+                            if (!c) continue;
+                            Count* j = dc.base + hr * dc.stride;
+                            *j = cpu_low_add(*j, c, mod);
+                        }
+                    }
+                }
+            }
+            continue;
+        }
+
+        // p=1: retain the proven row-major closure order because destinations
+        // are main states and can participate in the same final-edge phase.
         for (uint32_t bid = 0; bid < sparse.nblocks; ++bid) {
             const FBlock& xb = job.main_blocks[bid];
             if (!xb.stride || xb.end == xb.off) continue;
@@ -361,7 +404,6 @@ static void process_cpu_low_group_maskmajor(
             uint32_t high0 = G_FACTOR.high_mask_off[
                 size_t(job.mask) * FactorTablesHost::STRIDE + xb.he];
             for (Code hr = 0; hr < rows; ++hr) {
-                uint32_t hc = G_FACTOR.high_mask_codes[high0 + uint32_t(hr)];
                 for (uint32_t q = ca; q < cb; ++q) {
                     const CpuLowMaskClosureOp& op = sparse.closure_ops[q];
                     Count* src = cpu_mm_main_ptr_row0(
@@ -381,23 +423,12 @@ static void process_cpu_low_group_maskmajor(
                             block_auth, mm, logical, block_row0[dbid], dbid, dst, hr);
                         *j = cpu_low_add(*j, c, mod);
                     } else if (kind == LOWDESC_CROSS) {
-                        uint32_t hc2 = cpu_low_flip_high(hc, cpu_mm_closure_depth(op));
-                        if (hc2 == 0xffffffffu) continue;
-                        if (p == 1) {
-                            const StorageBlock& y = logical.main_blocks[dbid];
-                            uint32_t hr2 = cpu_high_mask_rank(job.mask, hc2, y.he);
-                            if (hr2 == 0xffffffffu) continue;
-                            Count* j = cpu_mm_main_ptr_row0(
-                                main_auth, mm, logical, main_row0[dbid], dbid, dst, hr2);
-                            *j = cpu_low_add(*j, c, mod);
-                        } else {
-                            const StorageBlock& y = logical.block_blocks[dbid];
-                            uint32_t hr2 = cpu_high_mask_rank(job.mask, hc2, y.he);
-                            if (hr2 == 0xffffffffu) continue;
-                            Count* j = cpu_mm_block_ptr_row0(
-                                block_auth, mm, logical, block_row0[dbid], dbid, dst, hr2);
-                            *j = cpu_low_add(*j, c, mod);
-                        }
+                        uint32_t hr2 = cpu_mm_cross_rank(
+                            sparse, high0 + uint32_t(hr), cpu_mm_closure_depth(op));
+                        if (hr2 == 0xffffffffu) continue;
+                        Count* j = cpu_mm_main_ptr_row0(
+                            main_auth, mm, logical, main_row0[dbid], dbid, dst, hr2);
+                        *j = cpu_low_add(*j, c, mod);
                     }
                 }
             }
@@ -445,4 +476,5 @@ struct CpuLowMaskMajorPool {
     double kernel_s() const { double z=0; for (const auto& s:stats) z+=s.kernel_s; return z; }
     uint64_t groups() const { uint64_t z=0; for (const auto& s:stats) z+=s.groups; return z; }
     uint64_t orbit_columns() const { uint64_t z=0; for (const auto& s:stats) z+=s.orbit_columns; return z; }
+    uint64_t closure_columns() const { uint64_t z=0; for (const auto& s:stats) z+=s.closure_columns; return z; }
 };
