@@ -161,10 +161,10 @@ int main(int argc, char** argv) {
     Code max_auth_states = 0;
     for (int d = 0; d < ngpu; ++d)
         max_auth_states = std::max(max_auth_states, shard.gpu_main[d] + shard.gpu_block[d]);
-    const long double max_auth_bytes = (long double)max_auth_states * sizeof(Count);
+    const long double max_auth_bytes = static_cast<long double>(max_auth_states) * sizeof(Count);
     const long double peak_v01_bytes = max_auth_bytes + scratch_bytes + factor_bytes + meta_bytes;
     const long double peak_v02_bytes = peak_v01_bytes + highdesc_bytes;
-    const long double gib = long double(1ULL << 30);
+    const long double gib = static_cast<long double>(1ULL << 30);
     const double peak_v01_gib = double(peak_v01_bytes / gib);
     const double peak_v02_gib = double(peak_v02_bytes / gib);
 
@@ -173,12 +173,12 @@ int main(int argc, char** argv) {
               << " gpus=" << ngpu
               << " states=" << (layout.main_size + layout.block_size)
               << " authoritative_gib="
-              << double((long double)(layout.main_size + layout.block_size) * sizeof(Count) / gib)
+              << double(static_cast<long double>(layout.main_size + layout.block_size) * sizeof(Count) / gib)
               << " max_authoritative_gpu_gib=" << double(max_auth_bytes / gib)
-              << " max_high_mask_group_gib=" << double((long double)low_scratch_bytes / gib)
-              << " low_alt_scratch_gib=" << double((long double)low_scratch_bytes / gib)
-              << " high_pingpong_scratch_gib=" << double((long double)high_scratch_bytes / gib)
-              << " shared_scratch_peak_gib=" << double((long double)scratch_bytes / gib)
+              << " max_high_mask_group_gib=" << double(static_cast<long double>(low_scratch_bytes) / gib)
+              << " low_alt_scratch_gib=" << double(static_cast<long double>(low_scratch_bytes) / gib)
+              << " high_pingpong_scratch_gib=" << double(static_cast<long double>(high_scratch_bytes) / gib)
+              << " shared_scratch_peak_gib=" << double(static_cast<long double>(scratch_bytes) / gib)
               << " factor_tables_mib=" << double(factor_bytes) / double(1ULL << 20)
               << " maskshard_meta_mib=" << double(meta_bytes) / double(1ULL << 20)
               << " high_route_mib="
@@ -200,10 +200,10 @@ int main(int argc, char** argv) {
 
     for (int d = 0; d < ngpu; ++d) {
         std::cout << "gpu=" << d
-                  << " main_gib=" << double((long double)shard.gpu_main[d] * sizeof(Count) / gib)
-                  << " block_gib=" << double((long double)shard.gpu_block[d] * sizeof(Count) / gib)
+                  << " main_gib=" << double(static_cast<long double>(shard.gpu_main[d]) * sizeof(Count) / gib)
+                  << " block_gib=" << double(static_cast<long double>(shard.gpu_block[d]) * sizeof(Count) / gib)
                   << " total_gib="
-                  << double((long double)(shard.gpu_main[d] + shard.gpu_block[d]) * sizeof(Count) / gib)
+                  << double(static_cast<long double>(shard.gpu_main[d] + shard.gpu_block[d]) * sizeof(Count) / gib)
                   << '\n';
     }
     return 0;
