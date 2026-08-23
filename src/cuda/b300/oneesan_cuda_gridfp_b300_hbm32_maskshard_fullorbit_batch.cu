@@ -1,6 +1,7 @@
 #include <cuda_runtime.h>
 
 #include <algorithm>
+#include <array>
 #include <atomic>
 #include <chrono>
 #include <cstdint>
@@ -125,9 +126,14 @@ struct FullOrbitBatchHighJob {
     Code main_n = 0;
     Code block_n = 0;
     Code work = 0;
+#ifdef MASKSHARD_HIGH_CLOSURE_ROWS
+    std::array<uint32_t, HIGH_LUT_K> closure_rows{};
+#endif
 };
 
-static std::vector<FullOrbitBatchHighJob> build_fullorbit_batch_high_jobs() {
+static std::vector<FullOrbitBatchHighJob> build_fullorbit_batch_high_jobs(
+    const HighDescHost* high_desc = nullptr
+) {
     constexpr uint32_t NM = 1u << LOW_LUT_K;
     std::vector<FullOrbitBatchHighJob> jobs;
     jobs.reserve(NM);
@@ -136,7 +142,35 @@ static std::vector<FullOrbitBatchHighJob> build_fullorbit_batch_high_jobs() {
         const auto db = make_factor_block_blocks(true, mask);
         const Code mn = mb.empty() ? 0 : mb.back().end;
         const Code dn = db.empty() ? 0 : db.back().end;
-        jobs.push_back({mask, mn, dn, mn + dn});
+        FullOrbitBatchHighJob job;
+        job.low_mask = mask;
+        job.main_n = mn;
+        job.block_n = dn;
+        job.work = mn + dn;
+#ifdef MASKSHARD_HIGH_CLOSURE_ROWS
+        if (!high_desc) {
+            std::cerr << "fullorbit-batch HIGH closure rows require host descriptors\n";
+            std::exit(203);
+        }
+        for (int pi = 0; pi < HIGH_LUT_K; ++pi) {
+            uint64_t rows = 0;
+            for (size_t bid = 0; bid < mb.size(); ++bid) {
+                if (!mb[bid].stride) continue;
+                const uint32_t a = high_desc->closure_block_off[size_t(pi) * 65 + bid];
+                const uint32_t z = high_desc->closure_block_off[size_t(pi) * 65 + bid + 1];
+                rows += uint64_t(z - a);
+            }
+            if (rows > 0xffffffffULL) {
+                std::cerr << "fullorbit-batch HIGH closure row count overflow mask="
+                          << mask << " pi=" << pi << " rows=" << rows << '\n';
+                std::exit(204);
+            }
+            job.closure_rows[size_t(pi)] = uint32_t(rows);
+        }
+#else
+        (void)high_desc;
+#endif
+        jobs.push_back(job);
     }
     std::sort(jobs.begin(), jobs.end(), [](const auto& x, const auto& y) {
         return x.work > y.work;
@@ -185,6 +219,9 @@ static void process_fullorbit_batch_high_job(
     w.ensure(job.main_n, job.block_n);
     const int bm = int(std::min<Code>(65535, (job.main_n + threads - 1) / threads));
     const int bd = int(std::min<Code>(65535, (job.block_n + threads - 1) / threads));
+#ifdef MASKSHARD_HIGH_CLOSURE_ROWS
+    const int warps_per_block = (threads + 31) / 32;
+#endif
 
     auto t = std::chrono::steady_clock::now();
     if (job.main_n) maskshard_high_main_io_kernel<false><<<bm, threads>>>(w.a, job.main_n);
@@ -202,8 +239,21 @@ static void process_fullorbit_batch_high_job(
         w.high_orbit_s += ram_seconds_since(t);
 
         t = std::chrono::steady_clock::now();
+#ifdef MASKSHARD_HIGH_CLOSURE_ROWS
+        const uint32_t pi = uint32_t((TARGET_W - 1) - p);
+        const Code closure_rows = job.closure_rows[size_t(pi)];
+        const int bc = closure_rows
+            ? int(std::min<Code>(65535,
+                (closure_rows + Code(warps_per_block) - 1) / Code(warps_per_block)))
+            : 0;
+        if (bc)
+            maskshard_main_highdesc_closure_inplace_kernel<<<bc, threads>>>(
+                w.a, w.d, job.main_n, p);
+#else
         if (job.main_n)
-            maskshard_main_highdesc_closure_inplace_kernel<<<bm, threads>>>(w.a, w.d, job.main_n, p);
+            maskshard_main_highdesc_closure_inplace_kernel<<<bm, threads>>>(
+                w.a, w.d, job.main_n, p);
+#endif
         ck(cudaGetLastError(), "fullorbit-batch high closure");
         ck(cudaDeviceSynchronize(), "fullorbit-batch high closure sync");
         w.high_closure_s += ram_seconds_since(t);
@@ -341,7 +391,7 @@ int main(int argc, char** argv) {
     const MateID init = MateID(R) << (2 * (TARGET_W - 1));
     const FullOrbitBatchAddress ia = fullorbit_batch_main_address_host(init, storage, layout, shard);
     const FullOrbitBatchAddress oa = fullorbit_batch_main_address_host(MateID(R), storage, layout, shard);
-    const auto high_jobs = build_fullorbit_batch_high_jobs();
+    const auto high_jobs = build_fullorbit_batch_high_jobs(&high_desc);
     std::vector<std::vector<uint32_t>> low_jobs(ngpu);
     for (uint32_t mask = 0; mask < shard.masks; ++mask)
         low_jobs[shard.owner[mask]].push_back(mask);
