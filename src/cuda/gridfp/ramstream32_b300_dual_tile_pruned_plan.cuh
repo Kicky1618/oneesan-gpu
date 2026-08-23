@@ -3,6 +3,7 @@
 #include "ramstream32_b300_dual_tile_pruned_peer.cuh"
 
 #include <algorithm>
+#include <array>
 #include <cstdint>
 #include <limits>
 #include <vector>
@@ -24,6 +25,11 @@ struct B300DualPrunedArrayPlan {
     uint64_t scheduled_bytes = 0; // bytes after launch-aware interval coalescing
     uint64_t full_bytes = 0;      // bytes of the unpruned whole-slot swap
     uint64_t launches = 0;
+    // NVLink 5's per-GPU throughput is bidirectional aggregate.  Every byte
+    // crossing a peer link consumes one byte of port traffic at both endpoints,
+    // independent of direction.  Track that load explicitly instead of using
+    // total network bytes as a proxy for runtime.
+    std::array<uint64_t, MAXGPU> gpu_port_bytes{};
 };
 struct B300DualPrunedSchedulePlan {
     std::vector<B300DualPrunedArrayPlan> l2h_main;
@@ -50,6 +56,17 @@ struct B300DualPrunedSchedulePlan {
         uint64_t x=0;for(const auto&p:l2h_main)x+=p.launches;
         for(const auto&p:l2h_block)x+=p.launches;
         for(const auto&p:h2l_main)x+=p.launches;return x;
+    }
+    std::array<uint64_t,MAXGPU> gpu_port_bytes_per_residue() const {
+        std::array<uint64_t,MAXGPU> x{};
+        auto add=[&](const std::vector<B300DualPrunedArrayPlan>&v){
+            for(const auto&p:v)for(int g=0;g<MAXGPU;++g)x[g]+=p.gpu_port_bytes[g];
+        };
+        add(l2h_main);add(l2h_block);add(h2l_main);return x;
+    }
+    uint64_t max_gpu_port_bytes_per_residue() const {
+        auto x=gpu_port_bytes_per_residue();
+        return *std::max_element(x.begin(),x.end());
     }
 };
 
@@ -130,6 +147,12 @@ static B300DualPrunedArrayPlan b300_dt_build_pruned_array_plan(
         }
         std::reverse(rev.begin(),rev.end());pp.runs=std::move(rev);
         out.scheduled_bytes+=dp[m].bytes;out.launches+=dp[m].launches;
+        for(const auto&r:pp.runs){
+            uint64_t peer_bytes=uint64_t(r.n)*sizeof(Count)*uint64_t(b300_dt_mode_popcount(r.mode));
+            // Every directional peer byte traverses both endpoint ports.
+            out.gpu_port_bytes[a]+=peer_bytes;
+            out.gpu_port_bytes[b]+=peer_bytes;
+        }
         if(!pp.runs.empty())out.pairs.push_back(std::move(pp));
     }
     return out;
