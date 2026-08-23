@@ -1,0 +1,49 @@
+name: B300 direct optimized
+
+on:
+  pull_request:
+    paths:
+      - 'src/cuda/b300/oneesan_cuda_gridfp_b300_hbm32_factorized_maskshard_opt_sparse.cu'
+      - 'src/cuda/b300/oneesan_cuda_gridfp_b300_hbm32_factorized_maskshard_sparse.cu'
+      - 'src/cuda/gridfp/ramstream32_b300_direct_mask_partition_opt.cuh'
+      - 'src/cuda/gridfp/ramstream32_b300_direct_maskshard.cuh'
+      - 'src/cuda/gridfp/ramstream32_b300_direct_system_atomic.cuh'
+      - 'src/cuda/gridfp/probes/b300_direct_axis_volume_plan.cu'
+      - 'src/cuda/gridfp/probes/b300_direct_storage_selftest.cu'
+      - 'scripts/build/gridfp-b300-hbm32-factorized-maskshard-opt-sparse.sh'
+      - '.github/workflows/b300-direct-opt.yml'
+  workflow_dispatch:
+
+jobs:
+  direct-opt:
+    runs-on: ubuntu-latest
+    container: nvidia/cuda:12.8.1-devel-ubuntu22.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Compile and run W10 direct factorized selftest
+        shell: bash
+        run: |
+          mkdir -p build
+          nvcc -O3 -std=c++17 -arch=sm_80 \
+            -DTARGET_W=10 -DLOW_LUT_K=5 -DHIGH_LUT_K=4 \
+            src/cuda/gridfp/probes/b300_direct_storage_selftest.cu \
+            -o build/b300_direct_storage_selftest
+          build/b300_direct_storage_selftest
+      - name: Compile and run W28 axis volume plan
+        shell: bash
+        run: |
+          nvcc -O3 -std=c++17 -arch=sm_80 \
+            -DTARGET_W=28 -DLOW_LUT_K=14 -DHIGH_LUT_K=13 \
+            src/cuda/gridfp/probes/b300_direct_axis_volume_plan.cu \
+            -o build/b300_direct_axis_volume_plan
+          build/b300_direct_axis_volume_plan
+      - name: Compile W28 graph-optimized maskshard backend
+        shell: bash
+        run: |
+          nvcc -O3 -std=c++17 -lineinfo -arch=sm_80 \
+            -DTARGET_W=28 -DLOW_LUT_K=14 -DHIGH_LUT_K=13 \
+            src/cuda/b300/oneesan_cuda_gridfp_b300_hbm32_factorized_maskshard_opt_sparse.cu \
+            -o build/b300_maskshard_opt_w28
+      - name: Plan n27 graph-optimized maskshard x8
+        shell: bash
+        run: build/b300_maskshard_opt_w28 27 4294967291 8 256 --plan-only 16 4 512
