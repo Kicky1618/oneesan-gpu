@@ -16,7 +16,7 @@ import csv
 import json
 from pathlib import Path
 import random
-from typing import List, Tuple
+from typing import Dict, List, Tuple
 
 try:
     import numpy as np
@@ -24,6 +24,22 @@ try:
     import scipy.sparse.linalg as spla
 except ImportError as exc:  # pragma: no cover - research environment dependency
     raise SystemExit("highmask_spectral_partition.py requires numpy and scipy") from exc
+
+
+def read_meta(path: Path) -> Dict[str, int]:
+    out: Dict[str, int] = {}
+    with path.open(newline="") as f:
+        r = csv.DictReader(f, delimiter="\t")
+        for row in r:
+            out[row["key"]] = int(row["value"])
+    required = {
+        "width", "low", "high", "vertices", "edges", "states",
+        "transition_updates", "same_mask_updates", "cuttable_updates",
+    }
+    missing = sorted(required - out.keys())
+    if missing:
+        raise ValueError(f"metadata is missing keys: {missing}")
+    return out
 
 
 def read_nodes(path: Path) -> np.ndarray:
@@ -164,9 +180,7 @@ def pair_swaps(
 ) -> Tuple[List[int], List[int]]:
     owner = owner.copy()
     loads = loads.copy()
-    edge_lookup = []
-    for u in range(len(owner)):
-        edge_lookup.append(dict(adjacency[u]))
+    edge_lookup = [dict(x) for x in adjacency]
 
     for _ in range(rounds):
         candidates = {}
@@ -218,19 +232,28 @@ def main() -> int:
     ap.add_argument("--swap-candidates", type=int, default=60)
     ap.add_argument("--cycles", type=int, default=3)
     ap.add_argument("--seed", type=int, default=1618)
-    ap.add_argument("--dp-rows", type=int, default=28)
     ap.add_argument("--output", type=Path)
     args = ap.parse_args()
     if args.max_load_ratio < 1.0:
         ap.error("max-load-ratio must be >= 1")
 
+    meta_path = Path(str(args.prefix) + ".meta.tsv")
     nodes_path = Path(str(args.prefix) + ".nodes.tsv")
     edges_path = Path(str(args.prefix) + ".edges.tsv")
+    meta = read_meta(meta_path)
     weights = read_nodes(nodes_path)
     matrix, adjacency, edge_weight = read_edges(edges_path, len(weights))
+    if len(weights) != meta["vertices"]:
+        raise ValueError("vertex count disagrees with metadata")
+    if len(edge_weight) != meta["edges"]:
+        raise ValueError("edge count disagrees with metadata")
+    if int(weights.sum()) != meta["states"]:
+        raise ValueError("state-weight sum disagrees with metadata")
+    if sum(edge_weight.values()) != meta["cuttable_updates"]:
+        raise ValueError("edge-weight sum disagrees with metadata")
+
     average = float(weights.sum()) / 8.0
     max_load = average * args.max_load_ratio
-
     owner = recursive_spectral(matrix, weights)
     loads = shard_loads(owner, weights)
     if max(loads) > max_load:
@@ -248,16 +271,20 @@ def main() -> int:
             )
 
     cut = cut_value(owner, edge_weight)
-    total_cuttable = sum(edge_weight.values())
-    same_mask_n27 = 73_007_659_168 if len(weights) == 8192 else 0
-    total_updates = total_cuttable + same_mask_n27
-    peer_tib = cut * 4.0 * args.dp_rows / float(1 << 40)
+    total_updates = meta["transition_updates"]
+    if meta["cuttable_updates"] + meta["same_mask_updates"] != total_updates:
+        raise ValueError("transition metadata does not add up")
+    peer_tib = cut * 4.0 * meta["width"] / float(1 << 40)
     remote_fraction = cut / total_updates if total_updates else 0.0
 
     result = {
+        "width": meta["width"],
+        "low": meta["low"],
+        "high": meta["high"],
         "vertices": len(weights),
         "edges": len(edge_weight),
         "total_state_weight": int(weights.sum()),
+        "transition_updates": total_updates,
         "max_load_ratio_requested": args.max_load_ratio,
         "shard_loads": loads,
         "max_load_ratio_actual": max(loads) / average,
