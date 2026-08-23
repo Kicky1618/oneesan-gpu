@@ -4,14 +4,20 @@ on:
   push:
     paths:
       - 'src/cuda/b300/oneesan_cuda_gridfp_b300_hbm32_maskshard_plan.cu'
+      - 'src/cuda/b300/maskshard_headers_compile.cu'
       - 'src/cuda/b300/maskshard_layout.hpp'
+      - 'src/cuda/b300/maskshard_lowlocal.cuh'
+      - 'src/cuda/b300/maskshard_highio.cuh'
       - 'src/cuda/gridfp/ramstream32_factorized_storage.hpp'
       - 'src/cuda/b300/oneesan_cuda_gridfp_b300_hbm32_factorized_batch.cu'
       - '.github/workflows/b300-maskshard-compile.yml'
   pull_request:
     paths:
       - 'src/cuda/b300/oneesan_cuda_gridfp_b300_hbm32_maskshard_plan.cu'
+      - 'src/cuda/b300/maskshard_headers_compile.cu'
       - 'src/cuda/b300/maskshard_layout.hpp'
+      - 'src/cuda/b300/maskshard_lowlocal.cuh'
+      - 'src/cuda/b300/maskshard_highio.cuh'
       - 'src/cuda/gridfp/ramstream32_factorized_storage.hpp'
       - 'src/cuda/b300/oneesan_cuda_gridfp_b300_hbm32_factorized_batch.cu'
       - '.github/workflows/b300-maskshard-compile.yml'
@@ -34,10 +40,19 @@ jobs:
             high: 13
     steps:
       - uses: actions/checkout@v4
-      - name: Compile mask-shard layout plan
+      - name: Compile mask-shard CUDA headers
         shell: bash
         run: |
           mkdir -p build
+          nvcc -O3 -std=c++17 -lineinfo -arch=sm_80 \
+            -DTARGET_W=${{ matrix.width }} \
+            -DLOW_LUT_K=${{ matrix.low }} \
+            -DHIGH_LUT_K=${{ matrix.high }} \
+            src/cuda/b300/maskshard_headers_compile.cu \
+            -o build/b300_maskshard_headers_w${{ matrix.width }}
+      - name: Compile mask-shard layout plan
+        shell: bash
+        run: |
           nvcc -O3 -std=c++17 -lineinfo -arch=sm_80 \
             -DTARGET_W=${{ matrix.width }} \
             -DLOW_LUT_K=${{ matrix.low }} \
