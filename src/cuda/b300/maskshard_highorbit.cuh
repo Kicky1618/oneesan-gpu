@@ -3,11 +3,9 @@
 #include <cstdint>
 #include "maskshard_index.cuh"
 
-// In-place HIGH-window orbit executor for fix_low=true factorized groups.
-//
-// A main factorized row is (HIGH all-rank, LOW mask-rank). For p in the HIGH
-// window, the source pair is determined entirely by HIGH+center; LOW topology
-// is untouched except by the LL boundary CROSS handled by HighDesc closure.
+#if defined(MASKSHARD_BLOCK_ORBIT) && !defined(MASKSHARD_ORBIT_AUX)
+#error "MASKSHARD_BLOCK_ORBIT currently reuses MASKSHARD_ORBIT_AUX target tables"
+#endif
 
 static_assert(HIGH_LUT_K < 16, "compact HIGH+center orbit code requires HIGH<16");
 
@@ -87,11 +85,59 @@ __device__ __forceinline__ Code maskshard_block_from_active(
 __global__ void maskshard_main_block_highorbit_kernel(
     Count* mainv, Count* blockv, Code n, int p
 ) {
-    Code i = Code(blockIdx.x) * blockDim.x + threadIdx.x;
     const Code step = Code(gridDim.x) * blockDim.x;
-#ifdef MASKSHARD_ORBIT_AUX
     const uint32_t pi = uint32_t((TARGET_W - 1) - p);
-#endif
+
+#ifdef MASKSHARD_BLOCK_ORBIT
+    // Every blocked state has exactly one excluded target obtained by inserting
+    // N at p; that target is exactly one NN/NR/NL orbit representative. Iterate
+    // blocked states instead of scanning all main states and rejecting ~65%.
+    const int last_bid = D_F_BLOCK_NBLOCKS - 1;
+    if (last_bid < 0) return;
+    const Code block_n = D_F_BLOCK_BLOCKS[last_bid].end;
+    Code di = Code(blockIdx.x) * blockDim.x + threadIdx.x;
+    for (; di < block_n; di += step) {
+        const int dbid = f_find_block(di);
+        const FBlock dx = D_F_BLOCK_BLOCKS[dbid];
+        uint32_t dhr = 0, dlr = 0;
+        maskshard_split_rank(di, dx, dhr, dlr);
+
+        const size_t bdi = size_t(pi) * D_HIGHDESC_BLOCK_TOTAL
+                         + D_HIGHDESC_BLOCK_BASE[dbid] + dhr;
+        const uint32_t bdesc = D_HIGHDESC_BLOCK[bdi];
+        if (highdesc_kind(bdesc) != HIGHDESC_MAIN) continue;
+        const uint32_t sbid = highdesc_block(bdesc);
+        const uint32_t shr = highdesc_rank(bdesc);
+        const FBlock sx = D_F_MAIN_BLOCKS[sbid];
+        const Code i = sx.off + Code(shr) * sx.stride + dlr;
+
+        const size_t sdi = size_t(pi) * D_HIGHDESC_MAIN_TOTAL
+                         + D_HIGHDESC_MAIN_BASE[sbid] + shr;
+        const uint32_t aux = D_MS_HIGH_ORBIT_AUX[sdi];
+        const uint32_t ak = maskshard_orbit_aux_kind(aux);
+        if (ak == MS_ORBIT_AUX_INVALID) continue;
+
+        const Count c = mainv[i];
+        const Count d = blockv[di];
+        if (ak == MS_ORBIT_AUX_NN) {
+            const uint32_t desc = D_HIGHDESC_MAIN[sdi];
+            if (highdesc_kind(desc) != HIGHDESC_MAIN) continue;
+            const FBlock y = D_F_MAIN_BLOCKS[highdesc_block(desc)];
+            const Code j = y.off + Code(highdesc_rank(desc)) * y.stride + dlr;
+            mainv[j] = maskshard_add_mod_plain(mainv[j], c);
+            mainv[i] = maskshard_add_mod_plain(c, d);
+            blockv[di] = 0;
+        } else {
+            const FBlock y = D_F_MAIN_BLOCKS[maskshard_orbit_aux_block(aux)];
+            const Code j = y.off + Code(maskshard_orbit_aux_rank(aux)) * y.stride + dlr;
+            const Count cc = mainv[j];
+            mainv[i] = maskshard_add_mod_plain(maskshard_add_mod_plain(c, cc), d);
+            blockv[di] = c;
+        }
+    }
+    (void)n;
+#else
+    Code i = Code(blockIdx.x) * blockDim.x + threadIdx.x;
     for (; i < n; i += step) {
         const int bid = f_find_main(i);
         const FBlock x = D_F_MAIN_BLOCKS[bid];
@@ -159,6 +205,7 @@ __global__ void maskshard_main_block_highorbit_kernel(
         }
 #endif
     }
+#endif
 }
 
 __global__ void maskshard_main_highdesc_closure_inplace_kernel(
