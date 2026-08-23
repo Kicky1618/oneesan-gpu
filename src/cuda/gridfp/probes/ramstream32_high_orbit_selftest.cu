@@ -16,6 +16,38 @@ static inline Count test_add(Count a, Count b, Count mod) {
     return (a >= mod - b) ? a - (mod - b) : a + b;
 }
 
+static uint32_t host_low_occ(uint32_t code) {
+    uint32_t mask = 0;
+    for (int p = 0; p < LOW_LUT_K; ++p)
+        if (((code >> (2 * p)) & 3u) != uint32_t(N)) mask |= 1u << p;
+    return mask;
+}
+
+static inline uint32_t host_highdesc_kind(uint32_t x) {
+    return x >> HIGHDESC_KIND_SHIFT;
+}
+static inline uint32_t host_highdesc_block(uint32_t x) {
+    return (x >> HIGHDESC_BLOCK_SHIFT) & HIGHDESC_BLOCK_MASK;
+}
+static inline uint32_t host_highdesc_rank(uint32_t x) {
+    return x & HIGHDESC_RANK_MASK;
+}
+static inline uint32_t host_highdesc_depth(uint32_t x) {
+    return (x >> HIGHDESC_DEPTH_SHIFT) & HIGHDESC_DEPTH_MASK;
+}
+static uint32_t host_highdesc_flip_low(uint32_t lc, uint32_t depth) {
+    int s = int(depth);
+    for (int pos = LOW_LUT_K - 1; pos >= 0; --pos) {
+        MateValue v = MateValue((lc >> (2 * pos)) & 3u);
+        if (v == ::L) ++s;
+        else if (v == R && --s == 0) {
+            uint32_t z = 3u << (2 * pos);
+            return (lc & ~z) | (uint32_t(::L) << (2 * pos));
+        }
+    }
+    return 0xffffffffu;
+}
+
 static MateID host_unrank_main_fixlow(
     Code i, uint32_t mask, const std::vector<FBlock>& mb,
     const StorageFactorHost& storage
@@ -65,7 +97,7 @@ static Code host_rank_main_fixlow(
     constexpr uint32_t HM = (1u << (2 * H)) - 1u;
     uint32_t lc = uint32_t(m) & LM;
     uint32_t hc = uint32_t((m >> (2 * (L + 1))) & HM);
-    if (lowmask_major_occ(lc, L) != mask) std::exit(182);
+    if (host_low_occ(lc) != mask) std::exit(182);
     int he = seg_end_height_host(hc, H);
     uint32_t bid = uint32_t(3 * he + int(mget(m, L)));
     if (bid >= mb.size()) std::exit(183);
@@ -89,7 +121,7 @@ static Code host_rank_block_fixlow(
     constexpr uint32_t HM = (1u << (2 * H)) - 1u;
     uint32_t lc = uint32_t(m) & LM;
     uint32_t hc = uint32_t((m >> (2 * L)) & HM);
-    if (lowmask_major_occ(lc, L) != mask) std::exit(186);
+    if (host_low_occ(lc) != mask) std::exit(186);
     uint32_t bid = uint32_t(seg_end_height_host(hc, H));
     if (bid >= db.size()) std::exit(187);
     uint32_t lp = storage.low_packed_rank[lc];
@@ -108,8 +140,6 @@ static Code closure_target_from_desc(
     const StorageFactorHost& storage, const HighDescHost& desc
 ) {
     constexpr int L = LOW_LUT_K;
-    constexpr int H = HIGH_LUT_K;
-    constexpr int S = StorageFactorHost::S;
     size_t bid = 0;
     while (bid < mb.size() && i >= mb[bid].end) ++bid;
     if (bid >= mb.size()) std::exit(190);
@@ -119,22 +149,22 @@ static Code closure_target_from_desc(
     uint32_t lr = x.stride ? uint32_t(r - Code(hr) * x.stride) : 0;
     uint32_t pi = uint32_t((TARGET_W - 1) - p);
     uint32_t dw = desc.main_desc[size_t(pi) * desc.main_total + desc.main_base[bid] + hr];
-    uint32_t kind = highdesc_kind(dw);
+    uint32_t kind = host_highdesc_kind(dw);
     if (kind == HIGHDESC_BLOCK) {
-        const FBlock& y = db[highdesc_block(dw)];
-        return y.off + Code(highdesc_rank(dw)) * y.stride + lr;
+        const FBlock& y = db[host_highdesc_block(dw)];
+        return y.off + Code(host_highdesc_rank(dw)) * y.stride + lr;
     }
     if (kind == HIGHDESC_CROSS) {
         uint32_t lc = uint32_t(m) & ((1u << (2 * L)) - 1u);
-        uint32_t lc2 = highdesc_flip_low(lc, highdesc_depth(dw));
+        uint32_t lc2 = host_highdesc_flip_low(lc, host_highdesc_depth(dw));
         if (lc2 == 0xffffffffu) std::exit(191);
-        if (lowmask_major_occ(lc2, L) != mask) std::exit(192);
-        const FBlock& y = db[highdesc_block(dw)];
+        if (host_low_occ(lc2) != mask) std::exit(192);
+        const FBlock& y = db[host_highdesc_block(dw)];
         uint32_t packed = storage.low_packed_rank[lc2];
         if (packed == 0xffffffffu) std::exit(193);
         uint32_t lr2 = packed & ((1u << L) - 1u);
         if (lr2 >= y.stride) std::exit(194);
-        return y.off + Code(highdesc_rank(dw)) * y.stride + lr2;
+        return y.off + Code(host_highdesc_rank(dw)) * y.stride + lr2;
     }
     std::cerr << "closure descriptor kind is not blocked/cross kind=" << kind << '\n';
     std::exit(195);
@@ -167,13 +197,14 @@ int main() {
         ++checked_masks;
 
         for (int p = wp.p_hi; p >= wp.p_lo; --p) {
-            std::vector<Count> in_m(size_t(ms)), in_d(size_t(ds));
+            std::vector<Count> in_m(static_cast<size_t>(ms));
+            std::vector<Count> in_d(static_cast<size_t>(ds));
             for (auto& x : in_m) x = rnd();
             for (auto& x : in_d) x = rnd();
 
             // Reference out-of-place recurrence = identity main + include + blocked exclude.
-            std::vector<Count> ref_m = in_m;
-            std::vector<Count> ref_d(size_t(ds), 0);
+            std::vector<Count> ref_m(in_m);
+            std::vector<Count> ref_d(static_cast<size_t>(ds), Count(0));
             for (Code i = 0; i < ms; ++i) {
                 Count c = in_m[size_t(i)];
                 MateID m = host_unrank_main_fixlow(i, mask, mb, storage);
@@ -196,7 +227,8 @@ int main() {
             }
 
             // New in-place HIGH orbit.
-            std::vector<Count> got_m = in_m, got_d = in_d;
+            std::vector<Count> got_m(in_m);
+            std::vector<Count> got_d(in_d);
             uint32_t pi = uint32_t((TARGET_W - 1) - p);
             for (size_t bid = 0; bid < mb.size(); ++bid) {
                 const FBlock& x = mb[bid];
@@ -231,7 +263,9 @@ int main() {
             // Closure pass, using the exact compact HIGH descriptor target used by GPU.
             for (Code i = 0; i < ms; ++i) {
                 MateID m = host_unrank_main_fixlow(i, mask, mb, storage);
-                int he = seg_end_height_host(uint32_t(m >> (2 * (LOW_LUT_K + 1))), HIGH_LUT_K);
+                constexpr uint32_t HM = (1u << (2 * HIGH_LUT_K)) - 1u;
+                uint32_t hc = uint32_t((m >> (2 * (LOW_LUT_K + 1))) & HM);
+                int he = seg_end_height_host(hc, HIGH_LUT_K);
                 uint32_t bid = uint32_t(3 * he + int(mget(m, LOW_LUT_K)));
                 const FBlock& x = mb[bid];
                 Code r = i - x.off;
@@ -242,7 +276,6 @@ int main() {
                 Count c = got_m[size_t(i)];
                 if (!c) continue;
                 Code j = closure_target_from_desc(m, i, mask, p, mb, db, storage, highdesc);
-                // Cross-check descriptor target against direct include_horizontal rank.
                 auto z = oneesan::gridfp::include_horizontal(m, TARGET_W, p);
                 if (!z.valid || !z.blocked) std::exit(196);
                 Code direct = host_rank_block_fixlow(z.mate, mask, db, storage);
@@ -255,8 +288,10 @@ int main() {
             }
 
             if (got_m != ref_m || got_d != ref_d) {
-                size_t badm = 0; while (badm < got_m.size() && got_m[badm] == ref_m[badm]) ++badm;
-                size_t badd = 0; while (badd < got_d.size() && got_d[badd] == ref_d[badd]) ++badd;
+                size_t badm = 0;
+                while (badm < got_m.size() && got_m[badm] == ref_m[badm]) ++badm;
+                size_t badd = 0;
+                while (badd < got_d.size() && got_d[badd] == ref_d[badd]) ++badd;
                 std::cerr << "HIGH orbit mismatch mask=" << mask << " p=" << p
                           << " main_bad=" << badm << '/' << got_m.size()
                           << " block_bad=" << badd << '/' << got_d.size() << '\n';
