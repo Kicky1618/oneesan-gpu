@@ -89,11 +89,50 @@ __global__ void maskshard_main_block_highorbit_kernel(
 ) {
     Code i = Code(blockIdx.x) * blockDim.x + threadIdx.x;
     const Code step = Code(gridDim.x) * blockDim.x;
+#ifdef MASKSHARD_ORBIT_AUX
+    const uint32_t pi = uint32_t((TARGET_W - 1) - p);
+#endif
     for (; i < n; i += step) {
         const int bid = f_find_main(i);
         const FBlock x = D_F_MAIN_BLOCKS[bid];
         uint32_t hr = 0, lr = 0;
         maskshard_split_rank(i, x, hr, lr);
+
+#ifdef MASKSHARD_ORBIT_AUX
+        const size_t di = size_t(pi) * D_HIGHDESC_MAIN_TOTAL
+                        + D_HIGHDESC_MAIN_BASE[bid] + hr;
+        const uint32_t aux = D_MS_HIGH_ORBIT_AUX[di];
+        const uint32_t ak = maskshard_orbit_aux_kind(aux);
+        if (ak == MS_ORBIT_AUX_INVALID) continue;
+        const uint32_t desc = D_HIGHDESC_MAIN[di];
+
+        Code j = ~Code(0), dj = ~Code(0);
+        if (ak == MS_ORBIT_AUX_NN) {
+            if (highdesc_kind(desc) != HIGHDESC_MAIN) continue;
+            const FBlock ym = D_F_MAIN_BLOCKS[highdesc_block(desc)];
+            const FBlock yd = D_F_BLOCK_BLOCKS[maskshard_orbit_aux_block(aux)];
+            j = ym.off + Code(highdesc_rank(desc)) * ym.stride + lr;
+            dj = yd.off + Code(maskshard_orbit_aux_rank(aux)) * yd.stride + lr;
+        } else {
+            if (highdesc_kind(desc) != HIGHDESC_BLOCK) continue;
+            const FBlock ym = D_F_MAIN_BLOCKS[maskshard_orbit_aux_block(aux)];
+            const FBlock yd = D_F_BLOCK_BLOCKS[highdesc_block(desc)];
+            j = ym.off + Code(maskshard_orbit_aux_rank(aux)) * ym.stride + lr;
+            dj = yd.off + Code(highdesc_rank(desc)) * yd.stride + lr;
+        }
+
+        const Count c = mainv[i];
+        const Count d = blockv[dj];
+        if (ak == MS_ORBIT_AUX_NN) {
+            mainv[j] = maskshard_add_mod_plain(mainv[j], c);
+            mainv[i] = maskshard_add_mod_plain(c, d);
+            blockv[dj] = 0;
+        } else {
+            const Count cc = mainv[j];
+            mainv[i] = maskshard_add_mod_plain(maskshard_add_mod_plain(c, cc), d);
+            blockv[dj] = c;
+        }
+#else
         const uint32_t active = maskshard_active_high_center(x, hr);
         const MateValuePair w = maskshard_high_pair_from_active(active, p);
         if (w != NN && w != NR && w != NL) continue;
@@ -118,6 +157,7 @@ __global__ void maskshard_main_block_highorbit_kernel(
             mainv[i] = maskshard_add_mod_plain(maskshard_add_mod_plain(c, cc), d);
             blockv[dj] = c;
         }
+#endif
     }
 }
 
