@@ -5,12 +5,14 @@ on:
     paths:
       - 'src/cuda/b300/oneesan_cuda_gridfp_b300_hbm32_maskshard.cu'
       - 'src/cuda/b300/oneesan_cuda_gridfp_b300_hbm32_maskshard_highdesc.cu'
+      - 'src/cuda/b300/oneesan_cuda_gridfp_b300_hbm32_maskshard_highorbit.cu'
       - 'src/cuda/b300/oneesan_cuda_gridfp_b300_hbm32_maskshard_plan.cu'
       - 'src/cuda/b300/maskshard_headers_compile.cu'
       - 'src/cuda/b300/maskshard_address_selftest.cu'
       - 'src/cuda/b300/maskshard_layout.hpp'
       - 'src/cuda/b300/maskshard_lowlocal.cuh'
       - 'src/cuda/b300/maskshard_highio.cuh'
+      - 'src/cuda/b300/maskshard_highorbit.cuh'
       - 'src/cuda/gridfp/ramstream32_factorized_storage.hpp'
       - 'src/cuda/gridfp/ramstream32_highdesc.cuh'
       - 'src/cuda/b300/oneesan_cuda_gridfp_b300_hbm32_factorized_batch.cu'
@@ -19,12 +21,14 @@ on:
     paths:
       - 'src/cuda/b300/oneesan_cuda_gridfp_b300_hbm32_maskshard.cu'
       - 'src/cuda/b300/oneesan_cuda_gridfp_b300_hbm32_maskshard_highdesc.cu'
+      - 'src/cuda/b300/oneesan_cuda_gridfp_b300_hbm32_maskshard_highorbit.cu'
       - 'src/cuda/b300/oneesan_cuda_gridfp_b300_hbm32_maskshard_plan.cu'
       - 'src/cuda/b300/maskshard_headers_compile.cu'
       - 'src/cuda/b300/maskshard_address_selftest.cu'
       - 'src/cuda/b300/maskshard_layout.hpp'
       - 'src/cuda/b300/maskshard_lowlocal.cuh'
       - 'src/cuda/b300/maskshard_highio.cuh'
+      - 'src/cuda/b300/maskshard_highorbit.cuh'
       - 'src/cuda/gridfp/ramstream32_factorized_storage.hpp'
       - 'src/cuda/gridfp/ramstream32_highdesc.cuh'
       - 'src/cuda/b300/oneesan_cuda_gridfp_b300_hbm32_factorized_batch.cu'
@@ -93,6 +97,15 @@ jobs:
             -DHIGH_LUT_K=${{ matrix.high }} \
             src/cuda/b300/oneesan_cuda_gridfp_b300_hbm32_maskshard_highdesc.cu \
             -o build/b300_maskshard_highdesc_w${{ matrix.width }}
+      - name: Compile in-place HIGH-orbit mask-shard solver
+        shell: bash
+        run: |
+          nvcc -O3 -std=c++17 -lineinfo -arch=sm_80 \
+            -DTARGET_W=${{ matrix.width }} \
+            -DLOW_LUT_K=${{ matrix.low }} \
+            -DHIGH_LUT_K=${{ matrix.high }} \
+            src/cuda/b300/oneesan_cuda_gridfp_b300_hbm32_maskshard_highorbit.cu \
+            -o build/b300_maskshard_highorbit_w${{ matrix.width }}
       - name: Compile mask-shard layout plan
         shell: bash
         run: |
