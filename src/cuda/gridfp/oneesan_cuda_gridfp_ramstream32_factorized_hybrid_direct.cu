@@ -75,10 +75,10 @@ int main(int argc, char** argv) {
         + storage.high_packed_rank.size() + G_FACTOR.low_packed_rank.size()
         + G_FACTOR.high_packed_rank.size()) * sizeof(uint32_t)) / (1 << 20);
 
-    long double auth_bytes = (long double(layout.main_size) + layout.block_size) * sizeof(Count);
-    long double pcie_bytes = 2.0L * W * auth_bytes;
-    double pcie_tib = double(pcie_bytes / (long double(1ULL << 40)));
-    double pcie_50gib_s = double(pcie_bytes / (50.0L * (1ULL << 30)));
+    double auth_bytes = double(layout.main_size + layout.block_size) * sizeof(Count);
+    double pcie_bytes = 2.0 * W * auth_bytes;
+    double pcie_tib = pcie_bytes / double(1ULL << 40);
+    double pcie_50gib_s = pcie_bytes / (50.0 * double(1ULL << 30));
 
     if (plan_only) {
         std::cout
