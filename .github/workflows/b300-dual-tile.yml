@@ -4,13 +4,17 @@ on:
   pull_request:
     paths:
       - 'src/cuda/b300/oneesan_cuda_gridfp_b300_hbm32_dual_tile_sparse.cu'
+      - 'src/cuda/b300/oneesan_cuda_gridfp_b300_hbm32_dual_tile_sparse_batch.cu'
       - 'src/cuda/gridfp/ramstream32_b300_dual_tile_layout.cuh'
       - 'src/cuda/gridfp/ramstream32_b300_dual_tile_kernels.cuh'
       - 'src/cuda/gridfp/ramstream32_b300_dual_tile_shuffle.cuh'
       - 'src/cuda/gridfp/ramstream32_b300_dual_tile_opt.cuh'
+      - 'src/cuda/gridfp/ramstream32_b300_dual_tile_precomputed_w28.cuh'
       - 'src/cuda/gridfp/probes/b300_dual_tile_selftest.cu'
       - 'src/cuda/gridfp/probes/b300_dual_tile_opt_plan.cu'
+      - 'src/cuda/gridfp/probes/b300_dual_tile_precomputed_plan.cu'
       - 'scripts/build/gridfp-b300-hbm32-dual-tile-sparse.sh'
+      - 'scripts/build/gridfp-b300-hbm32-dual-tile-sparse-batch.sh'
       - '.github/workflows/b300-dual-tile.yml'
   workflow_dispatch:
 
@@ -37,13 +41,25 @@ jobs:
             src/cuda/gridfp/probes/b300_dual_tile_opt_plan.cu \
             -o build/b300_dual_tile_opt_plan
           build/b300_dual_tile_opt_plan
-      - name: Compile W28 dual-tile backend
+      - name: W28 precomputed traffic regression
+        shell: bash
+        run: |
+          nvcc -O3 -std=c++17 -arch=sm_80 \
+            -DTARGET_W=28 -DLOW_LUT_K=14 -DHIGH_LUT_K=13 \
+            src/cuda/gridfp/probes/b300_dual_tile_precomputed_plan.cu \
+            -o build/b300_dual_tile_precomputed_plan
+          build/b300_dual_tile_precomputed_plan
+      - name: Compile W28 dual-tile backends
         shell: bash
         run: |
           nvcc -O3 -std=c++17 -lineinfo -arch=sm_80 \
             -DTARGET_W=28 -DLOW_LUT_K=14 -DHIGH_LUT_K=13 \
             src/cuda/b300/oneesan_cuda_gridfp_b300_hbm32_dual_tile_sparse.cu \
             -o build/b300_dual_tile_w28
+          nvcc -O3 -std=c++17 -lineinfo -arch=sm_80 \
+            -DTARGET_W=28 -DLOW_LUT_K=14 -DHIGH_LUT_K=13 \
+            src/cuda/b300/oneesan_cuda_gridfp_b300_hbm32_dual_tile_sparse_batch.cu \
+            -o build/b300_dual_tile_batch_w28
       - name: Plan n27 dual-tile x8
         shell: bash
         run: build/b300_dual_tile_w28 27 4294967291 8 256 --plan-only 512
