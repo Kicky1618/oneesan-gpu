@@ -12,6 +12,8 @@ on:
       - 'src/cuda/gridfp/probes/b300_high_orbit_selftest.cu'
       - 'src/cuda/gridfp/probes/b300_sparse_action_plan.cu'
       - 'src/cuda/gridfp/probes/b300_sparse_actions_selftest.cu'
+      - 'src/cuda/gridfp/probes/b300_direct_storage_selftest.cu'
+      - 'src/cuda/gridfp/probes/b300_direct_storage_plan.cu'
       - 'src/cuda/gridfp/probes/b300_high_warp_plan.cu'
       - 'src/cuda/gridfp/ramstream32_high_orbit.cuh'
       - 'src/cuda/gridfp/ramstream32_low_orbit_device.cuh'
@@ -51,6 +53,14 @@ jobs:
             src/cuda/gridfp/probes/b300_sparse_action_plan.cu \
             -o build/b300_sparse_action_plan
           build/b300_sparse_action_plan
+      - name: Direct factorized storage plan W28
+        shell: bash
+        run: |
+          nvcc -O3 -std=c++17 -arch=sm_80 \
+            -DTARGET_W=28 -DLOW_LUT_K=14 -DHIGH_LUT_K=13 \
+            src/cuda/gridfp/probes/b300_direct_storage_plan.cu \
+            -o build/b300_direct_storage_plan
+          build/b300_direct_storage_plan
       - name: HIGH warp-packing plan W28
         shell: bash
         run: |
@@ -90,6 +100,14 @@ jobs:
             src/cuda/gridfp/probes/b300_sparse_actions_selftest.cu \
             -o build/b300_sparse_actions_selftest
           build/b300_sparse_actions_selftest
+      - name: Direct factorized W10 full-row test
+        shell: bash
+        run: |
+          nvcc -O3 -std=c++17 -arch=sm_80 \
+            -DTARGET_W=10 -DLOW_LUT_K=5 -DHIGH_LUT_K=4 \
+            src/cuda/gridfp/probes/b300_direct_storage_selftest.cu \
+            -o build/b300_direct_storage_selftest
+          build/b300_direct_storage_selftest
       - name: Compile W28 compact resident backend
         shell: bash
         run: |
