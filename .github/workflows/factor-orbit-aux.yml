@@ -100,8 +100,8 @@ jobs:
           g++ -O3 -std=c++17 -Wall -Wextra -Werror \
             src/cpp/probes/factor_highclosure_rows.cpp \
             -o build/factor_highclosure_rows
-      - name: Quantify n=27 HIGH row traversal
-        run: build/factor_highclosure_rows 28 14
+      - name: Quantify n=27 HIGH row traversal and launch grids
+        run: build/factor_highclosure_rows 28 14 256
 
   savings:
     runs-on: ubuntu-latest
@@ -126,5 +126,5 @@ jobs:
           g++ -O3 -std=c++17 -Wall -Wextra -Werror \
             src/cpp/probes/factor_maskshard_memory.cpp \
             -o build/factor_maskshard_memory
-      - name: Verify n=27 v0.7 base HBM budget
+      - name: Verify n=27 v0.8 HBM budget
         run: build/factor_maskshard_memory 28 14 8 268.59
