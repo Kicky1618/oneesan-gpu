@@ -123,6 +123,18 @@ int main(int argc, char** argv) {
         }
     }
 
+    if (W == 28 && low == 14 && threads == 256) {
+        if (old_state_threads != U128(5400073092680ULL)
+            || selected_states != U128(1619638941284ULL)
+            || compact_lane_slots != U128(1620040986016ULL)
+            || old_launch_blocks != U128(6328761404ULL)
+            || compact_launch_blocks != U128(3964060594ULL)
+            || capped_old != 81368ULL || capped_compact != 33320ULL) {
+            std::cerr << "n=27 LOW closure launch-model regression\n";
+            return 2;
+        }
+    }
+
     const U128 residue_old_blocks = old_launch_blocks * U128(W);
     const U128 residue_compact_blocks = compact_launch_blocks * U128(W);
     std::cout << std::fixed << std::setprecision(6)
