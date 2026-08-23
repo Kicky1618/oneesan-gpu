@@ -7,6 +7,8 @@ on:
       - 'src/cpp/probes/factor_highmask_closure.cpp'
       - 'src/cpp/probes/factor_highmask_edge_cut.cpp'
       - 'src/cpp/probes/factor_maskshard_bijection.cpp'
+      - 'src/cpp/probes/factor_highdesc_semantics.cpp'
+      - 'src/common/gridfp_transition.hpp'
       - '.github/workflows/factor-mask-shard.yml'
   pull_request:
     paths:
@@ -14,6 +16,8 @@ on:
       - 'src/cpp/probes/factor_highmask_closure.cpp'
       - 'src/cpp/probes/factor_highmask_edge_cut.cpp'
       - 'src/cpp/probes/factor_maskshard_bijection.cpp'
+      - 'src/cpp/probes/factor_highdesc_semantics.cpp'
+      - 'src/common/gridfp_transition.hpp'
       - '.github/workflows/factor-mask-shard.yml'
   workflow_dispatch:
 
@@ -76,6 +80,28 @@ jobs:
             -o build/factor_maskshard_bijection
       - name: Verify LOW direct and HIGH route layouts
         run: build/factor_maskshard_bijection 10 5 8
+
+  highdesc-semantics:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        include:
+          - width: 10
+            low: 5
+          - width: 12
+            low: 6
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build HIGH descriptor semantic probe
+        run: |
+          mkdir -p build
+          g++ -O3 -std=c++17 -Wall -Wextra -Werror \
+            src/cpp/probes/factor_highdesc_semantics.cpp \
+            -o build/factor_highdesc_semantics
+      - name: Exhaustively compare descriptors with Grid-FP transitions
+        run: |
+          build/factor_highdesc_semantics \
+            ${{ matrix.width }} ${{ matrix.low }}
 
   edge-cut:
     runs-on: ubuntu-latest
