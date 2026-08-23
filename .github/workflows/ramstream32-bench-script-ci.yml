@@ -4,12 +4,16 @@ on:
   push:
     paths:
       - 'scripts/bench/ramstream32-factorized-ab.sh'
+      - 'scripts/bench/ramstream32-hybrid-sparse-v46-v47.sh'
       - 'docs/ramstream32-factorized-ab.md'
+      - 'docs/ramstream32-hybrid-sparse.md'
       - '.github/workflows/ramstream32-bench-script-ci.yml'
   pull_request:
     paths:
       - 'scripts/bench/ramstream32-factorized-ab.sh'
+      - 'scripts/bench/ramstream32-hybrid-sparse-v46-v47.sh'
       - 'docs/ramstream32-factorized-ab.md'
+      - 'docs/ramstream32-hybrid-sparse.md'
       - '.github/workflows/ramstream32-bench-script-ci.yml'
   workflow_dispatch:
 
@@ -20,9 +24,13 @@ jobs:
       - uses: actions/checkout@v4
       - name: Check benchmark harness syntax
         shell: bash
-        run: bash -n scripts/bench/ramstream32-factorized-ab.sh
-      - name: Check documented entry point
+        run: |
+          bash -n scripts/bench/ramstream32-factorized-ab.sh
+          bash -n scripts/bench/ramstream32-hybrid-sparse-v46-v47.sh
+      - name: Check documented entry points
         shell: bash
         run: |
           grep -Fq 'scripts/bench/ramstream32-factorized-ab.sh' \
             docs/ramstream32-factorized-ab.md
+          grep -Fq 'c8de8d73af1c44f075aee937bc8f37e8b7b79d27' \
+            docs/ramstream32-hybrid-sparse.md
