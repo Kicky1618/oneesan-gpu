@@ -21,7 +21,8 @@ __global__ void b300_dt_pruned_peer_kernel(
     for (; q < n; q += step) {
         Code i = begin + q;
         if (mode == 3) {
-            Count va = a[i], vb = b[i];
+            Count va = a[i];
+            Count vb = b[i];
             a[i] = vb;
             b[i] = va;
         } else if (mode == 1) {
@@ -40,7 +41,8 @@ struct B300DualPrunedPeerContext {
     int ngpu = 0;
     bool ready = false;
     // A directed stream on every endpoint lets one-sided active intervals be
-    // launched from the source GPU, avoiding a peer read of the active value.
+    // launched from the source GPU.  One-way runs use the copy engine on that
+    // stream; two-way runs use the register-swap kernel.
     std::array<std::array<cudaStream_t, MAXGPU>, MAXGPU> stream{};
 
     void init(int n) {
@@ -148,19 +150,38 @@ static inline void b300_dt_pruned_launch_run(
     B300DualPrunedPeerContext& ctx
 ) {
     if (!n || !mode) return;
-    int active;
-    if (mode == 1) active = a;
-    else if (mode == 2) active = b;
-    else active = B300DualPeerSwapContext::active_endpoint(a, b, z.ngpu);
-    ck(cudaSetDevice(active), "dual pruned launch device");
+    const auto& bs = blocked ? z.block_slot_base : z.main_slot_base;
+    Count* ap = ptrs[a] + bs[a][b] + begin;
+    Count* bp = ptrs[b] + bs[b][a] + begin;
+    size_t bytes = size_t(n) * sizeof(Count);
+
+    // A one-sided live interval is a plain contiguous migration.  Use the peer
+    // copy engine, then zero the old source on the same source-device stream so
+    // scratch/register swap work and SM occupancy are both avoided.
+    if (mode == 1 || mode == 2) {
+        int src = mode == 1 ? a : b;
+        int dst = mode == 1 ? b : a;
+        Count* sp = mode == 1 ? ap : bp;
+        Count* dp = mode == 1 ? bp : ap;
+        ck(cudaSetDevice(src), "dual pruned one-way device");
+        cudaStream_t s = ctx.stream[src][dst];
+        ck(cudaMemcpyPeerAsync(dp, dst, sp, src, bytes, s),
+           "dual pruned one-way peer copy");
+        ck(cudaMemsetAsync(sp, 0, bytes, s), "dual pruned one-way source zero");
+        return;
+    }
+
+    // Both streams are live, so a true in-place swap is required.  A single
+    // endpoint kernel reads both old values before either write.
+    int active = B300DualPeerSwapContext::active_endpoint(a, b, z.ngpu);
+    ck(cudaSetDevice(active), "dual pruned two-way device");
     int threads = 256;
     Code want = (n + threads - 1) / threads;
     unsigned blocks = unsigned(std::min<Code>(want, 8192));
-    const auto& bs = blocked ? z.block_slot_base : z.main_slot_base;
     b300_dt_pruned_peer_kernel<<<blocks, threads, 0,
         ctx.stream[active][active == a ? b : a]>>>(
         ptrs[a] + bs[a][b], ptrs[b] + bs[b][a], begin, n, mode);
-    ck(cudaGetLastError(), "dual pruned launch");
+    ck(cudaGetLastError(), "dual pruned two-way launch");
 }
 
 static long double b300_dt_pruned_peer_array(
@@ -170,7 +191,7 @@ static long double b300_dt_pruned_peer_array(
     B300DualPrunedPeerContext& ctx,
     B300DualShuffleStats* stats = nullptr
 ) {
-    ctx.init(z.ngpu);
+    if (!ctx.ready) ctx.init(z.ngpu);
     const auto& sz = blocked ? z.pair_block_size : z.pair_main_size;
     long double moved = 0;
     std::vector<Code> bounds;
