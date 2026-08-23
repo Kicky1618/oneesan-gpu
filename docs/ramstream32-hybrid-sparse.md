@@ -98,15 +98,55 @@ Validation:
 
 Merged as commit `8bab5b17b4eb7e608d2d142cecbfea5d7bfda59a`.
 
+## v4.6: split LOCAL/CROSS closure streams
+
+The v4.5 sparse runtime still decoded the descriptor kind for every closure operation. That branch is unnecessary once the topology has been classified during metadata construction.
+
+For a closure that does not cross into HIGH, destination storage is fixed by the active LOW position:
+
+- `p = 1`: destination is a main state;
+- `p > 1`: destination is a blocked state.
+
+v4.6 therefore builds two independent 64-bit streams per `(p, factor block)`:
+
+- `local_closure_ops`: source LOW rank, destination factor block, destination LOW rank;
+- `cross_closure_ops`: the same fields plus the HIGH matching depth.
+
+The dense descriptor is still available while the sparse stream is built. The builder asserts that every non-CROSS closure obeys the `p=1 -> MAIN`, `p>1 -> BLOCK` invariant. A mismatch aborts metadata construction rather than silently entering the optimized executor.
+
+Runtime changes:
+
+- LOCAL and CROSS operations are traversed in separate loops;
+- the per-operation `LOWDESC_MAIN/BLOCK/CROSS` dispatch is removed;
+- `p == 1` is hoisted outside the operation loops;
+- CROSS continues to use the v4.5 pre-ranked `uint16_t` HIGH destination table;
+- both streams remain 8 bytes/op, so the change is intended as a CPU front-end/branch-prediction optimization rather than a metadata-size reduction.
+
+The backend identifies itself as `gridfp-ramstream32-factorized-hybrid-sparse-v4.6` and reports LOCAL/CROSS closure MiB separately so a high-memory host benchmark can correlate runtime changes with the actual stream mix.
+
+Validation is wired into `.github/workflows/ramstream32-sparse-ci.yml`:
+
+- compile and `--plan-only` for W=22 / n=21;
+- compile and `--plan-only` for W=28 / n=27;
+- exhaustive W=10 comparison of out-of-place, in-place, direct, and sparse CPU LOW executors against the full reference recurrence.
+
 ## Current bottlenecks and next experiments
 
-The two changes above deliberately target topology/metadata work that can be removed exactly. They do not change the DP recurrence.
+v4.6 removes one remaining descriptor-dispatch cost, but does not alter the dominant data movement bound.
 
-The next CPU LOW experiment should be measured before promotion:
+The next measurements should compare v4.5 and v4.6 on a high-memory many-core host using at least the following counters:
 
-- split closure operations into local and CROSS streams;
-- for local closures, the destination kind is determined by the outer `p` (`p=1` -> main, `p>1` -> blocked), eliminating the per-operation kind branch;
-- keep CROSS operations in a separate branch-free loop using the v4.5 pre-ranked HIGH table;
-- benchmark on a high-memory, many-core host before merging, because this is a microarchitectural optimization rather than an asymptotic/topological reduction.
+- `cpu_wall_s` and `cpu_kernel_sum_s`;
+- CPU cycles/instructions and branch misses;
+- LLC misses and memory bandwidth;
+- LOCAL/CROSS closure operation counts;
+- full `wall_s`, to determine whether LOW-side savings remain visible behind HIGH-side PCIe traffic.
 
-For `n=27`, further copy-call coalescing alone cannot remove the remaining 106.088 TiB/residue HIGH-window traffic. Larger gains require either reducing how many HIGH states cross PCIe, increasing the fraction executed directly on the CPU/System-RAM side, or moving more of the authoritative representation into aggregate GPU memory.
+After that, the more consequential directions are:
+
+1. increase the CPU/System-RAM fraction so fewer HIGH states cross PCIe;
+2. partition HIGH work across aggregate multi-GPU memory and keep partitions resident for more than one local step;
+3. batch multiple CRT residues through the same topology metadata and scheduling decisions;
+4. investigate whether a legal wider in-place orbit can merge part of the HIGH boundary work into the CPU LOW pass without introducing cross-group write races.
+
+For `n=27`, copy-call coalescing alone cannot remove the remaining 106.088 TiB/residue HIGH-window traffic. Any large wall-time reduction must reduce transferred bytes, hide them behind useful work, or increase the effective host-device bandwidth.
