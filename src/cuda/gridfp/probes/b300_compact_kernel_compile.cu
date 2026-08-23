@@ -8,5 +8,6 @@
 #include "../ramstream32_b300_compact_io.cuh"
 #include "../ramstream32_b300_rowkernels.cuh"
 #include "../ramstream32_b300_high_warp.cuh"
+#include "../ramstream32_b300_sparse_actions.cuh"
 
 int main() { return 0; }
