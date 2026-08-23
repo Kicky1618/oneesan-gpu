@@ -25,6 +25,7 @@ __constant__ const Code* D_MS_BLOCK_BASE;
 __constant__ const Code* D_MS_MAIN_BLOCK_OFF;
 __constant__ const Code* D_MS_BLOCK_BLOCK_OFF;
 __constant__ const uint32_t* D_MS_HIGH_ROUTE;
+__constant__ const uint32_t* D_MS_LOW_BEGIN;
 __constant__ uint32_t D_MS_MAIN_NBLOCKS;
 __constant__ uint32_t D_MS_BLOCK_NBLOCKS;
 __constant__ uint32_t D_MS_MAIN_COLS[64];
@@ -38,6 +39,7 @@ struct MaskShardDeviceMeta {
     Code* main_block_off = nullptr;
     Code* block_block_off = nullptr;
     uint32_t* high_route = nullptr;
+    uint32_t* low_begin = nullptr;
 
     template<class T>
     static void copy_vec(T** dst, const std::vector<T>& v, const char* what) {
@@ -63,6 +65,30 @@ struct MaskShardDeviceMeta {
         copy_vec(&block_block_off, shard.block_block_off, "maskshard block block off");
         copy_vec(&high_route, route, "maskshard high route");
 
+        // StorageFactorHost orders LOW all-codes by (height, occupancy mask,
+        // mask-local rank). Reconstruct each mask interval's storage-column
+        // beginning directly from the base mask counts. This tiny table removes
+        // the per-element LOW code lookup and the 1 GiB dense packed-rank lookup
+        // from HIGH gather/scatter.
+        constexpr int S = MAXW + 2;
+        constexpr uint32_t NM = 1u << LOW_LUT_K;
+        std::vector<uint32_t> lb(size_t(NM) * S, 0u);
+        for (int h = 0; h <= LOW_LUT_K + 1; ++h) {
+            uint32_t rank = 0;
+            for (uint32_t mask = 0; mask < NM; ++mask) {
+                const size_t ix = size_t(mask) * S + h;
+                lb[ix] = rank;
+                rank += G_FACTOR.low_mask_off[ix + 1] - G_FACTOR.low_mask_off[ix];
+            }
+            const uint32_t expected = G_FACTOR.low_all_off[h + 1] - G_FACTOR.low_all_off[h];
+            if (rank != expected) {
+                std::cerr << "maskshard LOW storage begin mismatch h=" << h
+                          << " got=" << rank << " expected=" << expected << '\n';
+                std::exit(129);
+            }
+        }
+        copy_vec(&low_begin, lb, "maskshard low storage begin");
+
         ck(cudaMemcpyToSymbol(D_MS_MAIN_PTR, main_ptr, sizeof(Count*) * 8),
            "maskshard main ptrs");
         ck(cudaMemcpyToSymbol(D_MS_BLOCK_PTR, block_ptr, sizeof(Count*) * 8),
@@ -78,6 +104,8 @@ struct MaskShardDeviceMeta {
            "maskshard block block off ptr");
         ck(cudaMemcpyToSymbol(D_MS_HIGH_ROUTE, &high_route, sizeof(high_route)),
            "maskshard high route ptr");
+        ck(cudaMemcpyToSymbol(D_MS_LOW_BEGIN, &low_begin, sizeof(low_begin)),
+           "maskshard low begin ptr");
         ck(cudaMemcpyToSymbol(D_MS_MAIN_NBLOCKS, &shard.main_nblocks, sizeof(shard.main_nblocks)),
            "maskshard main nblocks");
         ck(cudaMemcpyToSymbol(D_MS_BLOCK_NBLOCKS, &shard.block_nblocks, sizeof(shard.block_nblocks)),
@@ -100,10 +128,11 @@ struct MaskShardDeviceMeta {
         if (main_block_off) cudaFree(main_block_off);
         if (block_block_off) cudaFree(block_block_off);
         if (high_route) cudaFree(high_route);
+        if (low_begin) cudaFree(low_begin);
         owner = nullptr;
         main_base = block_base = nullptr;
         main_block_off = block_block_off = nullptr;
-        high_route = nullptr;
+        high_route = low_begin = nullptr;
         dev = -1;
     }
 };
@@ -112,16 +141,7 @@ __device__ __forceinline__ uint32_t maskshard_low_all_rank(
     uint32_t low_mask, uint32_t hs, uint32_t low_mask_rank
 ) {
     constexpr int S = MAXW + 2;
-    // StorageFactorHost orders each height by (occupancy mask, mask-local rank).
-    // Thus one fixed LOW mask occupies a contiguous interval.  Resolve only the
-    // first code of that interval; all following columns are simply base+rank.
-    // Compared with looking up the code and dense packed-rank for every element,
-    // the large dense-rank access is now identical for the whole FBlock and is
-    // therefore cache-friendly.
-    const uint32_t p0 = D_F_LOW_MASK_OFF[size_t(low_mask) * S + hs];
-    const uint32_t code0 = D_F_LOW_MASK_CODES[p0];
-    const uint32_t base = D_F_LOW_PACKED_RANK[code0] >> LOW_LUT_K;
-    return base + low_mask_rank;
+    return D_MS_LOW_BEGIN[size_t(low_mask) * S + hs] + low_mask_rank;
 }
 
 __device__ __forceinline__ void maskshard_high_route(
