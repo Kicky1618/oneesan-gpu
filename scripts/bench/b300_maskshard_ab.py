@@ -118,6 +118,29 @@ def validate_result_rows(
             raise ValueError(f"{name} result row {i} has non-positive wall_s")
 
 
+def visible_gpu_count_hint() -> Tuple[int | None, str]:
+    cvd = os.environ.get("CUDA_VISIBLE_DEVICES")
+    if cvd is not None:
+        raw = cvd.strip()
+        if not raw or raw == "-1":
+            return 0, "CUDA_VISIBLE_DEVICES"
+        return len([x for x in raw.split(",") if x.strip()]), "CUDA_VISIBLE_DEVICES"
+
+    try:
+        cp = subprocess.run(
+            ["nvidia-smi", "--query-gpu=index", "--format=csv,noheader"],
+            text=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.DEVNULL,
+            check=False,
+        )
+    except FileNotFoundError:
+        return None, "unavailable"
+    if cp.returncode != 0:
+        return None, "nvidia-smi"
+    return len([line for line in cp.stdout.splitlines() if line.strip()]), "nvidia-smi"
+
+
 def tee_process(cmd: List[str], env: Dict[str, str]) -> Tuple[int, str, str]:
     print("+ " + shlex.join(cmd), flush=True)
     proc = subprocess.Popen(
@@ -277,6 +300,7 @@ def main() -> int:
     ap.add_argument("--vram-reserve-mib", type=int)
     ap.add_argument("--dry-run", action="store_true")
     ap.add_argument("--self-test", action="store_true")
+    ap.add_argument("--skip-gpu-preflight", action="store_true")
     args = ap.parse_args()
 
     if args.self_test:
@@ -298,6 +322,20 @@ def main() -> int:
     for mod in moduli:
         if not 2 <= mod <= 0xFFFFFFFF:
             ap.error(f"modulus out of uint32 range: {mod}")
+
+    if not args.dry_run and not args.skip_gpu_preflight:
+        visible_hint, source = visible_gpu_count_hint()
+        if visible_hint is not None and visible_hint < args.gpus:
+            raise SystemExit(
+                f"GPU preflight failed: requested {args.gpus}, only {visible_hint} "
+                f"visible according to {source}"
+            )
+        if visible_hint is None:
+            print(
+                "warning: could not preflight visible GPU count; "
+                "solver result identity check remains enabled",
+                file=sys.stderr,
+            )
 
     stamp = time.strftime("%Y%m%d-%H%M%S")
     result_dir = args.result_dir or (ROOT / "build" / "bench" / f"maskshard-ab-{stamp}")
