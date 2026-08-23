@@ -26,6 +26,24 @@ PRIMES = [
 
 RESULT_RE = re.compile(r"residue=(\d+).*?modulus=(\d+).*?wall_s=([0-9.eE+-]+)")
 
+# Exact 9x27 strip counts for the stronger planar-component condition used by
+# the n=27 bound.  They are independently recomputed by
+# src/cpp/probes/pq_component_strip_bound.cpp.
+#
+# Split the outer boundary into the fixed s-t arcs
+#   P0 = top + right,  Q0 = left + bottom.
+# For a valid simple path P, write boundary(F) = P XOR P0.  Every connected
+# component of 1-faces must touch P0; otherwise one boundary cycle of that
+# component survives in P.  Taking the complement gives
+# boundary(~F) = P XOR Q0, so every 0-component must touch Q0.  On an internal
+# strip boundary either color is allowed to escape into the adjacent strip.
+# Ignoring consistency between the three strips only enlarges the set and is
+# therefore still a rigorous upper bound.
+_PQ27_TOP9 = 1439363966680482394681847048772970007433626003156790462009370
+_PQ27_MIDDLE9 = 22942552281959548690313451479726513472161304029234933083393982
+_PQ27_BOTTOM9 = _PQ27_TOP9
+_PQ27_BOUND = _PQ27_TOP9 * _PQ27_MIDDLE9 * _PQ27_BOTTOM9
+
 
 def _strip_compatible(x: int, y: int, height: int) -> bool:
     """Whether two adjacent face-bit columns avoid a 2x2 checkerboard."""
@@ -70,11 +88,10 @@ def simple_path_upper_bound(n: int, max_strip_height: int = 9) -> tuple[int, lis
     have. Thus path count is at most the number of n x n face-bit matrices
     without checkerboard 2x2 blocks.
 
-    To keep the bound cheap to compute, partition the rows into independent
-    strips and ignore constraints across strip boundaries. This enlarges the
-    set and therefore remains a rigorous upper bound. Dynamic programming
-    chooses the strip-height partition (up to max_strip_height) with the
-    smallest exact product.
+    To keep the generic bound cheap to compute, partition the rows into
+    independent strips and ignore constraints across strip boundaries. For
+    n=27 and strip height >=9, also use the stronger precomputed P0/Q0
+    component bound documented above and take the smaller rigorous bound.
     """
     if n < 1:
         return 1, []
@@ -92,7 +109,12 @@ def simple_path_upper_bound(n: int, max_strip_height: int = 9) -> tuple[int, lis
                 best[rows] = cand
                 parts[rows] = parts[rows - h] + [h]
     assert best[n] is not None and parts[n] is not None
-    return best[n], parts[n]
+
+    generic_bound = best[n]
+    generic_parts = parts[n]
+    if n == 27 and hmax >= 9 and _PQ27_BOUND < generic_bound:
+        return _PQ27_BOUND, [9, 9, 9]
+    return generic_bound, generic_parts
 
 
 def primes_for_bound(bound: int) -> list[int]:
@@ -205,6 +227,10 @@ def main() -> int:
         total_wall += wall
         print(f"  CRT bits={M.bit_length()} / bound_bits={required_bits}", file=sys.stderr, flush=True)
         if M > path_bound:
+            if x > path_bound:
+                raise SystemExit(
+                    f"CRT reconstruction exceeds rigorous path bound: exact={x} > bound={path_bound}"
+                )
             out = work / "exact.txt"
             out.write_text(
                 f"n={n}\n"
