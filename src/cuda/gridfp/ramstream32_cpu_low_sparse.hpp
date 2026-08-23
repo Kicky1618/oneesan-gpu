@@ -20,13 +20,24 @@
 //   * at p=LOW_LUT_K the source center is N and the orbit kind uniquely gives
 //     the partner center (NN/NL -> L, NR -> R).
 // Only the three LOW ranks and the orbit kind need to be streamed at runtime.
+//
+// v4.5 also pre-ranks LOWDESC_CROSS on the inactive HIGH half. A CROSS update
+// preserves the HIGH occupancy mask and only flips one L to R, so the target
+// mask-local HIGH rank depends solely on (source HIGH code, matching depth).
+// Compute that topology map once while the dense storage rank table still
+// exists; runtime then replaces an O(H) bracket scan plus binary search with a
+// single uint16_t lookup. HIGH_LUT_K <= 15 guarantees every mask-local rank is
+// below 2^15, leaving 0xffff as an invalid sentinel.
 using CpuLowSparseOrbitOp = uint64_t;
 static_assert(sizeof(CpuLowSparseOrbitOp) == 8);
+static_assert(HIGH_LUT_K <= 15,
+              "uint16_t sparse CROSS rank requires HIGH_LUT_K <= 15");
 
 static constexpr uint64_t CPU_SPARSE_RANK_MASK = (1ull << 20) - 1ull;
 static constexpr int CPU_SPARSE_JLR_SHIFT = 20;
 static constexpr int CPU_SPARSE_DLR_SHIFT = 40;
 static constexpr int CPU_SPARSE_KIND_SHIFT = 60;
+static constexpr uint16_t CPU_SPARSE_CROSS_INVALID = 0xffffu;
 
 static inline CpuLowSparseOrbitOp cpu_sparse_orbit_pack(
     uint32_t src_lr, uint32_t kind, uint32_t jlr, uint32_t dlr
@@ -72,6 +83,12 @@ struct CpuLowSparseHost {
     std::vector<uint32_t> orbit_off;
     std::vector<uint32_t> closure_off;
     uint32_t nblocks = 0;
+
+    // flattened [(depth-1) * high_cross_pitch + global high-mask-code index].
+    // Value is the target mask-local HIGH rank, or 0xffff when no matching L
+    // exists. G_FACTOR.high_mask_codes supplies the source indexing.
+    std::vector<uint16_t> high_cross_rank;
+    uint32_t high_cross_pitch = 0;
 };
 
 static inline uint64_t cpu_sparse_closure_pack(uint32_t src_lr, uint32_t desc) {
@@ -89,7 +106,8 @@ static inline uint32_t cpu_sparse_closure_desc(uint64_t z) {
 }
 
 static CpuLowSparseHost build_cpu_low_sparse(
-    const StorageLayout& layout, const LowDescHost& desc, const LowOrbitHost& orbit
+    const StorageFactorHost& storage, const StorageLayout& layout,
+    const LowDescHost& desc, const LowOrbitHost& orbit
 ) {
     CpuLowSparseHost s;
     s.nblocks = uint32_t(layout.main_blocks.size());
@@ -138,11 +156,39 @@ static CpuLowSparseHost build_cpu_low_sparse(
         s.closure_off[size_t(pi) * pitch + s.nblocks] = uint32_t(s.closure_ops.size());
     }
 
+    // Pre-rank every possible inactive-HIGH CROSS operation. The dense storage
+    // rank is still available here and already stores the mask-local rank in
+    // its low HIGH_LUT_K bits. Flipping L->R preserves occupancy, so no mask
+    // conversion is necessary.
+    s.high_cross_pitch = uint32_t(G_FACTOR.high_mask_codes.size());
+    s.high_cross_rank.assign(
+        size_t(HIGH_LUT_K) * s.high_cross_pitch, CPU_SPARSE_CROSS_INVALID);
+    constexpr uint32_t HIGH_MASK_RANK_MASK = (1u << HIGH_LUT_K) - 1u;
+    for (uint32_t depth = 1; depth <= uint32_t(HIGH_LUT_K); ++depth) {
+        uint16_t* dst = s.high_cross_rank.data()
+            + size_t(depth - 1) * s.high_cross_pitch;
+        for (uint32_t i = 0; i < s.high_cross_pitch; ++i) {
+            uint32_t hc = G_FACTOR.high_mask_codes[i];
+            uint32_t hc2 = cpu_low_flip_high(hc, depth);
+            if (hc2 == 0xffffffffu) continue;
+            uint32_t packed = storage.high_packed_rank[hc2];
+            if (packed == 0xffffffffu) continue;
+            uint32_t hr2 = packed & HIGH_MASK_RANK_MASK;
+            if (hr2 >= uint32_t(CPU_SPARSE_CROSS_INVALID)) {
+                std::cerr << "cpu sparse cross rank overflow depth=" << depth
+                          << " rank=" << hr2 << '\n';
+                std::exit(103);
+            }
+            dst[i] = uint16_t(hr2);
+        }
+    }
+
     std::cerr << "cpu_low_sparse orbit_ops=" << s.orbit_ops.size()
               << " closure_ops=" << s.closure_ops.size()
               << " orbit_op_bytes=" << sizeof(CpuLowSparseOrbitOp)
               << " orbit_mib=" << double(s.orbit_ops.size() * sizeof(CpuLowSparseOrbitOp)) / (1<<20)
               << " closure_mib=" << double(s.closure_ops.size() * sizeof(uint64_t)) / (1<<20)
+              << " cross_rank_mib=" << double(s.high_cross_rank.size() * sizeof(uint16_t)) / (1<<20)
               << '\n';
     return s;
 }
@@ -247,21 +293,20 @@ static void process_cpu_low_group_sparse(
                         Count* j = dp[dbid] + hr * job.block_blocks[dbid].stride + cpu_low_lr(word);
                         *j = cpu_low_add(*j, c, mod);
                     } else if (kind == LOWDESC_CROSS) {
-                        uint32_t hc = G_FACTOR.high_mask_codes[high0 + hr];
-                        uint32_t hc2 = cpu_low_flip_high(hc, cpu_low_depth(word));
-                        if (hc2 == 0xffffffffu) continue;
+                        uint32_t depth = cpu_low_depth(word);
+                        if (!depth || depth > uint32_t(HIGH_LUT_K)) continue;
+                        uint16_t hr16 = sparse.high_cross_rank[
+                            size_t(depth - 1) * sparse.high_cross_pitch + high0 + hr];
+                        if (hr16 == CPU_SPARSE_CROSS_INVALID) continue;
+                        uint32_t hr2 = uint32_t(hr16);
                         if (p == 1) {
                             uint32_t jbid = cpu_low_block(word);
                             const FBlock& y = job.main_blocks[jbid];
-                            uint32_t hr2 = cpu_high_mask_rank(job.mask, hc2, y.he);
-                            if (hr2 == 0xffffffffu) continue;
                             Count* j = mp[jbid] + Code(hr2) * y.stride + cpu_low_lr(word);
                             *j = cpu_low_add(*j, c, mod);
                         } else {
                             uint32_t dbid = cpu_low_block(word);
                             const FBlock& y = job.block_blocks[dbid];
-                            uint32_t hr2 = cpu_high_mask_rank(job.mask, hc2, y.he);
-                            if (hr2 == 0xffffffffu) continue;
                             Count* j = dp[dbid] + Code(hr2) * y.stride + cpu_low_lr(word);
                             *j = cpu_low_add(*j, c, mod);
                         }
