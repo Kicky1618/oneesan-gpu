@@ -1,6 +1,7 @@
 #pragma once
 
 #include <cstdint>
+#include "maskshard_index.cuh"
 
 // Zero-scratch LOW-window orbit executor for fix_low=false HIGH-mask shards.
 // The authoritative HIGH-mask group itself is updated in place. HIGH exact
@@ -103,7 +104,6 @@ __global__ void maskshard_main_block_loworbit_kernel(
                 mainv[j] = maskshard_add_mod_plain(c, cc);
                 blockv[dj] = 0;
             } else {
-                // RN/LN companion keeps identity; NR/NL becomes new blocked.
                 blockv[dj] = c;
             }
         }
