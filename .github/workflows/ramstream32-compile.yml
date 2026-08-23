@@ -108,3 +108,4 @@ jobs:
             src/cpp/probes/factor_window_mask_components.cpp \
             -o build/factor_window_mask_components
           build/factor_window_mask_components ${{ matrix.width }} ${{ matrix.low }}
+# closure-probe-ci-trigger
