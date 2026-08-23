@@ -46,7 +46,7 @@ __host__ __device__ static inline MateID mset(MateID m, int k, MateValue v) {
 }
 __host__ __device__ static inline MateID msetpair(MateID m, int p, MateValuePair v) {
     MateID z = 15ULL << (2 * (p - 1));
-    return (m & ~z) | (MateID(v) << (2 * (p - 1));
+    return (m & ~z) | (MateID(v) << (2 * (p - 1)));
 }
 __host__ __device__ static inline MateID mshrink(MateID m, int k) {
     MateID mask = (1ULL << (2 * k)) - 1ULL;
