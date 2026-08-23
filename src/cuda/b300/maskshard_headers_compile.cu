@@ -6,10 +6,12 @@
 
 #include "../gridfp/ramstream32_factorized_storage.hpp"
 #include "../gridfp/ramstream32_highdesc.cuh"
+#include "../gridfp/ramstream32_lowdesc.cuh"
 #include "maskshard_layout.hpp"
 #include "maskshard_lowlocal.cuh"
 #include "maskshard_highio.cuh"
 #include "maskshard_highorbit.cuh"
+#include "maskshard_loworbit.cuh"
 
 int main() {
     // Compile-time integration probe. Runtime behavior is validated separately
