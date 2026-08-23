@@ -6,7 +6,9 @@ on:
       - 'src/cpp/probes/factor_orbit_aux_semantics.cpp'
       - 'src/cpp/probes/factor_orbitaux_savings.cpp'
       - 'src/cpp/probes/factor_blockorbit_semantics.cpp'
+      - 'src/cpp/probes/factor_blockorbit_compactaux_semantics.cpp'
       - 'src/cuda/b300/probes/maskshard_orbitaux_hostplan.cu'
+      - 'src/cuda/b300/probes/maskshard_blockorbitaux_hostplan.cu'
       - 'src/cuda/b300/maskshard_highio.cuh'
       - 'src/cuda/b300/maskshard_highorbit.cuh'
       - 'src/cuda/b300/maskshard_loworbit.cuh'
@@ -18,7 +20,9 @@ on:
       - 'src/cpp/probes/factor_orbit_aux_semantics.cpp'
       - 'src/cpp/probes/factor_orbitaux_savings.cpp'
       - 'src/cpp/probes/factor_blockorbit_semantics.cpp'
+      - 'src/cpp/probes/factor_blockorbit_compactaux_semantics.cpp'
       - 'src/cuda/b300/probes/maskshard_orbitaux_hostplan.cu'
+      - 'src/cuda/b300/probes/maskshard_blockorbitaux_hostplan.cu'
       - 'src/cuda/b300/maskshard_highio.cuh'
       - 'src/cuda/b300/maskshard_highorbit.cuh'
       - 'src/cuda/b300/maskshard_loworbit.cuh'
@@ -64,6 +68,22 @@ jobs:
       - name: Compare blocked-domain orbit plus closure with canonical update
         run: build/factor_blockorbit_semantics ${{ matrix.width }}
 
+  compact-blockaux-semantics:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        width: [10, 12]
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build compact blocked-coordinate aux probe
+        run: |
+          mkdir -p build
+          g++ -O3 -std=c++17 -Wall -Wextra -Werror \
+            src/cpp/probes/factor_blockorbit_compactaux_semantics.cpp \
+            -o build/factor_blockorbit_compactaux_semantics
+      - name: Verify one-word compact aux reproduces canonical update
+        run: build/factor_blockorbit_compactaux_semantics ${{ matrix.width }}
+
   savings:
     runs-on: ubuntu-latest
     steps:
@@ -81,11 +101,11 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - name: Build v0.5 HBM budget probe
+      - name: Build HBM budget probe
         run: |
           mkdir -p build
           g++ -O3 -std=c++17 -Wall -Wextra -Werror \
             src/cpp/probes/factor_maskshard_memory.cpp \
             -o build/factor_maskshard_memory
-      - name: Verify n=27 v0.5 HBM budget
+      - name: Verify n=27 v0.7 HBM budget
         run: build/factor_maskshard_memory 28 14 8 268.59
