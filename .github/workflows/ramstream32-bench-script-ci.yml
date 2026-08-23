@@ -1,0 +1,28 @@
+name: ramstream32 benchmark harness CI
+
+on:
+  push:
+    paths:
+      - 'scripts/bench/ramstream32-factorized-ab.sh'
+      - 'docs/ramstream32-factorized-ab.md'
+      - '.github/workflows/ramstream32-bench-script-ci.yml'
+  pull_request:
+    paths:
+      - 'scripts/bench/ramstream32-factorized-ab.sh'
+      - 'docs/ramstream32-factorized-ab.md'
+      - '.github/workflows/ramstream32-bench-script-ci.yml'
+  workflow_dispatch:
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Check benchmark harness syntax
+        shell: bash
+        run: bash -n scripts/bench/ramstream32-factorized-ab.sh
+      - name: Check documented entry point
+        shell: bash
+        run: |
+          grep -Fq 'scripts/bench/ramstream32-factorized-ab.sh' \
+            docs/ramstream32-factorized-ab.md
