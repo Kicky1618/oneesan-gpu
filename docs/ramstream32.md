@@ -2,38 +2,64 @@
 
 `ramstream32` is the low-VRAM / high-system-RAM execution profile for the GPU frontier DP.
 
-The authoritative `main` and `blocked` arrays live in ordinary anonymous system RAM. Only the current occupancy group is packed into a small pinned host staging buffer and copied explicitly to GPU scratch. This deliberately avoids registering the full authoritative array with CUDA and avoids GPU random loads over mapped host memory.
+The authoritative `main` and `blocked` arrays live in ordinary anonymous system RAM. Only the current occupancy group is packed into a small pinned host staging buffer and copied explicitly to GPU scratch. This avoids registering the full authoritative array with CUDA and avoids GPU random loads over mapped host memory.
 
-## Current implementation
+## Implementations
 
-Source:
+### v1: canonical gather/scatter baseline
 
 ```text
 src/cuda/gridfp/oneesan_cuda_gridfp_ramstream32.cu
+scripts/build/gridfp-ramstream32.sh
 ```
 
-Build helper:
+v1 performs CPU-side `group unrank -> canonical rank` for every packed/unpacked state. It exists as a correctness baseline and exposes separate `pack_s`, `h2d_s`, `kernel_s`, `d2h_s`, and `unpack_s` timings.
 
-```bash
-TARGET_W=22 ARCH=native bash scripts/build/gridfp-ramstream32.sh
-```
-
-`TARGET_W` is the vertex/frontier width, so `TARGET_W=22` builds the `n=21` regression binary. For the largest target, use `TARGET_W=28` (`n=27`).
-
-Run syntax:
+### v2: canonical interval packing
 
 ```text
-oneesan_cuda_gridfp_ramstream32_w<W> n modulus scratch_target_mib max_window cpu_threads
+src/cuda/gridfp/oneesan_cuda_gridfp_ramstream32_intervals.cu
+scripts/build/gridfp-ramstream32-intervals.sh
 ```
 
-Example regression run:
+v2 reuses the canonical interval construction developed in the factorized B300 implementation. Before materializing intervals it computes an upper bound on interval count. If the predicted/actual average run is sufficiently long, pack/unpack becomes parallel `memcpy` over canonical runs. Fragmented groups fall back to the v1 rank/unrank path.
+
+The default threshold is 16,384 states = 64 KiB per interval for 32-bit counts. Override it with `MIN_INTERVAL_ELEMS` at build time.
+
+## Build and regression
+
+`TARGET_W` is the vertex/frontier width, so `TARGET_W=22` builds `n=21`. The largest current target is `TARGET_W=28` (`n=27`).
+
+Build v2 for the first regression:
 
 ```bash
-TARGET_W=22 bash scripts/build/gridfp-ramstream32.sh
-./build/oneesan_cuda_gridfp_ramstream32_w22 21 4294967291 2048 14 16
+TARGET_W=22 ARCH=native bash scripts/build/gridfp-ramstream32-intervals.sh
 ```
 
-The known factorized implementation gives residue `998035516` for `n=21`, modulus `4294967291`; use this as the first correctness check.
+Run:
+
+```bash
+./build/oneesan_cuda_gridfp_ramstream32_intervals_w22 21 4294967291 2048 14 16
+```
+
+Arguments are:
+
+```text
+n modulus scratch_target_mib max_window cpu_threads
+```
+
+The known factorized result for `n=21`, modulus `4294967291`, is residue `998035516`.
+
+Useful threshold sweep:
+
+```bash
+for x in 4096 16384 65536 262144; do
+  MIN_INTERVAL_ELEMS=$x TARGET_W=22 \
+    bash scripts/build/gridfp-ramstream32-intervals.sh
+  ./build/oneesan_cuda_gridfp_ramstream32_intervals_w22 \
+    21 4294967291 2048 14 16
+done
+```
 
 ## Memory hierarchy
 
@@ -42,7 +68,7 @@ ordinary system RAM
   main authoritative array
   blocked authoritative array
           |
-          | CPU pack / unpack
+          | interval memcpy or fallback rank/unrank
           v
 small pinned staging buffers
           |
@@ -54,22 +80,27 @@ GPU scratch
   blocked
 ```
 
-The anonymous authoritative allocation uses `MADV_HUGEPAGE` where available and is not CUDA-pinned. Linux zero-page/lazy allocation means creating a very large virtual mapping itself is cheap; the machine must still have enough physical memory (or configured swap) once the DP touches the pages.
-
-The current version is intentionally a correctness/performance baseline. It performs CPU-side group `unrank -> canonical rank` during pack and unpack, then runs the same group-local GPU transition structure as the existing mapped-host prototype.
+The anonymous authoritative allocation uses `MADV_HUGEPAGE` where available and is not CUDA-pinned. Linux zero-page/lazy allocation makes the initial virtual mapping cheap; physical RAM is still required as pages are touched. Avoid relying on `MAP_NORESERVE` as a substitute for capacity planning: insufficient RAM can still lead to an OOM kill during the run.
 
 ## Instrumentation
 
-Each run reports:
+Both versions report:
 
-- `pack_s`: ordinary RAM -> pinned group staging
+- `pack_s`: authoritative RAM -> pinned staging
 - `h2d_s`: pinned staging -> GPU scratch
-- `kernel_s`: GPU transitions inside the resident window
+- `kernel_s`: GPU transitions while the group is resident
 - `d2h_s`: GPU scratch -> pinned staging
 - `unpack_s`: pinned staging -> authoritative RAM
 - `wall_s`: end-to-end row loop
 
-This is the main purpose of v1: identify whether the next bottleneck is CPU topology work, PCIe, or GPU transition work on the target host.
+v2 additionally reports:
+
+- `interval_arrays`: main/blocked group arrays handled with interval copies
+- `fallback_arrays`: arrays handled with rank/unrank
+- `interval_runs`: total contiguous canonical runs copied
+- `avg_interval_elems`: average states per selected interval
+
+These counters tell us whether canonical storage is already sufficiently contiguous or whether changing the authoritative layout is necessary.
 
 ## Capacity of the 32-bit authoritative arrays
 
@@ -83,29 +114,23 @@ Approximate `main + blocked` capacity per CRT residue:
 | 26 | 679.32 GiB |
 | 27 | 1939.89 GiB |
 
-For `n=27`, system RAM should be comfortably above 2 TiB if the machine also needs normal OS/page-cache/headroom.
+Practical first targets:
 
-## Next optimization: interval packing
+- 128 GiB RAM + 24--32 GiB VRAM: `n=24`
+- 384--512 GiB RAM + 24--32 GiB VRAM: `n=25`
+- 1 TiB RAM + 24--32 GiB VRAM: `n=26`
+- comfortably above 2 TiB RAM: `n=27`
 
-The existing factorized B300 source already contains canonical-layout interval construction (`Interval`, `intervals_rec`, `make_intervals`, and tiled peer intervals). That machinery proves useful here as well: when a group maps to long canonical runs, pack/unpack can become large `memcpy` operations instead of one host `unrank/rank` per state.
+## v3 criterion: factorized authoritative layout
 
-The intended v2 policy is:
+Do not change the global layout merely because VRAM is small. First measure v2.
 
-```text
-if average canonical interval is large:
-    memcpy interval pack/unpack
-else:
-    factorized-code pack/unpack
-```
-
-This should be implemented before attempting full 2D factorized authoritative storage, because it preserves the existing canonical authoritative format and gives a direct measurement of how much of the PCIe/RAM problem can be solved by layout-aware streaming alone.
-
-## Planned v3
-
-If interval packing remains too fragmented, change the authoritative system-RAM layout itself to the exact factorized decomposition
+If `fallback_arrays` remains high or `pack_s + unpack_s` dominates even when PCIe transfer time is small, change system-RAM storage to the exact factorized decomposition
 
 ```text
 biguplus_(h,c) HIGH_h x LOW_(h + delta(c))
 ```
 
-and store each block as a tiled row-major matrix. That removes canonical random gather from the steady-state path and turns group transfer into contiguous/tiled RAM traffic. The factorized topology codec already supplies the bijection needed to preserve exact DP semantics.
+and tile each block row-major. The factorized topology codec already supplies an exact bijection, so this changes storage order rather than DP semantics. In that layout, occupancy groups should map to large tiles/runs instead of canonical random gather.
+
+After v3, the next step is a double/triple-buffered pipeline that overlaps CPU packing, H2D, GPU transitions, D2H, and CPU unpacking.
