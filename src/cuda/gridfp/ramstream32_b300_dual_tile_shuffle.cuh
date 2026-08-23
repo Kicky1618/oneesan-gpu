@@ -11,7 +11,7 @@ struct B300DualShuffleStats {
     long double main_bytes = 0;
     long double block_bytes = 0;
     uint64_t rounds = 0;
-    uint64_t chunk_barriers = 0;
+    uint64_t chunk_barriers = 0; // retained name: now counts pipelined chunk steps
 };
 
 static void b300_dt_sync_all(int ngpu, const char* what) {
@@ -27,11 +27,13 @@ static void b300_dt_sync_all(int ngpu, const char* what) {
 //   contain stream(a,b).  The reverse holds on GPU b.
 // high_to_low=false is exactly the inverse.
 //
-// Each GPU owns one scratch chunk.  For a round, all four disjoint pairs first
-// stash the current chunk locally.  After a device-wide barrier, the stashed
-// chunks are copied to the peer slots.  This is intentionally conservative and
-// simple; an event-pipelined version can replace the two barriers later without
-// changing the physical layout or transition kernels.
+// One nonblocking stream and one event are used per GPU.  For each chunk the
+// outgoing slot is copied to local scratch, then an event is recorded.  The
+// peer's stream waits on that cross-device event before overwriting the slot.
+// Because the peer copy reading scratch is on the same source stream, the next
+// local stash on that stream cannot reuse scratch too early.  CUDA explicitly
+// permits cudaStreamWaitEvent() across devices, so the old all-GPU barrier per
+// chunk is unnecessary.
 static long double b300_dt_shuffle_array(
     const B300DualTileHost& z,
     Count** ptrs,
@@ -43,6 +45,14 @@ static long double b300_dt_shuffle_array(
 ) {
     if (!chunk_elems) std::exit(520);
     const int ngpu = z.ngpu;
+    std::array<cudaStream_t, MAXGPU> stream{};
+    std::array<cudaEvent_t, MAXGPU> stash_done{};
+    for (int g = 0; g < ngpu; ++g) {
+        ck(cudaSetDevice(g), "dual shuffle stream device");
+        ck(cudaStreamCreateWithFlags(&stream[g], cudaStreamNonBlocking), "dual shuffle stream");
+        ck(cudaEventCreateWithFlags(&stash_done[g], cudaEventDisableTiming), "dual shuffle event");
+    }
+
     std::array<int, MAXGPU> ring{};
     for (int g = 0; g < ngpu; ++g) ring[g] = g;
     long double moved = 0;
@@ -75,49 +85,53 @@ static long double b300_dt_shuffle_array(
         }
 
         for (Code off = 0; off < max_send; off += chunk_elems) {
-            // Phase 1: preserve outgoing bytes before either peer overwrites the
-            // pair slot.  Pairs are disjoint, so every GPU uses one scratch.
+            // Preserve both outgoing chunks and publish their completion.
             for (int k = 0; k < ngpu / 2; ++k) {
                 const Pair& x = pairs[k];
+                ck(cudaSetDevice(x.a), "dual pipeline stash a device");
                 if (off < x.send_a) {
                     Code n = std::min(chunk_elems, x.send_a - off);
-                    ck(cudaSetDevice(x.a), "dual stash a device");
                     ck(cudaMemcpyAsync(scratch[x.a], ptrs[x.a] + x.base_a + off,
-                                       size_t(n) * sizeof(Count), cudaMemcpyDeviceToDevice),
-                       "dual stash a");
+                                       size_t(n) * sizeof(Count), cudaMemcpyDeviceToDevice,
+                                       stream[x.a]), "dual pipeline stash a");
                 }
+                ck(cudaEventRecord(stash_done[x.a], stream[x.a]), "dual pipeline event a");
+
+                ck(cudaSetDevice(x.b), "dual pipeline stash b device");
                 if (off < x.send_b) {
                     Code n = std::min(chunk_elems, x.send_b - off);
-                    ck(cudaSetDevice(x.b), "dual stash b device");
                     ck(cudaMemcpyAsync(scratch[x.b], ptrs[x.b] + x.base_b + off,
-                                       size_t(n) * sizeof(Count), cudaMemcpyDeviceToDevice),
-                       "dual stash b");
+                                       size_t(n) * sizeof(Count), cudaMemcpyDeviceToDevice,
+                                       stream[x.b]), "dual pipeline stash b");
                 }
+                ck(cudaEventRecord(stash_done[x.b], stream[x.b]), "dual pipeline event b");
             }
-            b300_dt_sync_all(ngpu, "dual stash sync");
 
-            // Phase 2: send preserved chunks into the opposite slot.  The slot
-            // capacity is max(stream(a,b),stream(b,a)), so either direction fits.
+            // Each outbound copy waits until the destination GPU has preserved
+            // its old bytes.  Put the copy on the source stream so scratch reuse
+            // for the next chunk is automatically ordered after the peer read.
             for (int k = 0; k < ngpu / 2; ++k) {
                 const Pair& x = pairs[k];
+                ck(cudaSetDevice(x.a), "dual pipeline a2b device");
+                ck(cudaStreamWaitEvent(stream[x.a], stash_done[x.b], 0), "dual wait peer b stash");
                 if (off < x.send_a) {
                     Code n = std::min(chunk_elems, x.send_a - off);
-                    ck(cudaSetDevice(x.b), "dual peer a2b device");
                     ck(cudaMemcpyPeerAsync(ptrs[x.b] + x.base_b + off, x.b,
                                            scratch[x.a], x.a,
-                                           size_t(n) * sizeof(Count)),
-                       "dual peer a2b");
+                                           size_t(n) * sizeof(Count), stream[x.a]),
+                       "dual pipeline peer a2b");
                 }
+
+                ck(cudaSetDevice(x.b), "dual pipeline b2a device");
+                ck(cudaStreamWaitEvent(stream[x.b], stash_done[x.a], 0), "dual wait peer a stash");
                 if (off < x.send_b) {
                     Code n = std::min(chunk_elems, x.send_b - off);
-                    ck(cudaSetDevice(x.a), "dual peer b2a device");
                     ck(cudaMemcpyPeerAsync(ptrs[x.a] + x.base_a + off, x.a,
                                            scratch[x.b], x.b,
-                                           size_t(n) * sizeof(Count)),
-                       "dual peer b2a");
+                                           size_t(n) * sizeof(Count), stream[x.b]),
+                       "dual pipeline peer b2a");
                 }
             }
-            b300_dt_sync_all(ngpu, "dual peer sync");
             if (stats) ++stats->chunk_barriers;
         }
         if (stats) ++stats->rounds;
@@ -125,6 +139,18 @@ static long double b300_dt_shuffle_array(
         int last = ring[ngpu - 1];
         for (int k = ngpu - 1; k >= 2; --k) ring[k] = ring[k - 1];
         ring[1] = last;
+    }
+
+    // Synchronizing all source streams also waits for every inbound transfer,
+    // because each directed peer copy is present on exactly one of these streams.
+    for (int g = 0; g < ngpu; ++g) {
+        ck(cudaSetDevice(g), "dual pipeline final device");
+        ck(cudaStreamSynchronize(stream[g]), "dual pipeline final sync");
+    }
+    for (int g = 0; g < ngpu; ++g) {
+        ck(cudaSetDevice(g), "dual pipeline destroy device");
+        cudaEventDestroy(stash_done[g]);
+        cudaStreamDestroy(stream[g]);
     }
     if (stats) {
         if (blocked) stats->block_bytes += moved;
