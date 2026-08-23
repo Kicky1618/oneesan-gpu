@@ -1,6 +1,6 @@
 # B300 blocked-domain orbit research
 
-Status: experimental follow-up to `docs/b300-mask-shard.md`. v0.4 remains the correctness baseline; v0.5 is descriptor+aux main-domain orbit; v0.6 changes only the orbit iteration domain.
+Status: experimental follow-up to `docs/b300-mask-shard.md`. v0.4 remains the correctness baseline; v0.5 adds main-coordinate orbit aux; v0.6 changes the orbit iteration domain; v0.7 also compacts aux into blocked coordinates.
 
 ## Delete-N bijection
 
@@ -33,9 +33,9 @@ Existing descriptor tables already contain the inverse map:
 - `HighDesc.block_desc`: blocked HIGH coordinate -> representative main coordinate;
 - `LowDesc.block_desc`: blocked LOW coordinate -> representative main coordinate.
 
-For each blocked state the kernel therefore obtains the representative main state without reconstructing a MateID. The v0.5 aux table is reused temporarily to identify `NN` vs `NR/NL` and, for the pair case, to obtain the companion main target.
+For each blocked state the kernel obtains the representative main state without reconstructing a MateID. v0.6 reuses the v0.5 main-coordinate aux table to identify `NN` vs `NR/NL` and, for the pair case, to obtain the companion main target.
 
-The orbit update algebra is unchanged. The old blocked cell being iterated is exactly the blocked member of the orbit:
+The orbit update algebra is unchanged:
 
 - NN: companion gets `+c`; representative becomes `c + old_block`; blocked becomes 0;
 - NR/NL, p>1: representative becomes `c + companion + old_block`; blocked becomes `c`;
@@ -47,15 +47,13 @@ A pure-C++ exhaustive seeded-vector probe compares this blocked-domain pass plus
 
 One residue has W rows and W-1 horizontal positions per row.
 
-Representative state-steps:
+Representative state-steps at n=27:
 
 ```
 HIGH positions (13): D * 13 * 28 = 49,145,643,968,148
 LOW positions  (14): D * 14 * 28 = 52,926,078,119,544
 total orbit reps    :             = 102,071,722,087,692
 ```
-
-v0.5 removes two dense packed-rank lookups per representative relative to v0.4, i.e. exactly 204,143,444,175,384 dense-rank lookups/residue. In the simple logical-load model, v0.5 saves one uint32 load per representative relative to v0.4, about 371.335 TiB/residue. This is not a physical-HBM prediction because broadcasts and caches can collapse many HIGH-side accesses.
 
 For kernel source scanning per p:
 
@@ -66,6 +64,61 @@ ratio v0.6/v0.5            = 0.6750177306
 ```
 
 Thus v0.6 removes about 32.50% of total orbit+closure source-thread iterations, and about 64.996% of the orbit-pass iterations specifically.
+
+## v0.7 compact blocked-coordinate aux
+
+Once iteration is over blocked states, a main-coordinate aux table is wasteful. `block_desc` already supplies the representative main coordinate. The only extra information needed is:
+
+- whether the representative is NN or NR/NL;
+- for NR/NL with p>1, the companion main block/rank;
+- for LOW p=1, only the PAIR kind is needed because `LowDesc.main_desc` is already the companion target.
+
+v0.7 therefore stores one 32-bit word in exactly the same coordinate system as the descriptor block table:
+
+```
+HIGH aux index = [p][HighDesc blocked active coordinate]
+LOW  aux index = [p][LowDesc  blocked active coordinate]
+```
+
+The blocked kernel has already computed the descriptor index `bdi`, so the compact aux lookup reuses that exact index. No additional base table or index arithmetic is introduced.
+
+Exact n=27 auxiliary memory:
+
+```
+v0.5/v0.6 HIGH main aux : 113.573406 MiB/GPU
+v0.5/v0.6 LOW  main aux : 186.499115 MiB/GPU
+v0.5/v0.6 total         : 300.072521 MiB/GPU
+
+v0.7 HIGH block aux     :  39.044682 MiB/GPU
+v0.7 LOW  block aux     :  64.189293 MiB/GPU
+v0.7 total              : 103.233974 MiB/GPU
+```
+
+The exact HBM model is now:
+
+```
+v0.4 peak                : 248.980810 GiB/GPU
+v0.5/v0.6 peak           : 249.273850 GiB/GPU
+v0.7 compact-aux peak    : 249.081625 GiB/GPU
+planning usable HBM      : 268.590000 GiB/GPU
+v0.7 headroom            :  19.508375 GiB/GPU
+```
+
+Compared with v0.6, v0.7 returns about 196.84 MiB/GPU while preserving the same blocked-domain execution count.
+
+## v0.7 validation layers
+
+The branch contains three independent checks around this transformation:
+
+1. `factor_blockorbit_semantics.cpp`: blocked-domain orbit + closure equals canonical out-of-place update for every p at W=10/W=12.
+2. `factor_blockorbit_compactaux_semantics.cpp`: one compact aux word per blocked state is sufficient to reproduce the same update algebra, including LOW p=1.
+3. `maskshard_blockorbitaux_hostplan.cu`: builds the actual CUDA-side compact host tables and checks the block descriptor -> representative -> compact aux path against exact MateID transitions.
+
+The CUDA runtime candidate is:
+
+`oneesan_cuda_gridfp_b300_hbm32_maskshard_blockorbit_compactaux_batch_guarded.cu`
+
+It defines `MASKSHARD_BLOCK_ORBIT_AUX`, so the existing aux allocation/pointer plumbing is reused but uploads blocked-coordinate tables instead of main-coordinate tables.
 
 ## Main-state partition and closure follow-up
 
@@ -82,32 +135,21 @@ closure sources = 115,688,495,806
 fraction of M   = 0.2999290775303543
 ```
 
-If a future backend can iterate only closure sources, the two transition passes would scan
+If both HIGH and LOW closure could be iterated compactly, the two transition passes would scan
 
 ```
 D + (M - 2D) = M - D = 250,704,001,213
 ```
 
-source states per p, 32.498% of v0.5's `2M` scan count. HIGH closure compaction is naturally row-oriented in factorized storage. LOW closure compaction is harder because a naive one-block-per-LOW-column scheme produces strided HIGH-row memory accesses; it should not be implemented blindly before B300 profiling.
+source states per p, 32.498% of v0.5's `2M` scan count.
 
-## Aux memory follow-up
-
-v0.6 currently reuses the v0.5 main-coordinate aux tables (300.073 MiB/GPU), so its HBM peak is unchanged at about 249.274 GiB/GPU.
-
-Because blocked-domain iteration needs one aux entry only per blocked descriptor coordinate, a compact follow-up can reduce aux storage to
-
-```
-HIGH block aux: 39.044682 MiB/GPU
-LOW block aux : 64.189293 MiB/GPU
-total         : 103.233974 MiB/GPU
-```
-
-Projected peak with compact block aux is about 249.081625 GiB/GPU, leaving about 19.508375 GiB against the 268.59 GiB planning figure. Keep this as a separate optimization until v0.6 compiles and is benchmarked.
+HIGH closure compaction is naturally row-oriented in factorized storage, so it is the next plausible algorithmic step. LOW closure compaction is harder because a naive one-active-column traversal gives strided HIGH-row memory accesses. It should be treated separately rather than assuming the same representation is optimal for both windows.
 
 ## Runtime candidates
 
 - v0.4 A/B baseline: `oneesan_cuda_gridfp_b300_hbm32_maskshard_fullorbit_batch_guarded.cu`
 - v0.5 main-domain aux: `oneesan_cuda_gridfp_b300_hbm32_maskshard_fullorbit_aux_batch_guarded.cu`
-- v0.6 blocked-domain aux: `oneesan_cuda_gridfp_b300_hbm32_maskshard_blockorbit_aux_batch_guarded.cu`
+- v0.6 blocked-domain/full-aux: `oneesan_cuda_gridfp_b300_hbm32_maskshard_blockorbit_aux_batch_guarded.cu`
+- v0.7 blocked-domain/compact-aux: `oneesan_cuda_gridfp_b300_hbm32_maskshard_blockorbit_compactaux_batch_guarded.cu`
 
-Do not merge any of them to the production path before fresh nvcc CI and real full-P2P multi-GPU residue checks.
+GitHub Actions is still failing before job steps start (`steps=null`), so fresh nvcc confirmation remains blocked by CI infrastructure. Do not merge any candidate to the production path before fresh nvcc CI and real full-P2P multi-GPU residue checks.
