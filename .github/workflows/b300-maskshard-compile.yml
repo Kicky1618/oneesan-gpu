@@ -8,6 +8,7 @@ on:
       - 'src/cuda/b300/oneesan_cuda_gridfp_b300_hbm32_maskshard_highorbit.cu'
       - 'src/cuda/b300/oneesan_cuda_gridfp_b300_hbm32_maskshard_fullorbit.cu'
       - 'src/cuda/b300/oneesan_cuda_gridfp_b300_hbm32_maskshard_fullorbit_batch.cu'
+      - 'src/cuda/b300/oneesan_cuda_gridfp_b300_hbm32_maskshard_fullorbit_batch_guarded.cu'
       - 'src/cuda/b300/oneesan_cuda_gridfp_b300_hbm32_maskshard_plan.cu'
       - 'src/cuda/b300/maskshard_headers_compile.cu'
       - 'src/cuda/b300/maskshard_address_selftest.cu'
@@ -28,6 +29,7 @@ on:
       - 'src/cuda/b300/oneesan_cuda_gridfp_b300_hbm32_maskshard_highorbit.cu'
       - 'src/cuda/b300/oneesan_cuda_gridfp_b300_hbm32_maskshard_fullorbit.cu'
       - 'src/cuda/b300/oneesan_cuda_gridfp_b300_hbm32_maskshard_fullorbit_batch.cu'
+      - 'src/cuda/b300/oneesan_cuda_gridfp_b300_hbm32_maskshard_fullorbit_batch_guarded.cu'
       - 'src/cuda/b300/oneesan_cuda_gridfp_b300_hbm32_maskshard_plan.cu'
       - 'src/cuda/b300/maskshard_headers_compile.cu'
       - 'src/cuda/b300/maskshard_address_selftest.cu'
@@ -132,6 +134,15 @@ jobs:
             -DHIGH_LUT_K=${{ matrix.high }} \
             src/cuda/b300/oneesan_cuda_gridfp_b300_hbm32_maskshard_fullorbit_batch.cu \
             -o build/b300_maskshard_fullorbit_batch_w${{ matrix.width }}
+      - name: Compile guarded full-orbit batch solver
+        shell: bash
+        run: |
+          nvcc -O3 -std=c++17 -lineinfo -arch=sm_80 \
+            -DTARGET_W=${{ matrix.width }} \
+            -DLOW_LUT_K=${{ matrix.low }} \
+            -DHIGH_LUT_K=${{ matrix.high }} \
+            src/cuda/b300/oneesan_cuda_gridfp_b300_hbm32_maskshard_fullorbit_batch_guarded.cu \
+            -o build/b300_maskshard_fullorbit_batch_guarded_w${{ matrix.width }}
       - name: Compile mask-shard layout plan
         shell: bash
         run: |
