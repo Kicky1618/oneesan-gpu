@@ -90,10 +90,10 @@ int main(int argc, char** argv) {
     double dense_host_release_mib = double((storage.low_packed_rank.size()
         + storage.high_packed_rank.size() + G_FACTOR.low_packed_rank.size()
         + G_FACTOR.high_packed_rank.size()) * sizeof(uint32_t)) / (1 << 20);
-    long double auth_bytes = (long double(layout.main_size) + layout.block_size) * sizeof(Count);
-    long double pcie_bytes = 2.0L * W * auth_bytes;
-    double pcie_tib = double(pcie_bytes / (long double(1ULL << 40)));
-    double pcie_50gib_s = double(pcie_bytes / (50.0L * (1ULL << 30)));
+    double auth_bytes = double(layout.main_size + layout.block_size) * sizeof(Count);
+    double pcie_bytes = 2.0 * W * auth_bytes;
+    double pcie_tib = pcie_bytes / double(1ULL << 40);
+    double pcie_50gib_s = pcie_bytes / (50.0 * double(1ULL << 30));
 
     if (plan_only) {
         std::cout
@@ -119,20 +119,14 @@ int main(int argc, char** argv) {
     if (visible < 1) return 2;
     ck(cudaSetDevice(0), "cudaSetDevice");
 
-    // GPU executes only the HIGH+center window.  LOW descriptors remain on the
-    // host; only HIGH descriptors plus compact occupancy-mask tables consume VRAM.
     BidescMaskDeviceTables mask_tables;
     mask_tables.install(G_FACTOR);
     HighDescDeviceTables highdesc_tables;
     highdesc_tables.install(highdesc);
 
-    // Descriptor construction and the initial/final canonical rank are the only
-    // users of the two 4^K dense host-rank tables in this backend.
     release_dense_host_tables(storage);
-    highdesc.main_desc.clear();
-    highdesc.main_desc.shrink_to_fit();
-    highdesc.block_desc.clear();
-    highdesc.block_desc.shrink_to_fit();
+    highdesc.main_desc.clear(); highdesc.main_desc.shrink_to_fit();
+    highdesc.block_desc.clear(); highdesc.block_desc.shrink_to_fit();
 
     RamCounts main_auth, block_auth;
     main_auth.alloc(layout.main_size, "mmap hybrid main");
