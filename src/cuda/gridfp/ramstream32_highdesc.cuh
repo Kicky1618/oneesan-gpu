@@ -33,6 +33,16 @@ static inline uint32_t highdesc_pack(
         | (block << HIGHDESC_BLOCK_SHIFT) | rank;
 }
 
+static inline uint32_t highdesc_host_kind(uint32_t x) {
+    return x >> HIGHDESC_KIND_SHIFT;
+}
+static inline uint32_t highdesc_host_block(uint32_t x) {
+    return (x >> HIGHDESC_BLOCK_SHIFT) & HIGHDESC_BLOCK_MASK;
+}
+static inline uint32_t highdesc_host_rank(uint32_t x) {
+    return x & HIGHDESC_RANK_MASK;
+}
+
 static int highdesc_cross_depth_host(MateID m, int p) {
     constexpr int L = LOW_LUT_K;
     MateID t = msetpair(m, p, NN);
@@ -58,11 +68,8 @@ struct HighDescHost {
     uint64_t main_cross = 0;
     uint64_t main_invalid = 0;
 #ifdef MASKSHARD_HIGH_CLOSURE_ROWS
-    // One packed source (main FBlock, HIGH all-rank) per valid HIGH closure row.
     std::vector<uint32_t> closure_rows;
     std::array<uint32_t, MAXW + 2> closure_off{};
-    // Fixed stride 65 allows source-FBlock ranges to be looked up without
-    // duplicating the row list per LOW occupancy class.
     std::vector<uint32_t> closure_block_off;
 #endif
 };
@@ -177,7 +184,7 @@ static HighDescHost build_high_descriptors(
                 }
                 d.main_desc[size_t(pi) * mt + d.main_base[bid] + hr] = out;
 #ifdef MASKSHARD_HIGH_CLOSURE_ROWS
-                const uint32_t kind = out >> HIGHDESC_KIND_SHIFT;
+                const uint32_t kind = highdesc_host_kind(out);
                 if ((source_pair == LL || source_pair == RR || source_pair == RL)
                     && (kind == HIGHDESC_BLOCK || kind == HIGHDESC_CROSS)) {
                     d.closure_rows.push_back(
@@ -193,7 +200,7 @@ static HighDescHost build_high_descriptors(
         for (uint32_t bid = 0; bid < layout.main_blocks.size(); ++bid) {
             d.closure_block_off[size_t(pi) * 65 + bid] = cur;
             while (cur < closure_end
-                && highdesc_block(d.closure_rows[cur]) == bid) ++cur;
+                && highdesc_host_block(d.closure_rows[cur]) == bid) ++cur;
         }
         d.closure_block_off[size_t(pi) * 65 + layout.main_blocks.size()] = cur;
         if (cur != closure_end) {
