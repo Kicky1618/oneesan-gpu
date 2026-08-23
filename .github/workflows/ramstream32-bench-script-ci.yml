@@ -5,6 +5,7 @@ on:
     paths:
       - 'scripts/bench/ramstream32-factorized-ab.sh'
       - 'scripts/bench/ramstream32-hybrid-sparse-v46-v47.sh'
+      - 'scripts/tools/profile_high_group_transfer.py'
       - 'docs/ramstream32-factorized-ab.md'
       - 'docs/ramstream32-hybrid-sparse.md'
       - '.github/workflows/ramstream32-bench-script-ci.yml'
@@ -12,6 +13,7 @@ on:
     paths:
       - 'scripts/bench/ramstream32-factorized-ab.sh'
       - 'scripts/bench/ramstream32-hybrid-sparse-v46-v47.sh'
+      - 'scripts/tools/profile_high_group_transfer.py'
       - 'docs/ramstream32-factorized-ab.md'
       - 'docs/ramstream32-hybrid-sparse.md'
       - '.github/workflows/ramstream32-bench-script-ci.yml'
@@ -27,6 +29,13 @@ jobs:
         run: |
           bash -n scripts/bench/ramstream32-factorized-ab.sh
           bash -n scripts/bench/ramstream32-hybrid-sparse-v46-v47.sh
+          python3 -m py_compile scripts/tools/profile_high_group_transfer.py
+      - name: Check HIGH transfer profile regression
+        shell: bash
+        run: |
+          python3 scripts/tools/profile_high_group_transfer.py 27 > /tmp/high-profile.txt
+          grep -Fq 'main_states=385719506620 blocked_states=135015505407' /tmp/high-profile.txt
+          grep -Fq 'high_roundtrip_tib_per_residue=106.087684520' /tmp/high-profile.txt
       - name: Check documented entry points
         shell: bash
         run: |
