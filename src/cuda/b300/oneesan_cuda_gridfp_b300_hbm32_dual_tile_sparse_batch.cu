@@ -4,10 +4,15 @@
 #define main(...) b300_dual_tile_single_main(__VA_ARGS__)
 #include "oneesan_cuda_gridfp_b300_hbm32_dual_tile_sparse.cu"
 #undef main
+#include "../gridfp/ramstream32_b300_dual_tile_peer_swap.cuh"
 
 static int dt_env_int(const char* name,int fallback,int lo){
     const char* s=std::getenv(name);if(!s||!*s)return fallback;
     return std::max(lo,std::atoi(s));
+}
+static bool dt_env_peer_shuffle(){
+    const char* s=std::getenv("ONEESAN_DUAL_SHUFFLE");
+    return s && (std::strcmp(s,"peer-kernel")==0 || std::strcmp(s,"peer")==0);
 }
 
 static void dt_batch_zero_state(
@@ -44,6 +49,7 @@ int main(int argc,char**argv){
     int ngpu=std::max(1,std::atoi(argv[4]));
     int threads=dt_env_int("ONEESAN_DUAL_THREADS",256,32);
     int chunk_mib=dt_env_int("ONEESAN_DUAL_CHUNK_MIB",512,64);
+    bool peer_shuffle=dt_env_peer_shuffle();
     int W=n+1;
     if(W!=TARGET_W||W>MAXW||n<2||ngpu>MAXGPU)return 1;
     if constexpr(LOW_LUT_K+HIGH_LUT_K+1!=TARGET_W)return 1;
@@ -65,6 +71,7 @@ int main(int argc,char**argv){
     B300SparseActionsHost sparse=build_b300_sparse_actions(l,ld,lo,hd,ho);
     B300DualTileHost dual=build_b300_dual_tile_layout_w28_precomputed(f,l,ngpu);
     Code chunk_elems=Code(chunk_mib)*(1ull<<20)/sizeof(Count);
+    Code scratch_elems=peer_shuffle?Code(0):chunk_elems;
 
     DTMainLoc init=dt_main_loc_host(MateID(R)<<(2*(W-1)),f,l,dual);
     DTMainLoc answer=dt_main_loc_host(MateID(R),f,l,dual);
@@ -76,7 +83,7 @@ int main(int argc,char**argv){
     gpu.reserve(ngpu);
     for(int g=0;g<ngpu;++g){
         auto c=std::make_unique<DTGpu>();c->dev=g;
-        c->allocate(dual.main_count[g],dual.block_count[g],chunk_elems);
+        c->allocate(dual.main_count[g],dual.block_count[g],scratch_elems);
         gpu.push_back(std::move(c));
     }
     dt_enable_peer_mesh(ngpu);
@@ -85,8 +92,9 @@ int main(int argc,char**argv){
     // Install metadata once. D_MOD is replaced before every residue below.
     for(int g=0;g<ngpu;++g)dt_install_gpu(*gpu[g],f,l,dual,sparse,mods.front(),mp.data(),bp.data());
 
-    B300DualShuffleContext shuffle_ctx;
-    shuffle_ctx.init(ngpu);
+    B300DualShuffleContext copy_ctx;
+    B300DualPeerSwapContext peer_ctx;
+    if(peer_shuffle) peer_ctx.init(ngpu); else copy_ctx.init(ngpu);
 
     ld.main_desc.clear();ld.main_desc.shrink_to_fit();
     ld.block_desc.clear();ld.block_desc.shrink_to_fit();
@@ -100,7 +108,8 @@ int main(int argc,char**argv){
 
     double setup_s=ram_seconds_since(setup0);
     std::cerr<<"dual-batch setup_s="<<setup_s<<" moduli="<<mods.size()
-             <<" gpus="<<ngpu<<" threads="<<threads<<" chunk_mib="<<chunk_mib<<'\n';
+             <<" gpus="<<ngpu<<" threads="<<threads<<" chunk_mib="<<chunk_mib
+             <<" shuffle="<<(peer_shuffle?"peer-kernel":"copy-pipeline")<<'\n';
 
     double all_wall=0.0;
     for(size_t mi=0;mi<mods.size();++mi){
@@ -116,11 +125,17 @@ int main(int argc,char**argv){
         B300DualShuffleStats sh{};
         for(int row=0;row<W;++row){
             dt_run_high_local(sparse,ngpu,threads);
-            b300_dt_low_to_high(dual,mp.data(),bp.data(),sp.data(),chunk_elems,&sh,&shuffle_ctx);
+            if(peer_shuffle)
+                b300_dt_peer_low_to_high(dual,mp.data(),bp.data(),peer_ctx,&sh);
+            else
+                b300_dt_low_to_high(dual,mp.data(),bp.data(),sp.data(),chunk_elems,&sh,&copy_ctx);
             dt_run_low_local(sparse,ngpu,threads);
             if(row+1<W){
                 b300_dt_zero_block_arenas(dual,bp.data());
-                b300_dt_high_to_low_main(dual,mp.data(),sp.data(),chunk_elems,&sh,&shuffle_ctx);
+                if(peer_shuffle)
+                    b300_dt_peer_high_to_low_main(dual,mp.data(),peer_ctx,&sh);
+                else
+                    b300_dt_high_to_low_main(dual,mp.data(),sp.data(),chunk_elems,&sh,&copy_ctx);
             }
         }
         b300_dt_sync_all(ngpu,"dual batch final sync");
@@ -133,13 +148,14 @@ int main(int argc,char**argv){
                  <<" residue="<<ans<<" modulus="<<mod
                  <<" wall_s="<<wall
                  <<" ordinal="<<(mi+1)<<'/'<<mods.size()
+                 <<" shuffle_mode="<<(peer_shuffle?"peer-kernel":"copy-pipeline")
                  <<" shuffle_tib="<<dt_tib(sh.main_bytes+sh.block_bytes)<<'\n';
         std::cout.flush();
     }
 
     std::cerr<<"dual-batch complete residues="<<mods.size()
              <<" setup_s="<<setup_s<<" solver_wall_s_sum="<<all_wall<<'\n';
-    shuffle_ctx.release();
+    if(peer_shuffle) peer_ctx.release(); else copy_ctx.release();
     for(auto&c:gpu)c->release();
     return 0;
 }
