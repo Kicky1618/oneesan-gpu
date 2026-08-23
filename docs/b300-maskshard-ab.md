@@ -24,6 +24,42 @@ Default sources are:
 
 The build uses `scripts/build/b300-hbm32-batch.sh`. `ARCH=native` is used by default; override with `--arch` when required by the installed CUDA toolkit.
 
+## Strict test identity
+
+The A/B driver treats the requested hardware/input tuple as part of correctness, not just metadata.
+
+Before a real run it performs a best-effort visible-GPU preflight using `CUDA_VISIBLE_DEVICES`, or `nvidia-smi` when that variable is absent. If fewer GPUs are visible than `--gpus`, the run is rejected before building/running the huge n=27 case. `--skip-gpu-preflight` exists only for environments where those visibility mechanisms do not reflect CUDA runtime visibility.
+
+After every solver run the parsed result rows must report exactly:
+
+- the requested `n`;
+- the requested GPU count;
+- the modulus list in the same order;
+- `residue_index=0..k-1` and the correct `residues_total`;
+- finite nonnegative setup/phase/scratch values and positive `wall_s`.
+
+This catches the solver's current fallback behavior where requesting more GPUs than are visible can otherwise reduce the actual GPU count via `min(requested, visible, 8)`.
+
+## Build provenance
+
+`scripts/build/b300-hbm32-batch.sh` writes a sidecar next to every binary:
+
+```text
+<binary>.build.json
+```
+
+It records:
+
+- binary SHA-256;
+- source SHA-256;
+- build-script SHA-256;
+- git head at build time;
+- source path;
+- n / width / LOW / HIGH;
+- architecture and the effective nvcc flags.
+
+The A/B driver validates this sidecar before running every candidate, including `--skip-build`. A stale binary, modified source, modified build script, wrong split, wrong architecture, or altered binary is rejected and must be rebuilt. The accepted provenance records are copied into `manifest.json`.
+
 ## HBM reserve
 
 To preserve an explicit amount of free HBM for the guarded allocator:
@@ -48,12 +84,18 @@ python3 scripts/bench/b300_maskshard_ab.py \
   --modulus 4294967279
 ```
 
-The driver verifies residue equality separately for each modulus.
+The driver verifies the exact modulus sequence and residue equality separately for each modulus.
 
 ## Inspect commands without running
 
 ```bash
 python3 scripts/bench/b300_maskshard_ab.py --dry-run
+```
+
+The parser/identity checks have a GPU-free self-test:
+
+```bash
+python3 scripts/bench/b300_maskshard_ab.py --self-test
 ```
 
 To reuse already-built binaries:
@@ -62,7 +104,7 @@ To reuse already-built binaries:
 python3 scripts/bench/b300_maskshard_ab.py --skip-build
 ```
 
-The expected binaries are under `build/maskshard-ab/` unless `--build-dir` is supplied.
+The expected binaries and provenance sidecars are under `build/maskshard-ab/` unless `--build-dir` is supplied.
 
 ## Results
 
@@ -74,7 +116,7 @@ build/bench/maskshard-ab-YYYYMMDD-HHMMSS/
 
 Files include:
 
-- `manifest.json`: git head, build inputs, sources and binary paths;
+- `manifest.json`: git head, build inputs, sources, binary paths and validated build provenance;
 - `v0.X.stdout.log`: raw solver stdout;
 - `v0.X.stderr.log`: raw solver diagnostics;
 - `summary.json`: parsed result rows after each completed candidate.
@@ -90,10 +132,13 @@ The terminal comparison includes:
 - `max_scratch_gib`;
 - wall-time ratio against the first variant for each modulus.
 
+The `*_sum_s` phase counters are sums over worker/GPU activity, not phase wall-clock durations. Use `wall_s` for end-to-end candidate ranking and use the summed counters to identify which phase changed.
+
 ## Failure policy
 
 - Any build or solver nonzero exit stops the comparison.
-- A missing/malformed result row stops with exit code 90.
+- Missing/stale build provenance stops before the candidate is run.
+- A missing, malformed, wrong-GPU-count or wrong-modulus result stops with exit code 90.
 - A residue mismatch stops with exit code 91.
 - A candidate that fails guarded HBM admission is not treated as a performance result.
 
