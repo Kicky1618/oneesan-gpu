@@ -1,3 +1,4 @@
+#include <algorithm>
 #include <cstdint>
 #include <cstdlib>
 #include <iomanip>
@@ -13,9 +14,9 @@ static U64 count_paths(int width) {
     for (int s = 0; s < width; ++s) {
         std::fill(nxt.begin(), nxt.end(), 0);
         for (int h = 0; h <= width + 1; ++h) if (cur[h]) {
-            nxt[h] += cur[h];       // N
-            if (h > 0) nxt[h - 1] += cur[h]; // R
-            nxt[h + 1] += cur[h];   // L
+            nxt[h] += cur[h];
+            if (h > 0) nxt[h - 1] += cur[h];
+            nxt[h + 1] += cur[h];
         }
         cur.swap(nxt);
     }
@@ -43,13 +44,12 @@ static std::vector<U64> count_n_at_each_position(int width) {
         }
     }
 
-    // Position p is processed after width-1-p symbols from the HIGH end.
     std::vector<U64> out(width);
     for (int p = 0; p < width; ++p) {
         const int s = width - 1 - p;
         U64 z = 0;
         for (int h = 0; h <= width + 1; ++h)
-            z += f[s][h] * b[s + 1][h]; // force this symbol to N
+            z += f[s][h] * b[s + 1][h];
         out[p] = z;
     }
     return out;
@@ -66,7 +66,7 @@ int main(int argc, char** argv) {
     const int W = argc > 1 ? std::atoi(argv[1]) : 28;
     const int low = argc > 2 ? std::atoi(argv[2]) : 14;
     const int high = W - 1 - low;
-    if (W < 4 || W > 40 || low < 1 || high < 1) return 1;
+    if (W < 4 || W > 28 || low < 1 || high < 1) return 1;
 
     const U64 main_states = count_paths(W);
     const U64 blocked_states = count_paths(W - 1);
@@ -87,12 +87,10 @@ int main(int argc, char** argv) {
     const U128 reps = high_rep_steps + low_rep_steps;
     const U128 removed_dense_lookups = 2 * reps;
 
-    // v0.4 orbit hot path: one active-code load for every main state and two
-    // dense packed-rank loads for each representative. v0.5 replaces the code
-    // load with aux for every state and the two rank loads with one descriptor
-    // load for each representative. Logical load reduction is therefore one
-    // uint32 per representative. This is NOT a prediction of physical HBM
-    // traffic because HIGH rows broadcast heavily and caches can coalesce hits.
+    // v0.4: active-code load for every main state + two dense rank loads per
+    // representative. v0.5: aux load for every state + one descriptor load per
+    // representative. Therefore logical load reduction is one uint32 per rep.
+    // This is not physical HBM traffic: broadcasts/caches can reduce it.
     const U128 logical_bytes_saved = 4 * reps;
     const long double tib = 1099511627776.0L;
 
