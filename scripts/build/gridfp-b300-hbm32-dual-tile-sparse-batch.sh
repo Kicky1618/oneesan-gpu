@@ -25,5 +25,10 @@ TMPDIR="$ONEESAN_TMP_DIR" nvcc \
 
 echo "built $OUT"
 echo "  n=$N width=$W arch=$ARCH low_lut_k=$LOW_LUT_K high_lut_k=$HIGH_LUT_K"
-echo "  exact: python3 scripts/solve/solve_b300_exact_batch.py $N --binary $OUT"
-echo "  env: ONEESAN_DUAL_THREADS=256 ONEESAN_DUAL_CHUNK_MIB=512"
+echo "  copy-engine exact:"
+echo "    ONEESAN_DUAL_SHUFFLE=copy ONEESAN_DUAL_THREADS=256 ONEESAN_DUAL_CHUNK_MIB=512 \\"
+echo "      python3 scripts/solve/solve_b300_exact_batch.py $N --binary $OUT"
+echo "  scratch-free peer-kernel exact:"
+echo "    ONEESAN_DUAL_SHUFFLE=peer-kernel ONEESAN_DUAL_THREADS=256 \\"
+echo "      python3 scripts/solve/solve_b300_exact_batch.py $N --binary $OUT"
+echo "  n=27 uses the rigorous 12+3+12 P0/Q0 bound and therefore 19 CRT primes."
