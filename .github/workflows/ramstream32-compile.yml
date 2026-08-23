@@ -1,3 +1,4 @@
+# CI probe: v3.4 descriptor validation.
 name: ramstream32 CUDA compile
 
 on:
