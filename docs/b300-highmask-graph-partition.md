@@ -70,24 +70,84 @@ headroom vs 268.59 GiB plan          1.232 GiB/GPU
 The latter is too close to the planning HBM limit to be attractive without real
 allocator measurements.
 
+## Can destination aggregation rescue direct owner-compute?
+
+For one fixed horizontal HIGH position, let `S(k)` be the exact canonical state
+count at width `k`. The non-identity update destinations have a useful image
+decomposition:
+
+- blocked destinations cover exactly `S(W-1)` states;
+- `blocked_exclude` contributes an injective `S(W-1)`-state image in main;
+- the NN -> LR branch contributes a disjoint `S(W-2)`-state main image;
+- RN/LN -> NR/NL main destinations are already contained in the
+  `blocked_exclude` image.
+
+The corresponding update and distinct-destination counts are therefore
+
+```text
+updates / HIGH position              S(W) + S(W-1) - S(W-2)
+distinct destinations / position     2*S(W-1) + S(W-2)
+```
+
+`factor_highupdate_aggregation.cpp` exhaustively checks the image decomposition
+at every position for W=4..13 and then evaluates the count recurrence directly
+at n=27.
+
+For W=28 / LOW=14 / HIGH=13:
+
+```text
+S(28)                               385,719,506,620
+S(27)                               135,015,505,407
+S(26)                                47,337,954,326
+updates / HIGH position             473,397,057,701
+distinct destinations / position   317,368,965,140
+ideal destination/update ratio            0.670407557
+ideal global update reduction             32.9592443%
+```
+
+If every update were remote, replacing every set of colliding updates by one
+4-byte destination payload would reduce the raw model only from
+
+```text
+626.884 TiB/residue -> 420.268 TiB/residue.
+```
+
+So even globally perfect per-destination aggregation has only a 1.4916x ceiling
+on this workload. Against the current 92.81 TiB transpose, an aggregated direct
+scheme would still need fewer than about
+
+```text
+92.81 / 420.268 ~= 22.08%
+```
+
+of all distinct destination payloads to cross GPUs.
+
+This 22.08% is not a proof against owner-aware aggregation: a good partition may
+place high-collision destinations non-randomly. However, exact reduced-width
+experiments show the expected adverse correlation. For example, at W=14/LOW=7,
+a balanced cut's remote update subset retained about 80% of its payloads even
+after grouping by `(source GPU, destination state)`, which is weaker aggregation
+than the 67.04% global ratio. This reduced-width result is diagnostic evidence,
+not an n=27 regression claim.
+
 ## Break-even against the current transpose
 
-The all-remote direct-update model is about 626.884 TiB/residue. To beat the
-current ~92.81 TiB/residue bulk transpose using the same 4-byte accounting, an
-8-way owner partition would need
+Without aggregation, the all-remote direct-update model is about
+626.884 TiB/residue. To beat ~92.81 TiB/residue using the same 4-byte accounting,
+an 8-way owner partition would need
 
 ```text
 remote update fraction < 92.81 / 626.884 ~= 0.14805
 ```
 
-The nonlinear heuristic reaches about 0.33-0.34, still more than twice the
-break-even fraction. Real direct remote atomics or fine-grained messages would
-normally cost more than the idealized 4-byte payload model, strengthening the
-case for the existing transpose.
+The nonlinear heuristic reaches about 0.33-0.34. Destination aggregation relaxes
+the theoretical target, but its total collision budget is too small to make the
+current 0.33-0.34 cut obviously competitive. Real remote atomics, metadata and
+fine-grained messages also cost more than the idealized 4-byte payload model.
 
-This does **not** prove that no better partition exists. It does show that the
-old ~430 TiB result was not merely an artifact worth fixing into production:
-even a substantially better nonlinear cut remains far behind bulk transfer.
+This does **not** prove that no better partition or aggregation exists. It does
+show that direct owner-compute needs a qualitatively stronger compression or
+communication-avoiding transformation, not just a better 8-way graph cut.
 
 ## Reproduce/export the exact graph
 
@@ -120,6 +180,15 @@ This writes:
 The n=27 exporter pins all counts listed at the top of this note, so changes to
 transition semantics or graph construction fail loudly.
 
+The aggregation image decomposition can be checked independently with:
+
+```bash
+g++ -O3 -std=c++17 -Wall -Wextra -Werror \
+  src/cpp/probes/factor_highupdate_aggregation.cpp \
+  -o build/factor_highupdate_aggregation
+build/factor_highupdate_aggregation 28 14 13
+```
+
 ## Reproduce the nonlinear heuristic
 
 `scripts/research/highmask_spectral_partition.py` consumes the exported TSVs.
@@ -150,9 +219,9 @@ measurement on:
 
 1. `high_io_sum_s` to see the realized cost of the ~92.81 TiB transpose;
 2. `high_closure_sum_s` for v0.9/v0.10/v0.11 row-packing effects;
-3. only revisit owner-compute if a communication scheme aggregates multiple
-   crossing updates into substantially fewer payload transfers than the simple
-   state-update edge model.
+3. only revisit owner-compute if a scheme aggregates/compresses crossing updates
+   substantially beyond ordinary destination collision folding.
 
-The exact graph exporter is now in-tree, while the spectral numbers remain
-exploratory research measurements rather than CI performance regressions.
+The exact graph exporter and destination-image probe are now in-tree, while the
+spectral partition numbers remain exploratory research measurements rather than
+CI performance regressions.
