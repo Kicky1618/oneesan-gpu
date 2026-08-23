@@ -18,7 +18,6 @@ static void hybrid_inplace_release_dense_host(StorageFactorHost& storage) {
     storage.high_packed_rank.clear(); storage.high_packed_rank.shrink_to_fit();
     storage.low_all_codes.clear(); storage.low_all_codes.shrink_to_fit();
     storage.high_all_codes.clear(); storage.high_all_codes.shrink_to_fit();
-
     G_FACTOR.low_packed_rank.clear(); G_FACTOR.low_packed_rank.shrink_to_fit();
     G_FACTOR.high_packed_rank.clear(); G_FACTOR.high_packed_rank.shrink_to_fit();
     G_FACTOR.low_all_codes.clear(); G_FACTOR.low_all_codes.shrink_to_fit();
@@ -80,11 +79,10 @@ int main(int argc, char** argv) {
         + storage.high_packed_rank.size() + G_FACTOR.low_packed_rank.size()
         + G_FACTOR.high_packed_rank.size()) * sizeof(uint32_t)) / (1 << 20);
 
-    long double auth_bytes = (long double(layout.main_size) + layout.block_size) * sizeof(Count);
-    // Only the HIGH+center window crosses PCIe: one H2D + one D2H per row.
-    long double pcie_bytes = 2.0L * W * auth_bytes;
-    double pcie_tib = double(pcie_bytes / (long double(1ULL << 40)));
-    double pcie_50gib_s = double(pcie_bytes / (50.0L * (1ULL << 30)));
+    double auth_bytes = double(layout.main_size + layout.block_size) * sizeof(Count);
+    double pcie_bytes = 2.0 * W * auth_bytes;
+    double pcie_tib = pcie_bytes / double(1ULL << 40);
+    double pcie_50gib_s = pcie_bytes / (50.0 * double(1ULL << 30));
 
     if (plan_only) {
         std::cout
@@ -112,7 +110,6 @@ int main(int argc, char** argv) {
     if (visible < 1) return 2;
     ck(cudaSetDevice(0), "cudaSetDevice");
 
-    // GPU metadata is deliberately only HIGH descriptor + compact mask tables.
     BidescMaskDeviceTables mask_tables;
     mask_tables.install(G_FACTOR);
     HighDescDeviceTables highdesc_tables;
@@ -139,12 +136,11 @@ int main(int argc, char** argv) {
                 process_group_bidesc_compact(gpu, main_auth, block_auth, storage, layout,
                                              W, high_wp, job.g, gpu_threads);
         cpu.run(cpu_jobs, main_auth, block_auth, storage, layout, lowdesc, orbit, mod);
-        std::cerr
-            << "row " << row + 1 << '/' << W
-            << " gpu_groups=" << gpu.groups
-            << " cpu_groups=" << cpu.groups()
-            << " cpu_scratch_gib=" << double(cpu.peak_scratch_bytes()) / double(1ULL << 30)
-            << '\n';
+        std::cerr << "row " << row + 1 << '/' << W
+                  << " gpu_groups=" << gpu.groups
+                  << " cpu_groups=" << cpu.groups()
+                  << " cpu_scratch_gib=" << double(cpu.peak_scratch_bytes()) / double(1ULL << 30)
+                  << '\n';
     }
 
     double wall_s = ram_seconds_since(wall0);
