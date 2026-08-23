@@ -9,12 +9,14 @@ on:
       - 'src/cpp/probes/factor_blockorbit_compactaux_semantics.cpp'
       - 'src/cpp/probes/factor_highclosure_rows.cpp'
       - 'src/cpp/probes/factor_highclosure_rowpack.cpp'
+      - 'src/cpp/probes/factor_highclosure_rowpack_taskmap.cpp'
       - 'src/cpp/probes/factor_highclosure_cross.cpp'
       - 'src/cuda/b300/probes/maskshard_orbitaux_hostplan.cu'
       - 'src/cuda/b300/probes/maskshard_blockorbitaux_hostplan.cu'
       - 'src/cuda/b300/probes/maskshard_highclosure_rows_hostplan.cu'
       - 'src/cuda/b300/maskshard_highio.cuh'
       - 'src/cuda/b300/maskshard_highorbit.cuh'
+      - 'src/cuda/b300/maskshard_highclosure_rowpack.cuh'
       - 'src/cuda/b300/maskshard_loworbit.cuh'
       - 'src/cuda/b300/maskshard_index.cuh'
       - 'src/cuda/gridfp/ramstream32_highdesc.cuh'
@@ -28,12 +30,14 @@ on:
       - 'src/cpp/probes/factor_blockorbit_compactaux_semantics.cpp'
       - 'src/cpp/probes/factor_highclosure_rows.cpp'
       - 'src/cpp/probes/factor_highclosure_rowpack.cpp'
+      - 'src/cpp/probes/factor_highclosure_rowpack_taskmap.cpp'
       - 'src/cpp/probes/factor_highclosure_cross.cpp'
       - 'src/cuda/b300/probes/maskshard_orbitaux_hostplan.cu'
       - 'src/cuda/b300/probes/maskshard_blockorbitaux_hostplan.cu'
       - 'src/cuda/b300/probes/maskshard_highclosure_rows_hostplan.cu'
       - 'src/cuda/b300/maskshard_highio.cuh'
       - 'src/cuda/b300/maskshard_highorbit.cuh'
+      - 'src/cuda/b300/maskshard_highclosure_rowpack.cuh'
       - 'src/cuda/b300/maskshard_loworbit.cuh'
       - 'src/cuda/b300/maskshard_index.cuh'
       - 'src/cuda/gridfp/ramstream32_highdesc.cuh'
@@ -119,6 +123,26 @@ jobs:
             -o build/factor_highclosure_rowpack
       - name: Quantify n=27 packed HIGH closure work
         run: build/factor_highclosure_rowpack 28 14 256
+
+  highclosure-rowpack-taskmap:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        include:
+          - width: 10
+            low: 5
+          - width: 12
+            low: 6
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build packed HIGH closure task-map probe
+        run: |
+          mkdir -p build
+          g++ -O3 -std=c++17 -Wall -Wextra -Werror \
+            src/cpp/probes/factor_highclosure_rowpack_taskmap.cpp \
+            -o build/factor_highclosure_rowpack_taskmap
+      - name: Compare packed and row-wise HIGH closure source maps
+        run: build/factor_highclosure_rowpack_taskmap ${{ matrix.width }} ${{ matrix.low }}
 
   highclosure-cross:
     runs-on: ubuntu-latest
