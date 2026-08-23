@@ -18,6 +18,8 @@ HIGH occupancy-mask vertices       8,192
 nonzero undirected mask pairs      139,267
 authoritative state weight         520,735,012,027
 transition updates / HIGH window   6,154,161,750,113
+same-mask updates                     73,007,659,168
+cuttable cross-mask updates        6,081,154,090,945
 ```
 
 Every edge weight is the exact number of state-level HIGH transition updates
@@ -40,8 +42,8 @@ optimizes HBM balance.
 ## Nonlinear exploratory partitioning
 
 An offline sparse-graph experiment used recursive normalized spectral bisection
-followed by weighted single-node moves and pair swaps. This is a heuristic upper
-bound, not an optimality proof.
+followed by capacity-constrained single-node moves and pair swaps. This is a
+heuristic upper bound, not an optimality proof.
 
 With maximum authoritative load constrained to 1.025x average, a constructed
 partition reached approximately:
@@ -87,6 +89,60 @@ This does **not** prove that no better partition exists. It does show that the
 old ~430 TiB result was not merely an artifact worth fixing into production:
 even a substantially better nonlinear cut remains far behind bulk transfer.
 
+## Reproduce/export the exact graph
+
+Build the exporter:
+
+```bash
+g++ -O3 -std=c++17 -Wall -Wextra -Werror \
+  src/cpp/probes/factor_highmask_graph_export.cpp \
+  -o build/factor_highmask_graph_export
+```
+
+Validate only:
+
+```bash
+build/factor_highmask_graph_export 28 14
+```
+
+Export the graph:
+
+```bash
+build/factor_highmask_graph_export 28 14 build/highmask28
+```
+
+This writes:
+
+- `build/highmask28.meta.tsv`: width/split/count totals;
+- `build/highmask28.nodes.tsv`: HIGH occupancy mask and authoritative state weight;
+- `build/highmask28.edges.tsv`: unordered mask pair and exact transition weight.
+
+The n=27 exporter pins all counts listed at the top of this note, so changes to
+transition semantics or graph construction fail loudly.
+
+## Reproduce the nonlinear heuristic
+
+`scripts/research/highmask_spectral_partition.py` consumes the exported TSVs.
+It requires NumPy and SciPy and currently targets exactly 8 shards.
+
+```bash
+python3 scripts/research/highmask_spectral_partition.py \
+  build/highmask28 \
+  --max-load-ratio 1.025 \
+  --output build/highmask28.partition.json
+```
+
+The output JSON contains shard loads, cut update weight, remote-update fraction,
+direct-peer TiB/residue, and the owner id for every HIGH occupancy mask.
+
+The script validates node/edge/state/update totals against `meta.tsv` before it
+partitions. The eigensolver and local search are heuristic, so a run is not
+required to reproduce the exact 214.693 TiB exploratory number bit-for-bit to be
+valid. Compare the reported cut and load ratio instead.
+
+The TSV format also makes the same exact graph available to METIS/KaHIP-style
+external experiments without changing the Grid-FP counting code.
+
 ## Consequence for current work
 
 Keep HIGH gather/scatter as the primary v0.9-v0.11 execution model. Focus B300
@@ -98,7 +154,5 @@ measurement on:
    crossing updates into substantially fewer payload transfers than the simple
    state-update edge model.
 
-A useful future reproducibility task is to add an exact HIGH-mask weighted graph
-exporter for METIS/KaHIP-style external partitioners. Until then, the spectral
-numbers above should be treated as exploratory research measurements rather than
-CI regression values.
+The exact graph exporter is now in-tree, while the spectral numbers remain
+exploratory research measurements rather than CI performance regressions.
