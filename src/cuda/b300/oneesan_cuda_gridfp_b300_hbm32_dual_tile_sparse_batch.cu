@@ -5,7 +5,7 @@
 #include "oneesan_cuda_gridfp_b300_hbm32_dual_tile_sparse.cu"
 #undef main
 #include "../gridfp/ramstream32_b300_dual_tile_peer_swap.cuh"
-#include "../gridfp/ramstream32_b300_dual_tile_pruned_peer.cuh"
+#include "../gridfp/ramstream32_b300_dual_tile_pruned_plan.cuh"
 
 static int dt_env_int(const char* name,int fallback,int lo){
     const char* s=std::getenv(name);if(!s||!*s)return fallback;
@@ -68,6 +68,8 @@ int main(int argc,char**argv){
     int ngpu=std::max(1,std::atoi(argv[4]));
     int threads=dt_env_int("ONEESAN_DUAL_THREADS",256,32);
     int chunk_mib=dt_env_int("ONEESAN_DUAL_CHUNK_MIB",512,64);
+    int prune_launch_kib=dt_env_int("ONEESAN_DUAL_PRUNE_LAUNCH_KIB",8192,0);
+    uint64_t prune_launch_bytes=uint64_t(prune_launch_kib)*1024ull;
     DTBatchShuffleMode shuffle_mode=dt_batch_shuffle_mode();
     bool peer_family=shuffle_mode!=DTBatchShuffleMode::CopyPipeline;
     int W=n+1;
@@ -91,8 +93,11 @@ int main(int argc,char**argv){
     B300SparseActionsHost sparse=build_b300_sparse_actions(l,ld,lo,hd,ho);
     B300DualTileHost dual=build_b300_dual_tile_layout_w28_precomputed(f,l,ngpu);
     B300DualReachSchedule reach;
-    if(shuffle_mode==DTBatchShuffleMode::ReachPruned)
+    B300DualPrunedSchedulePlan prune_plan;
+    if(shuffle_mode==DTBatchShuffleMode::ReachPruned){
         reach=build_b300_dual_reach_schedule(sparse,f,l,dual);
+        prune_plan=build_b300_dual_pruned_schedule_plan(dual,l,reach,prune_launch_bytes);
+    }
 
     Code chunk_elems=Code(chunk_mib)*(1ull<<20)/sizeof(Count);
     // Peer-kernel and reachability-pruned engines are genuinely scratch-free.
@@ -138,7 +143,15 @@ int main(int argc,char**argv){
     std::cerr<<"dual-batch setup_s="<<setup_s<<" moduli="<<mods.size()
              <<" gpus="<<ngpu<<" threads="<<threads<<" chunk_mib="<<chunk_mib
              <<" shuffle="<<dt_batch_shuffle_name(shuffle_mode)
-             <<" scratch_mib_per_gpu="<<(scratch_elems*sizeof(Count)/(1ull<<20))<<'\n';
+             <<" scratch_mib_per_gpu="<<(scratch_elems*sizeof(Count)/(1ull<<20));
+    if(shuffle_mode==DTBatchShuffleMode::ReachPruned){
+        std::cerr<<" prune_launch_kib="<<prune_launch_kib
+                 <<" prune_logical_tib="<<dt_tib((long double)prune_plan.logical_bytes_per_residue())
+                 <<" prune_scheduled_tib="<<dt_tib((long double)prune_plan.scheduled_bytes_per_residue())
+                 <<" prune_full_tib="<<dt_tib((long double)prune_plan.full_bytes_per_residue())
+                 <<" prune_launches="<<prune_plan.launches_per_residue();
+    }
+    std::cerr<<'\n';
 
     double all_wall=0.0;
     for(size_t mi=0;mi<mods.size();++mi){
@@ -157,7 +170,8 @@ int main(int argc,char**argv){
             if(shuffle_mode==DTBatchShuffleMode::PeerKernel)
                 b300_dt_peer_low_to_high(dual,mp.data(),bp.data(),peer_ctx,&sh);
             else if(shuffle_mode==DTBatchShuffleMode::ReachPruned)
-                b300_dt_pruned_low_to_high(dual,l,mp.data(),bp.data(),reach.l2h[row],pruned_ctx,&sh);
+                b300_dt_execute_pruned_l2h(dual,mp.data(),bp.data(),
+                    prune_plan.l2h_main[row],prune_plan.l2h_block[row],pruned_ctx,&sh);
             else
                 b300_dt_low_to_high(dual,mp.data(),bp.data(),sp.data(),chunk_elems,&sh,&copy_ctx);
 
@@ -167,7 +181,8 @@ int main(int argc,char**argv){
                 if(shuffle_mode==DTBatchShuffleMode::PeerKernel)
                     b300_dt_peer_high_to_low_main(dual,mp.data(),peer_ctx,&sh);
                 else if(shuffle_mode==DTBatchShuffleMode::ReachPruned)
-                    b300_dt_pruned_high_to_low_main(dual,l,mp.data(),reach.h2l[row],pruned_ctx,&sh);
+                    b300_dt_execute_pruned_h2l_main(dual,mp.data(),
+                        prune_plan.h2l_main[row],pruned_ctx,&sh);
                 else
                     b300_dt_high_to_low_main(dual,mp.data(),sp.data(),chunk_elems,&sh,&copy_ctx);
             }
@@ -183,7 +198,8 @@ int main(int argc,char**argv){
                  <<" wall_s="<<wall
                  <<" ordinal="<<(mi+1)<<'/'<<mods.size()
                  <<" shuffle_mode="<<dt_batch_shuffle_name(shuffle_mode)
-                 <<" shuffle_tib="<<dt_tib(sh.main_bytes+sh.block_bytes)<<'\n';
+                 <<" shuffle_tib="<<dt_tib(sh.main_bytes+sh.block_bytes)
+                 <<" shuffle_launches="<<sh.chunk_barriers<<'\n';
         std::cout.flush();
     }
 
