@@ -11,6 +11,11 @@
 #undef main
 
 int main(int argc, char** argv) {
+    const int threads = argc > 3 ? std::atoi(argv[3]) : 256;
+    if (threads < 32 || threads > 1024 || (threads & 31)) {
+        std::cerr << "v0.9 compact closure requires threads to be a multiple of 32 in [32,1024]\n";
+        return 1;
+    }
     std::cerr << "backend_alias=b300-factorized-maskshard-v0.9-blockorbit-compactaux-fullclosure-batch"
               << " orbit_aux=1 block_orbit=1 compact_block_aux=1"
               << " high_closure_rows=1 low_closure_cols=1 guarded_hbm=1\n";
