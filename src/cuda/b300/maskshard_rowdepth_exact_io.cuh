@@ -88,29 +88,29 @@ struct MaskShardRowDepthExactCache {
             std::cerr << "row-depth exact unsupported device id " << dev << '\n';
             std::exit(262);
         }
-        if (!installed[dev]) {
-            if (!low_peak.empty()) {
-                ck(cudaMalloc(&d_low[dev], low_peak.size() * sizeof(std::uint8_t)),
-                   "row-depth exact alloc LOW peaks");
-                ck(cudaMemcpy(d_low[dev], low_peak.data(),
-                              low_peak.size() * sizeof(std::uint8_t),
-                              cudaMemcpyHostToDevice),
-                   "row-depth exact copy LOW peaks");
-            }
-            if (!high_peak.empty()) {
-                ck(cudaMalloc(&d_high[dev], high_peak.size() * sizeof(std::uint8_t)),
-                   "row-depth exact alloc HIGH peaks");
-                ck(cudaMemcpy(d_high[dev], high_peak.data(),
-                              high_peak.size() * sizeof(std::uint8_t),
-                              cudaMemcpyHostToDevice),
-                   "row-depth exact copy HIGH peaks");
-            }
-            installed[dev] = true;
+        if (installed[dev]) return;
+
+        if (!low_peak.empty()) {
+            ck(cudaMalloc(&d_low[dev], low_peak.size() * sizeof(std::uint8_t)),
+               "row-depth exact alloc LOW peaks");
+            ck(cudaMemcpy(d_low[dev], low_peak.data(),
+                          low_peak.size() * sizeof(std::uint8_t),
+                          cudaMemcpyHostToDevice),
+               "row-depth exact copy LOW peaks");
+        }
+        if (!high_peak.empty()) {
+            ck(cudaMalloc(&d_high[dev], high_peak.size() * sizeof(std::uint8_t)),
+               "row-depth exact alloc HIGH peaks");
+            ck(cudaMemcpy(d_high[dev], high_peak.data(),
+                          high_peak.size() * sizeof(std::uint8_t),
+                          cudaMemcpyHostToDevice),
+               "row-depth exact copy HIGH peaks");
         }
         ck(cudaMemcpyToSymbol(D_MS_ROW_DEPTH_LOW_PEAK, &d_low[dev], sizeof(d_low[dev])),
            "row-depth exact LOW peak ptr");
         ck(cudaMemcpyToSymbol(D_MS_ROW_DEPTH_HIGH_PEAK, &d_high[dev], sizeof(d_high[dev])),
            "row-depth exact HIGH peak ptr");
+        installed[dev] = true;
     }
 };
 
@@ -131,28 +131,33 @@ static void maskshard_set_row_depth_exact_io_row(int zero_based_row) {
 template<bool SCATTER>
 __global__ void maskshard_high_main_io_rowdepth_exact_kernel(Count* scratch, Code n) {
     constexpr int S = MAXW + 2;
+    constexpr int FULL_CAP = (TARGET_W + 1) / 2;
     Code i = Code(blockIdx.x) * blockDim.x + threadIdx.x;
     const Code step = Code(gridDim.x) * blockDim.x;
     const int cap = maskshard_row_depth_io_cap(SCATTER);
     for (; i < n; i += step) {
         const int bid = f_find_main(i);
         const FBlock x = D_F_MAIN_BLOCKS[bid];
-        if (int(x.he) > cap || int(x.hs) > cap) {
-            if constexpr (!SCATTER) scratch[i] = 0;
-            continue;
-        }
         std::uint32_t hr = 0, lr = 0;
         maskshard_split_rank(i, x, hr, lr);
-        const std::uint32_t hi = D_F_HIGH_ALL_OFF[x.he] + hr;
-        const std::uint32_t lo = D_F_LOW_MASK_OFF[
-            std::size_t(D_F_MASK) * S + x.hs] + lr;
-        const int hp = int(D_MS_ROW_DEPTH_HIGH_PEAK[hi]);
-        const int lp = int(D_MS_ROW_DEPTH_LOW_PEAK[lo]);
-        const int peak = hp > lp ? hp : lp;
-        if (peak > cap) {
-            if constexpr (!SCATTER) scratch[i] = 0;
-            continue;
+
+        if (cap < FULL_CAP) {
+            if (int(x.he) > cap || int(x.hs) > cap) {
+                if constexpr (!SCATTER) scratch[i] = 0;
+                continue;
+            }
+            const std::uint32_t hi = D_F_HIGH_ALL_OFF[x.he] + hr;
+            const std::uint32_t lo = D_F_LOW_MASK_OFF[
+                std::size_t(D_F_MASK) * S + x.hs] + lr;
+            const int hp = int(D_MS_ROW_DEPTH_HIGH_PEAK[hi]);
+            const int lp = int(D_MS_ROW_DEPTH_LOW_PEAK[lo]);
+            const int peak = hp > lp ? hp : lp;
+            if (peak > cap) {
+                if constexpr (!SCATTER) scratch[i] = 0;
+                continue;
+            }
         }
+
         Count* p = maskshard_main_addr(bid, hr, lr);
         if constexpr (SCATTER) *p = scratch[i];
         else scratch[i] = *p;
@@ -162,28 +167,28 @@ __global__ void maskshard_high_main_io_rowdepth_exact_kernel(Count* scratch, Cod
 template<bool SCATTER>
 __global__ void maskshard_high_block_io_rowdepth_exact_kernel(Count* scratch, Code n) {
     constexpr int S = MAXW + 2;
+    constexpr int FULL_CAP = TARGET_W / 2;
     Code i = Code(blockIdx.x) * blockDim.x + threadIdx.x;
     const Code step = Code(gridDim.x) * blockDim.x;
     const int cap = maskshard_row_depth_io_cap(SCATTER);
     for (; i < n; i += step) {
         const int bid = f_find_block(i);
         const FBlock x = D_F_BLOCK_BLOCKS[bid];
-        if (int(x.he) > cap) {
-            if constexpr (!SCATTER) scratch[i] = 0;
-            continue;
-        }
         if constexpr (!SCATTER) {
             scratch[i] = 0;
         } else {
             std::uint32_t hr = 0, lr = 0;
             maskshard_split_rank(i, x, hr, lr);
-            const std::uint32_t hi = D_F_HIGH_ALL_OFF[x.he] + hr;
-            const std::uint32_t lo = D_F_LOW_MASK_OFF[
-                std::size_t(D_F_MASK) * S + x.he] + lr;
-            const int hp = int(D_MS_ROW_DEPTH_HIGH_PEAK[hi]);
-            const int lp = int(D_MS_ROW_DEPTH_LOW_PEAK[lo]);
-            const int peak = hp > lp ? hp : lp;
-            if (peak > cap) continue;
+            if (cap < FULL_CAP) {
+                if (int(x.he) > cap) continue;
+                const std::uint32_t hi = D_F_HIGH_ALL_OFF[x.he] + hr;
+                const std::uint32_t lo = D_F_LOW_MASK_OFF[
+                    std::size_t(D_F_MASK) * S + x.he] + lr;
+                const int hp = int(D_MS_ROW_DEPTH_HIGH_PEAK[hi]);
+                const int lp = int(D_MS_ROW_DEPTH_LOW_PEAK[lo]);
+                const int peak = hp > lp ? hp : lp;
+                if (peak > cap) continue;
+            }
             Count* p = maskshard_block_addr(bid, hr, lr);
             *p = scratch[i];
         }
