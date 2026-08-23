@@ -197,11 +197,18 @@ int main(int argc, char** argv) {
         * LD(highdesc_main_active + highdesc_block_active);
     const LD lowdesc_bytes = LD(4) * LD(low)
         * LD(lowdesc_main_active + lowdesc_block_active);
-    // v0.5 stores one extra 32-bit descriptor only for active MAIN coordinates:
-    // HIGH: [p][main-block HIGH row], LOW: [p][main-block LOW column].
+
+    // v0.5/v0.6: one aux word per active MAIN coordinate.
     const LD high_orbit_aux_bytes = LD(4) * LD(high) * LD(highdesc_main_active);
     const LD low_orbit_aux_bytes = LD(4) * LD(low) * LD(lowdesc_main_active);
     const LD orbit_aux_bytes = high_orbit_aux_bytes + low_orbit_aux_bytes;
+
+    // v0.7: block_desc already gives representative main coordinates, so the
+    // extra word follows active BLOCKED coordinates and only carries orbit kind
+    // plus the companion target where needed.
+    const LD high_block_orbit_aux_bytes = LD(4) * LD(high) * LD(highdesc_block_active);
+    const LD low_block_orbit_aux_bytes = LD(4) * LD(low) * LD(lowdesc_block_active);
+    const LD block_orbit_aux_bytes = high_block_orbit_aux_bytes + low_block_orbit_aux_bytes;
 
     const LD auth_bytes = LD(max_auth) * 4;
     const LD low_md_bytes = LD(max_high_mask_group) * 4;
@@ -215,6 +222,7 @@ int main(int argc, char** argv) {
     const LD v03 = common + v03_scratch + highdesc_bytes;
     const LD v04 = common + v04_scratch + highdesc_bytes + lowdesc_bytes;
     const LD v05 = v04 + orbit_aux_bytes;
+    const LD v07 = v04 + block_orbit_aux_bytes;
 
     std::cout << std::fixed << std::setprecision(6)
               << "maskshard-memory W=" << W << " low=" << low << " high=" << high
@@ -226,23 +234,30 @@ int main(int argc, char** argv) {
               << "factor_tables_mib=" << double(mib(factor_bytes))
               << " maskshard_meta_mib=" << double(mib(meta_bytes))
               << " low_begin_mib=" << double(mib(low_begin_bytes)) << '\n'
-              << "highdesc_active=" << (highdesc_main_active + highdesc_block_active)
+              << "highdesc_main_active=" << highdesc_main_active
+              << " highdesc_block_active=" << highdesc_block_active
               << " highdesc_mib=" << double(mib(highdesc_bytes)) << '\n'
-              << "lowdesc_active=" << (lowdesc_main_active + lowdesc_block_active)
+              << "lowdesc_main_active=" << lowdesc_main_active
+              << " lowdesc_block_active=" << lowdesc_block_active
               << " lowdesc_mib=" << double(mib(lowdesc_bytes)) << '\n'
               << "high_orbit_aux_mib=" << double(mib(high_orbit_aux_bytes))
               << " low_orbit_aux_mib=" << double(mib(low_orbit_aux_bytes))
               << " orbit_aux_mib=" << double(mib(orbit_aux_bytes)) << '\n'
+              << "high_block_orbit_aux_mib=" << double(mib(high_block_orbit_aux_bytes))
+              << " low_block_orbit_aux_mib=" << double(mib(low_block_orbit_aux_bytes))
+              << " block_orbit_aux_mib=" << double(mib(block_orbit_aux_bytes)) << '\n'
               << "v01_peak_gib=" << double(gib(v01)) << '\n'
               << "v02_highdesc_peak_gib=" << double(gib(v02)) << '\n'
               << "v03_highorbit_peak_gib=" << double(gib(v03)) << '\n'
               << "v04_fullorbit_peak_gib=" << double(gib(v04)) << '\n'
               << "v05_orbitaux_peak_gib=" << double(gib(v05)) << '\n'
+              << "v06_blockorbit_peak_gib=" << double(gib(v05)) << '\n'
+              << "v07_compact_blockorbit_peak_gib=" << double(gib(v07)) << '\n'
               << "usable_gib=" << double(usable_gib)
-              << " v05_headroom_gib=" << double(usable_gib - gib(v05)) << '\n';
+              << " v07_headroom_gib=" << double(usable_gib - gib(v07)) << '\n';
 
-    if (gib(v05) >= usable_gib) {
-        std::cerr << "v0.5 exceeds requested usable HBM\n";
+    if (gib(v07) >= usable_gib) {
+        std::cerr << "v0.7 exceeds requested usable HBM\n";
         return 2;
     }
     return 0;
