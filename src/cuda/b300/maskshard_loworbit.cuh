@@ -3,11 +3,6 @@
 #include <cstdint>
 #include "maskshard_index.cuh"
 
-// Zero-scratch LOW-window orbit executor for fix_low=false HIGH-mask shards.
-// The authoritative HIGH-mask group itself is updated in place. HIGH exact
-// topology is unchanged by orbit representatives (NN/NR/NL); boundary-crossing
-// closure transitions are handled by LowDesc.
-
 static_assert(LOW_LUT_K < 15, "compact LOW+center orbit code requires LOW<15");
 
 __device__ __forceinline__ uint32_t maskshard_active_low_center(
@@ -76,11 +71,63 @@ __device__ __forceinline__ Code maskshard_block_from_low_active(
 __global__ void maskshard_main_block_loworbit_kernel(
     Count* mainv, Count* blockv, Code n, int p
 ) {
-    Code i = Code(blockIdx.x) * blockDim.x + threadIdx.x;
     const Code step = Code(gridDim.x) * blockDim.x;
-#ifdef MASKSHARD_ORBIT_AUX
     const uint32_t pi = uint32_t(LOW_LUT_K - p);
-#endif
+
+#ifdef MASKSHARD_BLOCK_ORBIT
+    const int last_bid = D_F_BLOCK_NBLOCKS - 1;
+    if (last_bid < 0) return;
+    const Code block_n = D_F_BLOCK_BLOCKS[last_bid].end;
+    Code di = Code(blockIdx.x) * blockDim.x + threadIdx.x;
+    for (; di < block_n; di += step) {
+        const int dbid = f_find_block(di);
+        const FBlock dx = D_F_BLOCK_BLOCKS[dbid];
+        uint32_t dhr = 0, dlr = 0;
+        maskshard_split_rank(di, dx, dhr, dlr);
+
+        const size_t bdi = size_t(pi) * D_LOWDESC_BLOCK_TOTAL
+                         + D_LOWDESC_BLOCK_BASE[dbid] + dlr;
+        const uint32_t bdesc = D_LOWDESC_BLOCK[bdi];
+        if (lowdesc_kind(bdesc) != LOWDESC_MAIN) continue;
+        const uint32_t sbid = lowdesc_block(bdesc);
+        const uint32_t slr = lowdesc_lr(bdesc);
+        const FBlock sx = D_F_MAIN_BLOCKS[sbid];
+        const Code i = sx.off + Code(dhr) * sx.stride + slr;
+
+        const size_t sdi = size_t(pi) * D_LOWDESC_MAIN_TOTAL
+                         + D_LOWDESC_MAIN_BASE[sbid] + slr;
+        const uint32_t aux = D_MS_LOW_ORBIT_AUX[sdi];
+        const uint32_t ak = maskshard_orbit_aux_kind(aux);
+        if (ak == MS_ORBIT_AUX_INVALID) continue;
+
+        const Count c = mainv[i];
+        const Count d = blockv[di];
+        if (ak == MS_ORBIT_AUX_NN || p == 1) {
+            const uint32_t desc = D_LOWDESC_MAIN[sdi];
+            if (lowdesc_kind(desc) != LOWDESC_MAIN) continue;
+            const FBlock y = D_F_MAIN_BLOCKS[lowdesc_block(desc)];
+            const Code j = y.off + Code(dhr) * y.stride + lowdesc_lr(desc);
+            if (ak == MS_ORBIT_AUX_NN) {
+                mainv[j] = maskshard_add_mod_plain(mainv[j], c);
+                mainv[i] = maskshard_add_mod_plain(c, d);
+                blockv[di] = 0;
+            } else {
+                const Count cc = mainv[j];
+                mainv[i] = maskshard_add_mod_plain(maskshard_add_mod_plain(c, cc), d);
+                mainv[j] = maskshard_add_mod_plain(c, cc);
+                blockv[di] = 0;
+            }
+        } else {
+            const FBlock y = D_F_MAIN_BLOCKS[maskshard_orbit_aux_block(aux)];
+            const Code j = y.off + Code(dhr) * y.stride + maskshard_orbit_aux_rank(aux);
+            const Count cc = mainv[j];
+            mainv[i] = maskshard_add_mod_plain(maskshard_add_mod_plain(c, cc), d);
+            blockv[di] = c;
+        }
+    }
+    (void)n;
+#else
+    Code i = Code(blockIdx.x) * blockDim.x + threadIdx.x;
     for (; i < n; i += step) {
         const int bid = f_find_main(i);
         const FBlock x = D_F_MAIN_BLOCKS[bid];
@@ -160,6 +207,7 @@ __global__ void maskshard_main_block_loworbit_kernel(
         }
 #endif
     }
+#endif
 }
 
 __global__ void maskshard_main_lowdesc_closure_inplace_kernel(
