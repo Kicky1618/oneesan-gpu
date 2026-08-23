@@ -12,6 +12,7 @@ on:
       - 'src/cpp/probes/factor_loworbit_semantics.cpp'
       - 'src/cpp/probes/factor_orbit_racefree.cpp'
       - 'src/cpp/probes/factor_fullorbit_schedule_equiv.cpp'
+      - 'src/cpp/probes/factor_low_storage_contiguous.cpp'
       - 'src/cpp/probes/factor_maskshard_memory.cpp'
       - 'src/common/gridfp_transition.hpp'
       - '.github/workflows/factor-mask-shard.yml'
@@ -26,6 +27,7 @@ on:
       - 'src/cpp/probes/factor_loworbit_semantics.cpp'
       - 'src/cpp/probes/factor_orbit_racefree.cpp'
       - 'src/cpp/probes/factor_fullorbit_schedule_equiv.cpp'
+      - 'src/cpp/probes/factor_low_storage_contiguous.cpp'
       - 'src/cpp/probes/factor_maskshard_memory.cpp'
       - 'src/common/gridfp_transition.hpp'
       - '.github/workflows/factor-mask-shard.yml'
@@ -73,6 +75,17 @@ jobs:
           g++ -O3 -std=c++17 -Wall -Wextra -Werror src/cpp/probes/factor_maskshard_memory.cpp -o build/factor_maskshard_memory
       - name: Verify v0.4 HBM budget
         run: build/factor_maskshard_memory ${{ matrix.width }} ${{ matrix.low }} ${{ matrix.gpus }} ${{ matrix.usable }}
+
+  low-storage-contiguous:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build LOW storage contiguity probe
+        run: |
+          mkdir -p build
+          g++ -O3 -std=c++17 -Wall -Wextra -Werror src/cpp/probes/factor_low_storage_contiguous.cpp -o build/factor_low_storage_contiguous
+      - name: Verify all LOW=14 occupancy-major intervals
+        run: build/factor_low_storage_contiguous 14
 
   closure:
     runs-on: ubuntu-latest
