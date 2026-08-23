@@ -68,6 +68,7 @@ static void process_group_bidesc_compact(
     ++c.groups;
 }
 
+#ifndef RAMSTREAM_BIDESC_COMPACT_NO_MAIN
 int main(int argc, char** argv) {
     int n = argc > 1 ? std::atoi(argv[1]) : TARGET_W - 1;
     Count mod = argc > 2 ? Count(std::strtoul(argv[2], nullptr, 10)) : 4294967291u;
@@ -171,3 +172,4 @@ int main(int argc, char** argv) {
     block_auth.release();
     return 0;
 }
+#endif
