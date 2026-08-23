@@ -59,8 +59,6 @@ static void auth_to_device_rect(
     constexpr int S = StorageFactorHost::S;
 
     if (!fix_low) {
-        // HIGH occupancy is fixed.  Its rows form one contiguous run and all LOW
-        // columns are present, so the factor block is a single linear DMA.
         uint32_t row0 = storage.high_mask_begin[size_t(mask) * S + fb.he];
         Code elems = fb.end - fb.off;
         ck(cudaMemcpy(dst + fb.off,
@@ -73,10 +71,6 @@ static void auth_to_device_rect(
         return;
     }
 
-    // LOW occupancy is fixed.  Every HIGH row contributes the same-width LOW
-    // slice.  cudaMemcpy2D expresses the whole strided gather in one copy call;
-    // CUDA may internally stage pageable host memory, but we no longer allocate
-    // a multi-GiB pinned group buffer or issue one CPU memcpy per row.
     uint32_t col0 = storage.low_mask_begin[size_t(mask) * S + fb.hs];
     size_t width_bytes = size_t(fb.stride) * sizeof(Count);
     Code rows = fb.stride ? (fb.end - fb.off) / fb.stride : 0;
@@ -297,6 +291,7 @@ static std::vector<DirectJob> make_direct2d_jobs(const WindowPlan& wp) {
     return jobs;
 }
 
+#ifndef RAMSTREAM_DIRECT2D_NO_MAIN
 int main(int argc, char** argv) {
     int n = argc > 1 ? std::atoi(argv[1]) : TARGET_W - 1;
     Count mod = argc > 2 ? Count(std::strtoul(argv[2], nullptr, 10)) : 4294967291u;
@@ -394,3 +389,4 @@ int main(int argc, char** argv) {
     block_auth.release();
     return 0;
 }
+#endif
