@@ -1,0 +1,41 @@
+name: n27 P0 Q0 component bound
+
+on:
+  pull_request:
+    paths:
+      - 'src/cpp/probes/pq_component_strip_bound.cpp'
+      - 'scripts/solve/solve_b300_exact.py'
+      - 'scripts/solve/solve_b300_exact_batch.py'
+      - '.github/workflows/pq-component-bound.yml'
+  workflow_dispatch:
+
+jobs:
+  bound:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build exact component-strip probe
+        run: |
+          mkdir -p build
+          g++ -O3 -std=c++17 src/cpp/probes/pq_component_strip_bound.cpp \
+            -o build/pq_component_strip_bound
+      - name: Recompute n27 exact strip constants
+        run: build/pq_component_strip_bound
+      - name: Verify Python CRT prefix is 19 primes
+        run: |
+          cd scripts/solve
+          python3 - <<'PY'
+          import solve_b300_exact as s
+          bound, strips = s.simple_path_upper_bound(27)
+          prefix = s.primes_for_bound(bound)
+          assert strips == [9, 9, 9], strips
+          assert bound == s._PQ27_BOUND
+          assert bound.bit_length() == 604
+          assert len(prefix) == 19, len(prefix)
+          m18 = 1
+          for p in s.PRIMES[:18]:
+              m18 *= p
+          m19 = m18 * s.PRIMES[18]
+          assert m18 <= bound < m19
+          print(f'n27 bound_bits={bound.bit_length()} primes={len(prefix)}')
+          PY
