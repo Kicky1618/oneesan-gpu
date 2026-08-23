@@ -8,6 +8,7 @@ on:
       - 'src/cpp/probes/factor_highmask_edge_cut.cpp'
       - 'src/cpp/probes/factor_maskshard_bijection.cpp'
       - 'src/cpp/probes/factor_highdesc_semantics.cpp'
+      - 'src/cpp/probes/factor_highorbit_semantics.cpp'
       - 'src/common/gridfp_transition.hpp'
       - '.github/workflows/factor-mask-shard.yml'
   pull_request:
@@ -17,6 +18,7 @@ on:
       - 'src/cpp/probes/factor_highmask_edge_cut.cpp'
       - 'src/cpp/probes/factor_maskshard_bijection.cpp'
       - 'src/cpp/probes/factor_highdesc_semantics.cpp'
+      - 'src/cpp/probes/factor_highorbit_semantics.cpp'
       - 'src/common/gridfp_transition.hpp'
       - '.github/workflows/factor-mask-shard.yml'
   workflow_dispatch:
@@ -101,6 +103,28 @@ jobs:
       - name: Exhaustively compare descriptors with Grid-FP transitions
         run: |
           build/factor_highdesc_semantics \
+            ${{ matrix.width }} ${{ matrix.low }}
+
+  highorbit-semantics:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        include:
+          - width: 10
+            low: 5
+          - width: 12
+            low: 6
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build in-place HIGH orbit semantic probe
+        run: |
+          mkdir -p build
+          g++ -O3 -std=c++17 -Wall -Wextra -Werror \
+            src/cpp/probes/factor_highorbit_semantics.cpp \
+            -o build/factor_highorbit_semantics
+      - name: Compare orbit plus closure with out-of-place update
+        run: |
+          build/factor_highorbit_semantics \
             ${{ matrix.width }} ${{ matrix.low }}
 
   edge-cut:
