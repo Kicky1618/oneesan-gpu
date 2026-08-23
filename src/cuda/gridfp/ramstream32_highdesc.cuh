@@ -5,16 +5,6 @@
 #include <iostream>
 #include <vector>
 
-// HIGH-window descriptor.  HIGH + center are active.  The only transition that
-// can touch exact LOW topology is a boundary-crossing LL partner search.  Once
-// it crosses the center, the operation on LOW is only: find the `depth`-th
-// unmatched R from the boundary and flip R -> L.  We encode that depth in four
-// spare descriptor bits and rank the modified LOW code directly.
-//
-// bits 31..30: kind
-// bits 29..26: boundary matching depth (CROSS only)
-// bits 25..20: destination FBlock index
-// bits 19..0 : destination HIGH all-rank
 static constexpr uint32_t HIGHDESC_RANK_MASK = (1u << 20) - 1u;
 static constexpr uint32_t HIGHDESC_BLOCK_MASK = 0x3fu;
 static constexpr uint32_t HIGHDESC_DEPTH_MASK = 0x0fu;
@@ -49,7 +39,7 @@ static int highdesc_cross_depth_host(MateID m, int p) {
     int q = p - 1, s = 1;
     for (;;) {
         --q;
-        if (q < L) return s; // next symbol is LOW[L-1]
+        if (q < L) return s;
         MateValue v = mget(t, q);
         if (v == ::L) ++s;
         else if (v == R) --s;
@@ -68,10 +58,12 @@ struct HighDescHost {
     uint64_t main_cross = 0;
     uint64_t main_invalid = 0;
 #ifdef MASKSHARD_HIGH_CLOSURE_ROWS
-    // Packed source coordinate, encoded with the ordinary block/rank fields.
-    // Entries are grouped by HIGH p in closure_off.
+    // One packed source (main FBlock, HIGH all-rank) per valid HIGH closure row.
     std::vector<uint32_t> closure_rows;
     std::array<uint32_t, MAXW + 2> closure_off{};
+    // Fixed stride 65 allows source-FBlock ranges to be looked up without
+    // duplicating the row list per LOW occupancy class.
+    std::vector<uint32_t> closure_block_off;
 #endif
 };
 
@@ -98,6 +90,9 @@ static HighDescHost build_high_descriptors(
     d.block_total = bt;
     d.main_desc.assign(size_t(mt) * H, highdesc_pack(HIGHDESC_INVALID, 0, 0));
     d.block_desc.assign(size_t(bt) * H, highdesc_pack(HIGHDESC_INVALID, 0, 0));
+#ifdef MASKSHARD_HIGH_CLOSURE_ROWS
+    d.closure_block_off.assign(size_t(H) * 65, 0u);
+#endif
 
     auto representative_low = [&](int hs) -> uint32_t {
         uint32_t a = storage.low_all_off[hs];
@@ -108,7 +103,8 @@ static HighDescHost build_high_descriptors(
     for (int p = TARGET_W - 1; p >= L + 1; --p) {
         int pi = (TARGET_W - 1) - p;
 #ifdef MASKSHARD_HIGH_CLOSURE_ROWS
-        d.closure_off[size_t(pi)] = uint32_t(d.closure_rows.size());
+        const uint32_t closure_begin = uint32_t(d.closure_rows.size());
+        d.closure_off[size_t(pi)] = closure_begin;
 #endif
 
         for (size_t bid = 0; bid < layout.main_blocks.size(); ++bid) {
@@ -191,7 +187,19 @@ static HighDescHost build_high_descriptors(
             }
         }
 #ifdef MASKSHARD_HIGH_CLOSURE_ROWS
-        d.closure_off[size_t(pi) + 1] = uint32_t(d.closure_rows.size());
+        const uint32_t closure_end = uint32_t(d.closure_rows.size());
+        d.closure_off[size_t(pi) + 1] = closure_end;
+        uint32_t cur = closure_begin;
+        for (uint32_t bid = 0; bid < layout.main_blocks.size(); ++bid) {
+            d.closure_block_off[size_t(pi) * 65 + bid] = cur;
+            while (cur < closure_end
+                && highdesc_block(d.closure_rows[cur]) == bid) ++cur;
+        }
+        d.closure_block_off[size_t(pi) * 65 + layout.main_blocks.size()] = cur;
+        if (cur != closure_end) {
+            std::cerr << "highdesc closure row FBlock ordering mismatch\n";
+            std::exit(70);
+        }
 #endif
 
         for (size_t bid = 0; bid < layout.block_blocks.size(); ++bid) {
@@ -244,6 +252,8 @@ static HighDescHost build_high_descriptors(
         << " closure_rows=" << d.closure_rows.size()
         << " closure_rows_mib="
         << double(d.closure_rows.size() * sizeof(uint32_t)) / double(1 << 20)
+        << " closure_block_off_kib="
+        << double(d.closure_block_off.size() * sizeof(uint32_t)) / 1024.0
 #endif
         << " cross_frac=" << cross_frac
         << " invalid_frac=" << invalid_frac
@@ -259,7 +269,7 @@ __constant__ uint32_t D_HIGHDESC_MAIN_TOTAL;
 __constant__ uint32_t D_HIGHDESC_BLOCK_TOTAL;
 #ifdef MASKSHARD_HIGH_CLOSURE_ROWS
 __constant__ uint32_t* D_HIGHDESC_CLOSURE_ROWS;
-__constant__ uint32_t D_HIGHDESC_CLOSURE_OFF[MAXW + 2];
+__constant__ const uint32_t* D_HIGHDESC_CLOSURE_BLOCK_OFF;
 #endif
 
 struct HighDescDeviceTables {
@@ -267,6 +277,7 @@ struct HighDescDeviceTables {
     uint32_t* block_desc = nullptr;
 #ifdef MASKSHARD_HIGH_CLOSURE_ROWS
     uint32_t* closure_rows = nullptr;
+    uint32_t* closure_block_off = nullptr;
 #endif
 
     void install(const HighDescHost& d) {
@@ -288,6 +299,14 @@ struct HighDescDeviceTables {
                           d.closure_rows.size() * sizeof(uint32_t), cudaMemcpyHostToDevice),
                "highdesc closure rows copy");
         }
+        if (!d.closure_block_off.empty()) {
+            ck(cudaMalloc(&closure_block_off,
+                          d.closure_block_off.size() * sizeof(uint32_t)),
+               "highdesc closure block off alloc");
+            ck(cudaMemcpy(closure_block_off, d.closure_block_off.data(),
+                          d.closure_block_off.size() * sizeof(uint32_t),
+                          cudaMemcpyHostToDevice), "highdesc closure block off copy");
+        }
 #endif
         ck(cudaMemcpyToSymbol(D_HIGHDESC_MAIN, &main_desc, sizeof(main_desc)), "highdesc main ptr");
         ck(cudaMemcpyToSymbol(D_HIGHDESC_BLOCK, &block_desc, sizeof(block_desc)), "highdesc block ptr");
@@ -302,9 +321,8 @@ struct HighDescDeviceTables {
 #ifdef MASKSHARD_HIGH_CLOSURE_ROWS
         ck(cudaMemcpyToSymbol(D_HIGHDESC_CLOSURE_ROWS, &closure_rows, sizeof(closure_rows)),
                               "highdesc closure rows ptr");
-        ck(cudaMemcpyToSymbol(D_HIGHDESC_CLOSURE_OFF, d.closure_off.data(),
-                              sizeof(uint32_t) * d.closure_off.size()),
-                              "highdesc closure rows off");
+        ck(cudaMemcpyToSymbol(D_HIGHDESC_CLOSURE_BLOCK_OFF, &closure_block_off,
+                              sizeof(closure_block_off)), "highdesc closure block off ptr");
 #endif
     }
 
@@ -313,7 +331,8 @@ struct HighDescDeviceTables {
         if (block_desc) cudaFree(block_desc);
 #ifdef MASKSHARD_HIGH_CLOSURE_ROWS
         if (closure_rows) cudaFree(closure_rows);
-        closure_rows = nullptr;
+        if (closure_block_off) cudaFree(closure_block_off);
+        closure_rows = closure_block_off = nullptr;
 #endif
         main_desc = block_desc = nullptr;
     }
