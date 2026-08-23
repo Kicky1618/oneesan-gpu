@@ -37,9 +37,11 @@ jobs:
       matrix:
         include:
           - width: 22
+            n: 21
             low: 11
             high: 10
           - width: 28
+            n: 27
             low: 14
             high: 13
     steps:
@@ -81,3 +83,8 @@ jobs:
             -DHIGH_LUT_K=${{ matrix.high }} \
             src/cuda/gridfp/oneesan_cuda_gridfp_ramstream32_factorized_bidesc.cu \
             -o build/ramstream32_bidesc_w${{ matrix.width }}
+      - name: Validate host descriptor plan
+        shell: bash
+        run: |
+          build/ramstream32_bidesc_w${{ matrix.width }} \
+            ${{ matrix.n }} 4294967291 16384 --plan-only
