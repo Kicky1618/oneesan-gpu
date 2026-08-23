@@ -49,12 +49,13 @@ static void b300_dt_generic_assignment_refine(
 }
 
 static uint64_t b300_dt_joint_retained(
-    const StorageLayout&l,const std::vector<uint8_t>&ho,const std::vector<uint8_t>&lo
+    const StorageLayout&l,const std::vector<uint8_t>&ho,const std::vector<uint8_t>&lo,int ngpu
 ){
     constexpr int S=MAXW+2;uint64_t z=0;uint64_t wm=uint64_t(2*TARGET_W-1),wb=uint64_t(TARGET_W);
-    auto add=[&](const StorageBlock&b,uint64_t mult){if(!b.valid||!b.rows||!b.cols)return;
-        for(uint32_t hm=0;hm<(1u<<HIGH_LUT_K);++hm){size_t hx=size_t(hm)*S+b.he;uint64_t nr=G_FACTOR.high_mask_off[hx+1]-G_FACTOR.high_mask_off[hx];if(!nr)continue;
-            int g=ho[hm];for(uint32_t lm=0;lm<(1u<<LOW_LUT_K);++lm)if(lo[lm]==g){size_t lx=size_t(lm)*S+b.hs;uint64_t nc=G_FACTOR.low_mask_off[lx+1]-G_FACTOR.low_mask_off[lx];z+=mult*nr*nc*sizeof(Count);}}};
+    std::array<std::array<uint32_t,MAXW+2>,MAXGPU> hc{},lc{};
+    for(uint32_t hm=0;hm<ho.size();++hm){int g=ho[hm];for(int h=0;h<=MAXW;++h){size_t x=size_t(hm)*S+h;hc[g][h]+=G_FACTOR.high_mask_off[x+1]-G_FACTOR.high_mask_off[x];}}
+    for(uint32_t lm=0;lm<lo.size();++lm){int g=lo[lm];for(int h=0;h<=MAXW;++h){size_t x=size_t(lm)*S+h;lc[g][h]+=G_FACTOR.low_mask_off[x+1]-G_FACTOR.low_mask_off[x];}}
+    auto add=[&](const StorageBlock&b,uint64_t mult){if(!b.valid||!b.rows||!b.cols)return;for(int g=0;g<ngpu;++g)z+=mult*uint64_t(hc[g][b.he])*lc[g][b.hs]*sizeof(Count);};
     for(const auto&b:l.main_blocks)add(b,wm);for(const auto&b:l.block_blocks)add(b,wb);return z;
 }
 
@@ -71,11 +72,11 @@ static B300DualTileHost build_b300_dual_tile_layout_joint_optimized(
     auto loadl=[&](const StorageBlock&b){if(!b.valid)return;for(uint32_t m=0;m<LN;++m){size_t x=size_t(m)*S+b.hs;lload[m]+=uint64_t(G_FACTOR.low_mask_off[x+1]-G_FACTOR.low_mask_off[x])*b.rows*sizeof(Count);}};
     for(const auto&b:l.main_blocks){loadh(b);loadl(b);}for(const auto&b:l.block_blocks){loadh(b);loadl(b);}
     uint64_t logical=uint64_t(2*TARGET_W-1)*uint64_t(l.main_size)*sizeof(Count)+uint64_t(TARGET_W)*uint64_t(l.block_size)*sizeof(Count);
-    uint64_t initial=b300_dt_joint_retained(l,ho,lo),moves=0,swaps=0;
+    uint64_t initial=b300_dt_joint_retained(l,ho,lo,ngpu),moves=0,swaps=0;
     uint64_t wm=uint64_t(2*TARGET_W-1),wb=uint64_t(TARGET_W);
 
     int done=0;
-    for(int it=0;it<outer_iters;++it){++done;uint64_t before=b300_dt_joint_retained(l,ho,lo);
+    for(int it=0;it<outer_iters;++it){++done;uint64_t before=b300_dt_joint_retained(l,ho,lo,ngpu);
         // Optimize LOW owners against current HIGH owners.
         std::array<std::array<uint32_t,MAXW+2>,MAXGPU> hcnt{};
         for(uint32_t hm=0;hm<HN;++hm){int g=ho[hm];for(int h=0;h<=MAXW;++h){size_t x=size_t(hm)*S+h;hcnt[g][h]+=G_FACTOR.high_mask_off[x+1]-G_FACTOR.high_mask_off[x];}}
@@ -91,7 +92,7 @@ static B300DualTileHost build_b300_dual_tile_layout_joint_optimized(
         auto addhb=[&](const StorageBlock&b,uint64_t mult){if(!b.valid)return;for(uint32_t hm=0;hm<HN;++hm){size_t x=size_t(hm)*S+b.he;uint64_t nr=G_FACTOR.high_mask_off[x+1]-G_FACTOR.high_mask_off[x];if(!nr)continue;for(int g=0;g<ngpu;++g)hb[hm][g]+=mult*nr*lcnt[g][b.hs]*sizeof(Count);}};
         for(const auto&b:l.main_blocks)addhb(b,wm);for(const auto&b:l.block_blocks)addhb(b,wb);
         b300_dt_generic_assignment_refine(ho,hload,hb,ngpu,slack_gib,pair_limit,moves,swaps);
-        uint64_t after=b300_dt_joint_retained(l,ho,lo);if(after<=before)break;
+        uint64_t after=b300_dt_joint_retained(l,ho,lo,ngpu);if(after<=before)break;
     }
 
     B300DualTileHost z=build_b300_dual_tile_layout(f,l,ngpu);
@@ -100,7 +101,7 @@ static B300DualTileHost build_b300_dual_tile_layout_joint_optimized(
     b300_dt_rebuild_low_owner(z,lo,f,l);
 
     auto imbalance=[&](const std::vector<uint64_t>&load,const std::vector<uint8_t>&own){std::array<uint64_t,MAXGPU>a{};uint64_t t=0;for(size_t i=0;i<load.size();++i){a[own[i]]+=load[i];t+=load[i];}uint64_t mx=*std::max_element(a.begin(),a.begin()+ngpu);return t?double((long double)mx/((long double)t/ngpu)):0.0;};
-    if(stats){stats->logical_bytes=logical;stats->retained_initial=initial;stats->retained_final=b300_dt_joint_retained(l,ho,lo);stats->moves=moves;stats->swaps=swaps;stats->iterations=done;
+    if(stats){stats->logical_bytes=logical;stats->retained_initial=initial;stats->retained_final=b300_dt_joint_retained(l,ho,lo,ngpu);stats->moves=moves;stats->swaps=swaps;stats->iterations=done;
         stats->high_load_max_over_avg=imbalance(hload,ho);stats->low_load_max_over_avg=imbalance(lload,lo);}
     return z;
 }
