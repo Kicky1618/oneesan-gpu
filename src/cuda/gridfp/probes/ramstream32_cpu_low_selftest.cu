@@ -9,7 +9,7 @@
 #define RAMSTREAM_BIDESC_COMPACT_NO_MAIN
 #include "../oneesan_cuda_gridfp_ramstream32_factorized_bidesc_compact.cu"
 #undef RAMSTREAM_BIDESC_COMPACT_NO_MAIN
-#include "../ramstream32_cpu_low_inplace.hpp"
+#include "../ramstream32_cpu_low_direct.hpp"
 
 static void enum_states_rec(int pos, int h, MateID m, std::vector<MateID>& out) {
     if (pos < 0) {
@@ -86,11 +86,7 @@ int main() {
 
     auto main_states = enum_states(W);
     auto block_states = enum_states(W - 1);
-    if (main_states.size() != layout.main_size || block_states.size() != layout.block_size) {
-        std::cerr << "state count mismatch main=" << main_states.size() << '/' << layout.main_size
-                  << " block=" << block_states.size() << '/' << layout.block_size << '\n';
-        return 2;
-    }
+    if (main_states.size() != layout.main_size || block_states.size() != layout.block_size) return 2;
 
     std::unordered_map<MateID, size_t> mi, di;
     mi.reserve(main_states.size() * 2);
@@ -110,7 +106,6 @@ int main() {
                 init_m, init_d, storage, layout);
 
     std::vector<Count> rm = init_m, rd = init_d;
-    // Direct reference for exactly the LOW+center window p=LOW..1.
     for (int p = LOW_LUT_K; p >= 1; --p) {
         std::vector<Count> nm = rm;
         std::vector<Count> nd(rd.size(), 0);
@@ -119,20 +114,17 @@ int main() {
             auto z = oneesan::gridfp::include_horizontal(main_states[i], W, p);
             if (!z.valid) continue;
             if (z.blocked) {
-                auto it = di.find(z.mate);
-                if (it == di.end()) return 3;
+                auto it = di.find(z.mate); if (it == di.end()) return 3;
                 nd[it->second] = ref_add(nd[it->second], c, mod);
             } else {
-                auto it = mi.find(z.mate);
-                if (it == mi.end()) return 4;
+                auto it = mi.find(z.mate); if (it == mi.end()) return 4;
                 nm[it->second] = ref_add(nm[it->second], c, mod);
             }
         }
         for (size_t i = 0; i < block_states.size(); ++i) {
             Count c = rd[i];
             MateID z = oneesan::gridfp::blocked_exclude(block_states[i], p);
-            auto it = mi.find(z);
-            if (it == mi.end()) return 5;
+            auto it = mi.find(z); if (it == mi.end()) return 5;
             nm[it->second] = ref_add(nm[it->second], c, mod);
         }
         rm.swap(nm);
@@ -154,13 +146,22 @@ int main() {
     if (!compare_factor("in-place", main_auth, block_auth, main_states, block_states,
                         rm, rd, storage, layout)) return 11;
 
+    fill_factor(main_auth, block_auth, main_states, block_states,
+                init_m, init_d, storage, layout);
+    CpuLowDirectPool direct_pool(2);
+    direct_pool.run(jobs, main_auth, block_auth, storage, layout, lowdesc, orbit, mod);
+    if (!compare_factor("direct", main_auth, block_auth, main_states, block_states,
+                        rm, rd, storage, layout)) return 12;
+
     std::cout << "cpu-low-selftest OK W=" << W
               << " main=" << main_states.size()
               << " block=" << block_states.size()
               << " out_groups=" << out_pool.groups()
               << " in_groups=" << in_pool.groups()
+              << " direct_groups=" << direct_pool.groups()
               << " out_scratch_mib=" << double(out_pool.peak_scratch_bytes()) / (1 << 20)
               << " in_scratch_mib=" << double(in_pool.peak_scratch_bytes()) / (1 << 20)
+              << " direct_scratch_mib=0"
               << " orbit_mib=" << double(orbit.rec.size() * sizeof(uint64_t)) / (1 << 20)
               << '\n';
 
