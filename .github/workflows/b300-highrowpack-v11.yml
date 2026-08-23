@@ -1,0 +1,92 @@
+name: B300 HIGH row-pack v0.11 research
+
+on:
+  push:
+    paths:
+      - 'src/cpp/probes/factor_highclosure_rowpack.cpp'
+      - 'src/cpp/probes/factor_highclosure_rowpack_hybrid.cpp'
+      - 'src/cpp/probes/factor_highclosure_rowpack_taskmap.cpp'
+      - 'src/cpp/probes/factor_highclosure_rowpack_hybrid_taskmap.cpp'
+      - 'src/cuda/b300/maskshard_highclosure_rowpack.cuh'
+      - 'src/cuda/b300/oneesan_cuda_gridfp_b300_hbm32_maskshard_blockorbit_compactaux_fullclosure_highrowpack_batch_guarded.cu'
+      - 'src/cuda/b300/oneesan_cuda_gridfp_b300_hbm32_maskshard_blockorbit_compactaux_fullclosure_highrowpack16_batch_guarded.cu'
+      - '.github/workflows/b300-highrowpack-v11.yml'
+  pull_request:
+    paths:
+      - 'src/cpp/probes/factor_highclosure_rowpack.cpp'
+      - 'src/cpp/probes/factor_highclosure_rowpack_hybrid.cpp'
+      - 'src/cpp/probes/factor_highclosure_rowpack_taskmap.cpp'
+      - 'src/cpp/probes/factor_highclosure_rowpack_hybrid_taskmap.cpp'
+      - 'src/cuda/b300/maskshard_highclosure_rowpack.cuh'
+      - 'src/cuda/b300/oneesan_cuda_gridfp_b300_hbm32_maskshard_blockorbit_compactaux_fullclosure_highrowpack_batch_guarded.cu'
+      - 'src/cuda/b300/oneesan_cuda_gridfp_b300_hbm32_maskshard_blockorbit_compactaux_fullclosure_highrowpack16_batch_guarded.cu'
+      - '.github/workflows/b300-highrowpack-v11.yml'
+  workflow_dispatch:
+
+jobs:
+  hybrid-model:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build hybrid HIGH row-pack model
+        run: |
+          mkdir -p build
+          g++ -O3 -std=c++17 -Wall -Wextra -Werror \
+            src/cpp/probes/factor_highclosure_rowpack_hybrid.cpp \
+            -o build/factor_highclosure_rowpack_hybrid
+      - name: Verify n=27 threshold-16 model
+        run: build/factor_highclosure_rowpack_hybrid 28 14 256 16
+
+  hybrid-taskmap:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        include:
+          - width: 10
+            low: 5
+          - width: 12
+            low: 6
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build hybrid HIGH row-pack task-map probe
+        run: |
+          mkdir -p build
+          g++ -O3 -std=c++17 -Wall -Wextra -Werror \
+            src/cpp/probes/factor_highclosure_rowpack_hybrid_taskmap.cpp \
+            -o build/factor_highclosure_rowpack_hybrid_taskmap
+      - name: Compare hybrid and row-wise source maps
+        run: build/factor_highclosure_rowpack_hybrid_taskmap ${{ matrix.width }} ${{ matrix.low }} 16
+
+  cuda-compile:
+    runs-on: ubuntu-latest
+    container: nvidia/cuda:12.8.1-devel-ubuntu22.04
+    strategy:
+      matrix:
+        include:
+          - width: 22
+            low: 11
+            high: 10
+          - width: 28
+            low: 14
+            high: 13
+    steps:
+      - uses: actions/checkout@v4
+      - name: Compile v0.10 full HIGH row pack
+        shell: bash
+        run: |
+          mkdir -p build
+          nvcc -O3 -std=c++17 -lineinfo -arch=sm_80 \
+            -DTARGET_W=${{ matrix.width }} \
+            -DLOW_LUT_K=${{ matrix.low }} \
+            -DHIGH_LUT_K=${{ matrix.high }} \
+            src/cuda/b300/oneesan_cuda_gridfp_b300_hbm32_maskshard_blockorbit_compactaux_fullclosure_highrowpack_batch_guarded.cu \
+            -o build/b300_maskshard_v10_w${{ matrix.width }}
+      - name: Compile v0.11 hybrid HIGH row pack
+        shell: bash
+        run: |
+          nvcc -O3 -std=c++17 -lineinfo -arch=sm_80 \
+            -DTARGET_W=${{ matrix.width }} \
+            -DLOW_LUT_K=${{ matrix.low }} \
+            -DHIGH_LUT_K=${{ matrix.high }} \
+            src/cuda/b300/oneesan_cuda_gridfp_b300_hbm32_maskshard_blockorbit_compactaux_fullclosure_highrowpack16_batch_guarded.cu \
+            -o build/b300_maskshard_v11_w${{ matrix.width }}
