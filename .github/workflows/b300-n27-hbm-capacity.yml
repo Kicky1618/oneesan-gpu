@@ -10,10 +10,13 @@ on:
       - 'src/cuda/gridfp/probes/b300_compact_kernel_compile.cu'
       - 'src/cuda/gridfp/probes/b300_high_orbit_selftest.cu'
       - 'src/cuda/gridfp/probes/b300_sparse_action_plan.cu'
+      - 'src/cuda/gridfp/probes/b300_high_warp_plan.cu'
       - 'src/cuda/gridfp/ramstream32_high_orbit.cuh'
       - 'src/cuda/gridfp/ramstream32_low_orbit_device.cuh'
       - 'src/cuda/gridfp/ramstream32_b300_compact_io.cuh'
       - 'src/cuda/gridfp/ramstream32_b300_rowkernels.cuh'
+      - 'src/cuda/gridfp/ramstream32_b300_high_warp.cuh'
+      - 'src/cuda/gridfp/ramstream32_b300_main_desc.cuh'
       - 'src/cuda/gridfp/ramstream32_lowdesc.cuh'
       - 'src/cuda/gridfp/ramstream32_highdesc.cuh'
       - '.github/workflows/b300-n27-hbm-capacity.yml'
@@ -44,6 +47,14 @@ jobs:
             src/cuda/gridfp/probes/b300_sparse_action_plan.cu \
             -o build/b300_sparse_action_plan
           build/b300_sparse_action_plan
+      - name: HIGH warp-packing plan W28
+        shell: bash
+        run: |
+          nvcc -O3 -std=c++17 -arch=sm_80 \
+            -DTARGET_W=28 -DLOW_LUT_K=14 -DHIGH_LUT_K=13 \
+            src/cuda/gridfp/probes/b300_high_warp_plan.cu \
+            -o build/b300_high_warp_plan
+          build/b300_high_warp_plan
       - name: Compile W28 compact resident kernels
         shell: bash
         run: |
