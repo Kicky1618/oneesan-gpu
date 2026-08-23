@@ -22,6 +22,20 @@ __device__ __forceinline__ Count maskshard_add_mod_plain(Count a, Count b) {
     return a >= mod - b ? a - (mod - b) : a + b;
 }
 
+__device__ __forceinline__ void maskshard_split_rank(
+    Code i, const FBlock& x, uint32_t& hr, uint32_t& lr
+) {
+    const Code r64 = i - x.off;
+    if (r64 <= 0xffffffffULL) {
+        const uint32_t r = uint32_t(r64);
+        hr = x.stride ? r / x.stride : 0;
+        lr = x.stride ? r - hr * x.stride : 0;
+    } else {
+        hr = x.stride ? uint32_t(r64 / x.stride) : 0;
+        lr = x.stride ? uint32_t(r64 - Code(hr) * x.stride) : 0;
+    }
+}
+
 __device__ __forceinline__ uint32_t maskshard_active_high_center(
     const FBlock& x, uint32_t high_all_rank
 ) {
@@ -92,9 +106,8 @@ __global__ void maskshard_main_block_highorbit_kernel(
     for (; i < n; i += step) {
         const int bid = f_find_main(i);
         const FBlock x = D_F_MAIN_BLOCKS[bid];
-        const Code r = i - x.off;
-        const uint32_t hr = x.stride ? uint32_t(r / x.stride) : 0;
-        const uint32_t lr = x.stride ? uint32_t(r - Code(hr) * x.stride) : 0;
+        uint32_t hr = 0, lr = 0;
+        maskshard_split_rank(i, x, hr, lr);
         const uint32_t active = maskshard_active_high_center(x, hr);
         const MateValuePair w = maskshard_high_pair(x, hr, p);
         if (w != NN && w != NR && w != NL) continue;
@@ -135,9 +148,8 @@ __global__ void maskshard_main_highdesc_closure_inplace_kernel(
     for (; i < n; i += step) {
         const int bid = f_find_main(i);
         const FBlock x = D_F_MAIN_BLOCKS[bid];
-        const Code r = i - x.off;
-        const uint32_t hr = x.stride ? uint32_t(r / x.stride) : 0;
-        const uint32_t lr = x.stride ? uint32_t(r - Code(hr) * x.stride) : 0;
+        uint32_t hr = 0, lr = 0;
+        maskshard_split_rank(i, x, hr, lr);
         const MateValuePair w = maskshard_high_pair(x, hr, p);
         if (w != LL && w != RR && w != RL) continue;
 
