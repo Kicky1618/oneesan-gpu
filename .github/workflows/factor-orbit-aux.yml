@@ -4,6 +4,8 @@ on:
   push:
     paths:
       - 'src/cpp/probes/factor_orbit_aux_semantics.cpp'
+      - 'src/cpp/probes/factor_orbitaux_savings.cpp'
+      - 'src/cuda/b300/probes/maskshard_orbitaux_hostplan.cu'
       - 'src/cuda/b300/maskshard_highio.cuh'
       - 'src/cuda/b300/maskshard_highorbit.cuh'
       - 'src/cuda/b300/maskshard_loworbit.cuh'
@@ -13,6 +15,8 @@ on:
   pull_request:
     paths:
       - 'src/cpp/probes/factor_orbit_aux_semantics.cpp'
+      - 'src/cpp/probes/factor_orbitaux_savings.cpp'
+      - 'src/cuda/b300/probes/maskshard_orbitaux_hostplan.cu'
       - 'src/cuda/b300/maskshard_highio.cuh'
       - 'src/cuda/b300/maskshard_highorbit.cuh'
       - 'src/cuda/b300/maskshard_loworbit.cuh'
@@ -41,6 +45,19 @@ jobs:
             -o build/factor_orbit_aux_semantics
       - name: Verify descriptor plus aux orbit targets
         run: build/factor_orbit_aux_semantics ${{ matrix.width }} ${{ matrix.low }}
+
+  savings:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build orbit-aux savings probe
+        run: |
+          mkdir -p build
+          g++ -O3 -std=c++17 -Wall -Wextra -Werror \
+            src/cpp/probes/factor_orbitaux_savings.cpp \
+            -o build/factor_orbitaux_savings
+      - name: Verify delete-N bijection and n=27 lookup count
+        run: build/factor_orbitaux_savings 28 14
 
   memory:
     runs-on: ubuntu-latest
