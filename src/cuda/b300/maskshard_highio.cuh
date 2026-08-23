@@ -2,21 +2,12 @@
 
 #include <array>
 #include <cstdint>
+#include <cstdlib>
 #include <iostream>
 #include <vector>
 #include "maskshard_index.cuh"
 
 // Direct HIGH-window I/O for HIGH-mask-sharded authoritative HBM.
-//
-// Scratch layout (fix_low=true):
-//   row = HIGH all-rank, col = LOW rank within the fixed LOW occupancy mask.
-// Authoritative layout:
-//   owner = owner[HIGH occupancy mask]
-//   row = HIGH rank within that occupancy mask
-//   col = LOW storage all-rank
-//
-// Therefore the conversion is purely factorized. No MateID and no canonical
-// full-frontier rank are constructed.
 
 __constant__ Count* D_MS_MAIN_PTR[8];
 __constant__ Count* D_MS_BLOCK_PTR[8];
@@ -32,6 +23,31 @@ __constant__ uint32_t D_MS_BLOCK_NBLOCKS;
 __constant__ uint32_t D_MS_MAIN_COLS[64];
 __constant__ uint32_t D_MS_BLOCK_COLS[32];
 
+#ifdef MASKSHARD_ORBIT_AUX
+static constexpr uint32_t MS_ORBIT_AUX_RANK_MASK = (1u << 20) - 1u;
+static constexpr uint32_t MS_ORBIT_AUX_BLOCK_MASK = 0x3fu;
+static constexpr int MS_ORBIT_AUX_BLOCK_SHIFT = 20;
+static constexpr int MS_ORBIT_AUX_KIND_SHIFT = 30;
+enum MaskShardOrbitAuxKind : uint32_t {
+    MS_ORBIT_AUX_INVALID = 0,
+    MS_ORBIT_AUX_NN = 1,
+    MS_ORBIT_AUX_PAIR = 2,
+};
+static inline uint32_t maskshard_orbit_aux_pack(
+    MaskShardOrbitAuxKind kind, uint32_t block, uint32_t rank
+) {
+    if (block > MS_ORBIT_AUX_BLOCK_MASK || rank > MS_ORBIT_AUX_RANK_MASK) {
+        std::cerr << "maskshard orbit aux overflow block=" << block
+                  << " rank=" << rank << '\n';
+        std::exit(150);
+    }
+    return (uint32_t(kind) << MS_ORBIT_AUX_KIND_SHIFT)
+        | (block << MS_ORBIT_AUX_BLOCK_SHIFT) | rank;
+}
+__constant__ const uint32_t* D_MS_HIGH_ORBIT_AUX;
+__constant__ const uint32_t* D_MS_LOW_ORBIT_AUX;
+#endif
+
 struct MaskShardDeviceMeta {
     int dev = -1;
     uint8_t* owner = nullptr;
@@ -41,6 +57,10 @@ struct MaskShardDeviceMeta {
     Code* block_block_off = nullptr;
     uint32_t* high_route = nullptr;
     uint32_t* low_begin = nullptr;
+#ifdef MASKSHARD_ORBIT_AUX
+    uint32_t* high_orbit_aux = nullptr;
+    uint32_t* low_orbit_aux = nullptr;
+#endif
 
     template<class T>
     static void copy_vec(T** dst, const std::vector<T>& v, const char* what) {
@@ -48,6 +68,189 @@ struct MaskShardDeviceMeta {
         ck(cudaMalloc(dst, v.size() * sizeof(T)), what);
         ck(cudaMemcpy(*dst, v.data(), v.size() * sizeof(T), cudaMemcpyHostToDevice), what);
     }
+
+#ifdef MASKSHARD_ORBIT_AUX
+    struct OrbitAuxHostCache {
+        std::vector<uint32_t> high_aux;
+        std::vector<uint32_t> low_aux;
+    };
+
+    static const OrbitAuxHostCache& orbit_aux_host(const StorageLayout& layout) {
+        static OrbitAuxHostCache cache;
+        static bool built = false;
+        if (built) return cache;
+        built = true;
+
+        constexpr int L = LOW_LUT_K;
+        constexpr int H = HIGH_LUT_K;
+        constexpr int S = MAXW + 2;
+        constexpr uint32_t LM = (1u << L) - 1u;
+        constexpr uint32_t HM = (1u << H) - 1u;
+        const uint32_t LNM = 1u << L;
+        const uint32_t HNM = 1u << H;
+
+        // Prefixes of occupancy-major storage ranks, independently rebuilt
+        // from the base mask tables. These are ranks within one height.
+        std::vector<uint32_t> lb(size_t(LNM) * S), hb(size_t(HNM) * S);
+        for (int h = 0; h <= L + 1; ++h) {
+            uint32_t rank = 0;
+            for (uint32_t mask = 0; mask < LNM; ++mask) {
+                const size_t ix = size_t(mask) * S + h;
+                lb[ix] = rank;
+                rank += G_FACTOR.low_mask_off[ix + 1] - G_FACTOR.low_mask_off[ix];
+            }
+            if (rank != G_FACTOR.low_all_off[h + 1] - G_FACTOR.low_all_off[h]) {
+                std::cerr << "maskshard orbit aux LOW prefix mismatch h=" << h << '\n';
+                std::exit(151);
+            }
+        }
+        for (int h = 0; h <= H + 1; ++h) {
+            uint32_t rank = 0;
+            for (uint32_t mask = 0; mask < HNM; ++mask) {
+                const size_t ix = size_t(mask) * S + h;
+                hb[ix] = rank;
+                rank += G_FACTOR.high_mask_off[ix + 1] - G_FACTOR.high_mask_off[ix];
+            }
+            if (rank != G_FACTOR.high_all_off[h + 1] - G_FACTOR.high_all_off[h]) {
+                std::cerr << "maskshard orbit aux HIGH prefix mismatch h=" << h << '\n';
+                std::exit(152);
+            }
+        }
+
+        auto low_storage_rank = [&](uint32_t code, int h) -> uint32_t {
+            const uint32_t packed = G_FACTOR.low_packed_rank[code];
+            if (packed == 0xffffffffu) return 0xffffffffu;
+            const uint32_t mask = seg_occ(code, L);
+            return lb[size_t(mask) * S + h] + (packed & LM);
+        };
+        auto high_storage_rank = [&](uint32_t code, int h) -> uint32_t {
+            const uint32_t packed = G_FACTOR.high_packed_rank[code];
+            if (packed == 0xffffffffu) return 0xffffffffu;
+            const uint32_t mask = seg_occ(code, H);
+            return hb[size_t(mask) * S + h] + (packed & HM);
+        };
+
+        // Reconstruct storage-order code lists. Only ~2M codes total, unlike
+        // the dense 4^L/4^H rank arrays which already exist elsewhere.
+        std::vector<uint32_t> low_codes, high_codes;
+        low_codes.reserve(G_FACTOR.low_all_codes.size());
+        high_codes.reserve(G_FACTOR.high_all_codes.size());
+        std::array<uint32_t, MAXW + 2> low_off{}, high_off{};
+        for (int h = 0; h <= L + 1; ++h) {
+            low_off[h] = uint32_t(low_codes.size());
+            for (uint32_t mask = 0; mask < LNM; ++mask) {
+                const size_t ix = size_t(mask) * S + h;
+                for (uint32_t q = G_FACTOR.low_mask_off[ix]; q < G_FACTOR.low_mask_off[ix + 1]; ++q)
+                    low_codes.push_back(G_FACTOR.low_mask_codes[q]);
+            }
+        }
+        low_off[L + 2] = uint32_t(low_codes.size());
+        for (int h = 0; h <= H + 1; ++h) {
+            high_off[h] = uint32_t(high_codes.size());
+            for (uint32_t mask = 0; mask < HNM; ++mask) {
+                const size_t ix = size_t(mask) * S + h;
+                for (uint32_t q = G_FACTOR.high_mask_off[ix]; q < G_FACTOR.high_mask_off[ix + 1]; ++q)
+                    high_codes.push_back(G_FACTOR.high_mask_codes[q]);
+            }
+        }
+        high_off[H + 2] = uint32_t(high_codes.size());
+
+        std::array<uint32_t, 64> high_base{};
+        std::array<uint32_t, 64> low_base{};
+        uint32_t high_total = 0, low_total = 0;
+        for (size_t bid = 0; bid < layout.main_blocks.size(); ++bid) {
+            high_base[bid] = high_total;
+            low_base[bid] = low_total;
+            high_total += layout.main_blocks[bid].rows;
+            low_total += layout.main_blocks[bid].cols;
+        }
+        cache.high_aux.assign(size_t(high_total) * H, 0u);
+        cache.low_aux.assign(size_t(low_total) * L, 0u);
+
+        auto set_pair32 = [](uint32_t active, int q, MateValuePair v) {
+            const uint32_t sh = uint32_t(2 * (q - 1));
+            return (active & ~(15u << sh)) | (uint32_t(v) << sh);
+        };
+        auto drop_symbol32 = [](uint32_t active, int q) {
+            const uint32_t sh = uint32_t(2 * q);
+            const uint32_t lo = active & ((uint32_t(1) << sh) - 1u);
+            return lo | ((active & ~((uint32_t(1) << sh) - 1u)) >> 2);
+        };
+
+        // HIGH orbit: source coordinate is (block, HIGH storage all-rank).
+        for (int p = TARGET_W - 1; p >= L + 1; --p) {
+            const uint32_t pi = uint32_t((TARGET_W - 1) - p);
+            const int q = p - L;
+            for (size_t bid = 0; bid < layout.main_blocks.size(); ++bid) {
+                const StorageBlock& sb = layout.main_blocks[bid];
+                if (!sb.valid || !sb.rows || !sb.cols) continue;
+                for (uint32_t hr = 0; hr < sb.rows; ++hr) {
+                    const uint32_t hc = high_codes[high_off[sb.he] + hr];
+                    const uint32_t active = (hc << 2) | uint32_t(sb.c);
+                    const MateValuePair w = MateValuePair((active >> (2 * (q - 1))) & 15u);
+                    uint32_t aux = 0;
+                    if (w == NN) {
+                        const uint32_t dropped = drop_symbol32(active, q);
+                        const int dh = seg_end_height_host(dropped, H);
+                        const uint32_t dr = high_storage_rank(dropped, dh);
+                        aux = maskshard_orbit_aux_pack(MS_ORBIT_AUX_NN, uint32_t(dh), dr);
+                    } else if (w == NR || w == NL) {
+                        const MateValuePair cw = w == NR ? RN : LN;
+                        const uint32_t companion = set_pair32(active, q, cw);
+                        const uint32_t hc2 = companion >> 2;
+                        const uint32_t cv2 = companion & 3u;
+                        const int he2 = seg_end_height_host(hc2, H);
+                        const uint32_t hr2 = high_storage_rank(hc2, he2);
+                        aux = maskshard_orbit_aux_pack(
+                            MS_ORBIT_AUX_PAIR, uint32_t(3 * he2 + int(cv2)), hr2);
+                    }
+                    cache.high_aux[size_t(pi) * high_total + high_base[bid] + hr] = aux;
+                }
+            }
+        }
+
+        // LOW orbit: source coordinate is (block, LOW storage all-rank).
+        for (int p = L; p >= 1; --p) {
+            const uint32_t pi = uint32_t(L - p);
+            for (size_t bid = 0; bid < layout.main_blocks.size(); ++bid) {
+                const StorageBlock& sb = layout.main_blocks[bid];
+                if (!sb.valid || !sb.rows || !sb.cols) continue;
+                for (uint32_t lr = 0; lr < sb.cols; ++lr) {
+                    const uint32_t lc = low_codes[low_off[sb.hs] + lr];
+                    const uint32_t active = lc | (uint32_t(sb.c) << (2 * L));
+                    const MateValuePair w = MateValuePair((active >> (2 * (p - 1))) & 15u);
+                    uint32_t aux = 0;
+                    if (w == NN || w == NR || w == NL) {
+                        if (w == NN || p == 1) {
+                            const uint32_t dropped = drop_symbol32(active, p);
+                            const uint32_t lr2 = low_storage_rank(dropped, sb.he);
+                            aux = maskshard_orbit_aux_pack(
+                                w == NN ? MS_ORBIT_AUX_NN : MS_ORBIT_AUX_PAIR,
+                                uint32_t(sb.he), lr2);
+                        } else {
+                            const MateValuePair cw = w == NR ? RN : LN;
+                            const uint32_t companion = set_pair32(active, p, cw);
+                            const uint32_t lc2 = companion & ((uint32_t(1) << (2 * L)) - 1u);
+                            const uint32_t cv2 = (companion >> (2 * L)) & 3u;
+                            const int hs2 = int(sb.he) + (cv2 == uint32_t(::L) ? 1 : cv2 == uint32_t(R) ? -1 : 0);
+                            const uint32_t lr2 = low_storage_rank(lc2, hs2);
+                            aux = maskshard_orbit_aux_pack(
+                                MS_ORBIT_AUX_PAIR, uint32_t(3 * int(sb.he) + int(cv2)), lr2);
+                        }
+                    }
+                    cache.low_aux[size_t(pi) * low_total + low_base[bid] + lr] = aux;
+                }
+            }
+        }
+
+        std::cerr << "maskshard orbit_aux high_mib="
+                  << double(cache.high_aux.size() * sizeof(uint32_t)) / double(1 << 20)
+                  << " low_mib="
+                  << double(cache.low_aux.size() * sizeof(uint32_t)) / double(1 << 20)
+                  << '\n';
+        return cache;
+    }
+#endif
 
     void install(
         int device,
@@ -84,6 +287,11 @@ struct MaskShardDeviceMeta {
             }
         }
         copy_vec(&low_begin, lb, "maskshard low storage begin");
+#ifdef MASKSHARD_ORBIT_AUX
+        const OrbitAuxHostCache& oa = orbit_aux_host(layout);
+        copy_vec(&high_orbit_aux, oa.high_aux, "maskshard high orbit aux");
+        copy_vec(&low_orbit_aux, oa.low_aux, "maskshard low orbit aux");
+#endif
 
         ck(cudaMemcpyToSymbol(D_MS_MAIN_PTR, main_ptr, sizeof(Count*) * 8), "maskshard main ptrs");
         ck(cudaMemcpyToSymbol(D_MS_BLOCK_PTR, block_ptr, sizeof(Count*) * 8), "maskshard block ptrs");
@@ -94,6 +302,10 @@ struct MaskShardDeviceMeta {
         ck(cudaMemcpyToSymbol(D_MS_BLOCK_BLOCK_OFF, &block_block_off, sizeof(block_block_off)), "maskshard block block off ptr");
         ck(cudaMemcpyToSymbol(D_MS_HIGH_ROUTE, &high_route, sizeof(high_route)), "maskshard high route ptr");
         ck(cudaMemcpyToSymbol(D_MS_LOW_BEGIN, &low_begin, sizeof(low_begin)), "maskshard low begin ptr");
+#ifdef MASKSHARD_ORBIT_AUX
+        ck(cudaMemcpyToSymbol(D_MS_HIGH_ORBIT_AUX, &high_orbit_aux, sizeof(high_orbit_aux)), "maskshard high orbit aux ptr");
+        ck(cudaMemcpyToSymbol(D_MS_LOW_ORBIT_AUX, &low_orbit_aux, sizeof(low_orbit_aux)), "maskshard low orbit aux ptr");
+#endif
         ck(cudaMemcpyToSymbol(D_MS_MAIN_NBLOCKS, &shard.main_nblocks, sizeof(shard.main_nblocks)), "maskshard main nblocks");
         ck(cudaMemcpyToSymbol(D_MS_BLOCK_NBLOCKS, &shard.block_nblocks, sizeof(shard.block_nblocks)), "maskshard block nblocks");
 
@@ -115,6 +327,11 @@ struct MaskShardDeviceMeta {
         if (block_block_off) cudaFree(block_block_off);
         if (high_route) cudaFree(high_route);
         if (low_begin) cudaFree(low_begin);
+#ifdef MASKSHARD_ORBIT_AUX
+        if (high_orbit_aux) cudaFree(high_orbit_aux);
+        if (low_orbit_aux) cudaFree(low_orbit_aux);
+        high_orbit_aux = low_orbit_aux = nullptr;
+#endif
         owner = nullptr;
         main_base = block_base = nullptr;
         main_block_off = block_block_off = nullptr;
@@ -122,6 +339,18 @@ struct MaskShardDeviceMeta {
         dev = -1;
     }
 };
+
+#ifdef MASKSHARD_ORBIT_AUX
+__device__ __forceinline__ uint32_t maskshard_orbit_aux_kind(uint32_t x) {
+    return x >> MS_ORBIT_AUX_KIND_SHIFT;
+}
+__device__ __forceinline__ uint32_t maskshard_orbit_aux_block(uint32_t x) {
+    return (x >> MS_ORBIT_AUX_BLOCK_SHIFT) & MS_ORBIT_AUX_BLOCK_MASK;
+}
+__device__ __forceinline__ uint32_t maskshard_orbit_aux_rank(uint32_t x) {
+    return x & MS_ORBIT_AUX_RANK_MASK;
+}
+#endif
 
 __device__ __forceinline__ uint32_t maskshard_low_all_rank(
     uint32_t low_mask, uint32_t hs, uint32_t low_mask_rank
