@@ -1,5 +1,6 @@
 name: ramstream32 CUDA compile
 
+# CI probe: source under test is identical to main; this comment only triggers PR CI.
 on:
   push:
     paths:
