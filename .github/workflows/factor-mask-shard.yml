@@ -10,6 +10,7 @@ on:
       - 'src/cpp/probes/factor_highdesc_semantics.cpp'
       - 'src/cpp/probes/factor_highorbit_semantics.cpp'
       - 'src/cpp/probes/factor_loworbit_semantics.cpp'
+      - 'src/cpp/probes/factor_orbit_racefree.cpp'
       - 'src/cpp/probes/factor_maskshard_memory.cpp'
       - 'src/common/gridfp_transition.hpp'
       - '.github/workflows/factor-mask-shard.yml'
@@ -22,6 +23,7 @@ on:
       - 'src/cpp/probes/factor_highdesc_semantics.cpp'
       - 'src/cpp/probes/factor_highorbit_semantics.cpp'
       - 'src/cpp/probes/factor_loworbit_semantics.cpp'
+      - 'src/cpp/probes/factor_orbit_racefree.cpp'
       - 'src/cpp/probes/factor_maskshard_memory.cpp'
       - 'src/common/gridfp_transition.hpp'
       - '.github/workflows/factor-mask-shard.yml'
@@ -152,6 +154,24 @@ jobs:
           g++ -O3 -std=c++17 -Wall -Wextra -Werror src/cpp/probes/factor_loworbit_semantics.cpp -o build/factor_loworbit_semantics
       - name: Compare LOW orbit plus closure with out-of-place update
         run: build/factor_loworbit_semantics ${{ matrix.width }} ${{ matrix.low }}
+
+  racefree:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        include:
+          - width: 10
+            low: 5
+          - width: 12
+            low: 6
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build orbit race-freedom probe
+        run: |
+          mkdir -p build
+          g++ -O3 -std=c++17 -Wall -Wextra -Werror src/cpp/probes/factor_orbit_racefree.cpp -o build/factor_orbit_racefree
+      - name: Verify non-atomic orbit footprints and closure non-cascade
+        run: build/factor_orbit_racefree ${{ matrix.width }} ${{ matrix.low }}
 
   edge-cut:
     runs-on: ubuntu-latest
