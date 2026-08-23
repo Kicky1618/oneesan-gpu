@@ -9,6 +9,7 @@ on:
       - 'src/cuda/b300/maskshard_highorbit.cuh'
       - 'src/cuda/b300/maskshard_loworbit.cuh'
       - 'src/cuda/b300/maskshard_index.cuh'
+      - 'src/cuda/b300/probes/maskshard_orbitaux_hostplan.cu'
       - 'src/cuda/gridfp/ramstream32_factorized_storage.hpp'
       - 'src/cuda/gridfp/ramstream32_highdesc.cuh'
       - 'src/cuda/gridfp/ramstream32_lowdesc.cuh'
@@ -21,6 +22,7 @@ on:
       - 'src/cuda/b300/maskshard_highorbit.cuh'
       - 'src/cuda/b300/maskshard_loworbit.cuh'
       - 'src/cuda/b300/maskshard_index.cuh'
+      - 'src/cuda/b300/probes/maskshard_orbitaux_hostplan.cu'
       - 'src/cuda/gridfp/ramstream32_factorized_storage.hpp'
       - 'src/cuda/gridfp/ramstream32_highdesc.cuh'
       - 'src/cuda/gridfp/ramstream32_lowdesc.cuh'
@@ -35,9 +37,11 @@ jobs:
       matrix:
         include:
           - width: 22
+            n: 21
             low: 11
             high: 10
           - width: 28
+            n: 27
             low: 14
             high: 13
     steps:
@@ -53,3 +57,15 @@ jobs:
             -DHIGH_LUT_K=${{ matrix.high }} \
             src/cuda/b300/oneesan_cuda_gridfp_b300_hbm32_maskshard_fullorbit_batch_guarded.cu \
             -o build/b300_maskshard_orbitaux_w${{ matrix.width }}
+      - name: Compile actual orbit-aux host-plan probe
+        shell: bash
+        run: |
+          nvcc -O3 -std=c++17 -lineinfo -arch=sm_80 \
+            -DTARGET_W=${{ matrix.width }} \
+            -DLOW_LUT_K=${{ matrix.low }} \
+            -DHIGH_LUT_K=${{ matrix.high }} \
+            src/cuda/b300/probes/maskshard_orbitaux_hostplan.cu \
+            -o build/maskshard_orbitaux_hostplan_w${{ matrix.width }}
+      - name: Build and validate actual host-side aux tables
+        shell: bash
+        run: build/maskshard_orbitaux_hostplan_w${{ matrix.width }} ${{ matrix.n }}
