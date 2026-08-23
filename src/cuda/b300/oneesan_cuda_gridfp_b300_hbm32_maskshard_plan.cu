@@ -11,6 +11,7 @@
 
 #include "../gridfp/ramstream32_factorized_storage.hpp"
 #include "maskshard_layout.hpp"
+#include "maskshard_lowlocal.cuh"
 
 static void verify_low_window_direct_layout(
     const StorageFactorHost& storage,
@@ -119,9 +120,12 @@ int main(int argc, char** argv) {
               << double((layout.main_size + layout.block_size) * sizeof(Count)) / double(1ULL << 30)
               << " max_high_mask_group_gib="
               << double(max_group * sizeof(Count)) / double(1ULL << 30)
+              << " low_alt_scratch_gib="
+              << double(max_group * sizeof(Count)) / double(1ULL << 30)
               << " high_route_mib="
               << double(high_route.size() * sizeof(uint32_t)) / double(1ULL << 20)
               << " low_window_direct_rank=1"
+              << " low_window_copyback=" << (LOW_LUT_K & 1)
               << '\n';
 
     for (int d = 0; d < ngpu; ++d) {
