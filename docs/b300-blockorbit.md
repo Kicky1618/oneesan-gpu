@@ -1,6 +1,6 @@
 # B300 blocked-domain orbit research
 
-Status: experimental follow-up to `docs/b300-mask-shard.md`. v0.4 remains the correctness baseline; v0.5 adds main-coordinate orbit aux; v0.6 moves orbit iteration to blocked states; v0.7 compacts aux into blocked coordinates; v0.8 additionally compacts the HIGH closure pass by HIGH row.
+Status: experimental follow-up to `docs/b300-mask-shard.md`. v0.4 remains the correctness baseline; v0.5 adds main-coordinate orbit aux; v0.6 moves orbit iteration to blocked states; v0.7 compacts aux into blocked coordinates; v0.8 compacts the HIGH closure pass by HIGH row; v0.9 additionally compacts the LOW closure pass by LOW column while preserving row-local memory access.
 
 ## Delete-N bijection
 
@@ -102,15 +102,9 @@ v0.8 peak               : 249.116280 GiB/GPU
 v0.8 headroom           :  19.473720 GiB/GPU
 ```
 
-The HBM figure is independently tracked by `factor_maskshard_memory.cpp`; `factor_highclosure_rows.cpp` separately derives the 715,533-row combinatorial count, state work, warp work, and launch-grid model.
+The HBM figure is tracked by `factor_maskshard_memory.cpp`; `factor_highclosure_rows.cpp` separately derives the 715,533-row combinatorial count, state work, warp work, and launch-grid model.
 
-The list is stored in source-FBlock order. A tiny `[p][FBlock]` offset table identifies the valid row range for each block. For each fixed LOW occupancy mask, the host precomputes how many listed rows belong to FBlocks whose group-local `stride` is nonzero and stores that count in the HIGH job. The closure grid is then launched as
-
-```
-ceil(valid_closure_rows / warps_per_block)
-```
-
-with the existing 65,535-block cap. This avoids sizing the v0.8 grid from the much larger `main_n` while leaving v0.4-v0.7 launch behavior unchanged.
+The list is stored in source-FBlock order. A tiny `[p][FBlock]` offset table identifies the valid row range for each block. For each fixed LOW occupancy mask, the host precomputes how many listed rows belong to FBlocks whose group-local `stride` is nonzero and stores that count in the HIGH job. The closure grid is launched from the compact row count rather than from `main_n`.
 
 The v0.8 closure kernel assigns one valid HIGH closure row to one warp. The warp processes passive LOW columns coalesced as `lr = lane, lane+32, ...`. Row membership is precomputed once on the host; the kernel no longer performs pair classification for closure.
 
@@ -124,7 +118,7 @@ warp rounds incl. LOW widths > 32          :    94,409,928,028
 warp lane slots                            : 3,021,117,696,896
 ```
 
-The warp-lane model is 60.2494% of the old flattened state-thread count, with 49.7813% of those lane slots carrying a useful closure state. This is a structural work model, not a B300 timing prediction: atomics, cache behavior, row-list indirection, and memory latency still require measurement.
+The warp-lane model is 60.2494% of the old flattened state-thread count, with 49.7813% of those lane slots carrying a useful closure state. This is a structural work model, not a B300 timing prediction.
 
 The host grid-sizing improvement is much smaller because many large LOW-mask groups hit the 65,535-block cap. At 256 threads:
 
@@ -132,34 +126,55 @@ The host grid-sizing improvement is much smaller because many large LOW-mask gro
 old main_n-sized closure blocks / DP row : 9,140,772,719
 v0.8 row-sized closure blocks / DP row   : 8,923,348,057
 ratio                                     : 0.976213755
-
-old blocks / residue (28 rows)           : 255,941,636,132
-v0.8 blocks / residue                    : 249,853,745,596
 ```
 
-Thus v0.8 should not be justified as a large kernel-launch-count reduction. Its main expected benefit is removing repeated per-state HIGH-row decoding/classification and traversing only closure rows while retaining coalesced LOW-column access.
+Thus v0.8 is not justified as a large kernel-launch-count reduction. Its main expected benefit is removing repeated per-state HIGH-row decoding/classification while retaining coalesced LOW-column access.
 
-`maskshard_highclosure_rows_hostplan.cu` validates the actual HighDesc-generated row list, exact membership, source-FBlock ranges, and descriptor kinds. The older HighDesc semantic probe independently validates descriptor semantics across compatible LOW codes.
+`maskshard_highclosure_rows_hostplan.cu` validates the actual HighDesc-generated row list, exact membership, source-FBlock ranges, and descriptor kinds once CUDA CI can execute.
 
-v0.8 runtime candidate:
+## v0.9 compact LOW closure columns
 
-`oneesan_cuda_gridfp_b300_hbm32_maskshard_blockorbit_compactaux_highclosurerows_batch_guarded.cu`
+A naive LOW-column executor would assign a warp to one selected LOW column and walk HIGH rows vertically. That gives strided state accesses and is deliberately not used.
 
-## Remaining closure opportunity
+Instead v0.9 stores the valid LOW closure columns in storage all-rank order for each `(p,FBlock)`. A runtime task is:
 
-For fixed p, main states partition into:
+```
+(FBlock, one HIGH row, one 32-column compact chunk)
+```
+
+One warp therefore stays inside one HIGH row and processes up to 32 selected LOW columns. The selected column indices are monotonically increasing within each FBlock, so source reads retain useful spatial locality even though the columns are compacted.
+
+The n=27 LOW-column model gives 1,088,282 compact source columns per LOW position. Across 14 positions:
+
+```
+LOW closure column table : 58.120529 MiB/GPU
+FBlock range table       :  3.554688 KiB/GPU
+v0.9 extra vs v0.8       : 58.124001 MiB/GPU
+v0.9 peak model          : 249.173042 GiB/GPU
+v0.9 headroom            :  19.416958 GiB/GPU
+```
+
+`factor_v09_memory_delta.cpp` independently derives the 1,088,282-column count and adds the exact v0.9 table delta to the v0.8 peak. This is intentionally a separate probe so the already-established v0.8 HBM model is not rewritten while v0.9 remains experimental.
+
+The locality probe `factor_lowclosure_columns.cpp` reports that the selected source words are about 29.99% of the full LOW closure scan. In a simple source-read locality model, selected columns touch about 41.70% as many 32-byte sectors and about 47.53% as many 128-byte lines as the full storage-order scan. These figures model source reads only; destination atomics, descriptor accesses, cache reuse, and scheduling still require B300 measurement.
+
+`factor_lowclosure_taskmap.cpp` independently checks the arithmetic decomposition into `(row, compact-column chunk)` at small widths. `maskshard_lowclosure_cols_hostplan.cu` checks the actual StorageFactorHost + LowDesc-generated compact table, including descriptor validity and FBlock ranges, when nvcc execution is available.
+
+Both v0.8 and v0.9 require a complete number of warps per block. Their wrappers now reject thread counts that are not multiples of 32 (and values outside 32..1024); the default 256-thread launch is unchanged. This prevents a partial final warp from silently dropping columns.
+
+The fixed-p main-state partition remains:
 
 1. orbit representatives `NN/NR/NL`: D states;
 2. companions `LR/RN/LN`: D states;
 3. closure sources `LL/RR/RL`: `M - 2D = 115,688,495,806` states.
 
-If LOW closure could also be iterated compactly, ideal source-state work per p would become
+With both orbit and closure compacted, the ideal source-state work per p is
 
 ```
 D + (M - 2D) = M - D = 250,704,001,213.
 ```
 
-LOW closure is harder: the active coordinate is the LOW column, so a naive compact-column traversal produces strided HIGH-row accesses. It should remain separate until a storage-friendly representation is found.
+The implementation is not assumed to achieve the corresponding wall-time ratio because compact index loads and atomic destinations remain.
 
 ## Runtime candidates
 
@@ -168,5 +183,6 @@ LOW closure is harder: the active coordinate is the LOW column, so a naive compa
 - v0.6 blocked-domain/full-aux: `oneesan_cuda_gridfp_b300_hbm32_maskshard_blockorbit_aux_batch_guarded.cu`
 - v0.7 blocked-domain/compact-aux: `oneesan_cuda_gridfp_b300_hbm32_maskshard_blockorbit_compactaux_batch_guarded.cu`
 - v0.8 v0.7 + compact HIGH closure rows: `oneesan_cuda_gridfp_b300_hbm32_maskshard_blockorbit_compactaux_highclosurerows_batch_guarded.cu`
+- v0.9 v0.8 + compact LOW closure columns: `oneesan_cuda_gridfp_b300_hbm32_maskshard_blockorbit_compactaux_fullclosurerows_batch_guarded.cu`
 
-GitHub Actions is still failing before job steps start (`steps=null`), so fresh nvcc confirmation remains blocked by CI infrastructure. Do not merge any candidate to the production path before fresh nvcc CI and real full-P2P multi-GPU residue checks.
+GitHub Actions is still failing before job steps start (`steps=null`), including ordinary CPU-only probes and the CUDA W=22/W=28 matrix. Therefore there is still no fresh nvcc evidence for v0.2-v0.9. Do not merge any candidate to the production path before fresh nvcc CI and real full-P2P multi-GPU residue checks. The first useful B300 comparison is v0.4 vs v0.7 vs v0.8 vs v0.9 on identical moduli; v0.5/v0.6 remain diagnostic controls.
