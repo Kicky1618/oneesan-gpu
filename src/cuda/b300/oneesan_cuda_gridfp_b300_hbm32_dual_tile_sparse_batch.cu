@@ -85,6 +85,9 @@ int main(int argc,char**argv){
     // Install metadata once. D_MOD is replaced before every residue below.
     for(int g=0;g<ngpu;++g)dt_install_gpu(*gpu[g],f,l,dual,sparse,mods.front(),mp.data(),bp.data());
 
+    B300DualShuffleContext shuffle_ctx;
+    shuffle_ctx.init(ngpu);
+
     ld.main_desc.clear();ld.main_desc.shrink_to_fit();
     ld.block_desc.clear();ld.block_desc.shrink_to_fit();
     hd.main_desc.clear();hd.main_desc.shrink_to_fit();
@@ -113,11 +116,11 @@ int main(int argc,char**argv){
         B300DualShuffleStats sh{};
         for(int row=0;row<W;++row){
             dt_run_high_local(sparse,ngpu,threads);
-            b300_dt_low_to_high(dual,mp.data(),bp.data(),sp.data(),chunk_elems,&sh);
+            b300_dt_low_to_high(dual,mp.data(),bp.data(),sp.data(),chunk_elems,&sh,&shuffle_ctx);
             dt_run_low_local(sparse,ngpu,threads);
             if(row+1<W){
                 b300_dt_zero_block_arenas(dual,bp.data());
-                b300_dt_high_to_low_main(dual,mp.data(),sp.data(),chunk_elems,&sh);
+                b300_dt_high_to_low_main(dual,mp.data(),sp.data(),chunk_elems,&sh,&shuffle_ctx);
             }
         }
         b300_dt_sync_all(ngpu,"dual batch final sync");
@@ -136,6 +139,7 @@ int main(int argc,char**argv){
 
     std::cerr<<"dual-batch complete residues="<<mods.size()
              <<" setup_s="<<setup_s<<" solver_wall_s_sum="<<all_wall<<'\n';
+    shuffle_ctx.release();
     for(auto&c:gpu)c->release();
     return 0;
 }
