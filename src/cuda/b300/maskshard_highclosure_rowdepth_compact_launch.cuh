@@ -1,5 +1,11 @@
 #pragma once
 
+#include <algorithm>
+#include <cstdint>
+#include <cstdlib>
+#include <iostream>
+#include <vector>
+
 #ifndef MASKSHARD_HIGH_CLOSURE_ROW_DEPTH_COMPACT_LAUNCH
 #error "maskshard_highclosure_rowdepth_compact_launch.cuh requires compact launch macro"
 #endif
