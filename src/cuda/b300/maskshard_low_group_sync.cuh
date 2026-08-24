@@ -13,7 +13,11 @@
 #endif
 
 #ifdef MASKSHARD_LOW_ORBIT_WARP_ROW_TASKS
+#ifdef MASKSHARD_LOW_GROUP_PACKED_CONFIG
+#include "maskshard_loworbit_warprow_packed.cuh"
+#else
 #include "maskshard_loworbit_warprow.cuh"
+#endif
 #endif
 
 // Queue the complete LOW orbit/closure chain for one fixed HIGH-mask group on
