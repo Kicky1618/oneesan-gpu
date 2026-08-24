@@ -222,16 +222,161 @@ static uint64_t cpu_low_saturating_mul(uint64_t a, uint64_t b) {
     return a * b;
 }
 
+static void cpu_low_sort_lpt_range(
+    std::vector<CpuLowStaticJobCost>& local,
+    const std::vector<CpuLowJob>& jobs
+) {
+    std::sort(local.begin(), local.end(), [&](const auto& a, const auto& b) {
+        if (a.cells != b.cells) return a.cells > b.cells;
+        if (jobs[a.index].scratch_bytes != jobs[b.index].scratch_bytes)
+            return jobs[a.index].scratch_bytes > jobs[b.index].scratch_bytes;
+        return jobs[a.index].g < jobs[b.index].g;
+    });
+}
+
+static uint64_t cpu_low_lpt_range_max_cells(
+    const std::vector<CpuLowStaticJobCost>& ordered,
+    size_t begin, size_t end, int nworkers,
+    const std::vector<CpuLowJob>& jobs
+) {
+    if (begin >= end || nworkers <= 0) return 0;
+    std::vector<CpuLowStaticJobCost> local(
+        ordered.begin() + begin, ordered.begin() + end);
+    cpu_low_sort_lpt_range(local, jobs);
+    std::vector<uint64_t> loads(size_t(nworkers), 0);
+    for (const auto& x : local) {
+        int best = 0;
+        for (int w = 1; w < nworkers; ++w) {
+            if (loads[size_t(w)] < loads[size_t(best)]) best = w;
+        }
+        loads[size_t(best)] += x.cells;
+    }
+    return *std::max_element(loads.begin(), loads.end());
+}
+
+static void cpu_low_lpt_assign_range(
+    const std::vector<CpuLowStaticJobCost>& ordered,
+    size_t begin, size_t end, int first_worker, int nworkers,
+    const std::vector<CpuLowJob>& jobs,
+    std::vector<std::vector<size_t>>& worker_jobs,
+    std::vector<uint64_t>& worker_cells
+) {
+    if (begin >= end || nworkers <= 0) return;
+    std::vector<CpuLowStaticJobCost> local(
+        ordered.begin() + begin, ordered.begin() + end);
+    cpu_low_sort_lpt_range(local, jobs);
+    for (const auto& x : local) {
+        int best = first_worker;
+        for (int w = first_worker + 1; w < first_worker + nworkers; ++w) {
+            if (worker_cells[size_t(w)] < worker_cells[size_t(best)]) best = w;
+        }
+        worker_jobs[size_t(best)].push_back(x.index);
+        worker_cells[size_t(best)] += x.cells;
+    }
+}
+
+static void cpu_low_refine_domain_boundaries(
+    const std::vector<CpuLowStaticJobCost>& ordered,
+    const std::vector<CpuLowJob>& jobs,
+    int workers, int domain_size,
+    std::vector<std::pair<size_t,size_t>>& segs,
+    int& refined_boundaries, uint64_t& moved_jobs
+) {
+    constexpr size_t RADIUS = 32;
+    constexpr int PASSES = 2;
+    refined_boundaries = 0;
+    moved_jobs = 0;
+    if (segs.size() < 2) return;
+
+    for (int pass = 0; pass < PASSES; ++pass) {
+        bool changed = false;
+        for (size_t q = 0; q + 1 < segs.size(); ++q) {
+            size_t d = pass == 0 ? q : (segs.size() - 2 - q);
+            auto left = segs[d];
+            auto right = segs[d + 1];
+            if (left.first >= left.second || right.first >= right.second) continue;
+            if (left.second != right.first) {
+                std::cerr << "cpu LOW domain boundary lost contiguity\n";
+                std::exit(141);
+            }
+
+            int left_first_worker = int(d) * domain_size;
+            int right_first_worker = int(d + 1) * domain_size;
+            int left_workers = std::min(domain_size, workers - left_first_worker);
+            int right_workers = std::min(domain_size, workers - right_first_worker);
+            if (left_workers <= 0 || right_workers <= 0) continue;
+
+            size_t old_boundary = left.second;
+            size_t min_boundary = left.first + 1;
+            size_t max_boundary = right.second - 1;
+            size_t search_lo = old_boundary > RADIUS ? old_boundary - RADIUS : 0;
+            search_lo = std::max(search_lo, min_boundary);
+            size_t search_hi = std::min(max_boundary, old_boundary + RADIUS);
+            if (search_lo > search_hi) continue;
+
+            uint64_t current_left = cpu_low_lpt_range_max_cells(
+                ordered, left.first, old_boundary, left_workers, jobs);
+            uint64_t current_right = cpu_low_lpt_range_max_cells(
+                ordered, old_boundary, right.second, right_workers, jobs);
+            uint64_t current_max = std::max(current_left, current_right);
+            uint64_t current_sum = current_left + current_right;
+
+            size_t best_boundary = old_boundary;
+            uint64_t best_max = current_max;
+            uint64_t best_sum = current_sum;
+            size_t best_distance = 0;
+
+            for (size_t candidate = search_lo; candidate <= search_hi; ++candidate) {
+                if (candidate == old_boundary) continue;
+                uint64_t lm = cpu_low_lpt_range_max_cells(
+                    ordered, left.first, candidate, left_workers, jobs);
+                uint64_t rm = cpu_low_lpt_range_max_cells(
+                    ordered, candidate, right.second, right_workers, jobs);
+                uint64_t pm = std::max(lm, rm);
+                uint64_t ps = lm + rm;
+                size_t distance = candidate > old_boundary
+                    ? candidate - old_boundary : old_boundary - candidate;
+                bool better = pm < best_max
+                    || (pm == best_max && ps < best_sum)
+                    || (pm == best_max && ps == best_sum
+                        && best_boundary != old_boundary && distance < best_distance);
+                if (better) {
+                    best_boundary = candidate;
+                    best_max = pm;
+                    best_sum = ps;
+                    best_distance = distance;
+                }
+            }
+
+            if (best_boundary != old_boundary
+                && (best_max < current_max
+                    || (best_max == current_max && best_sum < current_sum))) {
+                size_t distance = best_boundary > old_boundary
+                    ? best_boundary - old_boundary : old_boundary - best_boundary;
+                segs[d].second = best_boundary;
+                segs[d + 1].first = best_boundary;
+                ++refined_boundaries;
+                moved_jobs += distance;
+                changed = true;
+            }
+        }
+        if (!changed) break;
+    }
+}
+
 static uint64_t cpu_low_build_domain_schedule(
     const std::vector<CpuLowJob>& jobs, const CpuLowSparseHost& sparse,
     int workers, int domain_size,
     std::vector<std::vector<size_t>>& worker_jobs,
     std::vector<uint64_t>& worker_cells,
-    int& active_domains
+    int& active_domains, int& refined_boundaries,
+    uint64_t& moved_jobs
 ) {
     worker_jobs.assign(size_t(workers), {});
     worker_cells.assign(size_t(workers), 0);
     active_domains = 0;
+    refined_boundaries = 0;
+    moved_jobs = 0;
     int domains = (workers + domain_size - 1) / domain_size;
 
     std::vector<CpuLowStaticJobCost> ordered;
@@ -273,8 +418,9 @@ static uint64_t cpu_low_build_domain_schedule(
     }
     uint64_t normalized_cap = lo;
 
+    std::vector<std::pair<size_t,size_t>> segs(size_t(domains));
     size_t i = 0;
-    for (int d = 0; d < domains && i < ordered.size(); ++d) {
+    for (int d = 0; d < domains; ++d) {
         int first_worker = d * domain_size;
         int nworkers = std::min(domain_size, workers - first_worker);
         uint64_t cap = cpu_low_saturating_mul(normalized_cap, uint64_t(nworkers));
@@ -284,34 +430,29 @@ static uint64_t cpu_low_build_domain_schedule(
             acc += ordered[i].cells;
             ++i;
         }
-        if (i == begin) continue;
-        ++active_domains;
-
-        std::vector<CpuLowStaticJobCost> local(
-            ordered.begin() + begin, ordered.begin() + i);
-        std::sort(local.begin(), local.end(), [&](const auto& a, const auto& b) {
-            if (a.cells != b.cells) return a.cells > b.cells;
-            if (jobs[a.index].scratch_bytes != jobs[b.index].scratch_bytes)
-                return jobs[a.index].scratch_bytes > jobs[b.index].scratch_bytes;
-            return jobs[a.index].g < jobs[b.index].g;
-        });
-
-        for (const auto& x : local) {
-            int best = first_worker;
-            for (int w = first_worker + 1; w < first_worker + nworkers; ++w) {
-                if (worker_cells[size_t(w)] < worker_cells[size_t(best)])
-                    best = w;
-            }
-            worker_jobs[size_t(best)].push_back(x.index);
-            worker_cells[size_t(best)] += x.cells;
-        }
+        segs[size_t(d)] = {begin, i};
     }
-
     if (i != ordered.size()) {
         std::cerr << "cpu LOW domain schedule reconstruction failed assigned="
                   << i << " jobs=" << ordered.size() << '\n';
         std::exit(139);
     }
+
+    cpu_low_refine_domain_boundaries(
+        ordered, jobs, workers, domain_size, segs,
+        refined_boundaries, moved_jobs);
+
+    for (int d = 0; d < domains; ++d) {
+        auto seg = segs[size_t(d)];
+        if (seg.first >= seg.second) continue;
+        ++active_domains;
+        int first_worker = d * domain_size;
+        int nworkers = std::min(domain_size, workers - first_worker);
+        cpu_low_lpt_assign_range(
+            ordered, seg.first, seg.second, first_worker, nworkers,
+            jobs, worker_jobs, worker_cells);
+    }
+
     return normalized_cap;
 }
 
@@ -326,6 +467,8 @@ struct CpuLowSparsePersistentPool {
     uint64_t contiguous_optimal_cap = 0;
     uint64_t domain_normalized_cap = 0;
     int domain_active_domains = 0;
+    int domain_refined_boundaries = 0;
+    uint64_t domain_refined_job_moves = 0;
 
     std::mutex mu;
     std::condition_variable start_cv;
@@ -397,11 +540,14 @@ struct CpuLowSparsePersistentPool {
         contiguous_optimal_cap = 0;
         domain_normalized_cap = 0;
         domain_active_domains = 0;
+        domain_refined_boundaries = 0;
+        domain_refined_job_moves = 0;
 
         if (schedule_mode == CPU_LOW_SCHEDULE_DOMAIN) {
             domain_normalized_cap = cpu_low_build_domain_schedule(
                 jobs, sparse, workers, domain_size,
-                sticky_worker_jobs, sticky_worker_cells, domain_active_domains);
+                sticky_worker_jobs, sticky_worker_cells, domain_active_domains,
+                domain_refined_boundaries, domain_refined_job_moves);
             for (size_t i = 0; i < jobs.size(); ++i) {
                 if (!jobs[i].main_size && !jobs[i].block_size) continue;
                 ++nonempty_jobs;
@@ -474,7 +620,9 @@ struct CpuLowSparsePersistentPool {
         if (schedule_mode == CPU_LOW_SCHEDULE_DOMAIN)
             std::cerr << " domain_size=" << domain_size
                       << " active_domains=" << domain_active_domains
-                      << " normalized_cap=" << domain_normalized_cap;
+                      << " outer_normalized_cap=" << domain_normalized_cap
+                      << " refined_boundaries=" << domain_refined_boundaries
+                      << " refined_job_moves=" << domain_refined_job_moves;
         std::cerr << " build_s=" << dt << '\n';
     }
 
@@ -511,7 +659,7 @@ struct CpuLowSparsePersistentPool {
         uint64_t seen = 0;
         for (;;) {
             {
-                std::unique_lock<std::mutex> lock(mu);
+                std::unique_lock_lock<std::mutex> lock(mu);
                 start_cv.wait(lock, [&] { return stopping || generation != seen; });
                 if (stopping) return;
                 seen = generation;
