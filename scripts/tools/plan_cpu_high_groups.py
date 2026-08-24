@@ -16,6 +16,7 @@ class GroupCost:
     group: int
     mask: int
     roundtrip_bytes: int
+    gpu_state_steps: int
     nn_cells: int
     nrnl_cells: int
     block_cells: int
@@ -39,17 +40,22 @@ class Candidate:
     forced: bool
     cpu_s: float
     dma_s: float
+    gpu_kernel_s: float
     cells: float
 
     @property
+    def gpu_saved_s(self) -> float:
+        return self.dma_s + self.gpu_kernel_s
+
+    @property
     def margin_s(self) -> float:
-        return self.dma_s - self.cpu_s
+        return self.gpu_saved_s - self.cpu_s
 
     @property
     def efficiency(self) -> float:
         if self.cpu_s == 0:
             return math.inf
-        return self.dma_s / self.cpu_s
+        return self.gpu_saved_s / self.cpu_s
 
 
 def load_costs(path: str) -> list[GroupCost]:
@@ -63,12 +69,14 @@ def load_costs(path: str) -> list[GroupCost]:
         missing = required.difference(rd.fieldnames or [])
         if missing:
             raise SystemExit(f"missing cost columns: {', '.join(sorted(missing))}")
+        has_gpu_steps = "gpu_state_steps" in (rd.fieldnames or [])
         for row in rd:
             out.append(
                 GroupCost(
                     group=int(row["group"]),
                     mask=int(row["mask"]),
                     roundtrip_bytes=int(row["roundtrip_bytes"]),
+                    gpu_state_steps=int(row["gpu_state_steps"]) if has_gpu_steps else 0,
                     nn_cells=int(row["nn_cells"]),
                     nrnl_cells=int(row["nrnl_cells"]),
                     block_cells=int(row["block_closure_cells"]),
@@ -105,51 +113,41 @@ def select_overlap(
     candidates: list[Candidate], min_margin_s: float | None,
     max_groups: int | None,
 ) -> tuple[list[Candidate], float, float, float]:
-    """Greedy fractional-knapsack relaxation for the overlapped HIGH critical path.
-
-    The modeled HIGH phase is
-
-        max(sum(cpu_i for selected),
-            sum(dma_i for unselected)).
-
-    Forced groups are always on CPU. Optional groups are ordered by dma_i/cpu_i,
-    then every prefix is evaluated. This is exact for the fractional relaxation
-    and a deterministic O(n log n) approximation to the discrete partition.
-    """
+    """Approximate min max(CPU selected, GPU unselected) by ratio-prefix search."""
     forced = [x for x in candidates if x.forced]
     optional = [x for x in candidates if not x.forced]
     if min_margin_s is not None:
         optional = [x for x in optional if x.margin_s >= min_margin_s]
     optional.sort(
-        key=lambda x: (x.efficiency, x.dma_s, -x.cpu_s), reverse=True
+        key=lambda x: (x.efficiency, x.gpu_saved_s, -x.cpu_s), reverse=True
     )
 
     if max_groups is not None:
         optional = optional[: max(0, max_groups - len(forced))]
 
-    total_dma_s = sum(x.dma_s for x in candidates)
+    total_gpu_s = sum(x.gpu_saved_s for x in candidates)
     cpu_s = sum(x.cpu_s for x in forced)
-    saved_dma_s = sum(x.dma_s for x in forced)
+    saved_gpu_s = sum(x.gpu_saved_s for x in forced)
     best_k = 0
     best_cpu_s = cpu_s
-    best_remaining_dma_s = max(0.0, total_dma_s - saved_dma_s)
-    best_critical_s = max(best_cpu_s, best_remaining_dma_s)
+    best_remaining_gpu_s = max(0.0, total_gpu_s - saved_gpu_s)
+    best_critical_s = max(best_cpu_s, best_remaining_gpu_s)
 
     for k, x in enumerate(optional, 1):
         cpu_s += x.cpu_s
-        saved_dma_s += x.dma_s
-        remaining_dma_s = max(0.0, total_dma_s - saved_dma_s)
-        critical_s = max(cpu_s, remaining_dma_s)
+        saved_gpu_s += x.gpu_saved_s
+        remaining_gpu_s = max(0.0, total_gpu_s - saved_gpu_s)
+        critical_s = max(cpu_s, remaining_gpu_s)
         if critical_s < best_critical_s:
             best_k = k
             best_cpu_s = cpu_s
-            best_remaining_dma_s = remaining_dma_s
+            best_remaining_gpu_s = remaining_gpu_s
             best_critical_s = critical_s
 
     return (
         forced + optional[:best_k],
         best_cpu_s,
-        best_remaining_dma_s,
+        best_remaining_gpu_s,
         best_critical_s,
     )
 
@@ -157,8 +155,8 @@ def select_overlap(
 def main() -> None:
     ap = argparse.ArgumentParser(
         description=(
-            "Select CPU HIGH occupancy groups using an explicit DMA-vs-CPU cost model. "
-            "The output is directly consumable as CPU_HIGH_GROUPS_FILE."
+            "Select CPU HIGH occupancy groups using measured DMA, GPU-HIGH, and "
+            "CPU-direct cost models. Output is CPU_HIGH_GROUPS_FILE compatible."
         )
     )
     ap.add_argument("cost_tsv")
@@ -166,6 +164,8 @@ def main() -> None:
                     help="measured aggregate H2D+D2H throughput in GiB/s")
     ap.add_argument("--cpu-gcell-s", type=float, required=True,
                     help="measured aggregate direct-executor throughput in weighted Gcells/s")
+    ap.add_argument("--gpu-gstate-s", type=float, default=None,
+                    help="measured GPU HIGH throughput in billion state-steps/s")
     ap.add_argument("--nn-weight", type=float, default=1.0)
     ap.add_argument("--nrnl-weight", type=float, default=1.0)
     ap.add_argument("--block-weight", type=float, default=1.0)
@@ -182,10 +182,7 @@ def main() -> None:
     ap.add_argument("--max-groups", type=int, default=None,
                     help="optional cap; forced groups are always retained")
     ap.add_argument("--overlap", action="store_true",
-                    help=(
-                        "optimize max(CPU-HIGH time, remaining DMA time) instead of "
-                        "independent sequential margins"
-                    ))
+                    help="minimize max(CPU-HIGH, remaining GPU-HIGH) instead of sequential sum")
     ap.add_argument("--report-top", type=int, default=12)
     args = ap.parse_args()
 
@@ -195,6 +192,8 @@ def main() -> None:
     ):
         if getattr(args, name) <= 0:
             raise SystemExit(f"--{name.replace('_', '-')} must be positive")
+    if args.gpu_gstate_s is not None and args.gpu_gstate_s <= 0:
+        raise SystemExit("--gpu-gstate-s must be positive")
     if args.group_overhead_us < 0:
         raise SystemExit("--group-overhead-us must be non-negative")
     if args.min_margin_us is not None and args.min_margin_us < 0:
@@ -207,11 +206,13 @@ def main() -> None:
     costs = load_costs(args.cost_tsv)
     cpu_cell_rate = args.cpu_gcell_s * 1e9
     pcie_rate = args.pcie_gib_s * GIB
+    gpu_state_rate = None if args.gpu_gstate_s is None else args.gpu_gstate_s * 1e9
     fixed_cpu_s = args.group_overhead_us * 1e-6
-    min_margin_s = (
-        None if args.min_margin_us is None else args.min_margin_us * 1e-6
-    )
+    min_margin_s = None if args.min_margin_us is None else args.min_margin_us * 1e-6
     gpu_target_bytes = None if args.gpu_target_mib is None else args.gpu_target_mib * MIB
+
+    if gpu_state_rate is not None and not any(g.gpu_state_steps for g in costs):
+        raise SystemExit("--gpu-gstate-s requires gpu_state_steps in the cost plan")
 
     candidates: list[Candidate] = []
     for g in costs:
@@ -220,14 +221,15 @@ def main() -> None:
         )
         cpu_s = cells / cpu_cell_rate + fixed_cpu_s
         dma_s = g.roundtrip_bytes / pcie_rate
+        gpu_kernel_s = 0.0 if gpu_state_rate is None else g.gpu_state_steps / gpu_state_rate
         forced = gpu_target_bytes is not None and g.roundtrip_bytes > gpu_target_bytes
-        candidates.append(Candidate(g, forced, cpu_s, dma_s, cells))
+        candidates.append(Candidate(g, forced, cpu_s, dma_s, gpu_kernel_s, cells))
 
     forced_rows = [x for x in candidates if x.forced]
-    total_dma_s = sum(x.dma_s for x in candidates)
+    total_gpu_s = sum(x.gpu_saved_s for x in candidates)
 
     if args.overlap:
-        selected, overlap_cpu_s, overlap_remaining_dma_s, overlap_critical_s = select_overlap(
+        selected, overlap_cpu_s, overlap_remaining_gpu_s, overlap_critical_s = select_overlap(
             candidates, min_margin_s, args.max_groups
         )
     else:
@@ -235,7 +237,7 @@ def main() -> None:
             candidates, 0.0 if min_margin_s is None else min_margin_s,
             args.max_groups,
         )
-        overlap_cpu_s = overlap_remaining_dma_s = overlap_critical_s = math.nan
+        overlap_cpu_s = overlap_remaining_gpu_s = overlap_critical_s = math.nan
 
     selected_ids = sorted({x.group.group for x in selected})
     selected_set = set(selected_ids)
@@ -249,10 +251,13 @@ def main() -> None:
         g.weighted_cells(args.nn_weight, args.nrnl_weight, args.block_weight, args.cross_weight)
         for g in costs if g.group in selected_set
     )
+    selected_gpu_steps = sum(g.gpu_state_steps for g in costs if g.group in selected_set)
     est_cpu_s = selected_cells / cpu_cell_rate + len(selected_ids) * fixed_cpu_s
     est_dma_saved_s = selected_bytes / pcie_rate
-    est_margin_s = est_dma_saved_s - est_cpu_s
-    est_remaining_dma_s = max(0.0, total_dma_s - est_dma_saved_s)
+    est_kernel_saved_s = 0.0 if gpu_state_rate is None else selected_gpu_steps / gpu_state_rate
+    est_gpu_saved_s = est_dma_saved_s + est_kernel_saved_s
+    est_margin_s = est_gpu_saved_s - est_cpu_s
+    est_remaining_gpu_s = max(0.0, total_gpu_s - est_gpu_saved_s)
 
     print(
         "planner "
@@ -261,19 +266,22 @@ def main() -> None:
         f"removed_gib={selected_bytes / GIB:.6f} "
         f"removed_fraction={selected_bytes / total_bytes:.9f} "
         f"weighted_gcells={selected_cells / 1e9:.6f} "
+        f"gpu_gstate_steps={selected_gpu_steps / 1e9:.6f} "
         f"est_cpu_s={est_cpu_s:.6f} est_dma_saved_s={est_dma_saved_s:.6f} "
-        f"est_remaining_dma_s={est_remaining_dma_s:.6f} "
+        f"est_gpu_kernel_saved_s={est_kernel_saved_s:.6f} "
+        f"est_gpu_saved_s={est_gpu_saved_s:.6f} "
+        f"est_remaining_gpu_s={est_remaining_gpu_s:.6f} "
         f"est_sequential_margin_s={est_margin_s:.6f}",
         file=sys.stderr,
     )
     if args.overlap:
         print(
             "overlap_model "
-            f"baseline_dma_s={total_dma_s:.6f} "
+            f"baseline_gpu_s={total_gpu_s:.6f} "
             f"cpu_s={overlap_cpu_s:.6f} "
-            f"remaining_dma_s={overlap_remaining_dma_s:.6f} "
+            f"remaining_gpu_s={overlap_remaining_gpu_s:.6f} "
             f"critical_s={overlap_critical_s:.6f} "
-            f"modeled_speedup={total_dma_s / overlap_critical_s if overlap_critical_s else math.inf:.9f}x",
+            f"modeled_speedup={total_gpu_s / overlap_critical_s if overlap_critical_s else math.inf:.9f}x",
             file=sys.stderr,
         )
 
@@ -285,13 +293,10 @@ def main() -> None:
         )
 
     if args.overlap:
-        best = sorted(
-            candidates, key=lambda x: (x.efficiency, x.dma_s), reverse=True
-        )[: max(0, args.report_top)]
+        best = sorted(candidates, key=lambda x: (x.efficiency, x.gpu_saved_s), reverse=True)
     else:
-        best = sorted(
-            candidates, key=lambda x: x.margin_s, reverse=True
-        )[: max(0, args.report_top)]
+        best = sorted(candidates, key=lambda x: x.margin_s, reverse=True)
+    best = best[: max(0, args.report_top)]
 
     for x in best:
         print(
@@ -299,7 +304,9 @@ def main() -> None:
             f"group={x.group.group} mask={x.group.mask} forced={int(x.forced)} "
             f"roundtrip_mib={x.group.roundtrip_bytes / MIB:.6f} "
             f"weighted_mcells={x.cells / 1e6:.6f} "
+            f"gpu_mstate_steps={x.group.gpu_state_steps / 1e6:.6f} "
             f"cpu_us={x.cpu_s * 1e6:.3f} dma_us={x.dma_s * 1e6:.3f} "
+            f"gpu_kernel_us={x.gpu_kernel_s * 1e6:.3f} "
             f"margin_us={x.margin_s * 1e6:.3f} "
             f"efficiency={x.efficiency:.9f}",
             file=sys.stderr,
