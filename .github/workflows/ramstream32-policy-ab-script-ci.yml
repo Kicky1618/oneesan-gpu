@@ -1,0 +1,31 @@
+name: ramstream32 policy A/B harness CI
+
+on:
+  push:
+    paths:
+      - 'scripts/bench/ramstream32-cpu-high-policy-ab.sh'
+      - 'docs/ramstream32-cpu-high-policy-ab.md'
+      - '.github/workflows/ramstream32-policy-ab-script-ci.yml'
+  pull_request:
+    paths:
+      - 'scripts/bench/ramstream32-cpu-high-policy-ab.sh'
+      - 'docs/ramstream32-cpu-high-policy-ab.md'
+      - '.github/workflows/ramstream32-policy-ab-script-ci.yml'
+  workflow_dispatch:
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Check harness syntax
+        shell: bash
+        run: bash -n scripts/bench/ramstream32-cpu-high-policy-ab.sh
+      - name: Check documented entry point
+        shell: bash
+        run: |
+          grep -Fq 'scripts/bench/ramstream32-cpu-high-policy-ab.sh' \
+            docs/ramstream32-cpu-high-policy-ab.md
+          grep -Fq 'GROUPS_FILE=' docs/ramstream32-cpu-high-policy-ab.md
+          grep -Fq 'THRESHOLD_MIB=' docs/ramstream32-cpu-high-policy-ab.md
+          grep -Fq 'policy_speedup' docs/ramstream32-cpu-high-policy-ab.md
