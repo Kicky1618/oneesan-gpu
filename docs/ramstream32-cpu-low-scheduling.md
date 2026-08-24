@@ -122,7 +122,42 @@ contiguous: optimal load balance under mask-order constraint, potentially far fe
 
 A large reduction in cross-worker page cuts with only a small increase in `contiguous_imbalance` is evidence for implementing a page-aware production scheduler. A large imbalance penalty is evidence for keeping LPT and seeking a NUMA-node-level hybrid instead.
 
-Cross-worker is deliberately more conservative than cross-socket. Two workers can share pages while remaining on the same NUMA node. Do not interpret these counts as remote-memory bytes; pair them with the `move_pages` diagnostic before changing memory policy.
+### NUMA-domain cut model
+
+Cross-worker sharing is deliberately more conservative than cross-socket sharing. Two pinned workers can share a boundary page while remaining on the same NUMA node. The probe therefore accepts an optional static domain model:
+
+```bash
+./build/ramstream32_cpu_low_schedule_plan_n27 \
+  27 64 --domain-size 32 --workers
+```
+
+`--domain-size 32` models worker IDs `0..31` as domain 0, `32..63` as domain 1, and so on. This matches an experiment where `CPU_LOW_CPU_LIST` is ordered in socket-local blocks and the worker count does not wrap around the CPU list.
+
+The output then includes LPT and contiguous domain cuts:
+
+```text
+domain_size=32
+domains=2
+cross_domain_pages_4k=...
+cross_domain_auth_page_fraction_4k=...
+cross_domain_pages_2m=...
+cross_domain_auth_page_fraction_2m=...
+contiguous_cross_domain_pages_4k=...
+contiguous_cross_domain_auth_page_fraction_4k=...
+contiguous_cross_domain_pages_2m=...
+contiguous_cross_domain_auth_page_fraction_2m=...
+```
+
+This is still a static ownership model. It does not read Linux CPU topology and does not prove that a page physically resides on the modeled node. Use it to estimate which schedule creates cross-domain ownership boundaries, then compare against the measured `move_pages` histogram.
+
+Useful sanity cases are:
+
+```text
+--domain-size 1        every worker is its own domain; cross-domain == cross-worker
+--domain-size workers  all workers are one domain; cross-domain == 0
+```
+
+Do not interpret cross-worker or cross-domain page counts as remote-memory bytes. They identify boundary pages with multiple logical owners; actual traffic depends on first-touch placement, AutoNUMA, THP, cache behavior, and GPU DMA.
 
 Use `--workers` to dump every worker's LPT and contiguous exact-cell load:
 
@@ -130,7 +165,7 @@ Use `--workers` to dump every worker's LPT and contiguous exact-cell load:
 ./build/ramstream32_cpu_low_schedule_plan_n27 27 32 --workers
 ```
 
-The table includes `cells/fraction` for LPT and `contiguous_cells/contiguous_fraction` for the ordered partition.
+The table includes `cells/fraction` for LPT and `contiguous_cells/contiguous_fraction` for the ordered partition, plus the modeled domain when `--domain-size` is supplied.
 
 This probe constructs only topology/descriptor metadata and the LOW job plan. It does not mmap the multi-terabyte authoritative state arrays and does not require an actual solver residue run.
 
