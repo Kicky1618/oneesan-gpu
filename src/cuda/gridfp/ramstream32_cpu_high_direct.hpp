@@ -1,6 +1,7 @@
 #pragma once
 
 #include "ramstream32_cpu_high.hpp"
+#include "ramstream32_cpu_affinity.hpp"
 
 #include <atomic>
 #include <chrono>
@@ -23,7 +24,8 @@
 // per-operation kind decode/branch and lets partner/drop block reconstruction be
 // hoisted outside the inner operation loop. v5.3 likewise separates ordinary
 // blocked closures from boundary CROSS closures, removing the last descriptor-
-// kind branch from the CPU HIGH direct hot loops.
+// kind branch from the CPU HIGH direct hot loops. v5.5 optionally pins workers
+// through CPU_HIGH_CPU_LIST so direct work does not migrate across CPU sockets.
 
 enum CpuHighOrbitKind : uint8_t {
     CPU_HIGH_ORBIT_NN = 1,
@@ -66,9 +68,6 @@ static inline uint32_t cpu_high_orbit_partner_block(
 ) {
     if (p != LOW_LUT_K + 1) return source_bid;
 
-    // At the boundary the second symbol is the center. NN -> LR leaves center
-    // R; NR/NL -> RN/LN leaves center N. The LOW start height source.hs is
-    // unchanged, so recover the new HIGH end height from that center value.
     uint32_t center = nn_stream ? uint32_t(R) : uint32_t(N);
     int he = int(source.hs) + (center == uint32_t(R) ? 1 : 0);
     return uint32_t(3 * he + int(center));
@@ -108,13 +107,8 @@ struct CpuHighClosureOffsets {
 };
 
 struct CpuHighDirectHost {
-    // Compatibility wrappers intentionally preserve orbit_ops.size(),
-    // orbit_off.size(), closure_ops.size(), and closure_off.size() for
-    // production metrics and existing selftests while the executor gets
-    // branch-free per-class streams.
     CpuHighOrbitStreams orbit_ops;
     CpuHighClosureStreams closure_ops;
-    // flattened [pi * (nblocks+1) + bid]
     CpuHighOrbitOffsets orbit_off;
     CpuHighClosureOffsets closure_off;
     uint32_t nblocks = 0;
@@ -300,7 +294,7 @@ static Count* cpu_high_direct_row_ptr(
     uint32_t mask, const StorageFactorHost& storage, uint32_t hr
 ) {
     if (!fb.stride || hr >= sb.rows) return nullptr;
-    constexpr int S = StorageFactorHost::S;
+    constexpr int S = FactorTablesHost::STRIDE;
     uint32_t col0 = storage.low_mask_begin[size_t(mask) * S + fb.hs];
     return auth.ptr + sb.off + Code(hr) * sb.cols + col0;
 }
@@ -323,10 +317,6 @@ static void process_cpu_high_group_direct(
     for (int p = TARGET_W - 1; p >= LOW_LUT_K + 1; --p) {
         uint32_t pi = uint32_t((TARGET_W - 1) - p);
 
-        // Orbit pass. Every blocked state belongs to exactly one N* orbit. NN
-        // and NR/NL are disjoint orbit families: inserting the dropped N into a
-        // blocked state uniquely reconstructs the lower symbol and thus its
-        // family. Reordering the two streams cannot couple distinct orbits.
         for (uint32_t bid = 0; bid < direct.nblocks; ++bid) {
             const FBlock& x = job.main_blocks[bid];
             if (!x.stride) continue;
@@ -412,14 +402,11 @@ static void process_cpu_high_group_direct(
                         Count d = dp[lr];
                         ip[lr] = cpu_high_add(cpu_high_add(c, cc, mod), d, mod);
                         dp[lr] = c;
-                        // partner keeps its identity value
                     }
                 }
             }
         }
 
-        // Closure pass. BLOCK and CROSS write only blocked destinations and do
-        // not modify closure source values, so their stream order is irrelevant.
         for (uint32_t bid = 0; bid < direct.nblocks; ++bid) {
             const FBlock& x = job.main_blocks[bid];
             if (!x.stride) continue;
@@ -504,6 +491,7 @@ struct CpuHighDirectPool {
         ts.reserve(workers);
         for (int w = 0; w < workers; ++w) {
             ts.emplace_back([&, w] {
+                cpu_high_bind_worker(w);
                 for (;;) {
                     size_t q = next.fetch_add(1, std::memory_order_relaxed);
                     if (q >= jobs.size()) break;
