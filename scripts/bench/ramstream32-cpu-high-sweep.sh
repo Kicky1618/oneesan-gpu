@@ -106,11 +106,13 @@ if [[ -n "$cost_plan_path" ]]; then echo "cost_plan_sha256=$(file_sha256 "$cost_
 printf 'repeat\torder\tmode\toverlap\tthreshold_mib\tresidue\twall_s\th2d_s\tgpu_kernel_s\td2h_s\tcpu_high_wall_s\tcpu_high_kernel_sum_s\tcpu_low_wall_s\tpcie_removed_tib\tpcie_remaining_tib\tcpu_high_groups\traw\n' >"$out"
 
 run_one() {
-  local repeat="$1" order="$2" threshold="$3" line residue got_schedule got_domain
+  local repeat="$1" order="$2" threshold="$3" line residue got_schedule got_domain got_refine
   line="$(CPU_HIGH_MAX_MIB="$threshold" CPU_HIGH_WORKERS="$CPU_HIGH_WORKERS" CPU_HIGH_MODE="$CPU_HIGH_MODE" CPU_HIGH_OVERLAP="$CPU_HIGH_OVERLAP" CPU_HIGH_CPU_LIST="$CPU_HIGH_CPU_LIST" CPU_LOW_CPU_LIST="$CPU_LOW_CPU_LIST" CPU_LOW_SCHEDULE="$CPU_LOW_SCHEDULE" CPU_LOW_DOMAIN_SIZE="$CPU_LOW_DOMAIN_SIZE" CPU_LOW_DOMAIN_REFINE="$CPU_LOW_DOMAIN_REFINE" "$bin" "$N" "$MODULUS" "$GPU_TARGET_MIB" "$CPU_WORKERS" | tail -n1)"
   residue="$(field "$line" residue)"; got_schedule="$(field "$line" cpu_low_schedule)"
   if [[ "$got_schedule" != "$CPU_LOW_SCHEDULE" ]]; then echo "LOW schedule provenance mismatch requested=$CPU_LOW_SCHEDULE got=$got_schedule" >&2; exit 7; fi
   if [[ "$CPU_LOW_SCHEDULE" == domain ]]; then got_domain="$(field "$line" cpu_low_domain_size)"; if [[ "$got_domain" != "$CPU_LOW_DOMAIN_SIZE" ]]; then echo "LOW domain provenance mismatch requested=$CPU_LOW_DOMAIN_SIZE got=$got_domain" >&2; exit 7; fi; fi
+  got_refine="$(field "$line" cpu_low_domain_refine)"
+  if [[ "$got_refine" != "$CPU_LOW_DOMAIN_REFINE" ]]; then echo "LOW refine provenance mismatch requested=$CPU_LOW_DOMAIN_REFINE got=$got_refine" >&2; exit 7; fi
   printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' "$repeat" "$order" "$CPU_HIGH_MODE" "$CPU_HIGH_OVERLAP" "$threshold" "$residue" "$(field "$line" wall_s)" "$(field "$line" h2d_s)" "$(field "$line" gpu_kernel_s)" "$(field "$line" d2h_s)" "$(field "$line" cpu_high_wall_s)" "$(field "$line" cpu_high_kernel_sum_s)" "$(field "$line" cpu_low_wall_s)" "$(field "$line" pcie_removed_tib_per_residue)" "$(field "$line" pcie_remaining_tib_per_residue)" "$(field "$line" cpu_high_groups)" "$line" >>"$out"
   printf '%s\n' "$residue"
 }
