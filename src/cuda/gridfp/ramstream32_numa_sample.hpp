@@ -60,6 +60,7 @@ static RamstreamNumaSampleResult ramstream_query_numa_pages(
     for (uintptr_t p = aligned; p < end && pages.size() < max_samples; p += spacing)
         pages.push_back(reinterpret_cast<void*>(p));
     if (pages.empty()) return out;
+    out.samples = pages.size();
 
     std::vector<int> status(pages.size(), -999999);
     errno = 0;
@@ -71,7 +72,6 @@ static RamstreamNumaSampleResult ramstream_query_numa_pages(
         return out;
     }
 
-    out.samples = pages.size();
     for (int s : status) {
         if (s >= 0) {
             ++out.success;
