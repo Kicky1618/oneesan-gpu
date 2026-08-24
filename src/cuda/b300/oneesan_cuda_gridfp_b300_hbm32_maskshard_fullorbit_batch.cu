@@ -34,6 +34,9 @@
 #if defined(MASKSHARD_HIGH_CLOSURE_TASK_LAUNCH) && !defined(MASKSHARD_HIGH_CLOSURE_ROWPACK)
 #error "task-sized HIGH closure launch requires HIGH closure row packing"
 #endif
+#if defined(MASKSHARD_LOW_CLOSURE_ROW_DEPTH_COMPACT_LAUNCH) && !defined(MASKSHARD_LOW_CLOSURE_ROW_DEPTH_COMPACT)
+#error "exact LOW closure launch requires exact LOW closure task mapping"
+#endif
 
 struct FullOrbitBatchAddress {
     int owner = -1;
@@ -150,6 +153,10 @@ struct FullOrbitBatchLowJob {
     uint32_t mask = 0;
 #ifdef MASKSHARD_LOW_CLOSURE_COLS
     std::array<Code, LOW_LUT_K> closure_tasks{};
+#endif
+#ifdef MASKSHARD_LOW_CLOSURE_ROW_DEPTH_COMPACT_LAUNCH
+    std::array<std::array<Code, (TARGET_W + 1) / 2 + 1>, LOW_LUT_K>
+        closure_tasks_by_cap{};
 #endif
 };
 
@@ -377,7 +384,8 @@ static void process_fullorbit_batch_low_group(
     const MaskShardLayout& shard,
     Count* authoritative_main,
     Count* authoritative_block,
-    int threads
+    int threads,
+    int zero_based_row
 ) {
     const uint32_t mask = job.mask;
     ck(cudaSetDevice(w.dev), "fullorbit-batch low set device");
@@ -390,6 +398,8 @@ static void process_fullorbit_batch_low_group(
     const int bm = int(std::min<Code>(65535, (main_n + threads - 1) / threads));
 #ifdef MASKSHARD_LOW_CLOSURE_COLS
     const int warps_per_block = (threads + 31) / 32;
+#else
+    (void)zero_based_row;
 #endif
 
     for (int p = LOW_LUT_K; p >= 1; --p) {
@@ -403,7 +413,21 @@ static void process_fullorbit_batch_low_group(
         t = std::chrono::steady_clock::now();
 #ifdef MASKSHARD_LOW_CLOSURE_COLS
         const uint32_t pi = uint32_t(LOW_LUT_K - p);
-        const Code closure_tasks = job.closure_tasks[size_t(pi)];
+        Code closure_tasks = job.closure_tasks[size_t(pi)];
+#ifdef MASKSHARD_LOW_CLOSURE_ROW_DEPTH_COMPACT_LAUNCH
+        const int closure_cap = std::min(zero_based_row + 1, (TARGET_W + 1) / 2);
+        closure_tasks = job.closure_tasks_by_cap[size_t(pi)][size_t(closure_cap)];
+        if (closure_cap == (TARGET_W + 1) / 2
+            && closure_tasks != job.closure_tasks[size_t(pi)]) {
+            std::cerr << "fullorbit-batch exact LOW closure full-cap mismatch mask="
+                      << mask << " pi=" << pi
+                      << " got=" << closure_tasks
+                      << " expected=" << job.closure_tasks[size_t(pi)] << '\n';
+            std::exit(210);
+        }
+#else
+        (void)zero_based_row;
+#endif
         const int bc = closure_tasks
             ? int(std::min<Code>(65535,
                 (closure_tasks + Code(warps_per_block) - 1) / Code(warps_per_block)))
@@ -533,6 +557,11 @@ int main(int argc, char** argv) {
         const auto mb = make_factor_main_blocks(false, mask);
         for (int pi = 0; pi < LOW_LUT_K; ++pi) {
             Code tasks = 0;
+#ifdef MASKSHARD_LOW_CLOSURE_ROW_DEPTH_COMPACT_LAUNCH
+            constexpr int FULL_CAP = (TARGET_W + 1) / 2;
+            constexpr int CAP_STRIDE = FULL_CAP + 1;
+            std::array<Code, FULL_CAP + 1> cap_tasks{};
+#endif
             for (size_t bid = 0; bid < mb.size(); ++bid) {
                 const FBlock& b = mb[bid];
                 if (!b.stride || b.end == b.off) continue;
@@ -541,8 +570,30 @@ int main(int argc, char** argv) {
                 const uint32_t chunks = (z - a + 31u) >> 5;
                 const Code rows = (b.end - b.off) / b.stride;
                 tasks += rows * Code(chunks);
+#ifdef MASKSHARD_LOW_CLOSURE_ROW_DEPTH_COMPACT_LAUNCH
+                for (int cap = 1; cap <= FULL_CAP; ++cap) {
+                    const uint32_t selected = low_closure.compact_active_count[
+                        (size_t(pi) * 65 + bid) * CAP_STRIDE + size_t(cap)];
+                    if (!selected) continue;
+                    const uint32_t active_rows = low_closure.high_active_count[
+                        (size_t(mask) * (HIGH_LUT_K + 2) + b.he) * CAP_STRIDE
+                        + size_t(cap)];
+                    cap_tasks[size_t(cap)] += Code(active_rows)
+                        * Code((selected + 31u) >> 5);
+                }
+#endif
             }
             job.closure_tasks[size_t(pi)] = tasks;
+#ifdef MASKSHARD_LOW_CLOSURE_ROW_DEPTH_COMPACT_LAUNCH
+            job.closure_tasks_by_cap[size_t(pi)] = cap_tasks;
+            if (cap_tasks[size_t(FULL_CAP)] != tasks) {
+                std::cerr << "fullorbit-batch exact LOW closure setup full-cap mismatch mask="
+                          << mask << " pi=" << pi
+                          << " got=" << cap_tasks[size_t(FULL_CAP)]
+                          << " expected=" << tasks << '\n';
+                std::exit(211);
+            }
+#endif
         }
 #endif
         low_jobs[shard.owner[mask]].push_back(job);
@@ -601,7 +652,7 @@ int main(int argc, char** argv) {
                 ts.emplace_back([&, d] {
                     for (const FullOrbitBatchLowJob& job : low_jobs[d])
                         process_fullorbit_batch_low_group(
-                            workers[d], job, shard, mp[d], bp[d], threads);
+                            workers[d], job, shard, mp[d], bp[d], threads, row);
                 });
             }
             for (auto& t : ts) t.join();
