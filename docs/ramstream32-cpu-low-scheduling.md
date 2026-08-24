@@ -1,12 +1,12 @@
 # RAMstream32 CPU LOW scheduling
 
-Backend v5.20 provides four scheduling modes for the persistent sparse LOW executor. `dynamic` remains the default. `sticky`, `contiguous`, and `domain` are opt-in static-owner modes.
+Backend v5.21 provides four scheduling modes for the persistent sparse LOW executor. `dynamic` remains the default. `sticky`, `contiguous`, and `domain` are opt-in static-owner modes.
 
 ## Why static scheduling is exact
 
 The LOW window fixes the occupancy mask of the inactive HIGH positions. Each resulting `CpuLowJob` is transition-closed for the complete LOW+center window, so different fixed-HIGH occupancy groups do not write into one another. Scheduling changes only which persistent worker evaluates each closed group; it does not change the recurrence, descriptor streams, operation ordering inside a group, or authoritative addresses.
 
-The W=10 exhaustive selftest runs dynamic, LPT-sticky, contiguous, refined-domain, and unrefined-domain pools for two consecutive LOW generations and compares every result with the exact reference recurrence after one and two LOW windows. v5.20 also has a deterministic unit case for the domain-boundary refiner: an initial `[8,8,8] | [1,1,1]` one-worker-per-domain split has pair makespan 24, and the bounded refinement moves one job to reach makespan 16 while preserving the single ordered boundary.
+The W=10 exhaustive selftest runs dynamic, LPT-sticky, contiguous, refined-domain, and unrefined-domain pools for two consecutive LOW generations and compares every result with the exact reference recurrence after one and two LOW windows. The boundary refiner also has a deterministic unit case: an initial `[8,8,8] | [1,1,1]` one-worker-per-domain split has pair makespan 24, and the bounded refinement moves one job to reach makespan 16 while preserving the single ordered boundary.
 
 ## Production modes
 
@@ -39,22 +39,23 @@ Domain ownership is contiguous in numeric HIGH-mask order, but jobs inside each 
 
 ### Domain refinement control
 
-The v5.20 boundary refiner is enabled by default. It can be disabled without changing the binary:
+The boundary refiner is enabled by default and can be disabled without changing the binary:
 
 ```text
 CPU_LOW_DOMAIN_REFINE=1   # default: refined domain boundaries
 CPU_LOW_DOMAIN_REFINE=0   # initial outer-domain partition only
 ```
 
-The parser also accepts the usual boolean spellings used by the backend (`true/false`, `yes/no`, `on/off`). Invalid values abort rather than silently selecting a mode.
+The parser also accepts `true/false`, `yes/no`, and `on/off`. Invalid values abort rather than silently selecting a mode.
 
 Refinement OFF does not change the recurrence. It keeps the initial contiguous domain ranges produced by the outer normalized-cap partition, then performs the same exact-cell LPT assignment inside each domain. Refinement ON starts from that same assignment and only moves ordered domain boundaries when the local two-domain LPT objective improves. The W=10 selftest validates both modes for two consecutive LOW generations.
 
-Production provenance and schedule diagnostics include:
+v5.21 promotes the refinement condition into the solver's final provenance line. Production provenance and schedule diagnostics include:
 
 ```text
 cpu_low_schedule=dynamic|sticky|contiguous|domain
 cpu_low_domain_size=...
+cpu_low_domain_refine=0|1
 cpu_low_schedule_build_s=...
 cpu_low_contiguous_optimal_cap=...
 cpu_low_domain_outer_normalized_cap=...
@@ -63,7 +64,7 @@ cpu_low_domain_refined_boundaries=...
 cpu_low_domain_refined_job_moves=...
 ```
 
-`cpu_low_domain_normalized_cap` is retained as a compatibility alias for `cpu_low_domain_outer_normalized_cap`. Until the solver's final stdout line grows a dedicated refinement field, the domain schedule stderr line records `refine=0|1`; benchmark runners that need exact refinement provenance check that line or explicitly record the environment value.
+`cpu_low_domain_normalized_cap` is retained as a compatibility alias for `cpu_low_domain_outer_normalized_cap`. The domain schedule stderr line also records `refine=0|1`; the dedicated refinement A/B harness checks both stdout and stderr provenance.
 
 ## Exact work model
 
@@ -89,9 +90,9 @@ For a domain containing `k` workers, the initial ordered partition gives it a co
 
 This outer cap is a domain-total/worker-count normalization used to choose the initial boundaries. It is not a mathematical upper bound on each worker after LPT. A large indivisible job or LPT packing can produce a worker load greater than this value; actual `max_worker_cells` and `imbalance` are the relevant balance measurements.
 
-### v5.20 boundary refinement
+### Boundary refinement
 
-After the initial domain ranges are constructed, v5.20 can optimize the actual LPT makespan without giving up domain contiguity.
+After the initial domain ranges are constructed, the refiner can optimize the actual LPT makespan without giving up domain contiguity.
 
 For every adjacent pair of nonempty domains it searches at most 32 occupancy jobs to each side of the current boundary. Each candidate is evaluated by running the same exact-cell LPT assignment used by production inside the two affected domains. A move is accepted only when the pair objective improves lexicographically:
 
@@ -229,7 +230,7 @@ Over every four repeats each schedule appears once in every run position. The ha
 
 ### Isolate refinement itself
 
-To compare only the v5.20 boundary-refinement step, use the dedicated same-binary A/B runner:
+To compare only the boundary-refinement step, use the dedicated same-binary A/B runner:
 
 ```bash
 N=27 \
@@ -245,7 +246,7 @@ REPEATS=4 \
 bash scripts/bench/ramstream32-cpu-low-domain-refine-ab.sh
 ```
 
-Odd repeats run `refine=0 -> refine=1`; even repeats reverse that order. Both variants use the same binary, domain size, HIGH policy, affinities, worker counts, modulus, and GPU target. NUMA sampling is forced off. The harness also checks the domain scheduler's stderr `refine=0|1` provenance, requires zero reported boundary moves when refinement is disabled, and verifies identical residues.
+Odd repeats run `refine=0 -> refine=1`; even repeats reverse that order. Both variants use the same binary, domain size, HIGH policy, affinities, worker counts, modulus, and GPU target. NUMA sampling is forced off. The harness checks both final stdout `cpu_low_domain_refine=0|1` and scheduler stderr `refine=0|1`, requires zero reported boundary moves when refinement is disabled, and verifies identical residues.
 
 Its final comparison reports:
 
