@@ -114,7 +114,7 @@ printf 'repeat\torder\tposition\tschedule\tresidue\twall_s\tcpu_low_wall_s\tcpu_
 
 run_one() {
   local repeat="$1" order="$2" position="$3" schedule="$4"
-  local line residue got_schedule got_domain
+  local line residue got_schedule got_domain got_refine
   line="$(CPU_HIGH_MODE="$CPU_HIGH_MODE" \
     CPU_HIGH_OVERLAP="$CPU_HIGH_OVERLAP" \
     CPU_HIGH_MAX_MIB="$CPU_HIGH_MAX_MIB" \
@@ -136,6 +136,11 @@ run_one() {
   got_domain="$(field "$line" cpu_low_domain_size)"
   if [[ "$schedule" == domain && "$got_domain" != "$CPU_LOW_DOMAIN_SIZE" ]]; then
     echo "domain provenance mismatch requested=$CPU_LOW_DOMAIN_SIZE got=$got_domain" >&2
+    exit 7
+  fi
+  got_refine="$(field "$line" cpu_low_domain_refine)"
+  if [[ "$got_refine" != "$CPU_LOW_DOMAIN_REFINE" ]]; then
+    echo "refine provenance mismatch requested=$CPU_LOW_DOMAIN_REFINE got=$got_refine schedule=$schedule" >&2
     exit 7
   fi
   printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
