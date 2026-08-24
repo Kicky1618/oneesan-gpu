@@ -243,7 +243,7 @@ static void process_fullorbit_batch_high_job(
 
     for (int p = TARGET_W - 1; p >= LOW_LUT_K + 1; --p) {
         t = std::chrono::steady_clock::now();
-#ifdef MASKSHARD_BLOCK_ORBIT
+#ifdef MASKSHARD_BLOCK_ORBIT_TIGHT_LAUNCH
         if (job.block_n)
             maskshard_main_block_highorbit_kernel<<<bd, threads>>>(w.a, w.d, job.main_n, p);
 #else
