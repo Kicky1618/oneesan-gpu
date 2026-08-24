@@ -220,6 +220,22 @@ int main(int argc, char** argv) {
     const Result current = aggregate_rows(entries, W, 16, warps_per_block);
     const Result chosen = aggregate_rows(entries, W, threshold, warps_per_block);
 
+    int best_tasks_threshold = 1;
+    int best_blocks_threshold = 1;
+    U128 best_tasks = ~U128(0);
+    U128 best_blocks = ~U128(0);
+    for (int cut = 1; cut <= 1002; ++cut) {
+        const Result r = aggregate_rows(entries, W, cut, warps_per_block);
+        if (r.tasks < best_tasks) {
+            best_tasks = r.tasks;
+            best_tasks_threshold = cut;
+        }
+        if (r.blocks < best_blocks) {
+            best_blocks = r.blocks;
+            best_blocks_threshold = cut;
+        }
+    }
+
     if (W == 28 && low == 14 && threads == 256) {
         if (current.useful != U128(36989860194307ULL)
             || current.lanes != U128(44779140427808ULL)
@@ -239,6 +255,12 @@ int main(int argc, char** argv) {
                 || chosen.capped != 0)) {
             std::cerr << "n=27 threshold-29 exact row-depth regression mismatch\n";
             return 3;
+        }
+        if (best_tasks_threshold != 29 || best_blocks_threshold != 29
+            || best_tasks != U128(771962761132ULL)
+            || best_blocks != U128(96497498944ULL)) {
+            std::cerr << "n=27 threshold optimum regression mismatch\n";
+            return 4;
         }
     }
 
@@ -262,7 +284,11 @@ int main(int argc, char** argv) {
               << "current_blocks=" << u128_string(current.blocks)
               << " chosen_blocks=" << u128_string(chosen.blocks)
               << " ratio=" << ratio(chosen.blocks, current.blocks) << '\n'
-              << "chosen_capped_group_positions=" << u128_string(chosen.capped) << '\n';
+              << "chosen_capped_group_positions=" << u128_string(chosen.capped) << '\n'
+              << "best_tasks_threshold=" << best_tasks_threshold
+              << " best_tasks=" << u128_string(best_tasks) << '\n'
+              << "best_blocks_threshold=" << best_blocks_threshold
+              << " best_blocks=" << u128_string(best_blocks) << '\n';
 
     if (W == 28 && low == 14 && threads == 256 && argc <= 4) {
         const int cuts[] = {6, 8, 10, 16, 21, 29, 36, 43, 49, 64, 1002};
