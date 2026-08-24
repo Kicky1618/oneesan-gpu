@@ -3,11 +3,13 @@
 #include "ramstream32_cpu_high.hpp"
 #include "ramstream32_cpu_affinity.hpp"
 
+#include <algorithm>
 #include <atomic>
 #include <chrono>
 #include <cstdint>
 #include <iostream>
 #include <thread>
+#include <utility>
 #include <vector>
 
 // Zero-scratch CPU HIGH executor.
@@ -26,6 +28,10 @@
 // blocked closures from boundary CROSS closures, removing the last descriptor-
 // kind branch from the CPU HIGH direct hot loops. v5.5 optionally pins workers
 // through CPU_HIGH_CPU_LIST so direct work does not migrate across CPU sockets.
+// v5.6 computes the exact direct cell work of each selected occupancy group once
+// and schedules groups in descending work order. The atomic queue remains, so
+// workers still dynamically steal jobs, but the largest tail risks are launched
+// first instead of relying on the older transfer-size proxy.
 
 enum CpuHighOrbitKind : uint8_t {
     CPU_HIGH_ORBIT_NN = 1,
@@ -289,6 +295,35 @@ static inline std::pair<uint32_t,uint32_t> cpu_high_direct_range(
     return {off[size_t(pi)*pitch+bid], off[size_t(pi)*pitch+bid+1]};
 }
 
+static uint64_t cpu_high_direct_job_cells(
+    const CpuHighJob& job, const CpuHighDirectHost& direct
+) {
+    uint64_t cells = 0;
+    for (uint32_t bid = 0; bid < direct.nblocks; ++bid) {
+        const FBlock& x = job.main_blocks[bid];
+        uint64_t width = x.stride;
+        if (!width) continue;
+        for (uint32_t pi = 0; pi < uint32_t(HIGH_LUT_K); ++pi) {
+            auto [na, nb] = cpu_high_direct_range(
+                direct.orbit_off.nn, direct.nblocks, pi, bid);
+            auto [ra, rb] = cpu_high_direct_range(
+                direct.orbit_off.nrnl, direct.nblocks, pi, bid);
+            auto [ba, bb] = cpu_high_direct_range(
+                direct.closure_off.block, direct.nblocks, pi, bid);
+            auto [ca, cb] = cpu_high_direct_range(
+                direct.closure_off.cross, direct.nblocks, pi, bid);
+            uint64_t ops = uint64_t(nb - na) + uint64_t(rb - ra)
+                + uint64_t(bb - ba) + uint64_t(cb - ca);
+            if (ops && width > UINT64_MAX / ops) {
+                std::cerr << "cpu high direct job cell count overflow\n";
+                std::exit(133);
+            }
+            cells += ops * width;
+        }
+    }
+    return cells;
+}
+
 static Count* cpu_high_direct_row_ptr(
     RamCounts& auth, const StorageBlock& sb, const FBlock& fb,
     uint32_t mask, const StorageFactorHost& storage, uint32_t hr
@@ -475,9 +510,53 @@ struct CpuHighDirectPool {
     int workers = 1;
     std::vector<CpuHighDirectStats> stats;
     double wall_s = 0.0;
+    double schedule_build_s = 0.0;
+    std::vector<const CpuHighJob*> schedule_source;
+    std::vector<const CpuHighJob*> scheduled_jobs;
 
     explicit CpuHighDirectPool(int n)
         : workers(std::max(1, n)), stats(size_t(std::max(1, n))) {}
+
+    void prepare_schedule(
+        const std::vector<const CpuHighJob*>& jobs,
+        const CpuHighDirectHost& direct
+    ) {
+        if (schedule_source.size() == jobs.size()
+            && std::equal(schedule_source.begin(), schedule_source.end(), jobs.begin()))
+            return;
+
+        auto t0 = std::chrono::steady_clock::now();
+        schedule_source = jobs;
+        std::vector<std::pair<const CpuHighJob*,uint64_t>> ranked;
+        ranked.reserve(jobs.size());
+        uint64_t total_cells = 0;
+        uint64_t max_cells = 0;
+        uint64_t min_cells = UINT64_MAX;
+        for (const CpuHighJob* job : jobs) {
+            uint64_t cells = cpu_high_direct_job_cells(*job, direct);
+            ranked.push_back({job, cells});
+            total_cells += cells;
+            max_cells = std::max(max_cells, cells);
+            min_cells = std::min(min_cells, cells);
+        }
+        std::sort(ranked.begin(), ranked.end(), [](const auto& a, const auto& b) {
+            if (a.second != b.second) return a.second > b.second;
+            if (a.first->scratch_bytes != b.first->scratch_bytes)
+                return a.first->scratch_bytes > b.first->scratch_bytes;
+            return a.first->g < b.first->g;
+        });
+        scheduled_jobs.clear();
+        scheduled_jobs.reserve(ranked.size());
+        for (const auto& x : ranked) scheduled_jobs.push_back(x.first);
+        if (jobs.empty()) min_cells = 0;
+        double dt = ram_seconds_since(t0);
+        schedule_build_s += dt;
+        std::cerr << "cpu_high_direct_schedule jobs=" << jobs.size()
+                  << " total_cells=" << total_cells
+                  << " max_cells=" << max_cells
+                  << " min_cells=" << min_cells
+                  << " build_s=" << dt << '\n';
+    }
 
     void run(
         const std::vector<const CpuHighJob*>& jobs,
@@ -485,6 +564,7 @@ struct CpuHighDirectPool {
         const StorageFactorHost& storage, const StorageLayout& layout,
         const CpuHighDirectHost& direct, const CpuHighCrossHost& cross, Count mod
     ) {
+        prepare_schedule(jobs, direct);
         auto t0 = std::chrono::steady_clock::now();
         std::atomic<size_t> next{0};
         std::vector<std::thread> ts;
@@ -494,9 +574,9 @@ struct CpuHighDirectPool {
                 cpu_high_bind_worker(w);
                 for (;;) {
                     size_t q = next.fetch_add(1, std::memory_order_relaxed);
-                    if (q >= jobs.size()) break;
+                    if (q >= scheduled_jobs.size()) break;
                     process_cpu_high_group_direct(
-                        stats[w], *jobs[q], main_auth, block_auth,
+                        stats[w], *scheduled_jobs[q], main_auth, block_auth,
                         storage, layout, direct, cross, mod);
                 }
             });
