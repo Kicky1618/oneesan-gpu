@@ -50,7 +50,8 @@ static void fill_all(
             uint32_t v=transposed?uint32_t(s*16+g):uint32_t(g*16+s);
             uint32_t*ptr=reinterpret_cast<uint32_t*>(b+p.slot[g][s].off_bytes);
             uint64_t n=bytes/sizeof(uint32_t);
-            bt_fill<<<std::min<uint64_t>(65535,(n+255)/256),256>>>(ptr,n,v);
+            unsigned blocks=unsigned(std::min<uint64_t>(65535,(n+255)/256));
+            bt_fill<<<blocks,256>>>(ptr,n,v);
             btc(cudaGetLastError(),"bt fill kernel");
         }
     }
