@@ -1,6 +1,7 @@
 #pragma once
 
 #include "ramstream32_cpu_low_sparse.hpp"
+#include "ramstream32_cpu_affinity.hpp"
 
 #include <condition_variable>
 #include <mutex>
@@ -9,7 +10,8 @@
 // The LOW recurrence and per-group body remain in ramstream32_cpu_low_sparse.hpp;
 // this class only removes per-row std::thread construction/destruction. Jobs are
 // fixed for the lifetime of a production run, so workers sleep between rows and
-// consume the same atomic dynamic queue on every generation.
+// consume the same atomic dynamic queue on every generation. CPU_LOW_CPU_LIST
+// optionally pins each persistent worker once at thread startup.
 struct CpuLowSparsePersistentPool {
     int workers = 1;
     std::vector<CpuLowSparseStats> stats;
@@ -69,6 +71,7 @@ struct CpuLowSparsePersistentPool {
     }
 
     void worker_loop(int w) {
+        cpu_low_bind_worker(w);
         uint64_t seen = 0;
         for (;;) {
             {
