@@ -19,6 +19,8 @@ THRESHOLDS="${THRESHOLDS:-0 64 128 256 512 1024}"
 REPEATS="${REPEATS:-1}"
 BUILD="${BUILD:-1}"
 ANALYZE="${ANALYZE:-1}"
+COST_PLAN="${COST_PLAN:-auto}"
+GENERATE_POLICY="${GENERATE_POLICY:-1}"
 EXPECTED_RESIDUE="${EXPECTED_RESIDUE:-}"
 OUT_DIR="${OUT_DIR:-$ROOT/work/bench_ramstream32_cpu_high_sweep}"
 
@@ -39,6 +41,10 @@ if [[ "$CPU_HIGH_OVERLAP" != 0 && "$CPU_HIGH_OVERLAP" != 1 ]]; then
 fi
 if [[ "$ANALYZE" != 0 && "$ANALYZE" != 1 ]]; then
   echo "ANALYZE must be 0 or 1" >&2
+  exit 2
+fi
+if [[ "$GENERATE_POLICY" != 0 && "$GENERATE_POLICY" != 1 ]]; then
+  echo "GENERATE_POLICY must be 0 or 1" >&2
   exit 2
 fi
 
@@ -64,6 +70,10 @@ ts="$(date -u +%Y%m%dT%H%M%SZ)"
 out="$OUT_DIR/cpu-high-${CPU_HIGH_MODE}-overlap${CPU_HIGH_OVERLAP}-n${N}-${ts}.tsv"
 meta="$OUT_DIR/cpu-high-${CPU_HIGH_MODE}-overlap${CPU_HIGH_OVERLAP}-n${N}-${ts}.meta"
 analysis_out="$OUT_DIR/cpu-high-${CPU_HIGH_MODE}-overlap${CPU_HIGH_OVERLAP}-n${N}-${ts}.analysis.txt"
+cost_plan_path=""
+cost_plan_log=""
+policy_out=""
+policy_log=""
 
 file_sha256() {
   if command -v sha256sum >/dev/null 2>&1; then sha256sum "$1" | awk '{print $1}'
@@ -76,6 +86,22 @@ field() {
   done
   return 1
 }
+
+if [[ "$CPU_HIGH_MODE" == direct && "$COST_PLAN" != none && -n "$COST_PLAN" ]]; then
+  if [[ "$COST_PLAN" == auto ]]; then
+    if [[ "$BUILD" != 0 ]]; then
+      N="$N" ARCH="$ARCH" bash scripts/build/gridfp-ramstream32-cpu-high-cost-plan.sh
+    fi
+    cost_bin="$ROOT/build/ramstream32_cpu_high_cost_plan_n${N}"
+    [[ -x "$cost_bin" ]] || { echo "missing executable: $cost_bin" >&2; exit 3; }
+    cost_plan_path="$OUT_DIR/cpu-high-cost-plan-n${N}-${ts}.tsv"
+    cost_plan_log="$OUT_DIR/cpu-high-cost-plan-n${N}-${ts}.log"
+    "$cost_bin" "$N" >"$cost_plan_path" 2>"$cost_plan_log"
+  else
+    cost_plan_path="$COST_PLAN"
+    [[ -f "$cost_plan_path" ]] || { echo "missing COST_PLAN: $cost_plan_path" >&2; exit 3; }
+  fi
+fi
 
 cat >"$meta" <<EOF
 commit=$(git rev-parse HEAD 2>/dev/null || echo unknown)
@@ -93,9 +119,14 @@ cpu_high_overlap=$CPU_HIGH_OVERLAP
 thresholds=$THRESHOLDS
 repeats=$REPEATS
 analyze=$ANALYZE
+cost_plan=${cost_plan_path:-none}
+generate_policy=$GENERATE_POLICY
 expected_residue=${EXPECTED_RESIDUE:-unknown}
 binary_sha256=$(file_sha256 "$bin")
 EOF
+if [[ -n "$cost_plan_path" ]]; then
+  echo "cost_plan_sha256=$(file_sha256 "$cost_plan_path")" >>"$meta"
+fi
 
 printf 'repeat\torder\tmode\toverlap\tthreshold_mib\tresidue\twall_s\th2d_s\tgpu_kernel_s\td2h_s\tcpu_high_wall_s\tcpu_high_kernel_sum_s\tcpu_low_wall_s\tpcie_removed_tib\tpcie_remaining_tib\tcpu_high_groups\traw\n' >"$out"
 
@@ -157,11 +188,35 @@ best="$(awk -F '\t' 'NR>1 {s[$5]+=$7;n[$5]++} END {for(t in n){m=s[t]/n[t]; if(b
 echo "mode=$CPU_HIGH_MODE overlap=$CPU_HIGH_OVERLAP best_threshold_mib=${best%% *} mean_wall_s=${best#* }"
 
 if [[ "$ANALYZE" != 0 ]]; then
-  python3 scripts/tools/analyze_cpu_high_sweep.py "$out" | tee "$analysis_out"
+  analyze_args=(scripts/tools/analyze_cpu_high_sweep.py "$out")
+  if [[ -n "$cost_plan_path" ]]; then analyze_args+=(--cost-plan "$cost_plan_path"); fi
+  python3 "${analyze_args[@]}" | tee "$analysis_out"
+
+  if [[ "$CPU_HIGH_MODE" == direct && "$GENERATE_POLICY" != 0 && -n "$cost_plan_path" ]]; then
+    pcie_rate="$(awk -v o="$CPU_HIGH_OVERLAP" '
+      $1=="calibration" && $2=="mode=direct" && $3==("overlap=" o) && $4 ~ /^pcie_gib_s=/ {
+        sub(/^pcie_gib_s=/,"",$4); print $4; exit
+      }' "$analysis_out")"
+    cpu_rate="$(awk -v o="$CPU_HIGH_OVERLAP" '
+      $1=="calibration" && $2=="mode=direct" && $3==("overlap=" o) && $4 ~ /^cpu_gcell_s=/ {
+        sub(/^cpu_gcell_s=/,"",$4); print $4; exit
+      }' "$analysis_out")"
+    if [[ -n "$pcie_rate" && -n "$cpu_rate" ]]; then
+      policy_out="$OUT_DIR/cpu-high-cost-policy-overlap${CPU_HIGH_OVERLAP}-n${N}-${ts}.groups"
+      policy_log="$OUT_DIR/cpu-high-cost-policy-overlap${CPU_HIGH_OVERLAP}-n${N}-${ts}.log"
+      python3 scripts/tools/plan_cpu_high_groups.py "$cost_plan_path" \
+        --pcie-gib-s "$pcie_rate" --cpu-gcell-s "$cpu_rate" \
+        --gpu-target-mib "$GPU_TARGET_MIB" >"$policy_out" 2>"$policy_log"
+      echo "policy=$policy_out"
+      echo "policy_log=$policy_log"
+    else
+      echo "cost-model policy not generated: calibration rates unavailable" >&2
+    fi
+  fi
 fi
 
 echo "results=$out"
 echo "metadata=$meta"
-if [[ "$ANALYZE" != 0 ]]; then
-  echo "analysis=$analysis_out"
-fi
+if [[ -n "$cost_plan_path" ]]; then echo "cost_plan=$cost_plan_path"; fi
+if [[ -n "$cost_plan_log" ]]; then echo "cost_plan_log=$cost_plan_log"; fi
+if [[ "$ANALYZE" != 0 ]]; then echo "analysis=$analysis_out"; fi
