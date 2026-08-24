@@ -160,13 +160,25 @@ printf 'repeat\torder\tmode\toverlap\tthreshold_mib\tresidue\twall_s\th2d_s\tgpu
 
 run_one() {
   local repeat="$1" order="$2" threshold="$3"
-  local line residue
+  local line residue got_schedule got_domain
   line="$(CPU_HIGH_MAX_MIB="$threshold" CPU_HIGH_WORKERS="$CPU_HIGH_WORKERS" \
     CPU_HIGH_MODE="$CPU_HIGH_MODE" CPU_HIGH_OVERLAP="$CPU_HIGH_OVERLAP" \
     CPU_HIGH_CPU_LIST="$CPU_HIGH_CPU_LIST" CPU_LOW_CPU_LIST="$CPU_LOW_CPU_LIST" \
     CPU_LOW_SCHEDULE="$CPU_LOW_SCHEDULE" CPU_LOW_DOMAIN_SIZE="$CPU_LOW_DOMAIN_SIZE" \
     "$bin" "$N" "$MODULUS" "$GPU_TARGET_MIB" "$CPU_WORKERS" | tail -n1)"
   residue="$(field "$line" residue)"
+  got_schedule="$(field "$line" cpu_low_schedule)"
+  if [[ "$got_schedule" != "$CPU_LOW_SCHEDULE" ]]; then
+    echo "LOW schedule provenance mismatch requested=$CPU_LOW_SCHEDULE got=$got_schedule" >&2
+    exit 7
+  fi
+  if [[ "$CPU_LOW_SCHEDULE" == domain ]]; then
+    got_domain="$(field "$line" cpu_low_domain_size)"
+    if [[ "$got_domain" != "$CPU_LOW_DOMAIN_SIZE" ]]; then
+      echo "LOW domain provenance mismatch requested=$CPU_LOW_DOMAIN_SIZE got=$got_domain" >&2
+      exit 7
+    fi
+  fi
   printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
     "$repeat" "$order" "$CPU_HIGH_MODE" "$CPU_HIGH_OVERLAP" "$threshold" "$residue" \
     "$(field "$line" wall_s)" "$(field "$line" h2d_s)" \
@@ -188,7 +200,7 @@ for ((r=1; r<=REPEATS; ++r)); do
     run_thresholds=()
     for ((i=${#thresholds[@]}-1; i>=0; --i)); do run_thresholds+=("${thresholds[i]}"); done
   fi
-  echo "repeat $r/$REPEATS mode=$CPU_HIGH_MODE overlap=$CPU_HIGH_OVERLAP low_schedule=$CPU_LOW_SCHEDULE ($order)" >&2
+  echo "repeat $r/$REPEATS mode=$CPU_HIGH_MODE overlap=$CPU_HIGH_OVERLAP low_schedule=$CPU_LOW_SCHEDULE low_domain_size=${CPU_LOW_DOMAIN_SIZE:-none} ($order)" >&2
   for threshold in "${run_thresholds[@]}"; do
     echo "  CPU_HIGH_MAX_MIB=$threshold" >&2
     residue="$(run_one "$r" "$order" "$threshold")"
@@ -215,7 +227,7 @@ awk -F '\t' '
 ' "$out" | sort -t= -k2,2n
 
 best="$(awk -F '\t' 'NR>1 {s[$5]+=$7;n[$5]++} END {for(t in n){m=s[t]/n[t]; if(best==""||m<best){best=m;bt=t}} printf "%s %.9f",bt,best}' "$out")"
-echo "mode=$CPU_HIGH_MODE overlap=$CPU_HIGH_OVERLAP low_schedule=$CPU_LOW_SCHEDULE best_threshold_mib=${best%% *} mean_wall_s=${best#* }"
+echo "mode=$CPU_HIGH_MODE overlap=$CPU_HIGH_OVERLAP low_schedule=$CPU_LOW_SCHEDULE low_domain_size=${CPU_LOW_DOMAIN_SIZE:-none} best_threshold_mib=${best%% *} mean_wall_s=${best#* }"
 
 if [[ "$ANALYZE" != 0 ]]; then
   analyze_args=(scripts/tools/analyze_cpu_high_sweep.py "$out")
