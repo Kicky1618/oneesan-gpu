@@ -1,0 +1,81 @@
+name: B300 row-depth orbit v0.17 research
+
+on:
+  push:
+    paths:
+      - 'src/cpp/probes/factor_highorbit_rowdepth_semantics.cpp'
+      - 'src/cuda/b300/maskshard_rowdepth_orbit.cuh'
+      - 'src/cuda/b300/maskshard_lowclosure_kernel.cuh'
+      - 'src/cuda/b300/oneesan_cuda_gridfp_b300_hbm32_maskshard_blockorbit_compactaux_fullclosure_highrowpack16_lazyblockinit_rowdepthexact_tightlaunch_batch_guarded.cu'
+      - 'src/cuda/b300/oneesan_cuda_gridfp_b300_hbm32_maskshard_blockorbit_compactaux_fullclosure_highrowpack16_lazyblockinit_rowdepthexact_tightlaunch_rowdepthorbit_batch_guarded.cu'
+      - 'scripts/bench/b300_maskshard_rowdepth_orbit_ab.py'
+      - '.github/workflows/b300-rowdepth-orbit-v17.yml'
+  pull_request:
+    paths:
+      - 'src/cpp/probes/factor_highorbit_rowdepth_semantics.cpp'
+      - 'src/cuda/b300/maskshard_rowdepth_orbit.cuh'
+      - 'src/cuda/b300/maskshard_lowclosure_kernel.cuh'
+      - 'src/cuda/b300/oneesan_cuda_gridfp_b300_hbm32_maskshard_blockorbit_compactaux_fullclosure_highrowpack16_lazyblockinit_rowdepthexact_tightlaunch_batch_guarded.cu'
+      - 'src/cuda/b300/oneesan_cuda_gridfp_b300_hbm32_maskshard_blockorbit_compactaux_fullclosure_highrowpack16_lazyblockinit_rowdepthexact_tightlaunch_rowdepthorbit_batch_guarded.cu'
+      - 'scripts/bench/b300_maskshard_rowdepth_orbit_ab.py'
+      - '.github/workflows/b300-rowdepth-orbit-v17.yml'
+  workflow_dispatch:
+
+jobs:
+  semantics:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build row-depth orbit semantics probe
+        run: |
+          mkdir -p build
+          g++ -O3 -std=c++17 -Wall -Wextra -Werror \
+            src/cpp/probes/factor_highorbit_rowdepth_semantics.cpp \
+            -o build/factor_highorbit_rowdepth_semantics
+      - name: Verify small-width orbit pruning and n27 model
+        run: build/factor_highorbit_rowdepth_semantics 12
+
+  cuda-compile:
+    runs-on: ubuntu-latest
+    container: nvidia/cuda:12.8.1-devel-ubuntu22.04
+    strategy:
+      matrix:
+        include:
+          - width: 22
+            low: 11
+            high: 10
+          - width: 28
+            low: 14
+            high: 13
+    steps:
+      - uses: actions/checkout@v4
+      - name: Compile v0.16
+        shell: bash
+        run: |
+          mkdir -p build
+          nvcc -O3 -std=c++17 -lineinfo -arch=sm_80 \
+            -DTARGET_W=${{ matrix.width }} \
+            -DLOW_LUT_K=${{ matrix.low }} \
+            -DHIGH_LUT_K=${{ matrix.high }} \
+            src/cuda/b300/oneesan_cuda_gridfp_b300_hbm32_maskshard_blockorbit_compactaux_fullclosure_highrowpack16_lazyblockinit_rowdepthexact_tightlaunch_batch_guarded.cu \
+            -o build/b300_maskshard_v16_w${{ matrix.width }}
+      - name: Compile v0.17
+        shell: bash
+        run: |
+          nvcc -O3 -std=c++17 -lineinfo -arch=sm_80 \
+            -DTARGET_W=${{ matrix.width }} \
+            -DLOW_LUT_K=${{ matrix.low }} \
+            -DHIGH_LUT_K=${{ matrix.high }} \
+            src/cuda/b300/oneesan_cuda_gridfp_b300_hbm32_maskshard_blockorbit_compactaux_fullclosure_highrowpack16_lazyblockinit_rowdepthexact_tightlaunch_rowdepthorbit_batch_guarded.cu \
+            -o build/b300_maskshard_v17_w${{ matrix.width }}
+
+  ab-driver:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Syntax-check v0.16-v0.17 A/B
+        run: python3 -m py_compile scripts/bench/b300_maskshard_rowdepth_orbit_ab.py
+      - name: Dry-run v0.16-v0.17 comparison
+        run: |
+          python3 scripts/bench/b300_maskshard_rowdepth_orbit_ab.py \
+            --dry-run --n 27 --gpus 8 --threads 256 --modulus 4294967291
