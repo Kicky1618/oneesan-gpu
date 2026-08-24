@@ -5,6 +5,7 @@ on:
     paths:
       - 'src/cuda/gridfp/oneesan_cuda_gridfp_ramstream32_factorized_hybrid_sparse.cu'
       - 'src/cuda/gridfp/ramstream32_cpu_low_sparse.hpp'
+      - 'src/cuda/gridfp/ramstream32_cpu_low_sparse_persistent.hpp'
       - 'src/cuda/gridfp/ramstream32_cpu_low_direct.hpp'
       - 'src/cuda/gridfp/ramstream32_cpu_low_inplace.hpp'
       - 'src/cuda/gridfp/ramstream32_cpu_high.hpp'
@@ -21,6 +22,7 @@ on:
     paths:
       - 'src/cuda/gridfp/oneesan_cuda_gridfp_ramstream32_factorized_hybrid_sparse.cu'
       - 'src/cuda/gridfp/ramstream32_cpu_low_sparse.hpp'
+      - 'src/cuda/gridfp/ramstream32_cpu_low_sparse_persistent.hpp'
       - 'src/cuda/gridfp/ramstream32_cpu_low_direct.hpp'
       - 'src/cuda/gridfp/ramstream32_cpu_low_inplace.hpp'
       - 'src/cuda/gridfp/ramstream32_cpu_high.hpp'
@@ -68,10 +70,11 @@ jobs:
           build/ramstream32_hybrid_sparse_w${{ matrix.width }} \
             ${{ matrix.n }} 4294967291 12288 4 --plan-only \
             | tee /tmp/hybrid-plan.txt
-          grep -Fq 'backend=gridfp-ramstream32-factorized-hybrid-sparse-v5.12-plan' \
+          grep -Fq 'backend=gridfp-ramstream32-factorized-hybrid-sparse-v5.13-plan' \
             /tmp/hybrid-plan.txt
           grep -Fq 'cpu_high_persistent_workers=1' /tmp/hybrid-plan.txt
           grep -Fq 'cpu_high_async_overlap=1' /tmp/hybrid-plan.txt
+          grep -Fq 'cpu_low_persistent_workers=1' /tmp/hybrid-plan.txt
       - name: Validate n27 CPU HIGH scratch partition plan
         if: matrix.width == 28
         shell: bash
@@ -89,13 +92,14 @@ jobs:
           CPU_HIGH_MAX_MIB=256 CPU_HIGH_MODE=direct \
             build/ramstream32_hybrid_sparse_w28 \
             27 4294967291 12288 4 --plan-only 2>&1 | tee /tmp/high-offload-direct.txt
-          grep -Fq 'backend=gridfp-ramstream32-factorized-hybrid-sparse-v5.12-plan' \
+          grep -Fq 'backend=gridfp-ramstream32-factorized-hybrid-sparse-v5.13-plan' \
             /tmp/high-offload-direct.txt
           grep -Fq 'cpu_high_groups=12911' /tmp/high-offload-direct.txt
           grep -Fq 'cpu_high_mode=direct' /tmp/high-offload-direct.txt
           grep -Fq 'cpu_high_policy=threshold' /tmp/high-offload-direct.txt
           grep -Fq 'cpu_high_persistent_workers=1' /tmp/high-offload-direct.txt
           grep -Fq 'cpu_high_async_overlap=1' /tmp/high-offload-direct.txt
+          grep -Fq 'cpu_low_persistent_workers=1' /tmp/high-offload-direct.txt
           grep -Fq 'nn_orbit_ops=' /tmp/high-offload-direct.txt
           grep -Fq 'nrnl_orbit_ops=' /tmp/high-offload-direct.txt
           grep -Fq 'block_closure_ops=' /tmp/high-offload-direct.txt
@@ -143,6 +147,8 @@ jobs:
             src/cuda/gridfp/probes/ramstream32_cpu_low_selftest.cu \
             -o build/ramstream32_cpu_low_selftest
           build/ramstream32_cpu_low_selftest 2>&1 | tee /tmp/cpu-low-selftest.txt
+          grep -Fq 'cpu_low_sparse_persistent workers=' /tmp/cpu-low-selftest.txt
+          grep -Fq 'sparse_persistent_groups=' /tmp/cpu-low-selftest.txt
           grep -Fq 'cpu_high_direct_schedule jobs=' /tmp/cpu-low-selftest.txt
           grep -Fq 'persistent=1' /tmp/cpu-low-selftest.txt
           grep -Fq 'cpu_high_persistent_groups=' /tmp/cpu-low-selftest.txt
