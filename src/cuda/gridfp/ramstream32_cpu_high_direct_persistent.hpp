@@ -8,7 +8,8 @@
 // Persistent worker wrapper for the zero-scratch CPU HIGH direct executor.
 // The recurrence and job body remain in ramstream32_cpu_high_direct.hpp; this
 // class only removes per-row std::thread construction/destruction. Workers bind
-// CPU affinity once and sleep between HIGH rows.
+// CPU affinity once and sleep between HIGH rows. Thread creation is lazy so
+// scratch-mode runs pay no persistent-pool cost.
 struct CpuHighDirectPersistentPool {
     int workers = 1;
     std::vector<CpuHighDirectStats> stats;
@@ -37,23 +38,27 @@ struct CpuHighDirectPersistentPool {
     Count run_mod = 0;
 
     explicit CpuHighDirectPersistentPool(int n)
-        : workers(std::max(1, n)), stats(size_t(std::max(1, n))) {
-        auto t0 = std::chrono::steady_clock::now();
-        threads.reserve(workers);
-        for (int w = 0; w < workers; ++w) {
-            threads.emplace_back([this, w] { worker_loop(w); });
-        }
-        worker_start_s = ram_seconds_since(t0);
-        std::cerr << "cpu_high_direct_persistent workers=" << workers
-                  << " start_s=" << worker_start_s << '\n';
-    }
+        : workers(std::max(1, n)), stats(size_t(std::max(1, n))) {}
 
     CpuHighDirectPersistentPool(const CpuHighDirectPersistentPool&) = delete;
     CpuHighDirectPersistentPool& operator=(const CpuHighDirectPersistentPool&) = delete;
 
     ~CpuHighDirectPersistentPool() { shutdown(); }
 
+    void ensure_started() {
+        if (!threads.empty()) return;
+        auto t0 = std::chrono::steady_clock::now();
+        threads.reserve(workers);
+        for (int w = 0; w < workers; ++w) {
+            threads.emplace_back([this, w] { worker_loop(w); });
+        }
+        worker_start_s += ram_seconds_since(t0);
+        std::cerr << "cpu_high_direct_persistent workers=" << workers
+                  << " start_s=" << worker_start_s << '\n';
+    }
+
     void shutdown() {
+        if (threads.empty()) return;
         {
             std::lock_guard<std::mutex> lock(mu);
             if (stopping) return;
@@ -142,6 +147,7 @@ struct CpuHighDirectPersistentPool {
     ) {
         prepare_schedule(jobs, direct);
         if (scheduled_jobs.empty()) return;
+        ensure_started();
 
         auto t0 = std::chrono::steady_clock::now();
         {
