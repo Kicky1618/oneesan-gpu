@@ -154,7 +154,7 @@ CI requires these fields to be present, while the W=10 exhaustive reference comp
 
 A pure size threshold is only a proxy for CPU cost. Two occupancy groups with similar transfer size can have different NN/NRNL/closure/CROSS densities.
 
-The cost-plan probe computes the exact number of direct inner-loop cell iterations for every HIGH occupancy group:
+The cost-plan probe computes exact per-group work:
 
 ```bash
 N=27 bash scripts/build/gridfp-ramstream32-cpu-high-cost-plan.sh
@@ -170,30 +170,12 @@ For each group it reports:
 - NR/NL cell iterations;
 - ordinary blocked-closure cell iterations;
 - CROSS cell iterations;
+- GPU HIGH `gpu_state_steps`;
 - 4 KiB and 2 MiB boundary-page exposure upper bounds for NUMA analysis.
 
 The probe also verifies that all LOW-occupancy groups partition the authoritative main and blocked state spaces exactly once.
 
-Measured threshold sweeps can calibrate aggregate PCIe bandwidth and direct-executor weighted Gcells/s:
-
-```bash
-python3 scripts/tools/analyze_cpu_high_sweep.py sweep.tsv \
-  --cost-plan high-cost.tsv
-```
-
-The resulting rates feed the planner:
-
-```bash
-python3 scripts/tools/plan_cpu_high_groups.py high-cost.tsv \
-  --pcie-gib-s 45 \
-  --cpu-gcell-s 3.2 \
-  --gpu-target-mib 12288 \
-  > cpu-high.groups
-```
-
-The sequential planner evaluates each group using estimated DMA time saved versus CPU direct time. Groups larger than `--gpu-target-mib` are forced to CPU so the remaining GPU set still fits. The resulting list is not required to be monotone in group size.
-
-Run that exact policy with:
+Run an exact group policy with:
 
 ```bash
 CPU_HIGH_MODE=direct \
@@ -203,11 +185,11 @@ CPU_HIGH_WORKERS=32 \
   27 4294967291 12288 32
 ```
 
-`CPU_HIGH_GROUPS_FILE` overrides `CPU_HIGH_MAX_MIB`. The backend reports `cpu_high_policy=file` plus an FNV hash of the final selected-group bitset so a benchmark can identify the exact partition without embedding thousands of IDs in its output.
+`CPU_HIGH_GROUPS_FILE` overrides `CPU_HIGH_MAX_MIB`. The backend reports `cpu_high_policy=file` plus an FNV hash of the selected-group bitset.
 
 ## v5.5 explicit CPU affinity
 
-On a large multi-socket System-RAM machine, letting direct workers migrate between sockets makes both timing and page locality unstable. Direct mode now accepts an explicit Linux CPU list:
+On a large multi-socket System-RAM machine, direct-worker migration makes both timing and page locality unstable. Direct mode accepts an explicit Linux CPU list:
 
 ```bash
 CPU_HIGH_CPU_LIST='0-31,64-95' \
@@ -218,15 +200,13 @@ CPU_HIGH_WORKERS=32 \
   27 4294967291 12288 32
 ```
 
-Each direct worker is pinned round-robin to one CPU from the list using `pthread_setaffinity_np`. If the variable is unset, affinity behavior is unchanged from earlier versions. Invalid lists or binding failures abort instead of silently falling back, because silent fallback would make NUMA benchmark results hard to interpret.
+Each direct worker is pinned round-robin to one CPU from the list with `pthread_setaffinity_np`. If the variable is unset, affinity behavior is unchanged. Invalid lists or binding failures abort instead of silently falling back.
 
 The benchmark harness records `cpu_high_cpu_list` in its metadata. The current implementation pins direct workers only; it does not yet impose an `mbind` memory policy on the authoritative arrays.
 
 ## v5.6 exact-work HIGH scheduling
 
-`make_cpu_high_jobs()` historically sorts by transfer/scratch size. That is a reasonable proxy for scratch mode, but direct cost depends on the actual topology stream population.
-
-Direct mode now computes, once on the first row, the exact work for every selected group:
+Direct mode computes, once on the first row, exact work for every selected group:
 
 ```text
 sum over (HIGH position, source factor block):
@@ -234,59 +214,90 @@ sum over (HIGH position, source factor block):
   (NN ops + NR/NL ops + BLOCK closure ops + CROSS closure ops)
 ```
 
-The selected groups are sorted in descending exact cell work and cached for all later rows. Workers still consume an atomic dynamic queue, so this is a largest-work-first ordering rather than a static partition. It specifically reduces the risk that one large topology-heavy group is discovered at the end and becomes the row tail.
+The selected groups are sorted in descending exact cell work and cached for all later rows. Workers still consume an atomic dynamic queue, so this is largest-work-first dynamic scheduling. It reduces the risk that one topology-heavy group becomes the final row tail.
 
-The executor logs `cpu_high_direct_schedule` with group count, total/min/max cells, and one-time schedule-build time. The W=10 selftest path is wired to require that the schedule is actually built.
+The executor logs `cpu_high_direct_schedule` with group count, total/min/max cells, and one-time schedule-build time.
 
 ## v5.7 overlap-critical-path group planning
 
-When `CPU_HIGH_OVERLAP=0`, an offloaded group is useful only if its CPU cost is smaller than the GPU/DMA work it removes. That independent margin rule is wrong once CPU HIGH and GPU HIGH overlap.
+For sequential execution, group selection compares removable GPU-side work with CPU direct cost. Under `CPU_HIGH_OVERLAP=1`, independent per-group margin is not the correct objective: CPU and GPU branches run concurrently.
 
-For overlap, the approximate HIGH-phase objective is instead
+The overlap planner therefore minimizes the modeled HIGH critical path:
 
 ```text
 max(
   sum CPU-direct time of selected groups,
   sum DMA time of unselected groups
+    + sum GPU-HIGH work time of unselected groups
 )
 ```
 
-using rates measured under the same overlap setting. A group can therefore have a negative sequential margin and still reduce the critical path while the GPU/DMA branch has slack.
+A group may have a negative sequential margin and still be useful if moving it to CPU balances the two branches.
 
-`plan_cpu_high_groups.py --overlap` sorts optional groups by `DMA time removed / CPU time added`, evaluates every prefix, and chooses the prefix with the smallest modeled critical path. This is exact for the fractional relaxation and a deterministic `O(G log G)` approximation to the discrete group partition.
+`plan_cpu_high_groups.py --overlap` ranks optional groups by removable GPU-side time per CPU second, evaluates every prefix, and chooses the prefix with the smallest modeled critical path. It is a deterministic `O(G log G)` approximation to the discrete partition problem.
+
+## v5.8 three-rate measured cost model
+
+Threshold sweeps now calibrate three aggregate machine-specific rates under the same execution mode:
+
+```text
+pcie_gib_s   aggregate H2D+D2H throughput
+gpu_gstate_s GPU HIGH state-step throughput
+cpu_gcell_s  CPU HIGH direct weighted-cell throughput
+```
+
+The cost-plan field
+
+```text
+gpu_state_steps = HIGH_LUT_K * (main_states + blocked_states)
+```
+
+is a proxy for the HIGH GPU work removed by offloading a group. It follows the compact backend's per-position work scale, including the identity/clear/main/blocked processing that grows with group state count.
+
+The planner accepts the measured GPU term with:
 
 ```bash
 python3 scripts/tools/plan_cpu_high_groups.py high-cost.tsv \
   --pcie-gib-s 38 \
+  --gpu-gstate-s 7.5 \
   --cpu-gcell-s 2.7 \
   --gpu-target-mib 12288 \
   --overlap \
   > cpu-high-overlap.groups
 ```
 
-The threshold sweep automatically adds `--overlap` when `CPU_HIGH_OVERLAP=1`. It also calibrates PCIe and CPU rates from that overlapped run rather than reusing the non-overlap rates, because contention changes both. The generated policy is then passed through the NUMA page-exposure analyzer automatically.
+For a group, modeled removable GPU-side time is
 
-The current overlap model deliberately includes DMA and CPU-direct time but not a per-group GPU-kernel cost model. That makes it conservative when offloading also removes meaningful GPU kernel work; a later hardware-counter fit can add that term.
+```text
+roundtrip_bytes / measured_PCIe_rate
++ gpu_state_steps / measured_GPU_state_step_rate
+```
+
+while CPU cost uses the weighted direct cell count and measured CPU rate. If `--gpu-gstate-s` is omitted, the planner falls back to the older DMA-only GPU-side model.
+
+`analyze_cpu_high_sweep.py --cost-plan ...` estimates all three rates from threshold runs. `ramstream32-cpu-high-sweep.sh` then passes all available rates to `plan_cpu_high_groups.py`; when `CPU_HIGH_OVERLAP=1` it also adds `--overlap`. The generated policy is therefore calibrated to the same overlap/contention regime that produced the measurements rather than reusing non-overlap rates.
+
+The per-stream CPU weights still default to one. Separate NN, NR/NL, BLOCK, and CROSS weights remain a later hardware-counter fitting experiment.
 
 ## NUMA page-boundary analysis
 
-The authoritative arrays are anonymous `mmap` allocations with `MADV_HUGEPAGE`. A fixed LOW-occupancy group is contiguous only within each HIGH row: neighboring occupancy groups can therefore share the first/last VM page of those row slices.
+The authoritative arrays are anonymous `mmap` allocations with `MADV_HUGEPAGE`. A fixed LOW-occupancy group is contiguous only within each HIGH row, so neighboring occupancy groups can share the first/last VM page of those row slices.
 
-The exact cost plan now carries safe upper bounds for the authoritative bytes that can lie on group-boundary pages for both 4 KiB and 2 MiB page sizes. Summarize them for a threshold or exact policy with:
+The exact cost plan carries safe upper bounds for authoritative bytes that can lie on group-boundary pages for both 4 KiB and 2 MiB page sizes. Summarize them with:
 
 ```bash
 python3 scripts/tools/analyze_cpu_high_numa.py high-cost.tsv \
   --groups-file cpu-high.groups
 ```
 
-or:
+or
 
 ```bash
 python3 scripts/tools/analyze_cpu_high_numa.py high-cost.tsv \
   --threshold-mib 128 --threshold-mib 256 --threshold-mib 512
 ```
 
-The reported `page4k_boundary_upper_fraction` and `page2m_boundary_upper_fraction` are deliberately conservative upper bounds, not measured remote-NUMA traffic. If the 2 MiB upper fraction is high while the 4 KiB fraction is low, per-group `mbind` combined with transparent huge pages is structurally unattractive: splitting or disabling huge pages for CPU-owned slices should be investigated before adding a complicated memory policy.
+The reported page-boundary fractions are conservative upper bounds, not measured remote-NUMA traffic. A high 2 MiB exposure with low 4 KiB exposure argues against naive per-group `mbind` while transparent huge pages remain enabled.
 
 ## n=27 size-threshold reference points
 
@@ -300,9 +311,9 @@ The reported `page4k_boundary_upper_fraction` and `page2m_boundary_upper_fractio
 
 These are transfer-volume reference points, not predicted wall-time improvements.
 
-## One-command threshold calibration
+## One-command calibration
 
-For direct mode, the sweep builds the exact cost plan automatically by default, calibrates the model, and emits a candidate group policy:
+For direct mode, the sweep builds the exact cost plan automatically, calibrates the machine model, and emits a candidate group policy:
 
 ```bash
 N=27 \
@@ -316,7 +327,7 @@ REPEATS=2 \
 bash scripts/bench/ramstream32-cpu-high-sweep.sh
 ```
 
-Repeat with `CPU_HIGH_OVERLAP=1`, because memory-bandwidth contention changes both measured DMA and CPU rates. Generated artifacts include the raw sweep TSV, metadata, exact group-cost TSV, analysis output, a candidate `.groups` policy file, and the NUMA page-exposure summary for that policy.
+Repeat with `CPU_HIGH_OVERLAP=1`. Generated artifacts include the raw sweep TSV, metadata, exact group-cost TSV, analysis output, a candidate `.groups` policy file, and the NUMA page-exposure summary.
 
 Set `COST_PLAN=none` to disable automatic cost-plan generation or provide `COST_PLAN=/path/to/existing.tsv` to reuse one.
 
@@ -324,13 +335,13 @@ Set `COST_PLAN=none` to disable automatic cost-plan generation or provide `COST_
 
 `.github/workflows/ramstream32-sparse-ci.yml` covers W=22/W=28 compilation, normal plans, scratch/direct CPU HIGH plans, all four direct stream classes, explicit group-file selection, affinity parser behavior, exact-work schedule construction, the W=10 exhaustive reference comparison, concurrent disjoint HIGH execution, and the exact group-cost probe.
 
-`.github/workflows/ramstream32-bench-script-ci.yml` syntax-checks the sweep/build scripts, compiles the Python tools, validates sweep calibration on synthetic data, checks sequential and overlap-critical-path group planning, and validates the 4 KiB/2 MiB NUMA page-exposure analyzer.
+`.github/workflows/ramstream32-bench-script-ci.yml` syntax-checks the sweep/build scripts, compiles the Python tools, validates PCIe/CPU/GPU sweep calibration on synthetic data, checks sequential and overlap-critical-path group planning with `--gpu-gstate-s`, and validates the 4 KiB/2 MiB NUMA page-exposure analyzer.
 
 ## Next experiments
 
 The remaining large opportunities are increasingly memory-topology and model-fitting problems:
 
-1. use the page-exposure results to decide whether authoritative CPU-owned slices should stay under THP, use 4 KiB pages, or receive a coarse socket-level memory policy;
-2. estimate separate NN, NR/NL, BLOCK, and CROSS weights from hardware counters instead of using equal cell weights;
-3. extend the overlap model with measured per-group GPU-kernel cost rather than treating DMA as the entire removable GPU branch;
+1. use page-exposure results to choose THP, 4 KiB pages, or a coarse socket-level memory policy for CPU-owned slices;
+2. estimate separate NN, NR/NL, BLOCK, and CROSS CPU weights from hardware counters;
+3. fit GPU HIGH cost more finely than the current state-step proxy if measured residuals justify it;
 4. for multi-GPU B300 nodes, keep the largest HIGH occupancy groups resident across more than one local step when dependencies permit, while CPU handles the long tail of small groups.
