@@ -58,6 +58,16 @@ static int cpu_low_domain_size_from_env() {
     return int(v);
 }
 
+static bool cpu_low_domain_refine_from_env() {
+    const char* s = std::getenv("CPU_LOW_DOMAIN_REFINE");
+    if (!s || !*s || std::strcmp(s, "1") == 0 || std::strcmp(s, "true") == 0
+        || std::strcmp(s, "yes") == 0 || std::strcmp(s, "on") == 0) return true;
+    if (std::strcmp(s, "0") == 0 || std::strcmp(s, "false") == 0
+        || std::strcmp(s, "no") == 0 || std::strcmp(s, "off") == 0) return false;
+    std::cerr << "CPU_LOW_DOMAIN_REFINE must be 0/1, false/true, no/yes, or off/on\n";
+    std::exit(142);
+}
+
 static uint64_t cpu_low_sparse_job_cells(
     const CpuLowJob& job, const CpuLowSparseHost& sparse
 ) {
@@ -366,7 +376,7 @@ static void cpu_low_refine_domain_boundaries(
 
 static uint64_t cpu_low_build_domain_schedule(
     const std::vector<CpuLowJob>& jobs, const CpuLowSparseHost& sparse,
-    int workers, int domain_size,
+    int workers, int domain_size, bool refine_boundaries,
     std::vector<std::vector<size_t>>& worker_jobs,
     std::vector<uint64_t>& worker_cells,
     int& active_domains, int& refined_boundaries,
@@ -438,9 +448,11 @@ static uint64_t cpu_low_build_domain_schedule(
         std::exit(139);
     }
 
-    cpu_low_refine_domain_boundaries(
-        ordered, jobs, workers, domain_size, segs,
-        refined_boundaries, moved_jobs);
+    if (refine_boundaries) {
+        cpu_low_refine_domain_boundaries(
+            ordered, jobs, workers, domain_size, segs,
+            refined_boundaries, moved_jobs);
+    }
 
     for (int d = 0; d < domains; ++d) {
         auto seg = segs[size_t(d)];
@@ -460,6 +472,7 @@ struct CpuLowSparsePersistentPool {
     int workers = 1;
     CpuLowScheduleMode schedule_mode = CPU_LOW_SCHEDULE_DYNAMIC;
     int domain_size = 0;
+    bool domain_refine = true;
     std::vector<CpuLowSparseStats> stats;
     double wall_s = 0.0;
     double worker_start_s = 0.0;
@@ -497,9 +510,11 @@ struct CpuLowSparsePersistentPool {
     explicit CpuLowSparsePersistentPool(
         int n,
         CpuLowScheduleMode mode = cpu_low_schedule_mode_from_env(),
-        int requested_domain_size = cpu_low_domain_size_from_env()
+        int requested_domain_size = cpu_low_domain_size_from_env(),
+        bool requested_domain_refine = cpu_low_domain_refine_from_env()
     ) : workers(std::max(1, n)), schedule_mode(mode),
-        domain_size(requested_domain_size), stats(size_t(std::max(1, n))) {
+        domain_size(requested_domain_size), domain_refine(requested_domain_refine),
+        stats(size_t(std::max(1, n))) {
         if (schedule_mode == CPU_LOW_SCHEDULE_DOMAIN
             && (domain_size <= 0 || domain_size > workers)) {
             std::cerr << "CPU_LOW_DOMAIN_SIZE must be in 1..CPU_WORKERS for domain schedule\n";
@@ -522,7 +537,8 @@ struct CpuLowSparsePersistentPool {
         std::cerr << "cpu_low_sparse_persistent workers=" << workers
                   << " schedule=" << cpu_low_schedule_name(schedule_mode);
         if (schedule_mode == CPU_LOW_SCHEDULE_DOMAIN)
-            std::cerr << " domain_size=" << domain_size;
+            std::cerr << " domain_size=" << domain_size
+                      << " refine=" << int(domain_refine);
         std::cerr << " start_s=" << worker_start_s << '\n';
     }
 
@@ -545,7 +561,7 @@ struct CpuLowSparsePersistentPool {
 
         if (schedule_mode == CPU_LOW_SCHEDULE_DOMAIN) {
             domain_normalized_cap = cpu_low_build_domain_schedule(
-                jobs, sparse, workers, domain_size,
+                jobs, sparse, workers, domain_size, domain_refine,
                 sticky_worker_jobs, sticky_worker_cells, domain_active_domains,
                 domain_refined_boundaries, domain_refined_job_moves);
             for (size_t i = 0; i < jobs.size(); ++i) {
@@ -619,6 +635,7 @@ struct CpuLowSparsePersistentPool {
             std::cerr << " optimal_cap=" << contiguous_optimal_cap;
         if (schedule_mode == CPU_LOW_SCHEDULE_DOMAIN)
             std::cerr << " domain_size=" << domain_size
+                      << " refine=" << int(domain_refine)
                       << " active_domains=" << domain_active_domains
                       << " outer_normalized_cap=" << domain_normalized_cap
                       << " refined_boundaries=" << domain_refined_boundaries
