@@ -95,7 +95,7 @@ CPU_HIGH_WORKERS=32 \
   27 4294967291 12288 32
 ```
 
-`CPU_HIGH_MAX_MIB=0` disables CPU HIGH offload regardless of the mode setting.
+`CPU_HIGH_MAX_MIB=0` disables threshold-based CPU HIGH offload.
 
 ## v5.0 CPU/GPU HIGH overlap
 
@@ -114,62 +114,30 @@ Overlap is not assumed to be faster. PCIe DMA and CPU direct execution both cons
 
 ## v5.1 64-bit HIGH orbit metadata
 
-The first direct executor stored each orbit operation in 16 bytes:
-
-- source HIGH rank;
-- partner HIGH rank;
-- drop HIGH rank;
-- orbit kind;
-- partner block ID;
-- drop block ID.
-
-The two block IDs are redundant.
+The first direct executor stored each orbit operation in 16 bytes. v5.1 removes redundant block IDs and stores only three 20-bit HIGH ranks in one `uint64_t`. Four high bits remain unused, so the orbit portion of direct metadata is halved from 16 bytes/op to 8 bytes/op.
 
 For a source main factor block and active HIGH position `p`:
 
-1. if `p != LOW_LUT_K+1`, the partner transformation is entirely inside HIGH and preserves the HIGH endpoint height and center, so the partner remains in the source main block;
-2. at `p = LOW_LUT_K+1`, the pair crosses the HIGH/center boundary. `NN -> LR` leaves center `R`, while `NR -> RN` and `NL -> LN` leave center `N`; the unchanged LOW start height `source.hs` therefore determines the destination HIGH endpoint height and partner block;
-3. dropping the leading `N` preserves the combined HIGH+center endpoint height, so the blocked destination block is always `source.hs`.
+1. if `p != LOW_LUT_K+1`, the partner transformation is entirely inside HIGH and remains in the source main block;
+2. at `p = LOW_LUT_K+1`, `NN -> LR` leaves center `R`, while `NR -> RN` and `NL -> LN` leave center `N`, so `source.hs` and the orbit class determine the partner block;
+3. dropping the leading `N` always lands in blocked block `source.hs`.
 
-v5.1 stores only
-
-```text
-20-bit source HIGH rank
-20-bit partner HIGH rank
-20-bit drop HIGH rank
-```
-
-in one `uint64_t`. Four high bits remain unused. The orbit portion of direct metadata is therefore halved from 16 bytes/op to 8 bytes/op.
-
-This is guarded during metadata construction: the builder still computes partner/drop states with the full topology operations and ranks them normally, then asserts that the derived block IDs equal the explicit block IDs. A mismatch aborts before the compact stream is accepted. Rank overflow beyond 20 bits also aborts.
-
-The production `--plan-only` output computes `cpu_high_direct_meta_mib` through the compatibility stream wrappers, so it reports the complete compact footprint including all split offset tables.
+The builder still computes the full partner/drop states and explicit block IDs first, then asserts that the derived IDs match before accepting the compact stream. Rank overflow beyond 20 bits also aborts.
 
 ## v5.2 split NN and NR/NL orbit streams
 
-After v5.1, the direct hot loop still decoded an orbit kind and branched between the NN algebra and the common NR/NL algebra. NR and NL have identical count updates, so three streams are unnecessary.
-
-v5.2 uses two streams per `(p, source factor block)`:
+NR and NL have identical count updates. v5.2 therefore uses two streams per `(p, source factor block)`:
 
 - `NN`;
 - `NR/NL`.
 
-The 64-bit record now contains only the three 20-bit HIGH ranks; stream identity supplies the algebra. Destination block reconstruction is also hoisted outside the per-operation loop because it depends only on `(p, source block, stream)`.
+Stream identity supplies the algebra, so runtime no longer decodes or branches on orbit kind. Partner/drop block reconstruction is also hoisted outside the per-operation loop because it depends only on `(p, source block, stream)`.
 
-The reordering is exact. Every blocked drop state uniquely reconstructs its source by inserting the dropped `N`; the symbol immediately below that `N` determines whether the orbit belongs to NN, NR, or NL. Therefore two distinct N* orbit representatives cannot share the same blocked member, and partner states (`LR`, `RN`, `LN`) are never N* representatives at the same position.
-
-The operation size remains 8 bytes. v5.2 is therefore a CPU front-end / branch-prediction optimization, not a metadata-size reduction. The extra cost is one additional offset table.
+The reordering is exact. Every blocked drop state uniquely reconstructs its source by inserting the dropped `N`; the lower symbol determines NN, NR, or NL. Partner states (`LR`, `RN`, `LN`) are never N* representatives at the same position.
 
 ## v5.3 split BLOCK and CROSS closure streams
 
-The remaining descriptor-kind branch in direct mode was closure dispatch. Closure operations read main source values and only add into blocked destinations; they never modify another closure source. Reordering ordinary blocked closures and boundary CROSS closures is therefore safe, and additions into the same destination are commutative modulo the CRT prime.
-
-v5.3 builds two closure streams:
-
-- ordinary `BLOCK` closures;
-- boundary `CROSS` closures.
-
-Runtime no longer decodes `HIGHDESC_BLOCK` versus `HIGHDESC_CROSS` inside the hot loop. The LOW mask-code base used by CROSS is computed only when the CROSS stream for a source block is non-empty.
+Closure operations read main source values and only add into blocked destinations, so ordinary blocked closures and boundary CROSS closures can be reordered safely. v5.3 builds independent `BLOCK` and `CROSS` streams and removes the last descriptor-kind branch from the CPU HIGH direct hot loops.
 
 The n=27 direct plan log reports all four stream populations:
 
@@ -180,9 +148,62 @@ block_closure_ops=...
 cross_closure_ops=...
 ```
 
-CI requires these fields to be present, while the W=10 exhaustive reference comparison continues to validate the complete direct result.
+CI requires these fields to be present, while the W=10 exhaustive reference comparison validates the complete result.
 
-## n=27 partition sizes
+## v5.4 exact group cost model and file policy
+
+A pure size threshold is only a proxy for CPU cost. Two occupancy groups with similar transfer size can have different NN/NRNL/closure/CROSS densities.
+
+The cost-plan probe computes the exact number of direct inner-loop cell iterations for every HIGH occupancy group:
+
+```bash
+N=27 bash scripts/build/gridfp-ramstream32-cpu-high-cost-plan.sh
+./build/ramstream32_cpu_high_cost_plan_n27 27 > high-cost.tsv
+```
+
+For each group it reports:
+
+- round-trip bytes removed from PCIe if that group moves to CPU;
+- main and blocked state counts;
+- NN cell iterations;
+- NR/NL cell iterations;
+- ordinary blocked-closure cell iterations;
+- CROSS cell iterations.
+
+The probe also verifies that all LOW-occupancy groups partition the authoritative main and blocked state spaces exactly once.
+
+Measured threshold sweeps can calibrate aggregate PCIe bandwidth and direct-executor weighted Gcells/s:
+
+```bash
+python3 scripts/tools/analyze_cpu_high_sweep.py sweep.tsv \
+  --cost-plan high-cost.tsv
+```
+
+The resulting rates feed the planner:
+
+```bash
+python3 scripts/tools/plan_cpu_high_groups.py high-cost.tsv \
+  --pcie-gib-s 45 \
+  --cpu-gcell-s 3.2 \
+  --gpu-target-mib 12288 \
+  > cpu-high.groups
+```
+
+The planner evaluates each group independently using estimated DMA time saved versus CPU direct time. Groups larger than `--gpu-target-mib` are forced to CPU so the remaining GPU set still fits. The resulting list is not required to be monotone in group size.
+
+Run that exact policy with:
+
+```bash
+CPU_HIGH_MODE=direct \
+CPU_HIGH_GROUPS_FILE=cpu-high.groups \
+CPU_HIGH_WORKERS=32 \
+./build/oneesan_cuda_gridfp_ramstream32_factorized_hybrid_sparse_n27 \
+  27 4294967291 12288 32
+```
+
+`CPU_HIGH_GROUPS_FILE` overrides `CPU_HIGH_MAX_MIB`. The backend reports `cpu_high_policy=file` plus an FNV hash of the final selected-group bitset so a benchmark can identify the exact partition without embedding thousands of IDs in its output.
+
+## n=27 size-threshold reference points
 
 | threshold | CPU groups | PCIe removed | PCIe remaining |
 |---:|---:|---:|---:|
@@ -192,11 +213,11 @@ CI requires these fields to be present, while the W=10 exhaustive reference comp
 | 512 MiB | 14,913 | 61.2090 TiB | 44.8787 TiB |
 | 1024 MiB | 15,914 | 82.5714 TiB | 23.5163 TiB |
 
-These numbers are transfer-volume savings, not predicted wall-time improvements. CPU work must beat the removed PCIe time.
+These are transfer-volume reference points, not predicted wall-time improvements.
 
-## Threshold sweep and break-even analysis
+## One-command threshold calibration
 
-Build once, then run the same backend across several thresholds:
+For direct mode, the sweep now builds the exact cost plan automatically by default, calibrates the model, and emits a candidate group policy:
 
 ```bash
 N=27 \
@@ -209,34 +230,21 @@ REPEATS=2 \
 bash scripts/bench/ramstream32-cpu-high-sweep.sh
 ```
 
-Repeat with `CPU_HIGH_OVERLAP=1`. Odd repeats use ascending thresholds and even repeats use descending thresholds to reduce order bias. Every run must produce the same residue.
+Repeat with `CPU_HIGH_OVERLAP=1`, because memory-bandwidth contention changes both measured DMA and CPU rates. Generated artifacts include the raw sweep TSV, metadata, exact group-cost TSV, analysis output, and a candidate `.groups` policy file.
 
-The TSV records total wall time, H2D/GPU/D2H time, CPU HIGH and LOW time, removed/remaining PCIe volume, group count, mode, and overlap setting. The sweep automatically runs
-
-```bash
-python3 scripts/tools/analyze_cpu_high_sweep.py RESULT.tsv
-```
-
-which reports measured DMA seconds saved per TiB, CPU HIGH seconds spent per TiB, sequential break-even margin, offload efficiency, and the best observed threshold.
+Set `COST_PLAN=none` to disable automatic cost-plan generation or provide `COST_PLAN=/path/to/existing.tsv` to reuse one.
 
 ## Validation
 
-`.github/workflows/ramstream32-sparse-ci.yml` covers:
+`.github/workflows/ramstream32-sparse-ci.yml` covers W=22/W=28 compilation, normal plans, scratch/direct CPU HIGH plans, all four direct stream classes, the W=10 exhaustive reference comparison, concurrent disjoint HIGH execution, and the exact group-cost probe.
 
-1. W=22 and W=28 compilation;
-2. the normal hybrid-sparse plan;
-3. the n=27 256-MiB scratch partition, requiring 12,911 CPU groups;
-4. the same n=27 direct metadata plan and all four v5.3 stream classes;
-5. W=10 full-state comparison of both CPU HIGH executors and all CPU LOW executors against the reference recurrence;
-6. concurrent execution of two disjoint W=10 HIGH group subsets against the same reference result.
-
-The compact orbit builder additionally validates every derived partner/drop block against the full topology result before discarding those block IDs.
+`.github/workflows/ramstream32-bench-script-ci.yml` syntax-checks the sweep/build scripts, compiles the Python tools, validates sweep calibration on synthetic data, and checks that the planner can choose a profitable group while rejecting an intentionally expensive one.
 
 ## Next experiments
 
-The next large gains are scheduling and memory-placement problems rather than per-operation branches:
+The remaining large opportunities are increasingly memory-topology and scheduling problems:
 
-1. replace the fixed MiB threshold with a cost model learned from measured CPU-HIGH and DMA cost per group-size band;
-2. NUMA-pin CPU HIGH workers and authoritative occupancy slices so CPU offload does not bounce the roughly 1.9-TiB state space across sockets;
+1. NUMA-pin CPU HIGH workers and authoritative occupancy slices so CPU offload does not bounce the roughly 1.9-TiB state space across sockets;
+2. estimate separate NN, NR/NL, BLOCK, and CROSS weights from hardware counters instead of using equal cell weights;
 3. allocate CPU workers dynamically between HIGH and LOW according to the measured critical path, especially when `CPU_HIGH_OVERLAP=1`;
 4. for multi-GPU B300 nodes, keep the largest HIGH occupancy groups resident across more than one local step when dependencies permit, while CPU handles the long tail of small groups.
