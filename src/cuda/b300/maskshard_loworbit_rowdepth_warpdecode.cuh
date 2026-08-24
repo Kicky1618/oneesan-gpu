@@ -19,6 +19,18 @@ __device__ __forceinline__ int maskshard_loworbit_compact_find_block(
     return lo - 1;
 }
 
+__device__ __forceinline__ int maskshard_loworbit_physical_find_block(
+    Code task, int nb
+) {
+    int lo = 0, hi = nb;
+    while (lo < hi) {
+        const int mid = (lo + hi) >> 1;
+        if (task < D_F_BLOCK_BLOCKS[mid].end) hi = mid;
+        else lo = mid + 1;
+    }
+    return lo;
+}
+
 __global__ void maskshard_main_block_loworbit_rowdepth_warpdecode_kernel(
     Count* mainv, Count* blockv, Code n, int p
 ) {
@@ -43,7 +55,26 @@ __global__ void maskshard_main_block_loworbit_rowdepth_warpdecode_kernel(
 
         if (saturated) {
             di = task;
+#ifdef MASKSHARD_LOW_ORBIT_WARP_DECODE_FULLCAP
+            const unsigned live = __activemask();
+            const int lane = int(threadIdx.x & 31);
+            const int leader = __ffs(int(live)) - 1;
+            const int tail = 31 - __clz(live);
+            int first_bid = 0;
+            int last_bid = 0;
+            if (lane == leader) {
+                first_bid = maskshard_loworbit_physical_find_block(task, nb);
+                last_bid = maskshard_loworbit_physical_find_block(
+                    task + Code(tail - leader), nb);
+            }
+            first_bid = __shfl_sync(live, first_bid, leader);
+            last_bid = __shfl_sync(live, last_bid, leader);
+            dbid = first_bid == last_bid
+                ? first_bid
+                : maskshard_loworbit_physical_find_block(task, nb);
+#else
             dbid = f_find_block(di);
+#endif
             dx = D_F_BLOCK_BLOCKS[dbid];
             maskshard_split_rank(di, dx, dhr, dlr);
         } else {
