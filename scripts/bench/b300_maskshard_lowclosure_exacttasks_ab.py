@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""A/B entrypoint isolating v0.25 exact LOW closure task mapping."""
+"""A/B entrypoint isolating v0.26 exact LOW closure task mapping."""
 
 from __future__ import annotations
 
@@ -18,12 +18,12 @@ spec.loader.exec_module(base)
 
 base.VARIANTS.update(
     {
-        "v0.24": "src/cuda/b300/oneesan_cuda_gridfp_b300_hbm32_maskshard_blockorbit_compactaux_fullclosure_highrowpack16_lazyblockinit_rowdepthexact_tightlaunch_rowdepthorbit_rowcaplaunch_exacttasks_highclosurerowdepth_tasklaunch_exactclosuretasks_exactclosurelaunch_lowclosurerowdepth_batch_guarded.cu",
-        "v0.25": "src/cuda/b300/oneesan_cuda_gridfp_b300_hbm32_maskshard_blockorbit_compactaux_fullclosure_highrowpack16_lazyblockinit_rowdepthexact_tightlaunch_rowdepthorbit_rowcaplaunch_exacttasks_highclosurerowdepth_tasklaunch_exactclosuretasks_exactclosurelaunch_lowclosurerowdepth_exacttasks_batch_guarded.cu",
+        "v0.25": "src/cuda/b300/oneesan_cuda_gridfp_b300_hbm32_maskshard_blockorbit_compactaux_fullclosure_highrowpack29_lazyblockinit_rowdepthexact_tightlaunch_rowdepthorbit_rowcaplaunch_exacttasks_highclosurerowdepth_tasklaunch_exactclosuretasks_exactclosurelaunch_lowclosurerowdepth_batch_guarded.cu",
+        "v0.26": "src/cuda/b300/oneesan_cuda_gridfp_b300_hbm32_maskshard_blockorbit_compactaux_fullclosure_highrowpack29_lazyblockinit_rowdepthexact_tightlaunch_rowdepthorbit_rowcaplaunch_exacttasks_highclosurerowdepth_tasklaunch_exactclosuretasks_exactclosurelaunch_lowclosurerowdepth_exacttasks_batch_guarded.cu",
     }
 )
 
 if "--variants" not in sys.argv[1:]:
-    sys.argv[1:1] = ["--variants", "v0.24", "v0.25"]
+    sys.argv[1:1] = ["--variants", "v0.25", "v0.26"]
 
 raise SystemExit(base.main())
