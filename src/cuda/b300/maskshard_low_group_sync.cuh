@@ -57,7 +57,11 @@ static void maskshard_configure_low_group_group_sync(std::uint32_t mask) {
                   << " expected=" << EXPECTED << '\n';
         std::exit(329);
     }
+#ifdef MASKSHARD_LOW_ORBIT_WARP_ROW_TASKS
+    maskshard_configure_low_group_warprow(mask);
+#else
     maskshard_configure_low_group_loworbit_compact(mask);
+#endif
     G_MS_LOW_GROUP_SYNC_ACTIVE = true;
     G_MS_LOW_GROUP_SYNC_PHASE = 0;
 }
