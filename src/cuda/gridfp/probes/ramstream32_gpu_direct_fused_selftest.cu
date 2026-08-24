@@ -4,6 +4,7 @@
 
 #include "../ramstream32_gpu_direct_gather_cross.cuh"
 #include "../ramstream32_gpu_direct_fused.cuh"
+#include "../ramstream32_gpu_direct_fused_validate.hpp"
 
 int main(){
     constexpr Count mod=4294967291u;constexpr int W=TARGET_W;
@@ -11,7 +12,7 @@ int main(){
     int visible=0;cudaError_t ce=cudaGetDeviceCount(&visible);if(ce!=cudaSuccess||visible<1){std::cout<<"gpu-direct-fused-selftest SKIP no CUDA device\n";return 0;}ck(cudaSetDevice(0),"gdf selftest set device");
     build_full_dp();G_FACTOR=build_factor_tables();StorageFactorHost storage=build_storage_factor_tables(G_FACTOR);StorageLayout layout=build_storage_layout(storage);
     LowDescHost lowdesc=build_low_descriptors(storage,layout);HighDescHost highdesc=build_high_descriptors(storage,layout);LowOrbitHost loworbit=build_cpu_low_orbit(storage,layout,lowdesc);CpuHighDirectHost highdirect=build_cpu_high_direct(storage,layout,highdesc);
-    GpuDirectCrossHost forward=build_gpu_direct_cross(storage);GpuDirectGatherHost ordinary=build_gpu_direct_gather(layout,lowdesc,loworbit,highdirect);GpuDirectCrossGatherHost cross=build_gpu_direct_cross_gather(storage,layout,lowdesc,loworbit,highdirect);GpuDirectFusedHost fused=build_gpu_direct_fused(layout,ordinary,cross);
+    GpuDirectCrossHost forward=build_gpu_direct_cross(storage);GpuDirectGatherHost ordinary=build_gpu_direct_gather(layout,lowdesc,loworbit,highdirect);GpuDirectCrossGatherHost cross=build_gpu_direct_cross_gather(storage,layout,lowdesc,loworbit,highdirect);GpuDirectFusedHost fused=build_gpu_direct_fused_checked(layout,ordinary,cross);
     auto ms=gdg_enum_states(W),bs=gdg_enum_states(W-1);if(ms.size()!=layout.main_size||bs.size()!=layout.block_size)return 2;
     std::unordered_map<MateID,size_t>mi,di;for(size_t i=0;i<ms.size();++i)mi.emplace(ms[i],i);for(size_t i=0;i<bs.size();++i)di.emplace(bs[i],i);
     std::vector<Count>init_m(ms.size()),init_b(bs.size());std::mt19937_64 rng(1618);for(auto&x:init_m)x=Count(rng()%mod);for(auto&x:init_b)x=Count(rng()%mod);
