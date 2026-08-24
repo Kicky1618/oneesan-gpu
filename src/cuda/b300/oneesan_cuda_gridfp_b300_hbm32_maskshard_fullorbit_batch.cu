@@ -509,6 +509,9 @@ int main(int argc, char** argv) {
     const FullOrbitBatchAddress ia = fullorbit_batch_main_address_host(init, storage, layout, shard);
     const FullOrbitBatchAddress oa = fullorbit_batch_main_address_host(MateID(R), storage, layout, shard);
     const auto high_jobs = build_fullorbit_batch_high_jobs(&high_desc);
+#ifdef MASKSHARD_HIGH_CLOSURE_ROW_DEPTH_COMPACT
+    maskshard_prepare_highclosure_rowdepth_compact(high_desc, ngpu);
+#endif
     std::vector<std::vector<FullOrbitBatchLowJob>> low_jobs(ngpu);
     for (uint32_t mask = 0; mask < shard.masks; ++mask) {
         FullOrbitBatchLowJob job;
@@ -649,5 +652,8 @@ int main(int argc, char** argv) {
         if (mp[d]) cudaFree(mp[d]);
         if (bp[d]) cudaFree(bp[d]);
     }
+#ifdef MASKSHARD_HIGH_CLOSURE_ROW_DEPTH_COMPACT
+    maskshard_release_highclosure_rowdepth_compact();
+#endif
     return 0;
 }
