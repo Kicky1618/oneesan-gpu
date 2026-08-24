@@ -11,10 +11,20 @@ N="${N:-27}"
 ARCH="${ARCH:-native}"
 CONFIGS="${CONFIGS:-32:16 64:32 96:48 128:64}"
 BUILD="${BUILD:-1}"
+ANALYZE="${ANALYZE:-1}"
+MAX_IMBALANCE="${MAX_IMBALANCE:-}"
 OUT_DIR="${OUT_DIR:-$ROOT/work/bench_ramstream32_cpu_low_schedule_plan_sweep}"
 
 if (( N < 2 || N > 27 )); then
   echo "N must be in 2..27" >&2
+  exit 2
+fi
+if [[ "$ANALYZE" != 0 && "$ANALYZE" != 1 ]]; then
+  echo "ANALYZE must be 0 or 1" >&2
+  exit 2
+fi
+if [[ -n "$MAX_IMBALANCE" && ! "$MAX_IMBALANCE" =~ ^([0-9]+([.][0-9]*)?|[.][0-9]+)$ ]]; then
+  echo "MAX_IMBALANCE must be a non-negative number" >&2
   exit 2
 fi
 
@@ -46,6 +56,7 @@ mkdir -p "$OUT_DIR"
 ts="$(date -u +%Y%m%dT%H%M%SZ)"
 out="$OUT_DIR/low-schedule-plan-sweep-n${N}-${ts}.tsv"
 meta="$OUT_DIR/low-schedule-plan-sweep-n${N}-${ts}.meta"
+analysis="$OUT_DIR/low-schedule-plan-sweep-n${N}-${ts}.analysis.txt"
 
 file_sha256() {
   if command -v sha256sum >/dev/null 2>&1; then sha256sum "$1" | awk '{print $1}'
@@ -68,6 +79,8 @@ host=$(hostname 2>/dev/null || echo unknown)
 n=$N
 arch=$ARCH
 configs=$CONFIGS
+analyze=$ANALYZE
+max_imbalance=${MAX_IMBALANCE:-none}
 binary_sha256=$(file_sha256 "$bin")
 EOF
 
@@ -111,5 +124,14 @@ awk -F '\t' '
   }
 ' "$out"
 
+if [[ "$ANALYZE" == 1 ]]; then
+  args=(scripts/tools/analyze_cpu_low_schedule_plan_sweep.py "$out")
+  if [[ -n "$MAX_IMBALANCE" ]]; then
+    args+=(--max-imbalance "$MAX_IMBALANCE")
+  fi
+  python3 "${args[@]}" | tee "$analysis"
+fi
+
 echo "results=$out"
 echo "metadata=$meta"
+if [[ "$ANALYZE" == 1 ]]; then echo "analysis=$analysis"; fi
