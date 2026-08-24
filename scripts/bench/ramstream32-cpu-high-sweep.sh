@@ -75,6 +75,7 @@ cost_plan_path=""
 cost_plan_log=""
 policy_out=""
 policy_log=""
+numa_analysis_out=""
 
 file_sha256() {
   if command -v sha256sum >/dev/null 2>&1; then sha256sum "$1" | awk '{print $1}'
@@ -206,11 +207,19 @@ if [[ "$ANALYZE" != 0 ]]; then
     if [[ -n "$pcie_rate" && -n "$cpu_rate" ]]; then
       policy_out="$OUT_DIR/cpu-high-cost-policy-overlap${CPU_HIGH_OVERLAP}-n${N}-${ts}.groups"
       policy_log="$OUT_DIR/cpu-high-cost-policy-overlap${CPU_HIGH_OVERLAP}-n${N}-${ts}.log"
-      python3 scripts/tools/plan_cpu_high_groups.py "$cost_plan_path" \
-        --pcie-gib-s "$pcie_rate" --cpu-gcell-s "$cpu_rate" \
-        --gpu-target-mib "$GPU_TARGET_MIB" >"$policy_out" 2>"$policy_log"
+      planner_args=(
+        scripts/tools/plan_cpu_high_groups.py "$cost_plan_path"
+        --pcie-gib-s "$pcie_rate" --cpu-gcell-s "$cpu_rate"
+        --gpu-target-mib "$GPU_TARGET_MIB"
+      )
+      if [[ "$CPU_HIGH_OVERLAP" == 1 ]]; then planner_args+=(--overlap); fi
+      python3 "${planner_args[@]}" >"$policy_out" 2>"$policy_log"
+      numa_analysis_out="$OUT_DIR/cpu-high-cost-policy-overlap${CPU_HIGH_OVERLAP}-n${N}-${ts}.numa.txt"
+      python3 scripts/tools/analyze_cpu_high_numa.py "$cost_plan_path" \
+        --groups-file "$policy_out" >"$numa_analysis_out"
       echo "policy=$policy_out"
       echo "policy_log=$policy_log"
+      echo "numa_analysis=$numa_analysis_out"
     else
       echo "cost-model policy not generated: calibration rates unavailable" >&2
     fi
