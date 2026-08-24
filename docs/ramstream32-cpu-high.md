@@ -238,7 +238,7 @@ A group may have a negative sequential margin and still be useful if moving it t
 
 ## v5.8 three-rate measured cost model
 
-Threshold sweeps now calibrate three aggregate machine-specific rates under the same execution mode:
+Threshold sweeps calibrate three aggregate machine-specific rates under the same execution mode:
 
 ```text
 pcie_gib_s   aggregate H2D+D2H throughput
@@ -252,7 +252,7 @@ The cost-plan field
 gpu_state_steps = HIGH_LUT_K * (main_states + blocked_states)
 ```
 
-is a proxy for the HIGH GPU work removed by offloading a group. It follows the compact backend's per-position work scale, including the identity/clear/main/blocked processing that grows with group state count.
+is a proxy for HIGH GPU work removed by offloading a group.
 
 The planner accepts the measured GPU term with:
 
@@ -266,16 +266,54 @@ python3 scripts/tools/plan_cpu_high_groups.py high-cost.tsv \
   > cpu-high-overlap.groups
 ```
 
-For a group, modeled removable GPU-side time is
+If `--gpu-gstate-s` is omitted, the planner falls back to the DMA-only GPU-side model.
+
+## v5.9 affine CPU/GPU group-cost model
+
+A pure throughput model assumes zero fixed cost. That is weak for the many-small-group regime because both CPU direct execution and GPU HIGH processing pay per-group costs such as queue/scheduling work, descriptor setup, CUDA launches, and synchronization.
+
+`analyze_cpu_high_sweep.py` therefore also fits non-negative two-predictor models across threshold points:
 
 ```text
-roundtrip_bytes / measured_PCIe_rate
-+ gpu_state_steps / measured_GPU_state_step_rate
+CPU HIGH wall seconds ~= a_cpu * weighted_cells
+                       + b_cpu * group_executions
+
+GPU HIGH kernel seconds ~= a_gpu * gpu_state_steps
+                         + b_gpu * group_executions
 ```
 
-while CPU cost uses the weighted direct cell count and measured CPU rate. If `--gpu-gstate-s` is omitted, the planner falls back to the older DMA-only GPU-side model.
+The fit uses non-negative least squares over the two predictors. It reports:
 
-`analyze_cpu_high_sweep.py --cost-plan ...` estimates all three rates from threshold runs. `ramstream32-cpu-high-sweep.sh` then passes all available rates to `plan_cpu_high_groups.py`; when `CPU_HIGH_OVERLAP=1` it also adds `--overlap`. The generated policy is therefore calibrated to the same overlap/contention regime that produced the measurements rather than reusing non-overlap rates.
+```text
+affine_calibration ... cpu_gcell_s=... cpu_group_overhead_us=...
+affine_calibration ... gpu_gstate_s=... gpu_group_overhead_us=...
+```
+
+When a stable affine fit is available, the sweep prefers it over the older median throughput estimates and automatically passes
+
+```text
+--group-overhead-us ...
+--gpu-gstate-s ...
+--gpu-group-overhead-us ...
+```
+
+to `plan_cpu_high_groups.py`. If the fit is underdetermined or collapses to a zero throughput coefficient, the harness falls back to the v5.8 median-rate calibration.
+
+A manually calibrated affine policy can be generated with:
+
+```bash
+python3 scripts/tools/plan_cpu_high_groups.py high-cost.tsv \
+  --pcie-gib-s 38 \
+  --cpu-gcell-s 2.7 \
+  --group-overhead-us 15 \
+  --gpu-gstate-s 7.5 \
+  --gpu-group-overhead-us 8 \
+  --gpu-target-mib 12288 \
+  --overlap \
+  > cpu-high-overlap.groups
+```
+
+Empty zero-byte occupancy groups are excluded from affine fitting and planning because the production backend never executes them.
 
 The per-stream CPU weights still default to one. Separate NN, NR/NL, BLOCK, and CROSS weights remain a later hardware-counter fitting experiment.
 
@@ -335,7 +373,7 @@ Set `COST_PLAN=none` to disable automatic cost-plan generation or provide `COST_
 
 `.github/workflows/ramstream32-sparse-ci.yml` covers W=22/W=28 compilation, normal plans, scratch/direct CPU HIGH plans, all four direct stream classes, explicit group-file selection, affinity parser behavior, exact-work schedule construction, the W=10 exhaustive reference comparison, concurrent disjoint HIGH execution, and the exact group-cost probe.
 
-`.github/workflows/ramstream32-bench-script-ci.yml` syntax-checks the sweep/build scripts, compiles the Python tools, validates PCIe/CPU/GPU sweep calibration on synthetic data, checks sequential and overlap-critical-path group planning with `--gpu-gstate-s`, and validates the 4 KiB/2 MiB NUMA page-exposure analyzer.
+`.github/workflows/ramstream32-bench-script-ci.yml` syntax-checks the sweep/build scripts, compiles the Python tools, validates PCIe and affine CPU/GPU calibration on synthetic data with known throughput/overhead coefficients, checks sequential and overlap-critical-path group planning, and validates the 4 KiB/2 MiB NUMA page-exposure analyzer.
 
 ## Next experiments
 
