@@ -340,12 +340,12 @@ int main(int argc, char** argv) {
               << " contiguous_cross_domain_pages_2m=" << contiguous_domain_pages.cross_2m
               << " contiguous_cross_domain_auth_page_fraction_2m=" << contiguous_domain_pages.cross_auth_2m
               << " hybrid_domain_active_domains=" << domain_pool.domain_active_domains
-              << " hybrid_domain_optimal_per_worker_cap="
-              << domain_pool.domain_normalized_cap
-              << " hybrid_domain_min_worker_cells="
-              << cpu_low_min_cells(domain_pool.sticky_worker_cells)
-              << " hybrid_domain_max_worker_cells="
-              << cpu_low_max_cells(domain_pool.sticky_worker_cells)
+              << " hybrid_domain_optimal_per_worker_cap=" << domain_pool.domain_normalized_cap
+              << " hybrid_domain_outer_normalized_cap=" << domain_pool.domain_normalized_cap
+              << " hybrid_domain_refined_boundaries=" << domain_pool.domain_refined_boundaries
+              << " hybrid_domain_refined_job_moves=" << domain_pool.domain_refined_job_moves
+              << " hybrid_domain_min_worker_cells=" << cpu_low_min_cells(domain_pool.sticky_worker_cells)
+              << " hybrid_domain_max_worker_cells=" << cpu_low_max_cells(domain_pool.sticky_worker_cells)
               << " hybrid_domain_imbalance=" << hybrid_imbalance
               << " hybrid_domain_cross_worker_pages_4k=" << hybrid_pages.cross_4k
               << " hybrid_domain_cross_worker_auth_page_fraction_4k=" << hybrid_pages.cross_auth_4k
@@ -365,8 +365,7 @@ int main(int argc, char** argv) {
         for (int w = 0; w < workers; ++w) {
             uint64_t cells = lpt_pool.sticky_worker_cells[size_t(w)];
             uint64_t ccells = contiguous_pool.sticky_worker_cells[size_t(w)];
-            uint64_t hcells = domain_size > 0
-                ? domain_pool.sticky_worker_cells[size_t(w)] : 0;
+            uint64_t hcells = domain_size > 0 ? domain_pool.sticky_worker_cells[size_t(w)] : 0;
             double fraction = exact_total ? double(cells) / double(exact_total) : 0.0;
             double cfraction = exact_total ? double(ccells) / double(exact_total) : 0.0;
             double hfraction = exact_total ? double(hcells) / double(exact_total) : 0.0;
