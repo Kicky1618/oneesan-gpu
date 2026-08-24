@@ -16,6 +16,7 @@ class GroupCost:
     group: int
     mask: int
     roundtrip_bytes: int
+    pcie_copy_calls: int
     gpu_state_steps: int
     nn_cells: int
     nrnl_cells: int
@@ -69,13 +70,16 @@ def load_costs(path: str) -> list[GroupCost]:
         missing = required.difference(rd.fieldnames or [])
         if missing:
             raise SystemExit(f"missing cost columns: {', '.join(sorted(missing))}")
-        has_gpu_steps = "gpu_state_steps" in (rd.fieldnames or [])
+        fields = rd.fieldnames or []
+        has_gpu_steps = "gpu_state_steps" in fields
+        has_copy_calls = "pcie_copy_calls" in fields
         for row in rd:
             out.append(
                 GroupCost(
                     group=int(row["group"]),
                     mask=int(row["mask"]),
                     roundtrip_bytes=int(row["roundtrip_bytes"]),
+                    pcie_copy_calls=int(row["pcie_copy_calls"]) if has_copy_calls else 0,
                     gpu_state_steps=int(row["gpu_state_steps"]) if has_gpu_steps else 0,
                     nn_cells=int(row["nn_cells"]),
                     nrnl_cells=int(row["nrnl_cells"]),
@@ -155,13 +159,15 @@ def select_overlap(
 def main() -> None:
     ap = argparse.ArgumentParser(
         description=(
-            "Select CPU HIGH occupancy groups using measured DMA, GPU-HIGH, and "
+            "Select CPU HIGH occupancy groups using measured PCIe, GPU-HIGH, and "
             "CPU-direct cost models. Output is CPU_HIGH_GROUPS_FILE compatible."
         )
     )
     ap.add_argument("cost_tsv")
     ap.add_argument("--pcie-gib-s", type=float, required=True,
-                    help="measured aggregate H2D+D2H throughput in GiB/s")
+                    help="measured aggregate H2D+D2H payload throughput in GiB/s")
+    ap.add_argument("--pcie-copy-overhead-us", type=float, default=0.0,
+                    help="fixed cost per H2D/D2H factor-slice copy call")
     ap.add_argument("--cpu-gcell-s", type=float, required=True,
                     help="measured aggregate direct-executor throughput in weighted Gcells/s")
     ap.add_argument("--gpu-gstate-s", type=float, default=None,
@@ -196,6 +202,8 @@ def main() -> None:
             raise SystemExit(f"--{name.replace('_', '-')} must be positive")
     if args.gpu_gstate_s is not None and args.gpu_gstate_s <= 0:
         raise SystemExit("--gpu-gstate-s must be positive")
+    if args.pcie_copy_overhead_us < 0:
+        raise SystemExit("--pcie-copy-overhead-us must be non-negative")
     if args.group_overhead_us < 0 or args.gpu_group_overhead_us < 0:
         raise SystemExit("group overheads must be non-negative")
     if args.min_margin_us is not None and args.min_margin_us < 0:
@@ -209,6 +217,7 @@ def main() -> None:
     cpu_cell_rate = args.cpu_gcell_s * 1e9
     pcie_rate = args.pcie_gib_s * GIB
     gpu_state_rate = None if args.gpu_gstate_s is None else args.gpu_gstate_s * 1e9
+    fixed_pcie_copy_s = args.pcie_copy_overhead_us * 1e-6
     fixed_cpu_s = args.group_overhead_us * 1e-6
     fixed_gpu_s = args.gpu_group_overhead_us * 1e-6
     min_margin_s = None if args.min_margin_us is None else args.min_margin_us * 1e-6
@@ -216,6 +225,8 @@ def main() -> None:
 
     if gpu_state_rate is not None and not any(g.gpu_state_steps for g in costs):
         raise SystemExit("--gpu-gstate-s requires gpu_state_steps in the cost plan")
+    if fixed_pcie_copy_s > 0 and not any(g.pcie_copy_calls for g in costs):
+        raise SystemExit("--pcie-copy-overhead-us requires pcie_copy_calls in the cost plan")
 
     candidates: list[Candidate] = []
     for g in costs:
@@ -225,7 +236,7 @@ def main() -> None:
             args.nn_weight, args.nrnl_weight, args.block_weight, args.cross_weight
         )
         cpu_s = cells / cpu_cell_rate + fixed_cpu_s
-        dma_s = g.roundtrip_bytes / pcie_rate
+        dma_s = g.roundtrip_bytes / pcie_rate + g.pcie_copy_calls * fixed_pcie_copy_s
         gpu_kernel_s = fixed_gpu_s
         if gpu_state_rate is not None:
             gpu_kernel_s += g.gpu_state_steps / gpu_state_rate
@@ -250,7 +261,6 @@ def main() -> None:
         overlap_cpu_s = overlap_remaining_gpu_s = overlap_critical_s = math.nan
 
     selected_ids = sorted({x.group.group for x in selected})
-    selected_set = set(selected_ids)
 
     for group in selected_ids:
         print(group)
@@ -259,6 +269,7 @@ def main() -> None:
     selected_bytes = sum(x.group.roundtrip_bytes for x in selected)
     selected_cells = sum(x.cells for x in selected)
     selected_gpu_steps = sum(x.group.gpu_state_steps for x in selected)
+    selected_copy_calls = sum(x.group.pcie_copy_calls for x in selected)
     est_cpu_s = sum(x.cpu_s for x in selected)
     est_dma_saved_s = sum(x.dma_s for x in selected)
     est_kernel_saved_s = sum(x.gpu_kernel_s for x in selected)
@@ -272,8 +283,10 @@ def main() -> None:
         f"groups={len(candidates)} selected={len(selected_ids)} forced={len(forced_rows)} "
         f"removed_gib={selected_bytes / GIB:.6f} "
         f"removed_fraction={selected_bytes / total_bytes:.9f} "
+        f"pcie_copy_calls={selected_copy_calls} "
         f"weighted_gcells={selected_cells / 1e9:.6f} "
         f"gpu_gstate_steps={selected_gpu_steps / 1e9:.6f} "
+        f"pcie_copy_overhead_us={args.pcie_copy_overhead_us:.6f} "
         f"cpu_group_overhead_us={args.group_overhead_us:.6f} "
         f"gpu_group_overhead_us={args.gpu_group_overhead_us:.6f} "
         f"est_cpu_s={est_cpu_s:.6f} est_dma_saved_s={est_dma_saved_s:.6f} "
@@ -312,6 +325,7 @@ def main() -> None:
             "top "
             f"group={x.group.group} mask={x.group.mask} forced={int(x.forced)} "
             f"roundtrip_mib={x.group.roundtrip_bytes / MIB:.6f} "
+            f"pcie_copy_calls={x.group.pcie_copy_calls} "
             f"weighted_mcells={x.cells / 1e6:.6f} "
             f"gpu_mstate_steps={x.group.gpu_state_steps / 1e6:.6f} "
             f"cpu_us={x.cpu_s * 1e6:.3f} dma_us={x.dma_s * 1e6:.3f} "
