@@ -10,8 +10,8 @@ on:
       - 'src/cuda/b300/maskshard_highclosure_rowpack.cuh'
       - 'src/cuda/b300/maskshard_lowclosure_rowdepth.cuh'
       - 'src/cuda/b300/oneesan_cuda_gridfp_b300_hbm32_maskshard_fullorbit_batch.cu'
-      - 'src/cuda/b300/oneesan_cuda_gridfp_b300_hbm32_maskshard_blockorbit_compactaux_fullclosure_highrowpack16_lazyblockinit_rowdepthexact_tightlaunch_rowdepthorbit_rowcaplaunch_exacttasks_highclosurerowdepth_tasklaunch_exactclosuretasks_exactclosurelaunch_lowclosurerowdepth_batch_guarded.cu'
-      - 'src/cuda/b300/oneesan_cuda_gridfp_b300_hbm32_maskshard_blockorbit_compactaux_fullclosure_highrowpack29_lazyblockinit_rowdepthexact_tightlaunch_rowdepthorbit_rowcaplaunch_exacttasks_highclosurerowdepth_tasklaunch_exactclosuretasks_exactclosurelaunch_lowclosurerowdepth_batch_guarded.cu'
+      - 'src/cuda/b300/oneesan_b300_maskshard_v024_lowclosure_rowdepth.cu'
+      - 'src/cuda/b300/oneesan_b300_maskshard_v025_highrowpack29.cu'
       - 'scripts/bench/b300_maskshard_highclosure_threshold29_ab.py'
       - '.github/workflows/b300-highclosure-threshold-v25.yml'
   pull_request:
@@ -23,8 +23,8 @@ on:
       - 'src/cuda/b300/maskshard_highclosure_rowpack.cuh'
       - 'src/cuda/b300/maskshard_lowclosure_rowdepth.cuh'
       - 'src/cuda/b300/oneesan_cuda_gridfp_b300_hbm32_maskshard_fullorbit_batch.cu'
-      - 'src/cuda/b300/oneesan_cuda_gridfp_b300_hbm32_maskshard_blockorbit_compactaux_fullclosure_highrowpack16_lazyblockinit_rowdepthexact_tightlaunch_rowdepthorbit_rowcaplaunch_exacttasks_highclosurerowdepth_tasklaunch_exactclosuretasks_exactclosurelaunch_lowclosurerowdepth_batch_guarded.cu'
-      - 'src/cuda/b300/oneesan_cuda_gridfp_b300_hbm32_maskshard_blockorbit_compactaux_fullclosure_highrowpack29_lazyblockinit_rowdepthexact_tightlaunch_rowdepthorbit_rowcaplaunch_exacttasks_highclosurerowdepth_tasklaunch_exactclosuretasks_exactclosurelaunch_lowclosurerowdepth_batch_guarded.cu'
+      - 'src/cuda/b300/oneesan_b300_maskshard_v024_lowclosure_rowdepth.cu'
+      - 'src/cuda/b300/oneesan_b300_maskshard_v025_highrowpack29.cu'
       - 'scripts/bench/b300_maskshard_highclosure_threshold29_ab.py'
       - '.github/workflows/b300-highclosure-threshold-v25.yml'
   workflow_dispatch:
@@ -65,7 +65,7 @@ jobs:
             -DTARGET_W=${{ matrix.width }} \
             -DLOW_LUT_K=${{ matrix.low }} \
             -DHIGH_LUT_K=${{ matrix.high }} \
-            src/cuda/b300/oneesan_cuda_gridfp_b300_hbm32_maskshard_blockorbit_compactaux_fullclosure_highrowpack16_lazyblockinit_rowdepthexact_tightlaunch_rowdepthorbit_rowcaplaunch_exacttasks_highclosurerowdepth_tasklaunch_exactclosuretasks_exactclosurelaunch_lowclosurerowdepth_batch_guarded.cu \
+            src/cuda/b300/oneesan_b300_maskshard_v024_lowclosure_rowdepth.cu \
             -o build/b300_maskshard_v24_w${{ matrix.width }}
       - name: Compile v0.25 threshold-29
         shell: bash
@@ -74,7 +74,7 @@ jobs:
             -DTARGET_W=${{ matrix.width }} \
             -DLOW_LUT_K=${{ matrix.low }} \
             -DHIGH_LUT_K=${{ matrix.high }} \
-            src/cuda/b300/oneesan_cuda_gridfp_b300_hbm32_maskshard_blockorbit_compactaux_fullclosure_highrowpack29_lazyblockinit_rowdepthexact_tightlaunch_rowdepthorbit_rowcaplaunch_exacttasks_highclosurerowdepth_tasklaunch_exactclosuretasks_exactclosurelaunch_lowclosurerowdepth_batch_guarded.cu \
+            src/cuda/b300/oneesan_b300_maskshard_v025_highrowpack29.cu \
             -o build/b300_maskshard_v25_w${{ matrix.width }}
 
   ab-driver:
