@@ -12,10 +12,10 @@
 #define GDMA_HD inline
 #endif
 
-// Reduce x modulo mod. The fast path exploits mod = 2^32 - c.  For c <=
+// Reduce x modulo mod. The fast path exploits mod = 2^32 - c. For c <=
 // 65535, three base-2^32 folds reduce any uint64_t to < 2*mod, so only one
-// final subtraction is required.  Exact CRT primes used by this repository
-// have c <= 1209.  The generic fallback keeps experimental/smoke moduli valid.
+// final subtraction is required. Exact CRT primes used by this repository
+// have c <= 1209. The generic fallback keeps experimental/smoke moduli valid.
 GDMA_HD uint32_t gpu_direct_pm_reduce_u64_mod(uint64_t x, uint32_t mod) {
     if (!mod) return uint32_t(x);
     const uint32_t c = uint32_t(0u - mod); // 2^32 - mod, modulo 2^32.
@@ -39,8 +39,10 @@ __device__ __forceinline__ Count gpu_direct_pm_reduce_u64(uint64_t x) {
 }
 #endif
 
+static constexpr uint64_t GPU_DIRECT_PM_MAX_INVERSE_SCAN =
+    uint64_t(LOW_LUT_K > HIGH_LUT_K ? LOW_LUT_K : HIGH_LUT_K);
 static constexpr uint64_t GPU_DIRECT_PM_MAX_RAW_TERMS =
-    1ull + 0xffffull + 0xffffull * uint64_t(MAXW);
+    1ull + 0xffffull + 0xffffull * GPU_DIRECT_PM_MAX_INVERSE_SCAN;
 static_assert(GPU_DIRECT_PM_MAX_RAW_TERMS < (1ull << 20),
               "raw closure accumulator term bound unexpectedly large");
 static_assert(GPU_DIRECT_PM_MAX_RAW_TERMS * 0xffffffffull < (1ull << 52),
