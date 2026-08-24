@@ -12,10 +12,11 @@
 // Event-driven variant of BucketTransposeCtx.
 // cudaStreamWaitEvent may wait on an event from another CUDA device. Encode
 // in-place swap safety as GPU dependencies and avoid per-chunk host
-// synchronization. Fetch events are unique per (round,chunk).
+// synchronization. Fetch events are unique per (round,chunk), and round
+// completion events are unique per round as well.
 //
 // transpose() retains the blocking contract of the baseline context: it waits
-// once at the end of the complete 7-round transpose. This keeps transpose_s
+// once at the end of the complete K8 matching schedule. This keeps transpose_s
 // directly comparable while replacing O(rounds*chunks*GPUs) host waits with
 // only one final wait per GPU.
 
@@ -27,7 +28,7 @@ struct BucketTransposeEventCtx {
     std::array<uint8_t*,N> base{};
     std::array<uint8_t*,N> staging{};
     std::array<cudaStream_t,N> stream{};
-    std::array<cudaEvent_t,N> round_done{};
+    std::array<std::array<cudaEvent_t,N-1>,N> round_done{};
     std::array<std::vector<cudaEvent_t>,N> fetch_done;
     std::vector<std::array<std::pair<int,int>,N/2>> rounds;
     double peer_gib=0.0;
@@ -60,7 +61,8 @@ struct BucketTransposeEventCtx {
             }
             cke(cudaMalloc(&staging[g],chunk_bytes),"bucket event transpose staging alloc");
             cke(cudaStreamCreateWithFlags(&stream[g],cudaStreamNonBlocking),"bucket event transpose stream");
-            cke(cudaEventCreateWithFlags(&round_done[g],cudaEventDisableTiming),"bucket event transpose round event");
+            for(size_t ri=0;ri<rounds.size();++ri)
+                cke(cudaEventCreateWithFlags(&round_done[g][ri],cudaEventDisableTiming),"bucket event transpose round event");
             fetch_done[g].resize(event_count,nullptr);
             for(size_t k=0;k<event_count;++k)
                 cke(cudaEventCreateWithFlags(&fetch_done[g][k],cudaEventDisableTiming),"bucket event transpose fetch event");
@@ -68,9 +70,11 @@ struct BucketTransposeEventCtx {
     }
 
     void synchronize(){
+        if(!ngpu||rounds.empty())return;
+        size_t last=rounds.size()-1;
         for(int g=0;g<ngpu;++g){
             cke(cudaSetDevice(g),"bucket event transpose set synchronize");
-            cke(cudaEventSynchronize(round_done[g]),"bucket event transpose synchronize");
+            cke(cudaEventSynchronize(round_done[g][last]),"bucket event transpose synchronize");
         }
     }
 
@@ -82,9 +86,9 @@ struct BucketTransposeEventCtx {
                 for(int i=0;i<ngpu/2;++i){
                     auto[a,b]=round[size_t(i)];
                     cke(cudaSetDevice(a),"bucket event transpose set A round wait");
-                    cke(cudaStreamWaitEvent(stream[a],round_done[b],0),"bucket event transpose A round wait");
+                    cke(cudaStreamWaitEvent(stream[a],round_done[b][ri-1],0),"bucket event transpose A round wait");
                     cke(cudaSetDevice(b),"bucket event transpose set B round wait");
-                    cke(cudaStreamWaitEvent(stream[b],round_done[a],0),"bucket event transpose B round wait");
+                    cke(cudaStreamWaitEvent(stream[b],round_done[a][ri-1],0),"bucket event transpose B round wait");
                 }
             }
 
@@ -123,7 +127,7 @@ struct BucketTransposeEventCtx {
 
             for(int g=0;g<ngpu;++g){
                 cke(cudaSetDevice(g),"bucket event transpose set round record");
-                cke(cudaEventRecord(round_done[g],stream[g]),"bucket event transpose record round done");
+                cke(cudaEventRecord(round_done[g][ri],stream[g]),"bucket event transpose record round done");
             }
         }
         synchronize();
@@ -131,15 +135,15 @@ struct BucketTransposeEventCtx {
     }
 
     void release(){
-        if(ngpu)synchronize();
+        if(ngpu&&transposes)synchronize();
         for(int g=0;g<ngpu;++g){
             cke(cudaSetDevice(g),"bucket event transpose set release");
             for(cudaEvent_t&e:fetch_done[g]){if(e)cudaEventDestroy(e);e=nullptr;}
             fetch_done[g].clear();
-            if(round_done[g])cudaEventDestroy(round_done[g]);
+            for(size_t ri=0;ri<rounds.size();++ri){if(round_done[g][ri])cudaEventDestroy(round_done[g][ri]);round_done[g][ri]=nullptr;}
             if(stream[g])cudaStreamDestroy(stream[g]);
             if(staging[g])cudaFree(staging[g]);
-            round_done[g]=nullptr;stream[g]=nullptr;staging[g]=nullptr;base[g]=nullptr;
+            stream[g]=nullptr;staging[g]=nullptr;base[g]=nullptr;
         }
         ngpu=0;chunk_bytes=0;max_chunks=0;rounds.clear();
     }
