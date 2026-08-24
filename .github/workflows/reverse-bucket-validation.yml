@@ -1,0 +1,40 @@
+name: reverse bucket CUDA validation
+
+on:
+  push:
+    paths:
+      - 'src/common/gridfp_transition_reverse.hpp'
+      - 'src/cuda/gridfp/ramstream32_reverse_desc.hpp'
+      - 'src/cuda/gridfp/ramstream32_reverse_orbit.hpp'
+      - 'src/cuda/gridfp/ramstream32_bucket_reverse_atomic.cuh'
+      - 'src/cuda/gridfp/probes/ramstream32_bucket_reverse_atomic_selftest.cu'
+      - '.github/workflows/reverse-bucket-validation.yml'
+  pull_request:
+    paths:
+      - 'src/common/gridfp_transition_reverse.hpp'
+      - 'src/cuda/gridfp/ramstream32_reverse_desc.hpp'
+      - 'src/cuda/gridfp/ramstream32_reverse_orbit.hpp'
+      - 'src/cuda/gridfp/ramstream32_bucket_reverse_atomic.cuh'
+      - 'src/cuda/gridfp/probes/ramstream32_bucket_reverse_atomic_selftest.cu'
+      - '.github/workflows/reverse-bucket-validation.yml'
+  workflow_dispatch:
+
+jobs:
+  compile:
+    runs-on: ubuntu-latest
+    container: nvidia/cuda:12.8.1-devel-ubuntu22.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Compile W10 reverse bucket GPU selftest
+        shell: bash
+        run: |
+          mkdir -p build
+          nvcc -O3 -std=c++17 -lineinfo -arch=sm_80 \
+            -DTARGET_W=10 -DLOW_LUT_K=5 -DHIGH_LUT_K=4 \
+            src/cuda/gridfp/probes/ramstream32_bucket_reverse_atomic_selftest.cu \
+            -o build/ramstream32_bucket_reverse_atomic_selftest_w10
+      - name: Run when CUDA device is available
+        shell: bash
+        run: |
+          build/ramstream32_bucket_reverse_atomic_selftest_w10 | tee /tmp/reverse-bucket.txt
+          grep -Eq 'bucket-reverse-atomic-selftest (OK W=10|SKIP no CUDA device)' /tmp/reverse-bucket.txt
