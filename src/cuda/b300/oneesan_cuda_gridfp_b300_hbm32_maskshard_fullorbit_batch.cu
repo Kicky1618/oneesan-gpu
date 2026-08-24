@@ -25,6 +25,10 @@
 #include "maskshard_loworbit.cuh"
 #include "maskshard_lowclosure_kernel.cuh"
 
+#if defined(MASKSHARD_BLOCK_ORBIT_ROW_CAP_LAUNCH) && !defined(MASKSHARD_BLOCK_ORBIT_TIGHT_LAUNCH)
+#error "row-capped BLOCKED orbit launch requires tight BLOCKED-domain launch"
+#endif
+
 struct FullOrbitBatchAddress {
     int owner = -1;
     Code offset = 0;
@@ -128,6 +132,9 @@ struct FullOrbitBatchHighJob {
     Code main_n = 0;
     Code block_n = 0;
     Code work = 0;
+#ifdef MASKSHARD_BLOCK_ORBIT_ROW_CAP_LAUNCH
+    std::array<Code, HIGH_LUT_K + 2> block_depth_end{};
+#endif
 #ifdef MASKSHARD_HIGH_CLOSURE_ROWS
     std::array<uint32_t, HIGH_LUT_K> closure_rows{};
 #endif
@@ -156,6 +163,29 @@ static std::vector<FullOrbitBatchHighJob> build_fullorbit_batch_high_jobs(
         job.main_n = mn;
         job.block_n = dn;
         job.work = mn + dn;
+#ifdef MASKSHARD_BLOCK_ORBIT_ROW_CAP_LAUNCH
+        if (db.size() != size_t(HIGH_LUT_K + 2)) {
+            std::cerr << "fullorbit-batch row-cap BLOCKED block count mismatch mask="
+                      << mask << " blocks=" << db.size() << '\n';
+            std::exit(205);
+        }
+        Code prev = 0;
+        for (int h = 0; h <= HIGH_LUT_K + 1; ++h) {
+            const FBlock& b = db[size_t(h)];
+            if (int(b.he) != h || b.off != prev || b.end < b.off) {
+                std::cerr << "fullorbit-batch row-cap BLOCKED ordering mismatch mask="
+                          << mask << " h=" << h << '\n';
+                std::exit(206);
+            }
+            job.block_depth_end[size_t(h)] = b.end;
+            prev = b.end;
+        }
+        if (job.block_depth_end.back() != dn) {
+            std::cerr << "fullorbit-batch row-cap BLOCKED final size mismatch mask="
+                      << mask << '\n';
+            std::exit(207);
+        }
+#endif
 #ifdef MASKSHARD_HIGH_CLOSURE_ROWS
         if (!high_desc) {
             std::cerr << "fullorbit-batch HIGH closure rows require host descriptors\n";
@@ -220,7 +250,8 @@ static void configure_fullorbit_batch_high_group(uint32_t mask) {
 }
 
 static void process_fullorbit_batch_high_job(
-    FullOrbitBatchWorker& w, const FullOrbitBatchHighJob& job, int threads
+    FullOrbitBatchWorker& w, const FullOrbitBatchHighJob& job, int threads,
+    int zero_based_row
 ) {
     ck(cudaSetDevice(w.dev), "fullorbit-batch high set device");
     if (!job.main_n && !job.block_n) return;
@@ -228,6 +259,16 @@ static void process_fullorbit_batch_high_job(
     w.ensure(job.main_n, job.block_n);
     const int bm = int(std::min<Code>(65535, (job.main_n + threads - 1) / threads));
     const int bd = int(std::min<Code>(65535, (job.block_n + threads - 1) / threads));
+#ifdef MASKSHARD_BLOCK_ORBIT_ROW_CAP_LAUNCH
+    const int orbit_cap = std::min(zero_based_row + 1, HIGH_LUT_K + 1);
+    const Code orbit_block_n = job.block_depth_end[size_t(orbit_cap)];
+    const int bd_orbit = orbit_block_n
+        ? int(std::min<Code>(65535, (orbit_block_n + threads - 1) / threads))
+        : 0;
+#else
+    const int bd_orbit = bd;
+    (void)zero_based_row;
+#endif
 #ifdef MASKSHARD_HIGH_CLOSURE_ROWS
     const int warps_per_block = (threads + 31) / 32;
 #endif
@@ -244,8 +285,8 @@ static void process_fullorbit_batch_high_job(
     for (int p = TARGET_W - 1; p >= LOW_LUT_K + 1; --p) {
         t = std::chrono::steady_clock::now();
 #ifdef MASKSHARD_BLOCK_ORBIT_TIGHT_LAUNCH
-        if (job.block_n)
-            maskshard_main_block_highorbit_kernel<<<bd, threads>>>(w.a, w.d, job.main_n, p);
+        if (bd_orbit)
+            maskshard_main_block_highorbit_kernel<<<bd_orbit, threads>>>(w.a, w.d, job.main_n, p);
 #else
         if (job.main_n)
             maskshard_main_block_highorbit_kernel<<<bm, threads>>>(w.a, w.d, job.main_n, p);
@@ -499,7 +540,8 @@ int main(int argc, char** argv) {
                     for (;;) {
                         const size_t q = next_high.fetch_add(1, std::memory_order_relaxed);
                         if (q >= high_jobs.size()) break;
-                        process_fullorbit_batch_high_job(workers[d], high_jobs[q], threads);
+                        process_fullorbit_batch_high_job(
+                            workers[d], high_jobs[q], threads, row);
                     }
                 });
             }
