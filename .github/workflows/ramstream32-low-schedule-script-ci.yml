@@ -53,6 +53,7 @@ jobs:
           f=scripts/bench/ramstream32-cpu-low-schedule-plan-sweep.sh
           grep -Fq 'CONFIGS="${CONFIGS:-32:16 64:32 96:48 128:64}"' "$f"
           grep -Fq -- '--domain-size "$domain"' "$f"
+          grep -Fq 'domain_imbalance' "$f"
           grep -Fq 'analyze_cpu_low_schedule_plan_sweep.py' "$f"
           cat >/tmp/low-sweep.tsv <<'EOF'
           workers	domain_size	domains	lpt_imbalance	lpt_cross_domain_4k	lpt_cross_domain_2m	contiguous_imbalance	contiguous_cross_domain_4k	contiguous_cross_domain_2m	hybrid_imbalance	hybrid_cross_domain_4k	hybrid_cross_domain_2m	hybrid_cross_worker_4k	hybrid_cross_worker_2m	hybrid_domain_cap	hybrid_active_domains	raw
@@ -60,8 +61,11 @@ jobs:
           64	32	2	0.990	120	120	1.150	8	8	1.020	15	15	35	35	900	2	y
           EOF
           python3 scripts/tools/analyze_cpu_low_schedule_plan_sweep.py /tmp/low-sweep.tsv >/tmp/pareto.txt
-          grep -Fq 'pareto scheme=hybrid workers=64 domain_size=32' /tmp/pareto.txt
+          grep -Fq 'schemes=contiguous,domain,lpt' /tmp/pareto.txt
+          grep -Fq 'pareto scheme=domain workers=64 domain_size=32' /tmp/pareto.txt
           grep -Fq 'best_balance scheme=lpt workers=64 domain_size=32' /tmp/pareto.txt
+          python3 scripts/tools/analyze_cpu_low_schedule_plan_sweep.py /tmp/low-sweep.tsv --scheme hybrid >/tmp/legacy.txt
+          grep -Fq 'schemes=domain' /tmp/legacy.txt
       - name: Documentation
         shell: bash
         run: |
@@ -69,4 +73,5 @@ jobs:
           grep -Fq 'CPU_LOW_SCHEDULE=domain' "$d"
           grep -Fq 'CPU_LOW_DOMAIN_SIZE' "$d"
           grep -Fq 'cyclic-latin-4' "$d"
+          grep -Fq 'scheme=domain' "$d"
           grep -Fq 'Pareto' "$d"
