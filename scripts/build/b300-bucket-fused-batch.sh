@@ -31,7 +31,8 @@ case "$TRANSPOSE_MODE" in
     exit 2
     ;;
 esac
-SUFFIX=""; if [[ "$PM_ACCUM" == 1 ]]; then SUFFIX="_pm"; fi
+SUFFIX="_${TRANSPOSE_MODE}"
+if [[ "$PM_ACCUM" == 1 ]]; then SUFFIX="${SUFFIX}_pm"; fi
 OUT="$(build_path "${OUT:-oneesan_cuda_gridfp_b300_bucket_fused_batch${SUFFIX}_n${N}}")"
 
 TMPDIR="$ONEESAN_TMP_DIR" nvcc -O3 -std=c++17 -lineinfo -arch="$ARCH" \
