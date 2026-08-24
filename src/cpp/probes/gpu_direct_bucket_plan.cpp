@@ -84,7 +84,7 @@ int main(){
         <<"bucket_min_states="<<mn<<" bucket_max_states="<<mx<<'\n'
         <<"max_owner_high_rows="<<max_owner_high_rows<<'\n'
         <<"max_owner_low_cols="<<max_owner_low_cols<<'\n'
-        <<"locator_bits=19\n";
+        <<"owner_bits=3 local_rank_bits=15 locator_bits=18\n";
     U64 max_over=0;
     for(int g=0;g<8;++g){max_over=std::max(max_over,over[size_t(g)]);std::cout<<"gpu"<<g<<"_states="<<row[size_t(g)]<<" gpu"<<g<<"_gib="<<double(row[size_t(g)]*4)/double(1ULL<<30)<<" gpu"<<g<<"_slot_overhead_bytes="<<over[size_t(g)]<<'\n';}
     std::cout<<"max_slot_overhead_bytes="<<max_over<<'\n';
@@ -92,5 +92,7 @@ int main(){
         &&remote==455642447434ULL
         &&max_over==2154132ULL
         &&max_owner_high_rows==19631ULL
-        &&max_owner_low_cols==30114ULL?0:2;
+        &&max_owner_low_cols==30114ULL
+        &&max_owner_high_rows<=(1ULL<<15)
+        &&max_owner_low_cols<=(1ULL<<15)?0:2;
 }
