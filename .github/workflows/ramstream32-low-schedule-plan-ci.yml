@@ -36,14 +36,21 @@ jobs:
             -DTARGET_W=10 -DLOW_LUT_K=5 -DHIGH_LUT_K=4 \
             src/cuda/gridfp/probes/ramstream32_cpu_low_schedule_plan.cu \
             -o build/ramstream32_cpu_low_schedule_plan
-      - name: Validate exact LPT accounting
+      - name: Validate exact LPT and contiguous accounting
         shell: bash
         run: |
           build/ramstream32_cpu_low_schedule_plan 9 2 --workers \
             >/tmp/low-plan.tsv 2>/tmp/low-plan.log
           head -n1 /tmp/low-plan.tsv | grep -Fq 'cpu_low_schedule_plan OK n=9 workers=2'
           head -n1 /tmp/low-plan.tsv | grep -Fq 'imbalance='
-          grep -Fq $'worker\tjobs\tcells\tfraction' /tmp/low-plan.tsv
+          head -n1 /tmp/low-plan.tsv | grep -Fq 'cross_worker_pages_4k='
+          head -n1 /tmp/low-plan.tsv | grep -Fq 'cross_worker_pages_2m='
+          head -n1 /tmp/low-plan.tsv | grep -Fq 'contiguous_optimal_cap='
+          head -n1 /tmp/low-plan.tsv | grep -Fq 'contiguous_imbalance='
+          head -n1 /tmp/low-plan.tsv | grep -Fq 'contiguous_cross_worker_pages_4k='
+          head -n1 /tmp/low-plan.tsv | grep -Fq 'contiguous_cross_worker_pages_2m='
+          grep -Fq $'worker\tjobs\tcells\tfraction\tcontiguous_cells\tcontiguous_fraction' \
+            /tmp/low-plan.tsv
           test "$(tail -n +3 /tmp/low-plan.tsv | wc -l)" -eq 2
           grep -Fq 'cpu_low_sticky_schedule jobs=' /tmp/low-plan.log
       - name: Check documentation
@@ -51,3 +58,5 @@ jobs:
         run: |
           grep -Fq 'ramstream32_cpu_low_schedule_plan_n27' docs/ramstream32-cpu-low-scheduling.md
           grep -Fq -- '--workers' docs/ramstream32-cpu-low-scheduling.md
+          grep -Fq 'cross_worker_pages_4k' docs/ramstream32-cpu-low-scheduling.md
+          grep -Fq 'contiguous_imbalance' docs/ramstream32-cpu-low-scheduling.md
