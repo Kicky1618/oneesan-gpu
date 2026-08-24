@@ -20,6 +20,7 @@ CPU_HIGH_GROUPS_FILE="${CPU_HIGH_GROUPS_FILE:-}"
 CPU_HIGH_CPU_LIST="${CPU_HIGH_CPU_LIST:-}"
 CPU_LOW_CPU_LIST="${CPU_LOW_CPU_LIST:-}"
 CPU_LOW_DOMAIN_SIZE="${CPU_LOW_DOMAIN_SIZE:-}"
+CPU_LOW_DOMAIN_REFINE="${CPU_LOW_DOMAIN_REFINE:-1}"
 REPEATS="${REPEATS:-8}"
 BUILD="${BUILD:-1}"
 EXPECTED_RESIDUE="${EXPECTED_RESIDUE:-}"
@@ -39,6 +40,10 @@ if [[ "$CPU_HIGH_OVERLAP" != 0 && "$CPU_HIGH_OVERLAP" != 1 ]]; then
 fi
 if [[ ! "$CPU_LOW_DOMAIN_SIZE" =~ ^[1-9][0-9]*$ ]] || (( CPU_LOW_DOMAIN_SIZE > CPU_WORKERS )); then
   echo "CPU_LOW_DOMAIN_SIZE must be a positive integer <= CPU_WORKERS" >&2
+  exit 2
+fi
+if [[ "$CPU_LOW_DOMAIN_REFINE" != 0 && "$CPU_LOW_DOMAIN_REFINE" != 1 ]]; then
+  echo "CPU_LOW_DOMAIN_REFINE must be 0 or 1" >&2
   exit 2
 fi
 if [[ -n "$CPU_HIGH_GROUPS_FILE" && ! -f "$CPU_HIGH_GROUPS_FILE" ]]; then
@@ -93,6 +98,7 @@ cpu_high_groups_file=${CPU_HIGH_GROUPS_FILE:-none}
 cpu_high_cpu_list=${CPU_HIGH_CPU_LIST:-none}
 cpu_low_cpu_list=${CPU_LOW_CPU_LIST:-none}
 cpu_low_domain_size=$CPU_LOW_DOMAIN_SIZE
+cpu_low_domain_refine=$CPU_LOW_DOMAIN_REFINE
 repeats=$REPEATS
 schedules=dynamic,sticky,contiguous,domain
 order_design=cyclic-latin-4
@@ -118,6 +124,7 @@ run_one() {
     CPU_LOW_CPU_LIST="$CPU_LOW_CPU_LIST" \
     CPU_LOW_SCHEDULE="$schedule" \
     CPU_LOW_DOMAIN_SIZE="$CPU_LOW_DOMAIN_SIZE" \
+    CPU_LOW_DOMAIN_REFINE="$CPU_LOW_DOMAIN_REFINE" \
     RAMSTREAM_NUMA_SAMPLE_MIB=0 \
     "$bin" "$N" "$MODULUS" "$GPU_TARGET_MIB" "$CPU_WORKERS" | tail -n1)"
   residue="$(field "$line" residue)"
@@ -154,7 +161,7 @@ for ((r=1; r<=REPEATS; ++r)); do
     2) order=contiguous-domain-dynamic-sticky; schedules=(contiguous domain dynamic sticky) ;;
     3) order=domain-dynamic-sticky-contiguous; schedules=(domain dynamic sticky contiguous) ;;
   esac
-  echo "repeat $r/$REPEATS domain_size=$CPU_LOW_DOMAIN_SIZE ($order)" >&2
+  echo "repeat $r/$REPEATS domain_size=$CPU_LOW_DOMAIN_SIZE domain_refine=$CPU_LOW_DOMAIN_REFINE ($order)" >&2
   position=0
   for schedule in "${schedules[@]}"; do
     ((position+=1))
