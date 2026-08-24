@@ -31,6 +31,9 @@
 #if defined(MASKSHARD_ROW_DEPTH_ORBIT_COMPACT) && !defined(MASKSHARD_BLOCK_ORBIT_TIGHT_LAUNCH)
 #error "exact compact BLOCKED orbit launch requires tight BLOCKED-domain launch"
 #endif
+#if defined(MASKSHARD_HIGH_CLOSURE_TASK_LAUNCH) && !defined(MASKSHARD_HIGH_CLOSURE_ROWPACK)
+#error "task-sized HIGH closure launch requires HIGH closure row packing"
+#endif
 
 struct FullOrbitBatchAddress {
     int owner = -1;
@@ -195,19 +198,33 @@ static std::vector<FullOrbitBatchHighJob> build_fullorbit_batch_high_jobs(
             std::exit(203);
         }
         for (int pi = 0; pi < HIGH_LUT_K; ++pi) {
-            uint64_t rows = 0;
+            uint64_t closure_work = 0;
             for (size_t bid = 0; bid < mb.size(); ++bid) {
-                if (!mb[bid].stride) continue;
+                const FBlock& b = mb[bid];
+                if (!b.stride) continue;
                 const uint32_t a = high_desc->closure_block_off[size_t(pi) * 65 + bid];
                 const uint32_t z = high_desc->closure_block_off[size_t(pi) * 65 + bid + 1];
-                rows += uint64_t(z - a);
+                const uint64_t block_rows = uint64_t(z - a);
+#ifdef MASKSHARD_HIGH_CLOSURE_TASK_LAUNCH
+#ifdef MASKSHARD_HIGH_CLOSURE_ROWPACK_THRESHOLD
+                const bool pack = b.stride
+                    < uint32_t(MASKSHARD_HIGH_CLOSURE_ROWPACK_THRESHOLD);
+#else
+                const bool pack = true;
+#endif
+                closure_work += pack
+                    ? (block_rows * uint64_t(b.stride) + 31ULL) >> 5
+                    : block_rows;
+#else
+                closure_work += block_rows;
+#endif
             }
-            if (rows > 0xffffffffULL) {
-                std::cerr << "fullorbit-batch HIGH closure row count overflow mask="
-                          << mask << " pi=" << pi << " rows=" << rows << '\n';
+            if (closure_work > 0xffffffffULL) {
+                std::cerr << "fullorbit-batch HIGH closure work count overflow mask="
+                          << mask << " pi=" << pi << " work=" << closure_work << '\n';
                 std::exit(204);
             }
-            job.closure_rows[size_t(pi)] = uint32_t(rows);
+            job.closure_rows[size_t(pi)] = uint32_t(closure_work);
         }
 #else
         (void)high_desc;
