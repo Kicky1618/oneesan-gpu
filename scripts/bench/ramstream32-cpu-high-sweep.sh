@@ -205,12 +205,14 @@ if [[ "$ANALYZE" != 0 ]]; then
   python3 "${analyze_args[@]}" | tee "$analysis_out"
 
   if [[ "$CPU_HIGH_MODE" == direct && "$GENERATE_POLICY" != 0 && -n "$cost_plan_path" ]]; then
-    pcie_rate="$(analysis_field calibration pcie_gib_s)"
+    pcie_rate="$(analysis_field affine_calibration pcie_gib_s)"
+    pcie_copy_overhead="$(analysis_field affine_calibration pcie_copy_overhead_us)"
     cpu_rate="$(analysis_field affine_calibration cpu_gcell_s)"
     cpu_group_overhead="$(analysis_field affine_calibration cpu_group_overhead_us)"
     gpu_rate="$(analysis_field affine_calibration gpu_gstate_s)"
     gpu_group_overhead="$(analysis_field affine_calibration gpu_group_overhead_us)"
 
+    [[ -n "$pcie_rate" ]] || pcie_rate="$(analysis_field calibration pcie_gib_s)"
     [[ -n "$cpu_rate" ]] || cpu_rate="$(analysis_field calibration cpu_gcell_s)"
     [[ -n "$gpu_rate" ]] || gpu_rate="$(analysis_field calibration gpu_gstate_s)"
 
@@ -222,6 +224,9 @@ if [[ "$ANALYZE" != 0 ]]; then
         --pcie-gib-s "$pcie_rate" --cpu-gcell-s "$cpu_rate"
         --gpu-target-mib "$GPU_TARGET_MIB"
       )
+      if [[ -n "$pcie_copy_overhead" ]]; then
+        planner_args+=(--pcie-copy-overhead-us "$pcie_copy_overhead")
+      fi
       if [[ -n "$gpu_rate" ]]; then planner_args+=(--gpu-gstate-s "$gpu_rate"); fi
       if [[ -n "$cpu_group_overhead" ]]; then
         planner_args+=(--group-overhead-us "$cpu_group_overhead")
