@@ -32,6 +32,7 @@ class Sample:
 class CostGroup:
     group: int
     roundtrip_bytes: int
+    pcie_copy_calls: int
     gpu_state_steps: int
     nn_cells: int
     nrnl_cells: int
@@ -132,12 +133,15 @@ def load_costs(path: str) -> list[CostGroup]:
         missing = required.difference(rd.fieldnames or [])
         if missing:
             raise SystemExit(f"missing cost columns: {', '.join(sorted(missing))}")
-        has_gpu_steps = "gpu_state_steps" in (rd.fieldnames or [])
+        fields = rd.fieldnames or []
+        has_gpu_steps = "gpu_state_steps" in fields
+        has_copy_calls = "pcie_copy_calls" in fields
         for row in rd:
             out.append(
                 CostGroup(
                     group=int(row["group"]),
                     roundtrip_bytes=int(row["roundtrip_bytes"]),
+                    pcie_copy_calls=int(row["pcie_copy_calls"]) if has_copy_calls else 0,
                     gpu_state_steps=int(row["gpu_state_steps"]) if has_gpu_steps else 0,
                     nn_cells=int(row["nn_cells"]),
                     nrnl_cells=int(row["nrnl_cells"]),
@@ -153,7 +157,7 @@ def load_costs(path: str) -> list[CostGroup]:
 def main() -> None:
     ap = argparse.ArgumentParser(
         description=(
-            "Analyze CPU HIGH threshold sweeps and calibrate DMA, GPU-HIGH, and "
+            "Analyze CPU HIGH threshold sweeps and calibrate PCIe, GPU-HIGH, and "
             "CPU-direct per-group cost models."
         )
     )
@@ -304,6 +308,40 @@ def main() -> None:
         if math.isfinite(gpu_med):
             print(f"calibration mode={mode} overlap={overlap} gpu_gstate_s={gpu_med:.9f}")
 
+        rows_est = statistics.median(model_rows_samples) if model_rows_samples else math.nan
+
+        pcie_affine_rows: list[tuple[float, float, float]] = []
+        gpu_affine_rows: list[tuple[float, float, float]] = []
+        if costs is not None and math.isfinite(rows_est):
+            for threshold, group in rows.items():
+                limit_bytes = int(threshold * MIB)
+                selected_costs = [
+                    g for g in nonempty_costs
+                    if threshold > 0 and g.roundtrip_bytes <= limit_bytes
+                ]
+                selected_ids = {g.group for g in selected_costs}
+                remaining_costs = [g for g in nonempty_costs if g.group not in selected_ids]
+                remaining_bytes = sum(g.roundtrip_bytes for g in remaining_costs) * rows_est
+                remaining_calls = sum(g.pcie_copy_calls for g in remaining_costs) * rows_est
+                remaining_steps = sum(g.gpu_state_steps for g in remaining_costs) * rows_est
+                remaining_execs = len(remaining_costs) * rows_est
+                pcie_y = mean([s.dma_s for s in group])
+                gpu_y = mean([s.gpu_kernel_s for s in group])
+                pcie_affine_rows.append((remaining_bytes, remaining_calls, pcie_y))
+                gpu_affine_rows.append((remaining_steps, remaining_execs, gpu_y))
+
+        pcie_affine = nnls_two_predictors(pcie_affine_rows)
+        affine_pcie_rate = math.nan
+        affine_pcie_copy_us = math.nan
+        if pcie_affine is not None and pcie_affine[0] > 0.0:
+            affine_pcie_rate = 1.0 / pcie_affine[0] / GIB
+            affine_pcie_copy_us = pcie_affine[1] * 1e6
+            print(
+                f"affine_calibration mode={mode} overlap={overlap} "
+                f"pcie_gib_s={affine_pcie_rate:.9f} "
+                f"pcie_copy_overhead_us={affine_pcie_copy_us:.9f}"
+            )
+
         cpu_affine = nnls_two_predictors(cpu_affine_rows)
         affine_cpu_rate = math.nan
         affine_cpu_group_us = math.nan
@@ -315,23 +353,6 @@ def main() -> None:
                 f"cpu_gcell_s={affine_cpu_rate:.9f} "
                 f"cpu_group_overhead_us={affine_cpu_group_us:.9f}"
             )
-
-        gpu_affine_rows: list[tuple[float, float, float]] = []
-        if costs is not None and model_rows_samples:
-            rows_est = statistics.median(model_rows_samples)
-            total_nonempty = len(nonempty_costs)
-            for threshold, group in rows.items():
-                limit_bytes = int(threshold * MIB)
-                selected_costs = [
-                    g for g in nonempty_costs
-                    if threshold > 0 and g.roundtrip_bytes <= limit_bytes
-                ]
-                selected_ids = {g.group for g in selected_costs}
-                remaining_costs = [g for g in nonempty_costs if g.group not in selected_ids]
-                remaining_steps = sum(g.gpu_state_steps for g in remaining_costs) * rows_est
-                remaining_execs = len(remaining_costs) * rows_est
-                gpu_y = mean([s.gpu_kernel_s for s in group])
-                gpu_affine_rows.append((remaining_steps, remaining_execs, gpu_y))
 
         gpu_affine = nnls_two_predictors(gpu_affine_rows)
         affine_gpu_rate = math.nan
@@ -345,12 +366,17 @@ def main() -> None:
                 f"gpu_group_overhead_us={affine_gpu_group_us:.9f}"
             )
 
-        if costs is not None and mode == "direct" and math.isfinite(pcie_med):
+        if costs is not None and mode == "direct":
+            use_pcie_rate = affine_pcie_rate if math.isfinite(affine_pcie_rate) else pcie_med
             use_cpu_rate = affine_cpu_rate if math.isfinite(affine_cpu_rate) else cpu_med
             use_gpu_rate = affine_gpu_rate if math.isfinite(affine_gpu_rate) else gpu_med
-            if math.isfinite(use_cpu_rate):
+            if math.isfinite(use_pcie_rate) and math.isfinite(use_cpu_rate):
                 overlap_arg = " --overlap" if overlap else ""
                 gpu_arg = f" --gpu-gstate-s {use_gpu_rate:.9f}" if math.isfinite(use_gpu_rate) else ""
+                pcie_overhead_arg = (
+                    f" --pcie-copy-overhead-us {affine_pcie_copy_us:.9f}"
+                    if math.isfinite(affine_pcie_copy_us) and affine_pcie_copy_us > 0 else ""
+                )
                 cpu_overhead_arg = (
                     f" --group-overhead-us {affine_cpu_group_us:.9f}"
                     if math.isfinite(affine_cpu_group_us) and affine_cpu_group_us > 0 else ""
@@ -362,10 +388,10 @@ def main() -> None:
                 print(
                     "planner_command "
                     f"python3 scripts/tools/plan_cpu_high_groups.py {args.cost_plan} "
-                    f"--pcie-gib-s {pcie_med:.9f} --cpu-gcell-s {use_cpu_rate:.9f} "
+                    f"--pcie-gib-s {use_pcie_rate:.9f} --cpu-gcell-s {use_cpu_rate:.9f} "
                     f"--nn-weight {args.nn_weight:g} --nrnl-weight {args.nrnl_weight:g} "
                     f"--block-weight {args.block_weight:g} --cross-weight {args.cross_weight:g}"
-                    f"{gpu_arg}{cpu_overhead_arg}{gpu_overhead_arg}{overlap_arg}"
+                    f"{gpu_arg}{pcie_overhead_arg}{cpu_overhead_arg}{gpu_overhead_arg}{overlap_arg}"
                 )
 
 
