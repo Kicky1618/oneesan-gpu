@@ -57,7 +57,9 @@ jobs:
         run: |
           build/oneesan_cuda_gridfp_gpu_direct_n21 \
             21 4294967291 256 16 8 --plan-only 2>&1 | tee /tmp/gpu-direct-plan.txt
-          grep -Fq 'backend=gridfp-gpu-direct-v0.1-plan' /tmp/gpu-direct-plan.txt
+          grep -Fq 'backend=gridfp-gpu-direct-v0.2-plan' /tmp/gpu-direct-plan.txt
+          grep -Fq 'direct_active_fraction=' /tmp/gpu-direct-plan.txt
+          grep -Fq 'low_block_desc_saved_mib=' /tmp/gpu-direct-plan.txt
           grep -Fq 'scratch_bytes=0' /tmp/gpu-direct-plan.txt
       - name: Compile W28 resident GPU direct backend
         shell: bash
