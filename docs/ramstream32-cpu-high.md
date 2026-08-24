@@ -188,7 +188,7 @@ CPU_HIGH_WORKERS=32 \
 
 `CPU_HIGH_GROUPS_FILE` overrides `CPU_HIGH_MAX_MIB`. The backend reports `cpu_high_policy=file` plus an FNV hash of the selected-group bitset.
 
-## v5.5 explicit CPU affinity
+## v5.5 explicit CPU HIGH affinity
 
 On a large multi-socket System-RAM machine, direct-worker migration makes both timing and page locality unstable. Direct mode accepts an explicit Linux CPU list:
 
@@ -202,8 +202,6 @@ CPU_HIGH_WORKERS=32 \
 ```
 
 Each direct worker is pinned round-robin to one CPU from the list with `pthread_setaffinity_np`. If the variable is unset, affinity behavior is unchanged. Invalid lists or binding failures abort instead of silently falling back.
-
-The benchmark harness records `cpu_high_cpu_list` in its metadata. The current implementation pins direct HIGH workers only; it does not yet impose an `mbind` memory policy on the authoritative arrays.
 
 ## v5.6 exact-work HIGH scheduling
 
@@ -379,15 +377,55 @@ and the W=10 selftest runs the same LOW pool for two consecutive generations, co
 
 After v5.11/v5.13, fitted `cpu_group_overhead_us` should be interpreted as residual per-group scheduling/pointer-setup/topology cost, not repeated host-thread creation. Hardware calibration should therefore be regenerated after these versions rather than reusing coefficients measured on v5.10 or earlier.
 
+## v5.14 allocation-free sparse LOW pointer workspace
+
+At n=27 the factor layout has exactly 45 main blocks and 15 blocked blocks. The sparse LOW job body previously constructed two small `std::vector<Count*>` pointer tables for every occupancy group. With up to 8192 fixed-HIGH occupancy groups and 28 rows, this could create hundreds of thousands of tiny heap allocations even though the table dimensions are compile-time constants.
+
+The job body now uses stack arrays sized directly from the factorization:
+
+```text
+main pointers    3 * (HIGH_LUT_K + 2)
+blocked pointers     (HIGH_LUT_K + 2)
+```
+
+with a runtime guard against layout mismatch. The recurrence, operation ordering, and authoritative addresses are unchanged. The backend reports `cpu_low_pointer_workspace=stack`.
+
+## v5.15 explicit sparse LOW affinity and provenance
+
+Persistent LOW workers accept a separate Linux CPU list:
+
+```bash
+CPU_HIGH_CPU_LIST='0-31' \
+CPU_LOW_CPU_LIST='32-63' \
+CPU_HIGH_MODE=direct \
+CPU_HIGH_OVERLAP=1 \
+./build/oneesan_cuda_gridfp_ramstream32_factorized_hybrid_sparse_n27 \
+  27 4294967291 12288 32
+```
+
+`CPU_LOW_CPU_LIST` is parsed by the same strict CPU-list parser as `CPU_HIGH_CPU_LIST`; malformed lists or affinity failures abort rather than silently changing benchmark conditions. LOW workers bind once at persistent-thread startup.
+
+The backend now reports
+
+```text
+cpu_high_affinity=explicit|default
+cpu_low_affinity=explicit|default
+```
+
+and the threshold sweep, policy A/B harness, and stream-calibration harness record and explicitly propagate both lists. This also fixes the older harness behavior where `CPU_HIGH_CPU_LIST` could appear in metadata without being exported to the benchmark child process.
+
+Separate HIGH/LOW CPU lists are useful experimental controls, not a NUMA-memory-placement policy. LOW processing touches all fixed-HIGH occupancy groups, and the authoritative anonymous mappings still use ordinary Linux first-touch semantics with `MADV_HUGEPAGE` advice. No `mbind` policy is imposed yet.
+
 ## Policy A/B and stream-weight calibration
 
 The generated non-monotone group policy can be compared directly with the best size threshold using alternating order:
 
 ```bash
-POLICY_FILE=/path/to/cpu-high.groups \
+GROUPS_FILE=/path/to/cpu-high.groups \
 THRESHOLD_MIB=256 \
-CPU_HIGH_MODE=direct \
 CPU_HIGH_OVERLAP=1 \
+CPU_HIGH_CPU_LIST='0-31' \
+CPU_LOW_CPU_LIST='32-63' \
 REPEATS=4 \
 bash scripts/bench/ramstream32-cpu-high-policy-ab.sh
 ```
@@ -441,8 +479,9 @@ For direct mode, the sweep builds the exact cost plan automatically, calibrates 
 ```bash
 N=27 \
 CPU_HIGH_MODE=direct \
-CPU_HIGH_OVERLAP=0 \
+CPU_HIGH_OVERLAP=1 \
 CPU_HIGH_CPU_LIST='0-31' \
+CPU_LOW_CPU_LIST='32-63' \
 CPU_WORKERS=32 \
 CPU_HIGH_WORKERS=32 \
 THRESHOLDS='0 64 128 256 512 1024' \
@@ -450,21 +489,21 @@ REPEATS=2 \
 bash scripts/bench/ramstream32-cpu-high-sweep.sh
 ```
 
-Repeat with `CPU_HIGH_OVERLAP=1`. Generated artifacts include the raw sweep TSV, metadata, exact group-cost TSV, analysis output, a candidate `.groups` policy file, and the NUMA page-exposure summary.
+Generated artifacts include the raw sweep TSV, metadata, exact group-cost TSV, analysis output, a candidate `.groups` policy file, and the NUMA page-exposure summary. Compare overlap 0 and 1 on the target host because the calibrated rates are contention-regime specific.
 
 Set `COST_PLAN=none` to disable automatic cost-plan generation or provide `COST_PLAN=/path/to/existing.tsv` to reuse one.
 
 ## Validation
 
-`.github/workflows/ramstream32-sparse-ci.yml` covers W=22/W=28 compilation, v5.13 plan provenance, scratch/direct CPU HIGH plans, all four direct stream classes, explicit group-file selection, affinity parser behavior, the W=10 exhaustive reference comparison, two-generation persistent LOW and HIGH checks, concurrent disjoint HIGH execution, and the exact group-cost probe including `gpu_state_steps` and `pcie_copy_calls`.
+`.github/workflows/ramstream32-sparse-ci.yml` covers W=22/W=28 compilation, v5.15 provenance, default/explicit affinity plan output, scratch/direct CPU HIGH plans, all four direct stream classes, explicit group-file selection, HIGH/LOW affinity parser behavior, the W=10 exhaustive reference comparison, two-generation persistent LOW and HIGH checks, concurrent disjoint HIGH execution, and the exact group-cost probe including `gpu_state_steps` and `pcie_copy_calls`.
 
 `.github/workflows/ramstream32-bench-script-ci.yml` syntax-checks the sweep/build scripts, compiles the Python tools, validates affine PCIe/CPU/GPU calibration on synthetic data with known throughput/overhead coefficients, checks sequential and overlap-critical-path group planning, and validates the 4 KiB/2 MiB NUMA page-exposure analyzer.
 
 ## Next experiments
 
-The remaining large opportunities are increasingly allocator, memory-topology, and model-fitting problems:
+The remaining large opportunities are increasingly memory-topology and model-fitting problems:
 
-1. eliminate the per-LOW-group `std::vector<Count*>` pointer-table allocations in `process_cpu_low_group_sparse()`; at n=27 the factor layout has only 45 main and 15 blocked blocks, so fixed/per-worker pointer workspaces can remove hundreds of thousands of small allocations across 28 rows;
-2. add explicit LOW-worker CPU affinity and use page-exposure measurements to decide THP, 4 KiB pages, or a coarse socket-level memory policy;
-3. regenerate targeted NN/NRNL/BLOCK/CROSS weights on the persistent-worker backend and compare the resulting non-monotone policy against the best threshold with the alternating A/B harness;
+1. measure actual NUMA placement of sampled authoritative pages before adding `mbind`; compare the observed node distribution against HIGH/LOW worker affinity and GPU DMA behavior;
+2. only after those measurements, evaluate THP, 4 KiB pages, interleave, or coarse socket-local placement rather than imposing per-group NUMA policy blindly;
+3. regenerate targeted NN/NRNL/BLOCK/CROSS weights on v5.15 and compare the resulting non-monotone policy against the best threshold with the alternating A/B harness;
 4. for multi-GPU B300 nodes, keep the largest HIGH occupancy groups resident across more than one local step when dependencies permit, while CPU handles the long tail of small groups.
