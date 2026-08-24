@@ -137,14 +137,50 @@ v5.1 stores only
 20-bit source HIGH rank
 20-bit partner HIGH rank
 20-bit drop HIGH rank
- 2-bit orbit kind
 ```
 
-in one `uint64_t`. Two high bits remain unused. The orbit portion of direct metadata is therefore halved from 16 bytes/op to 8 bytes/op.
+in one `uint64_t`. Four high bits remain unused. The orbit portion of direct metadata is therefore halved from 16 bytes/op to 8 bytes/op.
 
 This is guarded during metadata construction: the builder still computes partner/drop states with the full topology operations and ranks them normally, then asserts that the derived block IDs equal the explicit block IDs. A mismatch aborts before the compact stream is accepted. Rank overflow beyond 20 bits also aborts.
 
-The production `--plan-only` output already computes `cpu_high_direct_meta_mib` with `sizeof(CpuHighOrbitOp)`, so it reports the compact v5.1 footprint without a separate estimator.
+The production `--plan-only` output computes `cpu_high_direct_meta_mib` through the compatibility stream wrappers, so it reports the complete compact footprint including all split offset tables.
+
+## v5.2 split NN and NR/NL orbit streams
+
+After v5.1, the direct hot loop still decoded an orbit kind and branched between the NN algebra and the common NR/NL algebra. NR and NL have identical count updates, so three streams are unnecessary.
+
+v5.2 uses two streams per `(p, source factor block)`:
+
+- `NN`;
+- `NR/NL`.
+
+The 64-bit record now contains only the three 20-bit HIGH ranks; stream identity supplies the algebra. Destination block reconstruction is also hoisted outside the per-operation loop because it depends only on `(p, source block, stream)`.
+
+The reordering is exact. Every blocked drop state uniquely reconstructs its source by inserting the dropped `N`; the symbol immediately below that `N` determines whether the orbit belongs to NN, NR, or NL. Therefore two distinct N* orbit representatives cannot share the same blocked member, and partner states (`LR`, `RN`, `LN`) are never N* representatives at the same position.
+
+The operation size remains 8 bytes. v5.2 is therefore a CPU front-end / branch-prediction optimization, not a metadata-size reduction. The extra cost is one additional offset table.
+
+## v5.3 split BLOCK and CROSS closure streams
+
+The remaining descriptor-kind branch in direct mode was closure dispatch. Closure operations read main source values and only add into blocked destinations; they never modify another closure source. Reordering ordinary blocked closures and boundary CROSS closures is therefore safe, and additions into the same destination are commutative modulo the CRT prime.
+
+v5.3 builds two closure streams:
+
+- ordinary `BLOCK` closures;
+- boundary `CROSS` closures.
+
+Runtime no longer decodes `HIGHDESC_BLOCK` versus `HIGHDESC_CROSS` inside the hot loop. The LOW mask-code base used by CROSS is computed only when the CROSS stream for a source block is non-empty.
+
+The n=27 direct plan log reports all four stream populations:
+
+```text
+nn_orbit_ops=...
+nrnl_orbit_ops=...
+block_closure_ops=...
+cross_closure_ops=...
+```
+
+CI requires these fields to be present, while the W=10 exhaustive reference comparison continues to validate the complete direct result.
 
 ## n=27 partition sizes
 
@@ -158,7 +194,7 @@ The production `--plan-only` output already computes `cpu_high_direct_meta_mib` 
 
 These numbers are transfer-volume savings, not predicted wall-time improvements. CPU work must beat the removed PCIe time.
 
-## Threshold sweep
+## Threshold sweep and break-even analysis
 
 Build once, then run the same backend across several thresholds:
 
@@ -175,17 +211,13 @@ bash scripts/bench/ramstream32-cpu-high-sweep.sh
 
 Repeat with `CPU_HIGH_OVERLAP=1`. Odd repeats use ascending thresholds and even repeats use descending thresholds to reduce order bias. Every run must produce the same residue.
 
-The TSV records:
+The TSV records total wall time, H2D/GPU/D2H time, CPU HIGH and LOW time, removed/remaining PCIe volume, group count, mode, and overlap setting. The sweep automatically runs
 
-- total wall time;
-- H2D / GPU kernel / D2H time;
-- CPU HIGH wall and summed kernel time;
-- CPU LOW wall time;
-- removed and remaining PCIe TiB;
-- selected CPU HIGH group count;
-- CPU HIGH mode and overlap setting.
+```bash
+python3 scripts/tools/analyze_cpu_high_sweep.py RESULT.tsv
+```
 
-The script reports the mean time at each threshold and the fastest observed threshold.
+which reports measured DMA seconds saved per TiB, CPU HIGH seconds spent per TiB, sequential break-even margin, offload efficiency, and the best observed threshold.
 
 ## Validation
 
@@ -194,7 +226,7 @@ The script reports the mean time at each threshold and the fastest observed thre
 1. W=22 and W=28 compilation;
 2. the normal hybrid-sparse plan;
 3. the n=27 256-MiB scratch partition, requiring 12,911 CPU groups;
-4. the same n=27 direct metadata plan;
+4. the same n=27 direct metadata plan and all four v5.3 stream classes;
 5. W=10 full-state comparison of both CPU HIGH executors and all CPU LOW executors against the reference recurrence;
 6. concurrent execution of two disjoint W=10 HIGH group subsets against the same reference result.
 
@@ -202,9 +234,9 @@ The compact orbit builder additionally validates every derived partner/drop bloc
 
 ## Next experiments
 
-The immediate measurements are the 2x2 comparison of `scratch/direct` and `overlap=0/1`, sweeping the CPU HIGH threshold. Once the best execution mode is known, the next structural targets are:
+The next large gains are scheduling and memory-placement problems rather than per-operation branches:
 
-1. split HIGH direct NN versus NR/NL streams to remove the remaining orbit-kind branch only if profiling shows it matters;
-2. NUMA-pin CPU HIGH workers and authoritative occupancy slices so CPU offload does not bounce 1.9-TiB state pages across sockets;
-3. replace the fixed MiB threshold with a cost model using measured DRAM bandwidth, PCIe bandwidth, group state count, and CROSS fraction;
-4. for multi-GPU B300 nodes, assign large HIGH groups to aggregate GPU memory while CPU handles the long tail of small groups.
+1. replace the fixed MiB threshold with a cost model learned from measured CPU-HIGH and DMA cost per group-size band;
+2. NUMA-pin CPU HIGH workers and authoritative occupancy slices so CPU offload does not bounce the roughly 1.9-TiB state space across sockets;
+3. allocate CPU workers dynamically between HIGH and LOW according to the measured critical path, especially when `CPU_HIGH_OVERLAP=1`;
+4. for multi-GPU B300 nodes, keep the largest HIGH occupancy groups resident across more than one local step when dependencies permit, while CPU handles the long tail of small groups.
