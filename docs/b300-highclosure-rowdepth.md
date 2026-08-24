@@ -89,16 +89,38 @@ exact compact lane slots = 44,779,140,427,808
 reduction                = 11.8777876973%
 ```
 
-v0.22 deliberately keeps the v0.21 dense task-sized host grid. If that host grid
-is also made row-depth exact, the model becomes:
+v0.22 deliberately keeps the v0.21 dense task-sized host grid.
+
+## v0.23: exact row-depth host launch
+
+v0.23 changes no CUDA task mapping. During setup it builds a host-only table of
+exact v0.22 warp-task counts indexed by fixed LOW occupancy mask, HIGH position
+and row-depth cap. The shared host uses that count to size the closure grid.
+
+For W=28/LOW14/HIGH13 there are
 
 ```text
-dense task-sized blocks = 117,915,540,260
-exact row-depth blocks   = 104,486,127,592
-reduction                = 11.3890099968%
+16,384 masks * 13 HIGH positions * 15 caps = 3,194,880 uint32 entries
+host-only table = 12.1875 MiB
+extra GPU HBM   = 0
 ```
 
-That remaining launch reduction is a separate next candidate.
+The fixed-policy launch model becomes:
+
+```text
+v0.21/v0.22 dense task-sized blocks = 117,915,540,260 / residue
+v0.23 exact row-depth blocks        = 104,486,127,592 / residue
+reduction                           = 11.3890099968%
+```
+
+At full cap the host table must equal the v0.21 dense task count for every
+`mask, HIGH-position` pair. The runtime asserts this before launching and exits
+if the two independent constructions disagree.
+
+The table build is setup-only and is included in `setup_s`, not the timed DP
+`wall_s`. Its first implementation intentionally favors a transparent factorized
+construction over micro-optimizing setup time; B300 profiling should determine
+whether further setup reduction is useful.
 
 ## Semantic validation
 
@@ -137,6 +159,14 @@ v0.21 -> v0.22 isolates exact closure task mapping:
 
 ```bash
 python3 scripts/bench/b300_maskshard_highclosure_exacttasks_ab.py \
+  --n 27 --gpus 8 --threads 256 \
+  --modulus 4294967291 --vram-reserve-mib 1024
+```
+
+v0.22 -> v0.23 isolates exact host launch sizing:
+
+```bash
+python3 scripts/bench/b300_maskshard_highclosure_exactlaunch_ab.py \
   --n 27 --gpus 8 --threads 256 \
   --modulus 4294967291 --vram-reserve-mib 1024
 ```
