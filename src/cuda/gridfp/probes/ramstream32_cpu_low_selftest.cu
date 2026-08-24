@@ -207,13 +207,27 @@ int main() {
                         main_states, block_states, low2_rm, low2_rd, storage, layout)) return 25;
 
     fill_factor(main_auth, block_auth, main_states, block_states, init_m, init_d, storage, layout);
-    CpuLowSparsePersistentPool sparse_domain_pool(2, CPU_LOW_SCHEDULE_DOMAIN, 1);
+    CpuLowSparsePersistentPool sparse_domain_pool(2, CPU_LOW_SCHEDULE_DOMAIN, 1, true);
     sparse_domain_pool.run(low_jobs, main_auth, block_auth, storage, layout, sparse, mod);
     if (!compare_factor("sparse-domain-1", main_auth, block_auth,
                         main_states, block_states, low_rm, low_rd, storage, layout)) return 26;
     sparse_domain_pool.run(low_jobs, main_auth, block_auth, storage, layout, sparse, mod);
     if (!compare_factor("sparse-domain-2", main_auth, block_auth,
                         main_states, block_states, low2_rm, low2_rd, storage, layout)) return 27;
+
+    fill_factor(main_auth, block_auth, main_states, block_states, init_m, init_d, storage, layout);
+    CpuLowSparsePersistentPool sparse_domain_unrefined_pool(
+        2, CPU_LOW_SCHEDULE_DOMAIN, 1, false);
+    sparse_domain_unrefined_pool.run(
+        low_jobs, main_auth, block_auth, storage, layout, sparse, mod);
+    if (!compare_factor("sparse-domain-unrefined-1", main_auth, block_auth,
+                        main_states, block_states, low_rm, low_rd, storage, layout)) return 31;
+    if (sparse_domain_unrefined_pool.domain_refined_boundaries != 0
+        || sparse_domain_unrefined_pool.domain_refined_job_moves != 0) return 32;
+    sparse_domain_unrefined_pool.run(
+        low_jobs, main_auth, block_auth, storage, layout, sparse, mod);
+    if (!compare_factor("sparse-domain-unrefined-2", main_auth, block_auth,
+                        main_states, block_states, low2_rm, low2_rd, storage, layout)) return 33;
 
     size_t sparse_orbit_ops = sparse.orbit_count();
     if (!sparse_orbit_ops
@@ -304,10 +318,15 @@ int main() {
               << " sparse_domain_groups=" << sparse_domain_pool.groups()
               << " sparse_domain_build_s=" << sparse_domain_pool.schedule_build_s
               << " sparse_domain_size=" << sparse_domain_pool.domain_size
+              << " sparse_domain_refine=" << int(sparse_domain_pool.domain_refine)
               << " sparse_domain_normalized_cap=" << sparse_domain_pool.domain_normalized_cap
               << " sparse_domain_active_domains=" << sparse_domain_pool.domain_active_domains
               << " sparse_domain_refined_boundaries=" << sparse_domain_pool.domain_refined_boundaries
               << " sparse_domain_refined_job_moves=" << sparse_domain_pool.domain_refined_job_moves
+              << " sparse_domain_unrefined_groups=" << sparse_domain_unrefined_pool.groups()
+              << " sparse_domain_unrefined_refine=" << int(sparse_domain_unrefined_pool.domain_refine)
+              << " sparse_domain_unrefined_boundaries=" << sparse_domain_unrefined_pool.domain_refined_boundaries
+              << " sparse_domain_unrefined_moves=" << sparse_domain_unrefined_pool.domain_refined_job_moves
               << " cpu_high_groups=" << high_pool.groups()
               << " cpu_high_direct_groups=" << high_direct_pool.groups()
               << " cpu_high_persistent_groups=" << high_persistent_pool.groups()
@@ -337,6 +356,7 @@ int main() {
     sparse_sticky_pool.shutdown();
     sparse_contiguous_pool.shutdown();
     sparse_domain_pool.shutdown();
+    sparse_domain_unrefined_pool.shutdown();
     high_persistent_pool.shutdown();
     high_pool.release();
     in_pool.release(); out_pool.release();
