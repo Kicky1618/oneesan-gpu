@@ -13,11 +13,18 @@
 #error "LOW orbit warp-row tasks layer on compact row-depth tasks"
 #endif
 
+#ifdef MASKSHARD_LOW_ORBIT_WARP_ROW_U32
+using MaskShardLowOrbitWarpTask = std::uint32_t;
+#else
+using MaskShardLowOrbitWarpTask = Code;
+#endif
+
 // One warp owns one active HIGH row and up to 32 active LOW ranks.  Compared
-// with the flat state task map this removes per-lane 64-bit quotient/remainder
-// decoding and shares HIGH-row metadata across all lanes.  At full cap, use
-// physical HIGH/LOW ranks directly to preserve the saturated locality fast path.
-__device__ __constant__ Code D_MS_LOW_ORBIT_WARP_PREFIX[HIGH_LUT_K + 3];
+// with the flat state task map this removes per-lane quotient/remainder decoding
+// and shares HIGH-row metadata across all lanes.  At full cap, use physical
+// HIGH/LOW ranks directly to preserve the saturated locality fast path.
+__device__ __constant__ MaskShardLowOrbitWarpTask
+    D_MS_LOW_ORBIT_WARP_PREFIX[HIGH_LUT_K + 3];
 __device__ __constant__ std::uint32_t
     D_MS_LOW_ORBIT_WARP_LOW_CHUNKS[HIGH_LUT_K + 2];
 
@@ -29,8 +36,9 @@ static Code maskshard_configure_loworbit_warprow_plan(
     maskshard_loworbit_rowdepth_compact_cache().make_job_plan(
         mask, cap, state_prefix, low_count);
 
-    std::array<Code, HIGH_LUT_K + 3> warp_prefix{};
+    std::array<MaskShardLowOrbitWarpTask, HIGH_LUT_K + 3> warp_prefix{};
     std::array<std::uint32_t, HIGH_LUT_K + 2> low_chunks{};
+    Code warp_total = 0;
     for (int h = 0; h <= HIGH_LUT_K + 1; ++h) {
         const Code states = state_prefix[size_t(h + 1)] - state_prefix[size_t(h)];
         const std::uint32_t lc = low_count[size_t(h)];
@@ -43,8 +51,15 @@ static Code maskshard_configure_loworbit_warprow_plan(
         }
         const std::uint32_t chunks = (lc + 31u) >> 5;
         low_chunks[size_t(h)] = chunks;
-        warp_prefix[size_t(h + 1)] =
-            warp_prefix[size_t(h)] + hc * Code(chunks);
+        warp_total += hc * Code(chunks);
+#ifdef MASKSHARD_LOW_ORBIT_WARP_ROW_U32
+        if (warp_total > 0xffffffffULL) {
+            std::cerr << "LOW orbit warp-row u32 prefix overflow mask=" << mask
+                      << " h=" << h << " total=" << warp_total << '\n';
+            std::exit(332);
+        }
+#endif
+        warp_prefix[size_t(h + 1)] = MaskShardLowOrbitWarpTask(warp_total);
     }
     ck(cudaMemcpyToSymbol(D_MS_LOW_ORBIT_WARP_PREFIX,
                           warp_prefix.data(), sizeof(warp_prefix)),
@@ -52,7 +67,7 @@ static Code maskshard_configure_loworbit_warprow_plan(
     ck(cudaMemcpyToSymbol(D_MS_LOW_ORBIT_WARP_LOW_CHUNKS,
                           low_chunks.data(), sizeof(low_chunks)),
        "LOW orbit warp-row LOW chunks");
-    return warp_prefix[size_t(HIGH_LUT_K + 2)];
+    return warp_total;
 }
 
 static void maskshard_configure_low_group_warprow(std::uint32_t mask) {
@@ -74,7 +89,7 @@ static void maskshard_configure_low_group_warprow(std::uint32_t mask) {
 #define maskshard_configure_low_group maskshard_configure_low_group_warprow
 
 __device__ __forceinline__ int maskshard_loworbit_warprow_find_block(
-    Code warp_task, int nb
+    MaskShardLowOrbitWarpTask warp_task, int nb
 ) {
     int lo = 0, hi = nb + 1;
     while (lo < hi) {
@@ -100,10 +115,12 @@ __global__ void maskshard_main_block_loworbit_warprow_kernel(
     const int lane = int(threadIdx.x & 31);
     const int warp_in_block = int(threadIdx.x >> 5);
     const int warps_per_block = int((blockDim.x + 31) >> 5);
-    Code warp_task = Code(blockIdx.x) * Code(warps_per_block)
-                   + Code(warp_in_block);
-    const Code warp_step = Code(gridDim.x) * Code(warps_per_block);
-    const Code total_warps = D_MS_LOW_ORBIT_WARP_PREFIX[nb];
+    MaskShardLowOrbitWarpTask warp_task =
+        MaskShardLowOrbitWarpTask(blockIdx.x) * MaskShardLowOrbitWarpTask(warps_per_block)
+        + MaskShardLowOrbitWarpTask(warp_in_block);
+    const MaskShardLowOrbitWarpTask warp_step =
+        MaskShardLowOrbitWarpTask(gridDim.x) * MaskShardLowOrbitWarpTask(warps_per_block);
+    const MaskShardLowOrbitWarpTask total_warps = D_MS_LOW_ORBIT_WARP_PREFIX[nb];
 
     for (; warp_task < total_warps; warp_task += warp_step) {
         int dbid = 0;
@@ -111,11 +128,14 @@ __global__ void maskshard_main_block_loworbit_warprow_kernel(
         std::uint32_t chunk = 0;
         if (lane == 0) {
             dbid = maskshard_loworbit_warprow_find_block(warp_task, nb);
-            const Code local = warp_task - D_MS_LOW_ORBIT_WARP_PREFIX[dbid];
+            const MaskShardLowOrbitWarpTask local =
+                warp_task - D_MS_LOW_ORBIT_WARP_PREFIX[dbid];
             const std::uint32_t chunks = D_MS_LOW_ORBIT_WARP_LOW_CHUNKS[dbid];
             if (chunks) {
-                hq = std::uint32_t(local / Code(chunks));
-                chunk = std::uint32_t(local - Code(hq) * Code(chunks));
+                hq = std::uint32_t(local / MaskShardLowOrbitWarpTask(chunks));
+                chunk = std::uint32_t(
+                    local - MaskShardLowOrbitWarpTask(hq)
+                          * MaskShardLowOrbitWarpTask(chunks));
             }
         }
         dbid = __shfl_sync(active, dbid, 0);
