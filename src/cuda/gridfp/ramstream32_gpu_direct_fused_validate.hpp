@@ -83,3 +83,13 @@ static void validate_gpu_direct_fused_low_p1_disjoint(
               << " cross_edges=" << cross_edges
               << " overlap=0\n";
 }
+
+static GpuDirectFusedHost build_gpu_direct_fused_checked(
+    const StorageLayout& layout,
+    const GpuDirectGatherHost& ordinary,
+    const GpuDirectCrossGatherHost& cross
+) {
+    GpuDirectFusedHost fused = build_gpu_direct_fused(layout, ordinary, cross);
+    validate_gpu_direct_fused_low_p1_disjoint(layout, ordinary, cross, fused);
+    return fused;
+}
