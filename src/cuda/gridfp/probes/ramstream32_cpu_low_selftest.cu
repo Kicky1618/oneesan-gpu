@@ -14,7 +14,7 @@
 #undef RAMSTREAM_BIDESC_COMPACT_NO_MAIN
 #include "../ramstream32_cpu_low_sparse.hpp"
 #include "../ramstream32_cpu_high.hpp"
-#include "../ramstream32_cpu_high_direct.hpp"
+#include "../ramstream32_cpu_high_direct_persistent.hpp"
 
 static void enum_states_rec(int pos, int h, MateID m, std::vector<MateID>& out) {
     if (pos < 0) { if (h == 0) out.push_back(m); return; }
@@ -163,6 +163,9 @@ int main() {
     auto [high_rm, high_rd] = reference_window(
         W, W - 1, LOW_LUT_K + 1, mod,
         main_states, block_states, mi, di, init_m, init_d);
+    auto [high2_rm, high2_rd] = reference_window(
+        W, W - 1, LOW_LUT_K + 1, mod,
+        main_states, block_states, mi, di, high_rm, high_rd);
     WindowPlan high_wp = make_direct2d_window(true);
     auto high_jobs = make_cpu_high_jobs(W, high_wp);
     std::vector<const CpuHighJob*> high_job_ptrs;
@@ -183,6 +186,19 @@ int main() {
     if (!compare_factor("cpu-high-direct", main_auth, block_auth, main_states, block_states,
                         high_rm, high_rd, storage, layout)) return 16;
 
+    fill_factor(main_auth, block_auth, main_states, block_states, init_m, init_d, storage, layout);
+    CpuHighDirectPersistentPool high_persistent_pool(2);
+    high_persistent_pool.run(high_job_ptrs, main_auth, block_auth,
+                             storage, layout, highdirect, highcross, mod);
+    if (!compare_factor("cpu-high-persistent-1", main_auth, block_auth,
+                        main_states, block_states, high_rm, high_rd,
+                        storage, layout)) return 17;
+    high_persistent_pool.run(high_job_ptrs, main_auth, block_auth,
+                             storage, layout, highdirect, highcross, mod);
+    if (!compare_factor("cpu-high-persistent-2", main_auth, block_auth,
+                        main_states, block_states, high2_rm, high2_rd,
+                        storage, layout)) return 18;
+
     // Simulate CPU/GPU overlap with two CPU direct pools touching disjoint LOW
     // occupancy groups. Their concurrent result must equal the same HIGH window.
     std::vector<const CpuHighJob*> high_jobs_a, high_jobs_b;
@@ -202,7 +218,7 @@ int main() {
     ta.join(); tb.join();
     if (!compare_factor("cpu-high-parallel-partition", main_auth, block_auth,
                         main_states, block_states, high_rm, high_rd,
-                        storage, layout)) return 17;
+                        storage, layout)) return 19;
 
     double sparse_meta_mib = double(
         sparse_orbit_ops*sizeof(CpuLowSparseOrbitOp)
@@ -216,6 +232,8 @@ int main() {
               << " direct_groups=" << direct_pool.groups() << " sparse_groups=" << sparse_pool.groups()
               << " cpu_high_groups=" << high_pool.groups()
               << " cpu_high_direct_groups=" << high_direct_pool.groups()
+              << " cpu_high_persistent_groups=" << high_persistent_pool.groups()
+              << " cpu_high_persistent_start_s=" << high_persistent_pool.worker_start_s
               << " cpu_high_parallel_groups="
               << (high_parallel_a.groups()+high_parallel_b.groups())
               << " out_scratch_mib=" << double(out_pool.peak_scratch_bytes()) / (1 << 20)
@@ -237,6 +255,7 @@ int main() {
               << double(highdirect.closure_ops.size()*sizeof(CpuHighClosureOp))/(1<<20)
               << '\n';
 
+    high_persistent_pool.shutdown();
     high_pool.release();
     in_pool.release(); out_pool.release();
     main_auth.release(); block_auth.release();
