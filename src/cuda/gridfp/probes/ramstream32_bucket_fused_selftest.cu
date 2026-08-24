@@ -1,8 +1,9 @@
 #define main bucket_fused_reference_main
-#include "ramstream32_gpu_direct_fused_selftest.cu"
+#include "ramstream32_gpu_direct_gather_selftest.cu"
 #undef main
 
-#include "../ramstream32_cpu_low_sparse.hpp"
+#include "../ramstream32_gpu_direct_gather_cross.cuh"
+#include "../ramstream32_gpu_direct_fused.cuh"
 #include "../ramstream32_bucket_layout.hpp"
 #include "../ramstream32_bucket_direct.hpp"
 #include "../ramstream32_bucket_fused.cuh"
@@ -38,7 +39,7 @@ static bool bkft_compare(
 static void bkft_alloc_slots(
     uint32_t fixed,const BucketPhysicalLayoutHost&phy,std::array<Count*,BUCKET_NGPU>&d
 ){
-    for(uint32_t s=0;s<BUCKET_NGPU;++s){size_t n=size_t(std::max<Code>(1,phy.slot_capacity[fixed][s]));ck(cudaMalloc(&d[s],n*sizeof(Count)),"bkft slot alloc");ck(cudaMemset(d[s],0,n*sizeof(Count)),"bkft slot zero");}
+    for(uint32_t s=0;s<BUCKET_NGPU;++s){size_t n=size_t(std::max<Code>(Code(1),phy.slot_capacity[fixed][s]));ck(cudaMalloc(&d[s],n*sizeof(Count)),"bkft slot alloc");ck(cudaMemset(d[s],0,n*sizeof(Count)),"bkft slot zero");}
 }
 static void bkft_free_slots(std::array<Count*,BUCKET_NGPU>&d){for(auto&p:d){if(p)cudaFree(p);p=nullptr;}}
 
