@@ -159,6 +159,31 @@ The raw probe retains the historical `hybrid_domain_*` prefix for compatibility;
 
 These page counts are static ownership exposures, not measured remote-memory bytes. First-touch placement, AutoNUMA, THP, caches, and GPU DMA still determine actual traffic.
 
+### Refinement preflight A/B
+
+Before spending a full residue on timing, compare refined and unrefined domain plans across the intended worker/socket shapes:
+
+```bash
+N=27 \
+CONFIGS='32:16 64:32 96:48 128:64' \
+bash scripts/bench/ramstream32-cpu-low-domain-refine-plan-ab.sh
+```
+
+The runner invokes the same production schedule-plan binary twice per topology with `CPU_LOW_DOMAIN_REFINE=0` and `1`. It verifies zero boundary moves in the unrefined variant and records:
+
+```text
+domain imbalance
+maximum worker exact-cell load
+cross-domain 4 KiB boundary pages
+cross-domain 2 MiB boundary pages
+cross-worker boundary pages
+outer normalized cap
+accepted boundary moves / moved jobs
+domain schedule build time
+```
+
+Its paired summary reports `imbalance_speedup`, `max_worker_cells_saved`, `cross_domain_4k_delta`, `cross_domain_2m_delta`, and `refine_extra_build_s`. A good refinement point lowers imbalance/max-worker work without materially worsening the relevant page cuts. If it improves modeled makespan but substantially increases cross-domain page exposure, the clean runtime A/B and NUMA diagnostic decide whether the trade is worthwhile.
+
 ## Topology sweep and Pareto analysis
 
 Several worker/domain layouts can be compared without allocating authoritative state:
@@ -278,4 +303,4 @@ Keep HIGH policy, worker counts, affinity lists, overlap mode, and sample spacin
 
 ## Benchmark provenance
 
-The LOW schedule comparison, domain-refinement A/B, NUMA diagnostic, CPU HIGH threshold sweep, policy A/B harness, and stream calibration propagate and record the relevant LOW scheduling controls. When `domain` is used, `CPU_LOW_DOMAIN_SIZE` and `CPU_LOW_DOMAIN_REFINE` are part of the benchmark condition; changing either invalidates a direct timing or calibration comparison.
+The LOW schedule comparison, domain-refinement preflight/runtime A/B, NUMA diagnostic, CPU HIGH threshold sweep, policy A/B harness, and stream calibration propagate and record the relevant LOW scheduling controls. When `domain` is used, `CPU_LOW_DOMAIN_SIZE` and `CPU_LOW_DOMAIN_REFINE` are part of the benchmark condition; changing either invalidates a direct timing or calibration comparison.
