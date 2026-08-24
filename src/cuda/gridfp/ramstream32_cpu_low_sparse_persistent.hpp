@@ -122,6 +122,11 @@ struct CpuLowSparsePersistentPool {
         if (schedule_mode != CPU_LOW_SCHEDULE_STICKY) return;
         if (sticky_source_jobs == &jobs && sticky_source_sparse == &sparse) return;
 
+        // A schedule is read lock-free by workers during a generation. Rebuild
+        // only after the previous generation is complete, matching the HIGH
+        // persistent pool's cached-schedule safety rule.
+        wait_run();
+
         auto t0 = std::chrono::steady_clock::now();
         std::vector<std::pair<size_t, uint64_t>> ranked;
         ranked.reserve(jobs.size());
