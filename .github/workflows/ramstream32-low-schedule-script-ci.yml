@@ -7,6 +7,7 @@ on:
       - 'scripts/bench/ramstream32-cpu-low-schedule-compare.sh'
       - 'scripts/bench/ramstream32-cpu-low-schedule-plan-sweep.sh'
       - 'scripts/bench/ramstream32-cpu-low-domain-refine-ab.sh'
+      - 'scripts/bench/ramstream32-cpu-low-domain-refine-plan-ab.sh'
       - 'scripts/tools/analyze_cpu_low_schedule_plan_sweep.py'
       - 'docs/ramstream32-cpu-low-scheduling.md'
       - '.github/workflows/ramstream32-low-schedule-script-ci.yml'
@@ -16,6 +17,7 @@ on:
       - 'scripts/bench/ramstream32-cpu-low-schedule-compare.sh'
       - 'scripts/bench/ramstream32-cpu-low-schedule-plan-sweep.sh'
       - 'scripts/bench/ramstream32-cpu-low-domain-refine-ab.sh'
+      - 'scripts/bench/ramstream32-cpu-low-domain-refine-plan-ab.sh'
       - 'scripts/tools/analyze_cpu_low_schedule_plan_sweep.py'
       - 'docs/ramstream32-cpu-low-scheduling.md'
       - '.github/workflows/ramstream32-low-schedule-script-ci.yml'
@@ -33,6 +35,7 @@ jobs:
           bash -n scripts/bench/ramstream32-cpu-low-schedule-compare.sh
           bash -n scripts/bench/ramstream32-cpu-low-schedule-plan-sweep.sh
           bash -n scripts/bench/ramstream32-cpu-low-domain-refine-ab.sh
+          bash -n scripts/bench/ramstream32-cpu-low-domain-refine-plan-ab.sh
           python3 -m py_compile scripts/tools/analyze_cpu_low_schedule_plan_sweep.py
       - name: Four-way schedule provenance
         shell: bash
@@ -44,7 +47,9 @@ jobs:
           grep -Fq 'domain-dynamic-sticky-contiguous' "$f"
           grep -Fq 'order_design=cyclic-latin-4' "$f"
           grep -Fq 'CPU_LOW_DOMAIN_SIZE="${CPU_LOW_DOMAIN_SIZE:-}"' "$f"
+          grep -Fq 'CPU_LOW_DOMAIN_REFINE="${CPU_LOW_DOMAIN_REFINE:-1}"' "$f"
           grep -Fq 'CPU_LOW_DOMAIN_SIZE="$CPU_LOW_DOMAIN_SIZE"' "$f"
+          grep -Fq 'CPU_LOW_DOMAIN_REFINE="$CPU_LOW_DOMAIN_REFINE"' "$f"
           grep -Fq 'domain provenance mismatch' "$f"
           grep -Fq 'cpu_low_domain_outer_normalized_cap' "$f"
           grep -Fq 'cpu_low_domain_refined_boundaries' "$f"
@@ -53,7 +58,7 @@ jobs:
           grep -Fq 'domain_vs_dynamic_wall' "$f"
           grep -Fq 'domain_vs_contiguous_low' "$f"
           grep -Fq 'RAMSTREAM_NUMA_SAMPLE_MIB=0' "$f"
-      - name: Domain refinement A/B design
+      - name: Domain refinement runtime A/B design
         shell: bash
         run: |
           f=scripts/bench/ramstream32-cpu-low-domain-refine-ab.sh
@@ -64,12 +69,29 @@ jobs:
           grep -Fq 'CPU_LOW_SCHEDULE=domain' "$f"
           grep -Fq 'CPU_LOW_DOMAIN_SIZE="$CPU_LOW_DOMAIN_SIZE"' "$f"
           grep -Fq 'CPU_LOW_DOMAIN_REFINE="$refine"' "$f"
+          grep -Fq 'cpu_low_domain_refine' "$f"
+          grep -Fq 'refine stdout provenance mismatch' "$f"
           grep -Fq 'cpu_low_domain_schedule .* refine=${refine}' "$f"
           grep -Fq 'refinement disabled but moves were reported' "$f"
           grep -Fq 'refine_speedup' "$f"
           grep -Fq 'refine_low_speedup' "$f"
           grep -Fq 'refine_extra_build_s' "$f"
           grep -Fq 'RAMSTREAM_NUMA_SAMPLE_MIB=0' "$f"
+      - name: Domain refinement preflight A/B design
+        shell: bash
+        run: |
+          f=scripts/bench/ramstream32-cpu-low-domain-refine-plan-ab.sh
+          grep -Fq 'CONFIGS="${CONFIGS:-32:16 64:32 96:48 128:64}"' "$f"
+          grep -Fq 'variants=refine0,refine1' "$f"
+          grep -Fq 'CPU_LOW_DOMAIN_REFINE="$refine"' "$f"
+          grep -Fq -- '--domain-size "$domain"' "$f"
+          grep -Fq 'hybrid_domain_imbalance' "$f"
+          grep -Fq 'hybrid_domain_cross_domain_pages_4k' "$f"
+          grep -Fq 'hybrid_domain_cross_domain_pages_2m' "$f"
+          grep -Fq 'unrefined preflight moved boundaries' "$f"
+          grep -Fq 'imbalance_speedup=' "$f"
+          grep -Fq 'cross_domain_4k_delta=' "$f"
+          grep -Fq 'refine_extra_build_s=' "$f"
       - name: Topology sweep and Pareto analyzer
         shell: bash
         run: |
@@ -96,10 +118,12 @@ jobs:
         shell: bash
         run: |
           d=docs/ramstream32-cpu-low-scheduling.md
+          grep -Fq 'Backend v5.21' "$d"
           grep -Fq 'CPU_LOW_SCHEDULE=domain' "$d"
           grep -Fq 'CPU_LOW_DOMAIN_SIZE' "$d"
           grep -Fq 'CPU_LOW_DOMAIN_REFINE' "$d"
           grep -Fq 'ramstream32-cpu-low-domain-refine-ab.sh' "$d"
+          grep -Fq 'ramstream32-cpu-low-domain-refine-plan-ab.sh' "$d"
           grep -Fq 'cpu_low_domain_refined_boundaries' "$d"
           grep -Fq 'domain_refined_job_moves' "$d"
           grep -Fq 'cyclic-latin-4' "$d"
