@@ -70,12 +70,24 @@ jobs:
           build/ramstream32_hybrid_sparse_w${{ matrix.width }} \
             ${{ matrix.n }} 4294967291 12288 4 --plan-only \
             | tee /tmp/hybrid-plan.txt
-          grep -Fq 'backend=gridfp-ramstream32-factorized-hybrid-sparse-v5.14-plan' \
+          grep -Fq 'backend=gridfp-ramstream32-factorized-hybrid-sparse-v5.15-plan' \
             /tmp/hybrid-plan.txt
           grep -Fq 'cpu_high_persistent_workers=1' /tmp/hybrid-plan.txt
           grep -Fq 'cpu_high_async_overlap=1' /tmp/hybrid-plan.txt
           grep -Fq 'cpu_low_persistent_workers=1' /tmp/hybrid-plan.txt
           grep -Fq 'cpu_low_pointer_workspace=stack' /tmp/hybrid-plan.txt
+          grep -Fq 'cpu_high_affinity=default' /tmp/hybrid-plan.txt
+          grep -Fq 'cpu_low_affinity=default' /tmp/hybrid-plan.txt
+      - name: Validate explicit affinity provenance
+        if: matrix.width == 22
+        shell: bash
+        run: |
+          CPU_HIGH_CPU_LIST=0 CPU_LOW_CPU_LIST=1 \
+            build/ramstream32_hybrid_sparse_w22 \
+            21 4294967291 12288 4 --plan-only \
+            | tee /tmp/hybrid-affinity-plan.txt
+          grep -Fq 'cpu_high_affinity=explicit' /tmp/hybrid-affinity-plan.txt
+          grep -Fq 'cpu_low_affinity=explicit' /tmp/hybrid-affinity-plan.txt
       - name: Validate n27 CPU HIGH scratch partition plan
         if: matrix.width == 28
         shell: bash
@@ -93,7 +105,7 @@ jobs:
           CPU_HIGH_MAX_MIB=256 CPU_HIGH_MODE=direct \
             build/ramstream32_hybrid_sparse_w28 \
             27 4294967291 12288 4 --plan-only 2>&1 | tee /tmp/high-offload-direct.txt
-          grep -Fq 'backend=gridfp-ramstream32-factorized-hybrid-sparse-v5.14-plan' \
+          grep -Fq 'backend=gridfp-ramstream32-factorized-hybrid-sparse-v5.15-plan' \
             /tmp/high-offload-direct.txt
           grep -Fq 'cpu_high_groups=12911' /tmp/high-offload-direct.txt
           grep -Fq 'cpu_high_mode=direct' /tmp/high-offload-direct.txt
@@ -117,14 +129,15 @@ jobs:
           grep -Fq 'cpu_high_policy=file' /tmp/high-offload-file.txt
           grep -Fq 'cpu_high_groups=2' /tmp/high-offload-file.txt
           grep -Fq 'cpu_high_selection_hash=' /tmp/high-offload-file.txt
-      - name: Validate CPU HIGH affinity parser
+      - name: Validate CPU affinity parser
         if: matrix.width == 22
         shell: bash
         run: |
           g++ -O2 -std=c++17 -pthread \
             src/cuda/gridfp/probes/ramstream32_cpu_affinity_selftest.cpp \
             -o build/ramstream32_cpu_affinity_selftest
-          build/ramstream32_cpu_affinity_selftest
+          build/ramstream32_cpu_affinity_selftest | tee /tmp/cpu-affinity-selftest.txt
+          grep -Fq 'cpu-affinity-selftest OK' /tmp/cpu-affinity-selftest.txt
       - name: Validate exact CPU HIGH cost plan
         if: matrix.width == 22
         shell: bash
