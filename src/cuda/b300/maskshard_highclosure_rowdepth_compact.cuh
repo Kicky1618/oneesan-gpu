@@ -1,5 +1,12 @@
 #pragma once
 
+#include <algorithm>
+#include <array>
+#include <cstdint>
+#include <cstdlib>
+#include <iostream>
+#include <vector>
+
 #ifndef MASKSHARD_HIGH_CLOSURE_ROW_DEPTH_COMPACT
 #error "maskshard_highclosure_rowdepth_compact.cuh requires MASKSHARD_HIGH_CLOSURE_ROW_DEPTH_COMPACT"
 #endif
