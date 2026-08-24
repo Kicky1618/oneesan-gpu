@@ -37,6 +37,9 @@
 #if defined(MASKSHARD_LOW_CLOSURE_ROW_DEPTH_COMPACT_LAUNCH) && !defined(MASKSHARD_LOW_CLOSURE_ROW_DEPTH_COMPACT)
 #error "exact LOW closure launch requires exact LOW closure task mapping"
 #endif
+#if defined(MASKSHARD_LOW_BLOCK_ORBIT_TIGHT_LAUNCH) && !defined(MASKSHARD_BLOCK_ORBIT)
+#error "tight LOW BLOCKED-domain launch requires BLOCKED-domain orbit"
+#endif
 
 struct FullOrbitBatchAddress {
     int owner = -1;
@@ -396,6 +399,9 @@ static void process_fullorbit_batch_low_group(
     Count* mainv = authoritative_main + shard.main_base[mask];
     Count* blockv = authoritative_block + shard.block_base[mask];
     const int bm = int(std::min<Code>(65535, (main_n + threads - 1) / threads));
+#ifdef MASKSHARD_LOW_BLOCK_ORBIT_TIGHT_LAUNCH
+    const int bd = int(std::min<Code>(65535, (block_n + threads - 1) / threads));
+#endif
 #ifdef MASKSHARD_LOW_CLOSURE_COLS
     const int warps_per_block = (threads + 31) / 32;
 #else
@@ -404,8 +410,13 @@ static void process_fullorbit_batch_low_group(
 
     for (int p = LOW_LUT_K; p >= 1; --p) {
         auto t = std::chrono::steady_clock::now();
+#ifdef MASKSHARD_LOW_BLOCK_ORBIT_TIGHT_LAUNCH
+        if (block_n)
+            maskshard_main_block_loworbit_kernel<<<bd, threads>>>(mainv, blockv, main_n, p);
+#else
         if (main_n)
             maskshard_main_block_loworbit_kernel<<<bm, threads>>>(mainv, blockv, main_n, p);
+#endif
         ck(cudaGetLastError(), "fullorbit-batch low orbit");
         ck(cudaDeviceSynchronize(), "fullorbit-batch low orbit sync");
         w.low_orbit_s += ram_seconds_since(t);
