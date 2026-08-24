@@ -122,6 +122,49 @@ The table build is setup-only and is included in `setup_s`, not the timed DP
 construction over micro-optimizing setup time; B300 profiling should determine
 whether further setup reduction is useful.
 
+## v0.25: threshold-29 HIGH row packing
+
+v0.24 is the separate LOW-closure row-depth experiment. The next HIGH-closure
+candidate is therefore numbered v0.25.
+
+The v0.11 threshold of 16 was intentionally conservative. After v0.22 exact
+row-depth task compaction and v0.23 exact launch sizing, the tradeoff changes:
+we can evaluate the threshold against the actual active LOW prefix on every DP
+row while still making the packing decision from the dense physical stride.
+
+`factor_highclosure_rowdepth_threshold.cpp` reproduces the v0.23 threshold-16
+aggregate exactly and evaluates the same task map for alternate compile-time
+thresholds. For n=27 / W=28 / 256 threads:
+
+```text
+                         v0.23 threshold 16     v0.25 threshold 29
+active useful items       36,989,860,194,307     36,989,860,194,307
+lane slots                44,779,140,427,808     42,734,081,059,456
+row/descriptor subgroups   1,948,871,708,005      2,131,117,327,561
+warp tasks                   835,870,866,393        771,962,761,132
+launch blocks                104,486,127,592         96,497,498,944
+capped group-positions                    0                      0
+```
+
+Relative to v0.23 this is:
+
+```text
+lane slots       -4.566991123%
+warp tasks       -7.645691198%
+launch blocks    -7.645635676%
+descriptor loads +9.351339999%
+```
+
+An exhaustive integer threshold scan `1..1002` in the same analytical model
+places both the minimum warp-task count and the minimum launch-block count at
+threshold 29. Threshold 36 reduces lane slots slightly further, but already
+increases task/block count and descriptor work, so threshold 29 is the clean
+A/B candidate rather than an assumption that more packing is always better.
+
+v0.25 adds no persistent GPU metadata and changes no source set. It only changes
+`MASKSHARD_HIGH_CLOSURE_ROWPACK_THRESHOLD` from 16 to 29; both the compact CUDA
+task map and the v0.23 host launch table consume that same compile-time policy.
+
 ## Semantic validation
 
 `factor_highclosure_rowdepth_taskmap.cpp` exhaustively compares, for every HIGH
@@ -136,6 +179,9 @@ Local validation passed with
 W=10 LOW=5 expected=12,719  compact=12,719  warp_tasks=2,306
 W=12 LOW=6 expected=146,624 compact=146,624 warp_tasks=9,311
 ```
+
+The v0.25 threshold model also passes the same warning-clean local build and
+contains pinned threshold-16 and threshold-29 n=27 regressions.
 
 ## A/B commands
 
@@ -167,6 +213,14 @@ v0.22 -> v0.23 isolates exact host launch sizing:
 
 ```bash
 python3 scripts/bench/b300_maskshard_highclosure_exactlaunch_ab.py \
+  --n 27 --gpus 8 --threads 256 \
+  --modulus 4294967291 --vram-reserve-mib 1024
+```
+
+v0.23 -> v0.25 isolates the threshold-16 -> threshold-29 packing policy:
+
+```bash
+python3 scripts/bench/b300_maskshard_highclosure_threshold29_ab.py \
   --n 27 --gpus 8 --threads 256 \
   --modulus 4294967291 --vram-reserve-mib 1024
 ```
