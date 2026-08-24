@@ -37,11 +37,22 @@ NUMA_SAMPLE_MIB=64 \
 bash scripts/bench/ramstream32-numa-sample.sh
 ```
 
-Backend v5.17 also supports `CPU_LOW_SCHEDULE=sticky`, which keeps each fixed-HIGH occupancy group on the same persistent LOW worker after a one-time exact-cell LPT partition. To isolate scheduling/locality effects, run the same diagnostic twice with only the schedule changed:
+Backend v5.18 accepts three LOW schedules:
+
+```text
+CPU_LOW_SCHEDULE=dynamic
+CPU_LOW_SCHEDULE=sticky
+CPU_LOW_SCHEDULE=contiguous
+```
+
+`sticky` keeps each fixed-HIGH occupancy group on the same persistent LOW worker after a one-time exact-cell LPT partition. `contiguous` also keeps stable ownership, but assigns numeric HIGH-occupancy-mask ranges contiguously while minimizing the maximum worker cell load subject to that order constraint. The latter is intended to reduce worker/NUMA-domain cuts through adjacent storage ranges.
+
+To isolate scheduling/locality effects, run the same diagnostic with only the LOW schedule changed:
 
 ```bash
-CPU_LOW_SCHEDULE=dynamic bash scripts/bench/ramstream32-numa-sample.sh
-CPU_LOW_SCHEDULE=sticky  bash scripts/bench/ramstream32-numa-sample.sh
+CPU_LOW_SCHEDULE=dynamic    bash scripts/bench/ramstream32-numa-sample.sh
+CPU_LOW_SCHEDULE=sticky     bash scripts/bench/ramstream32-numa-sample.sh
+CPU_LOW_SCHEDULE=contiguous bash scripts/bench/ramstream32-numa-sample.sh
 ```
 
 For a cost-model group policy, replace the threshold with:
@@ -53,7 +64,20 @@ CPU_HIGH_GROUPS_FILE=/path/to/cpu-high.groups
 
 The runner saves stdout, stderr, environment metadata, binary hash, optional groups-file hash, LOW schedule mode, and an analyzed placement summary.
 
-Sampling perturbs the run through syscalls and cache/TLB effects. Do not use the sampled run's `wall_s` as the clean performance number; repeat the same configuration with `RAMSTREAM_NUMA_SAMPLE_MIB=0` for timing. For clean dynamic/sticky timing, use `scripts/bench/ramstream32-cpu-low-schedule-ab.sh`, which forces NUMA sampling off and alternates run order.
+Sampling perturbs the run through syscalls and cache/TLB effects. Do not use the sampled run's `wall_s` as the clean performance number; repeat the same configuration with `RAMSTREAM_NUMA_SAMPLE_MIB=0` for timing. For clean three-way scheduling timing, use `scripts/bench/ramstream32-cpu-low-schedule-compare.sh`, which forces NUMA sampling off and rotates dynamic/sticky/contiguous run order. The older two-way `ramstream32-cpu-low-schedule-ab.sh` remains useful for focused dynamic-versus-sticky measurements.
+
+## Static page-cut preflight
+
+Before a multi-terabyte residue run, inspect the exact production sticky and contiguous assignments without allocating authoritative RAM:
+
+```bash
+N=27 bash scripts/build/gridfp-ramstream32-cpu-low-schedule-plan.sh
+./build/ramstream32_cpu_low_schedule_plan_n27 27 64 --domain-size 32
+```
+
+The probe constructs the production `CpuLowSparsePersistentPool` schedules themselves and then measures boundary-page ownership. It reports LPT and contiguous exact-cell imbalance, cross-worker 4 KiB/2 MiB boundary-page counts, and—in the `--domain-size 32` example—cross-domain cuts assuming worker IDs 0..31 and 32..63 represent two socket-local domains.
+
+These are static ownership exposures, not measured remote-memory bytes. They are useful for deciding whether contiguous ownership is structurally promising, but must be paired with `move_pages` measurements and clean timing.
 
 ## Analyzer
 
@@ -88,11 +112,12 @@ Run at least these configurations on the same host before adding a memory policy
 1. dynamic LOW scheduling with default affinity;
 2. dynamic scheduling with explicit `CPU_HIGH_CPU_LIST` and `CPU_LOW_CPU_LIST`;
 3. sticky scheduling with the same explicit lists;
-4. same-socket and split-socket HIGH/LOW CPU-list layouts;
-5. overlap 0 and overlap 1.
+4. contiguous scheduling with the same explicit lists;
+5. same-socket and split-socket HIGH/LOW CPU-list layouts;
+6. overlap 0 and overlap 1.
 
-Compare node histograms together with `cpu_high_wall_s`, `cpu_low_wall_s`, H2D/D2H time, and clean no-sampling wall time. Sticky scheduling is useful only if stable group ownership outweighs any loss of dynamic load balancing, so placement and timing must be considered together.
+Compare node histograms together with `cpu_high_wall_s`, `cpu_low_wall_s`, H2D/D2H time, static page-cut exposure, and clean no-sampling wall time. Stable scheduling is useful only if locality gains outweigh static-load imbalance, so placement and timing must be considered together.
 
 The purpose is to determine whether the workload is actually remote-memory limited before experimenting with interleave, 4 KiB pages, THP changes, or `mbind`.
 
-Per-group `mbind` is intentionally not implemented yet. Factorized group slices can share boundary pages, especially with 2 MiB huge pages, and the existing `analyze_cpu_high_numa.py` page-exposure analysis should be considered together with these measured node distributions.
+Per-group `mbind` is intentionally not implemented yet. Factorized group slices can share boundary pages, especially with 2 MiB huge pages. The LOW static page-cut probe, measured page histograms, and existing `analyze_cpu_high_numa.py` HIGH page-exposure analysis should be considered together before imposing a memory policy.
