@@ -81,10 +81,8 @@ __global__ void maskshard_main_lowdesc_closure_cols_inplace_kernel(
             const Code j = y.off + Code(hr) * y.stride + lowdesc_lr(desc);
             atomic_add_mod(blockv + j, c);
         } else if (kind == LOWDESC_CROSS) {
-            const uint32_t ha = D_F_LOW_MASK_OFF[size_t(D_F_MASK) * S + x.hs];
-            (void)ha;
-            const uint32_t hca = D_F_HIGH_MASK_OFF[size_t(D_F_MASK) * S + x.he];
-            const uint32_t hc = D_F_HIGH_MASK_CODES[hca + hr];
+            const uint32_t ha = D_F_HIGH_MASK_OFF[size_t(D_F_MASK) * S + x.he];
+            const uint32_t hc = D_F_HIGH_MASK_CODES[ha + hr];
             const uint32_t hc2 = lowdesc_flip_high(hc, lowdesc_depth(desc));
             if (hc2 == 0xffffffffu) continue;
             const uint32_t hp = D_F_HIGH_PACKED_RANK[hc2];
