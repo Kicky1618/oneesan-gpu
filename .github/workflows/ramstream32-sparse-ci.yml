@@ -82,7 +82,7 @@ jobs:
           grep -Fq 'cpu_high_affinity=default' /tmp/hybrid-plan.txt
           grep -Fq 'cpu_low_affinity=default' /tmp/hybrid-plan.txt
           grep -Fq 'numa_sample_mib=0' /tmp/hybrid-plan.txt
-      - name: Validate static LOW schedule provenance
+      - name: Validate static LOW schedule provenance and refinement toggle
         if: matrix.width == 22
         shell: bash
         run: |
@@ -104,14 +104,23 @@ jobs:
 
           CPU_LOW_SCHEDULE=domain CPU_LOW_DOMAIN_SIZE=2 \
             build/ramstream32_hybrid_sparse_w22 \
-            21 4294967291 12288 4 --plan-only | tee /tmp/hybrid-domain-plan.txt
+            21 4294967291 12288 4 --plan-only 2>&1 | tee /tmp/hybrid-domain-plan.txt
           grep -Fq 'cpu_low_schedule=domain' /tmp/hybrid-domain-plan.txt
           grep -Fq 'cpu_low_domain_size=2' /tmp/hybrid-domain-plan.txt
+          grep -Fq 'cpu_low_domain_schedule ' /tmp/hybrid-domain-plan.txt
+          grep -Fq ' refine=1 ' /tmp/hybrid-domain-plan.txt
           grep -Fq 'cpu_low_domain_outer_normalized_cap=' /tmp/hybrid-domain-plan.txt
-          grep -Fq 'cpu_low_domain_active_domains=' /tmp/hybrid-domain-plan.txt
           grep -Fq 'cpu_low_domain_refined_boundaries=' /tmp/hybrid-domain-plan.txt
           grep -Fq 'cpu_low_domain_refined_job_moves=' /tmp/hybrid-domain-plan.txt
-      - name: Reject invalid LOW schedule and domain size
+
+          CPU_LOW_SCHEDULE=domain CPU_LOW_DOMAIN_SIZE=2 CPU_LOW_DOMAIN_REFINE=0 \
+            build/ramstream32_hybrid_sparse_w22 \
+            21 4294967291 12288 4 --plan-only 2>&1 | tee /tmp/hybrid-domain-unrefined.txt
+          grep -Fq 'cpu_low_domain_schedule ' /tmp/hybrid-domain-unrefined.txt
+          grep -Fq ' refine=0 ' /tmp/hybrid-domain-unrefined.txt
+          grep -Fq 'cpu_low_domain_refined_boundaries=0' /tmp/hybrid-domain-unrefined.txt
+          grep -Fq 'cpu_low_domain_refined_job_moves=0' /tmp/hybrid-domain-unrefined.txt
+      - name: Reject invalid LOW schedule, domain size, and refine toggle
         if: matrix.width == 22
         shell: bash
         run: |
@@ -127,6 +136,11 @@ jobs:
             echo 'oversized CPU_LOW_DOMAIN_SIZE unexpectedly succeeded' >&2; exit 1
           fi
           grep -Fq 'CPU_LOW_DOMAIN_SIZE must be in 1..CPU_WORKERS' /tmp/large-domain-size.txt
+          if CPU_LOW_SCHEDULE=domain CPU_LOW_DOMAIN_SIZE=2 CPU_LOW_DOMAIN_REFINE=maybe \
+            build/ramstream32_hybrid_sparse_w22 21 4294967291 12288 4 --plan-only >/tmp/bad-refine.txt 2>&1; then
+            echo 'invalid CPU_LOW_DOMAIN_REFINE unexpectedly succeeded' >&2; exit 1
+          fi
+          grep -Fq 'CPU_LOW_DOMAIN_REFINE must be 0/1, false/true, no/yes, or off/on' /tmp/bad-refine.txt
       - name: Validate n27 CPU HIGH scratch partition plan
         if: matrix.width == 28
         shell: bash
@@ -186,13 +200,10 @@ jobs:
           grep -Fq 'cpu_low_sticky_schedule jobs=' /tmp/cpu-low-selftest.txt
           grep -Fq 'cpu_low_contiguous_schedule jobs=' /tmp/cpu-low-selftest.txt
           grep -Fq 'cpu_low_domain_schedule jobs=' /tmp/cpu-low-selftest.txt
-          grep -Fq 'sparse_persistent_groups=' /tmp/cpu-low-selftest.txt
-          grep -Fq 'sparse_sticky_groups=' /tmp/cpu-low-selftest.txt
-          grep -Fq 'sparse_contiguous_groups=' /tmp/cpu-low-selftest.txt
-          grep -Fq 'sparse_domain_groups=' /tmp/cpu-low-selftest.txt
-          grep -Fq 'sparse_domain_size=1' /tmp/cpu-low-selftest.txt
-          grep -Fq 'sparse_domain_refined_boundaries=' /tmp/cpu-low-selftest.txt
-          grep -Fq 'sparse_domain_refined_job_moves=' /tmp/cpu-low-selftest.txt
+          grep -Fq 'sparse_domain_refine=1' /tmp/cpu-low-selftest.txt
+          grep -Fq 'sparse_domain_unrefined_refine=0' /tmp/cpu-low-selftest.txt
+          grep -Fq 'sparse_domain_unrefined_boundaries=0' /tmp/cpu-low-selftest.txt
+          grep -Fq 'sparse_domain_unrefined_moves=0' /tmp/cpu-low-selftest.txt
           grep -Fq 'cpu_high_direct_schedule jobs=' /tmp/cpu-low-selftest.txt
           grep -Fq 'persistent=1' /tmp/cpu-low-selftest.txt
           grep -Fq 'cpu_high_persistent_groups=' /tmp/cpu-low-selftest.txt
