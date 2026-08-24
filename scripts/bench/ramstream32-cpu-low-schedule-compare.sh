@@ -104,7 +104,7 @@ if [[ -n "$CPU_HIGH_GROUPS_FILE" ]]; then
   echo "cpu_high_groups_file_sha256=$(file_sha256 "$CPU_HIGH_GROUPS_FILE")" >>"$meta"
 fi
 
-printf 'repeat\torder\tposition\tschedule\tresidue\twall_s\tcpu_low_wall_s\tcpu_low_kernel_sum_s\tcpu_low_schedule_build_s\tcpu_low_contiguous_optimal_cap\tcpu_low_domain_size\tcpu_low_domain_normalized_cap\tcpu_low_domain_active_domains\tcpu_low_worker_start_s\tcpu_high_wall_s\th2d_s\tgpu_kernel_s\td2h_s\traw\n' >"$out"
+printf 'repeat\torder\tposition\tschedule\tresidue\twall_s\tcpu_low_wall_s\tcpu_low_kernel_sum_s\tcpu_low_schedule_build_s\tcpu_low_contiguous_optimal_cap\tcpu_low_domain_size\tcpu_low_domain_outer_normalized_cap\tcpu_low_domain_active_domains\tcpu_low_domain_refined_boundaries\tcpu_low_domain_refined_job_moves\tcpu_low_worker_start_s\tcpu_high_wall_s\th2d_s\tgpu_kernel_s\td2h_s\traw\n' >"$out"
 
 run_one() {
   local repeat="$1" order="$2" position="$3" schedule="$4"
@@ -131,13 +131,15 @@ run_one() {
     echo "domain provenance mismatch requested=$CPU_LOW_DOMAIN_SIZE got=$got_domain" >&2
     exit 7
   fi
-  printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
+  printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
     "$repeat" "$order" "$position" "$schedule" "$residue" \
     "$(field "$line" wall_s)" "$(field "$line" cpu_low_wall_s)" \
     "$(field "$line" cpu_low_kernel_sum_s)" "$(field "$line" cpu_low_schedule_build_s)" \
     "$(field "$line" cpu_low_contiguous_optimal_cap)" \
-    "$got_domain" "$(field "$line" cpu_low_domain_normalized_cap)" \
+    "$got_domain" "$(field "$line" cpu_low_domain_outer_normalized_cap)" \
     "$(field "$line" cpu_low_domain_active_domains)" \
+    "$(field "$line" cpu_low_domain_refined_boundaries)" \
+    "$(field "$line" cpu_low_domain_refined_job_moves)" \
     "$(field "$line" cpu_low_worker_start_s)" "$(field "$line" cpu_high_wall_s)" \
     "$(field "$line" h2d_s)" "$(field "$line" gpu_kernel_s)" \
     "$(field "$line" d2h_s)" "$line" >>"$out"
@@ -175,7 +177,8 @@ awk -F '\t' '
   {
     s=$4; n[s]++;
     wall[s]+=$6; low[s]+=$7; kernel[s]+=$8; build[s]+=$9;
-    start[s]+=$14; high[s]+=$15;
+    refine_boundaries[s]+=$14; refine_moves[s]+=$15;
+    start[s]+=$16; high[s]+=$17;
     pos[s,$3]++;
   }
   END {
@@ -183,8 +186,8 @@ awk -F '\t' '
     for (i=1;i<=4;i++) {
       s=modes[i];
       if (!n[s]) continue;
-      printf("summary schedule=%s runs=%d mean_wall_s=%.9f mean_cpu_low_wall_s=%.9f mean_cpu_low_kernel_sum_s=%.9f mean_schedule_build_s=%.9f mean_worker_start_s=%.9f mean_cpu_high_wall_s=%.9f positions=%d/%d/%d/%d\n",
-             s,n[s],wall[s]/n[s],low[s]/n[s],kernel[s]/n[s],build[s]/n[s],start[s]/n[s],high[s]/n[s],pos[s,1]+0,pos[s,2]+0,pos[s,3]+0,pos[s,4]+0);
+      printf("summary schedule=%s runs=%d mean_wall_s=%.9f mean_cpu_low_wall_s=%.9f mean_cpu_low_kernel_sum_s=%.9f mean_schedule_build_s=%.9f mean_refined_boundaries=%.3f mean_refined_job_moves=%.3f mean_worker_start_s=%.9f mean_cpu_high_wall_s=%.9f positions=%d/%d/%d/%d\n",
+             s,n[s],wall[s]/n[s],low[s]/n[s],kernel[s]/n[s],build[s]/n[s],refine_boundaries[s]/n[s],refine_moves[s]/n[s],start[s]/n[s],high[s]/n[s],pos[s,1]+0,pos[s,2]+0,pos[s,3]+0,pos[s,4]+0);
     }
     if (n["dynamic"] && n["sticky"] && n["contiguous"] && n["domain"]) {
       dw=wall["dynamic"]/n["dynamic"]; sw=wall["sticky"]/n["sticky"];
