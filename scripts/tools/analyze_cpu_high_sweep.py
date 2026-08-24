@@ -244,12 +244,14 @@ def main() -> None:
             cpu_med = math.nan
 
         if costs is not None and mode == "direct" and math.isfinite(pcie_med) and math.isfinite(cpu_med):
+            overlap_arg = " --overlap" if overlap else ""
             print(
                 "planner_command "
                 f"python3 scripts/tools/plan_cpu_high_groups.py {args.cost_plan} "
                 f"--pcie-gib-s {pcie_med:.9f} --cpu-gcell-s {cpu_med:.9f} "
                 f"--nn-weight {args.nn_weight:g} --nrnl-weight {args.nrnl_weight:g} "
                 f"--block-weight {args.block_weight:g} --cross-weight {args.cross_weight:g}"
+                f"{overlap_arg}"
             )
 
 
