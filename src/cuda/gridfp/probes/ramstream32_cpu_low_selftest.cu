@@ -156,13 +156,22 @@ int main() {
     if (!compare_factor("sparse-v4.7", main_auth, block_auth, main_states, block_states, low_rm, low_rd, storage, layout)) return 13;
 
     fill_factor(main_auth, block_auth, main_states, block_states, init_m, init_d, storage, layout);
-    CpuLowSparsePersistentPool sparse_persistent_pool(2);
+    CpuLowSparsePersistentPool sparse_persistent_pool(2, CPU_LOW_SCHEDULE_DYNAMIC);
     sparse_persistent_pool.run(low_jobs, main_auth, block_auth, storage, layout, sparse, mod);
     if (!compare_factor("sparse-persistent-1", main_auth, block_auth,
                         main_states, block_states, low_rm, low_rd, storage, layout)) return 20;
     sparse_persistent_pool.run(low_jobs, main_auth, block_auth, storage, layout, sparse, mod);
     if (!compare_factor("sparse-persistent-2", main_auth, block_auth,
                         main_states, block_states, low2_rm, low2_rd, storage, layout)) return 21;
+
+    fill_factor(main_auth, block_auth, main_states, block_states, init_m, init_d, storage, layout);
+    CpuLowSparsePersistentPool sparse_sticky_pool(2, CPU_LOW_SCHEDULE_STICKY);
+    sparse_sticky_pool.run(low_jobs, main_auth, block_auth, storage, layout, sparse, mod);
+    if (!compare_factor("sparse-sticky-1", main_auth, block_auth,
+                        main_states, block_states, low_rm, low_rd, storage, layout)) return 22;
+    sparse_sticky_pool.run(low_jobs, main_auth, block_auth, storage, layout, sparse, mod);
+    if (!compare_factor("sparse-sticky-2", main_auth, block_auth,
+                        main_states, block_states, low2_rm, low2_rd, storage, layout)) return 23;
 
     size_t sparse_orbit_ops = sparse.orbit_count();
     if (!sparse_orbit_ops
@@ -243,6 +252,8 @@ int main() {
               << " direct_groups=" << direct_pool.groups() << " sparse_groups=" << sparse_pool.groups()
               << " sparse_persistent_groups=" << sparse_persistent_pool.groups()
               << " sparse_persistent_start_s=" << sparse_persistent_pool.worker_start_s
+              << " sparse_sticky_groups=" << sparse_sticky_pool.groups()
+              << " sparse_sticky_build_s=" << sparse_sticky_pool.schedule_build_s
               << " cpu_high_groups=" << high_pool.groups()
               << " cpu_high_direct_groups=" << high_direct_pool.groups()
               << " cpu_high_persistent_groups=" << high_persistent_pool.groups()
@@ -269,6 +280,7 @@ int main() {
               << '\n';
 
     sparse_persistent_pool.shutdown();
+    sparse_sticky_pool.shutdown();
     high_persistent_pool.shutdown();
     high_pool.release();
     in_pool.release(); out_pool.release();
