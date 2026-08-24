@@ -36,8 +36,8 @@ if [[ "$CPU_HIGH_OVERLAP" != 0 && "$CPU_HIGH_OVERLAP" != 1 ]]; then
   echo "CPU_HIGH_OVERLAP must be 0 or 1" >&2
   exit 2
 fi
-if [[ "$CPU_LOW_SCHEDULE" != dynamic && "$CPU_LOW_SCHEDULE" != sticky ]]; then
-  echo "CPU_LOW_SCHEDULE must be dynamic or sticky" >&2
+if [[ "$CPU_LOW_SCHEDULE" != dynamic && "$CPU_LOW_SCHEDULE" != sticky && "$CPU_LOW_SCHEDULE" != contiguous ]]; then
+  echo "CPU_LOW_SCHEDULE must be dynamic, sticky, or contiguous" >&2
   exit 2
 fi
 if [[ "$RUN_VALIDATION" != 0 && "$RUN_VALIDATION" != 1 ]]; then
