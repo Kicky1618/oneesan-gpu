@@ -32,7 +32,7 @@ Every HIGH transition preserves that mask:
 
 The groups are transition-closed. CPU and GPU subsets can be evaluated independently and then the ordinary LOW window can run after both subsets finish.
 
-The W=10 full-state regression checks this implementation against the reference Grid-FP recurrence.
+The W=10 full-state regression checks this implementation against the reference Grid-FP recurrence. It also partitions HIGH groups into two disjoint sets and runs the two sets concurrently to catch accidental cross-group writes.
 
 ## v4.8 scratch executor
 
@@ -85,8 +85,6 @@ The only transition that changes the exact LOW code is CROSS. Before authoritati
 
 as a `uint16_t` table. At `LOW_LUT_K=14`, the table is about 32.1 MiB.
 
-The direct topology metadata is independent of occupancy-group counts. For `HIGH_LUT_K=13`, a simple topology count gives roughly 10.2 million N* orbit representatives before descriptor filtering, so the 16-byte orbit format remains a few hundred MiB rather than scaling with the 1.9 TiB authoritative count arrays.
-
 Enable direct mode with:
 
 ```bash
@@ -98,6 +96,55 @@ CPU_HIGH_WORKERS=32 \
 ```
 
 `CPU_HIGH_MAX_MIB=0` disables CPU HIGH offload regardless of the mode setting.
+
+## v5.0 CPU/GPU HIGH overlap
+
+CPU and GPU HIGH subsets touch disjoint LOW-occupancy groups, so they can execute concurrently. `CPU_HIGH_OVERLAP=1` runs CPU HIGH on a host thread while the main thread drives the GPU HIGH groups. The LOW pass begins only after both subsets have completed.
+
+```bash
+CPU_HIGH_MAX_MIB=256 \
+CPU_HIGH_MODE=direct \
+CPU_HIGH_OVERLAP=1 \
+CPU_HIGH_WORKERS=32 \
+./build/oneesan_cuda_gridfp_ramstream32_factorized_hybrid_sparse_n27 \
+  27 4294967291 12288 32
+```
+
+Overlap is not assumed to be faster. PCIe DMA and CPU direct execution both consume System-RAM bandwidth, so the sweep must compare `CPU_HIGH_OVERLAP=0` and `1` on the target machine.
+
+## v5.1 64-bit HIGH orbit metadata
+
+The first direct executor stored each orbit operation in 16 bytes:
+
+- source HIGH rank;
+- partner HIGH rank;
+- drop HIGH rank;
+- orbit kind;
+- partner block ID;
+- drop block ID.
+
+The two block IDs are redundant.
+
+For a source main factor block and active HIGH position `p`:
+
+1. if `p != LOW_LUT_K+1`, the partner transformation is entirely inside HIGH and preserves the HIGH endpoint height and center, so the partner remains in the source main block;
+2. at `p = LOW_LUT_K+1`, the pair crosses the HIGH/center boundary. `NN -> LR` leaves center `R`, while `NR -> RN` and `NL -> LN` leave center `N`; the unchanged LOW start height `source.hs` therefore determines the destination HIGH endpoint height and partner block;
+3. dropping the leading `N` preserves the combined HIGH+center endpoint height, so the blocked destination block is always `source.hs`.
+
+v5.1 stores only
+
+```text
+20-bit source HIGH rank
+20-bit partner HIGH rank
+20-bit drop HIGH rank
+ 2-bit orbit kind
+```
+
+in one `uint64_t`. Two high bits remain unused. The orbit portion of direct metadata is therefore halved from 16 bytes/op to 8 bytes/op.
+
+This is guarded during metadata construction: the builder still computes partner/drop states with the full topology operations and ranks them normally, then asserts that the derived block IDs equal the explicit block IDs. A mismatch aborts before the compact stream is accepted. Rank overflow beyond 20 bits also aborts.
+
+The production `--plan-only` output already computes `cpu_high_direct_meta_mib` with `sizeof(CpuHighOrbitOp)`, so it reports the compact v5.1 footprint without a separate estimator.
 
 ## n=27 partition sizes
 
@@ -118,6 +165,7 @@ Build once, then run the same backend across several thresholds:
 ```bash
 N=27 \
 CPU_HIGH_MODE=direct \
+CPU_HIGH_OVERLAP=0 \
 CPU_WORKERS=32 \
 CPU_HIGH_WORKERS=32 \
 THRESHOLDS='0 64 128 256 512 1024' \
@@ -125,7 +173,7 @@ REPEATS=2 \
 bash scripts/bench/ramstream32-cpu-high-sweep.sh
 ```
 
-Odd repeats use ascending thresholds and even repeats use descending thresholds to reduce order bias. Every run must produce the same residue.
+Repeat with `CPU_HIGH_OVERLAP=1`. Odd repeats use ascending thresholds and even repeats use descending thresholds to reduce order bias. Every run must produce the same residue.
 
 The TSV records:
 
@@ -134,7 +182,8 @@ The TSV records:
 - CPU HIGH wall and summed kernel time;
 - CPU LOW wall time;
 - removed and remaining PCIe TiB;
-- selected CPU HIGH group count.
+- selected CPU HIGH group count;
+- CPU HIGH mode and overlap setting.
 
 The script reports the mean time at each threshold and the fastest observed threshold.
 
@@ -146,10 +195,16 @@ The script reports the mean time at each threshold and the fastest observed thre
 2. the normal hybrid-sparse plan;
 3. the n=27 256-MiB scratch partition, requiring 12,911 CPU groups;
 4. the same n=27 direct metadata plan;
-5. W=10 full-state comparison of both CPU HIGH executors and all CPU LOW executors against the reference recurrence.
+5. W=10 full-state comparison of both CPU HIGH executors and all CPU LOW executors against the reference recurrence;
+6. concurrent execution of two disjoint W=10 HIGH group subsets against the same reference result.
 
-The direct mode should not be promoted to the default until the W=10 regression passes and a real high-memory host shows that it improves wall time.
+The compact orbit builder additionally validates every derived partner/drop block against the full topology result before discarding those block IDs.
 
-## Next experiment
+## Next experiments
 
-After selecting a threshold and mode, GPU HIGH and CPU HIGH can run concurrently because they touch disjoint LOW-occupancy slices. That experiment should remain optional initially: both PCIe DMA and CPU direct execution consume System-RAM bandwidth, so overlap can either hide work or reduce effective bandwidth for both sides.
+The immediate measurements are the 2x2 comparison of `scratch/direct` and `overlap=0/1`, sweeping the CPU HIGH threshold. Once the best execution mode is known, the next structural targets are:
+
+1. split HIGH direct NN versus NR/NL streams to remove the remaining orbit-kind branch only if profiling shows it matters;
+2. NUMA-pin CPU HIGH workers and authoritative occupancy slices so CPU offload does not bounce 1.9-TiB state pages across sockets;
+3. replace the fixed MiB threshold with a cost model using measured DRAM bandwidth, PCIe bandwidth, group state count, and CROSS fraction;
+4. for multi-GPU B300 nodes, assign large HIGH groups to aggregate GPU memory while CPU handles the long tail of small groups.
