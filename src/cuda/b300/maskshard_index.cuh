@@ -2,6 +2,16 @@
 
 #include <cstdint>
 
+// HIGH closure row-depth pruning is parsed before the v0.15 row-depth headers
+// in the shared batch include order. Forward declarations are sufficient; the
+// actual constant-memory definitions are provided later by
+// maskshard_rowdepth_fblock_io.cuh / maskshard_rowdepth_exact_io.cuh.
+#ifdef MASKSHARD_HIGH_CLOSURE_ROW_DEPTH
+extern __device__ __constant__ int D_MS_ROW_DEPTH_INDEX;
+extern __device__ __constant__ std::uint8_t* D_MS_ROW_DEPTH_LOW_PEAK;
+extern __device__ __constant__ std::uint8_t* D_MS_ROW_DEPTH_HIGH_PEAK;
+#endif
+
 // Split one factorized group rank into (row, column). Production n=27 mask
 // groups are below 2^32 elements, so the hot path uses 32-bit quotient and
 // remainder. Keep the generic 64-bit fallback for other experimental widths or
