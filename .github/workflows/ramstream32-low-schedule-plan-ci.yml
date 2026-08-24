@@ -50,12 +50,12 @@ jobs:
           head -n1 /tmp/low-plan.tsv | grep -Fq 'contiguous_cross_worker_pages_4k='
           head -n1 /tmp/low-plan.tsv | grep -Fq 'contiguous_cross_worker_pages_2m='
           head -n1 /tmp/low-plan.tsv | grep -Fq 'contiguous_build_s='
-          grep -Fq $'worker\tjobs\tcells\tfraction\tcontiguous_jobs\tcontiguous_cells\tcontiguous_fraction\tdomain' \
+          grep -Fq $'worker\tjobs\tcells\tfraction\tcontiguous_jobs\tcontiguous_cells\tcontiguous_fraction\thybrid_domain_jobs\thybrid_domain_cells\thybrid_domain_fraction\tdomain' \
             /tmp/low-plan.tsv
           test "$(tail -n +3 /tmp/low-plan.tsv | wc -l)" -eq 2
           grep -Fq 'cpu_low_sticky_schedule jobs=' /tmp/low-plan.log
           grep -Fq 'cpu_low_contiguous_schedule jobs=' /tmp/low-plan.log
-      - name: Validate domain-cut model
+      - name: Validate domain-cut and hybrid model
         shell: bash
         run: |
           build/ramstream32_cpu_low_schedule_plan 9 2 --domain-size 1 \
@@ -72,6 +72,9 @@ jobs:
           assert fields['cross_domain_pages_2m'] == fields['cross_worker_pages_2m']
           assert fields['contiguous_cross_domain_pages_4k'] == fields['contiguous_cross_worker_pages_4k']
           assert fields['contiguous_cross_domain_pages_2m'] == fields['contiguous_cross_worker_pages_2m']
+          assert fields['hybrid_domain_cross_domain_pages_4k'] == fields['hybrid_domain_cross_worker_pages_4k']
+          assert fields['hybrid_domain_cross_domain_pages_2m'] == fields['hybrid_domain_cross_worker_pages_2m']
+          assert int(fields['hybrid_domain_active_domains']) >= 1
           PY
 
           build/ramstream32_cpu_low_schedule_plan 9 2 --domain-size 2 \
@@ -81,6 +84,9 @@ jobs:
           grep -Fq 'cross_domain_pages_2m=0' /tmp/low-domain2.txt
           grep -Fq 'contiguous_cross_domain_pages_4k=0' /tmp/low-domain2.txt
           grep -Fq 'contiguous_cross_domain_pages_2m=0' /tmp/low-domain2.txt
+          grep -Fq 'hybrid_domain_cross_domain_pages_4k=0' /tmp/low-domain2.txt
+          grep -Fq 'hybrid_domain_cross_domain_pages_2m=0' /tmp/low-domain2.txt
+          grep -Fq 'hybrid_domain_imbalance=' /tmp/low-domain2.txt
       - name: Check documentation
         shell: bash
         run: |
@@ -90,3 +96,4 @@ jobs:
           grep -Fq 'cross_worker_pages_4k' docs/ramstream32-cpu-low-scheduling.md
           grep -Fq 'cross_domain_pages_4k' docs/ramstream32-cpu-low-scheduling.md
           grep -Fq 'contiguous_imbalance' docs/ramstream32-cpu-low-scheduling.md
+          grep -Fq 'hybrid_domain_imbalance' docs/ramstream32-cpu-low-scheduling.md
