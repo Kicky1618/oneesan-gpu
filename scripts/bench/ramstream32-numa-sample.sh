@@ -20,6 +20,7 @@ CPU_HIGH_GROUPS_FILE="${CPU_HIGH_GROUPS_FILE:-}"
 CPU_HIGH_CPU_LIST="${CPU_HIGH_CPU_LIST:-}"
 CPU_LOW_CPU_LIST="${CPU_LOW_CPU_LIST:-}"
 CPU_LOW_SCHEDULE="${CPU_LOW_SCHEDULE:-dynamic}"
+CPU_LOW_DOMAIN_SIZE="${CPU_LOW_DOMAIN_SIZE:-}"
 NUMA_SAMPLE_MIB="${NUMA_SAMPLE_MIB:-64}"
 BUILD="${BUILD:-1}"
 OUT_DIR="${OUT_DIR:-$ROOT/work/bench_ramstream32_numa_sample}"
@@ -38,7 +39,13 @@ if [[ "$CPU_HIGH_OVERLAP" != 0 && "$CPU_HIGH_OVERLAP" != 1 ]]; then
 fi
 case "$CPU_LOW_SCHEDULE" in
   dynamic|sticky|contiguous) ;;
-  *) echo "CPU_LOW_SCHEDULE must be dynamic, sticky, or contiguous" >&2; exit 2 ;;
+  domain)
+    if [[ ! "$CPU_LOW_DOMAIN_SIZE" =~ ^[1-9][0-9]*$ ]] || (( CPU_LOW_DOMAIN_SIZE > CPU_WORKERS )); then
+      echo "CPU_LOW_DOMAIN_SIZE must be a positive integer <= CPU_WORKERS for domain schedule" >&2
+      exit 2
+    fi
+    ;;
+  *) echo "CPU_LOW_SCHEDULE must be dynamic, sticky, contiguous, or domain" >&2; exit 2 ;;
 esac
 if [[ ! "$NUMA_SAMPLE_MIB" =~ ^([0-9]+([.][0-9]*)?|[.][0-9]+)$ ]] || [[ "$NUMA_SAMPLE_MIB" == 0 ]]; then
   echo "NUMA_SAMPLE_MIB must be positive" >&2
@@ -67,6 +74,13 @@ file_sha256() {
   if command -v sha256sum >/dev/null 2>&1; then sha256sum "$1" | awk '{print $1}'
   else shasum -a 256 "$1" | awk '{print $1}'; fi
 }
+field() {
+  local line="$1" key="$2" token
+  for token in $line; do
+    if [[ "$token" == "$key="* ]]; then printf '%s\n' "${token#*=}"; return 0; fi
+  done
+  return 1
+}
 
 cat >"$meta_file" <<EOF
 commit=$(git rev-parse HEAD 2>/dev/null || echo unknown)
@@ -86,6 +100,7 @@ cpu_high_groups_file=${CPU_HIGH_GROUPS_FILE:-none}
 cpu_high_cpu_list=${CPU_HIGH_CPU_LIST:-none}
 cpu_low_cpu_list=${CPU_LOW_CPU_LIST:-none}
 cpu_low_schedule=$CPU_LOW_SCHEDULE
+cpu_low_domain_size=${CPU_LOW_DOMAIN_SIZE:-none}
 numa_sample_mib=$NUMA_SAMPLE_MIB
 binary_sha256=$(file_sha256 "$bin")
 EOF
@@ -101,14 +116,25 @@ CPU_HIGH_WORKERS="$CPU_HIGH_WORKERS" \
 CPU_HIGH_CPU_LIST="$CPU_HIGH_CPU_LIST" \
 CPU_LOW_CPU_LIST="$CPU_LOW_CPU_LIST" \
 CPU_LOW_SCHEDULE="$CPU_LOW_SCHEDULE" \
+CPU_LOW_DOMAIN_SIZE="$CPU_LOW_DOMAIN_SIZE" \
 RAMSTREAM_NUMA_SAMPLE_MIB="$NUMA_SAMPLE_MIB" \
   "$bin" "$N" "$MODULUS" "$GPU_TARGET_MIB" "$CPU_WORKERS" \
   >"$stdout_file" 2>"$stderr_file"
 
+result_line="$(tail -n1 "$stdout_file")"
+if [[ "$(field "$result_line" cpu_low_schedule)" != "$CPU_LOW_SCHEDULE" ]]; then
+  echo "LOW schedule provenance mismatch in solver output" >&2
+  exit 7
+fi
+if [[ "$CPU_LOW_SCHEDULE" == domain && "$(field "$result_line" cpu_low_domain_size)" != "$CPU_LOW_DOMAIN_SIZE" ]]; then
+  echo "LOW domain provenance mismatch in solver output" >&2
+  exit 7
+fi
+
 python3 scripts/tools/analyze_ramstream_numa_samples.py "$stderr_file" \
   | tee "$analysis_file"
 
-echo "result=$(tail -n1 "$stdout_file")"
+echo "result=$result_line"
 echo "stdout=$stdout_file"
 echo "stderr=$stderr_file"
 echo "analysis=$analysis_file"
