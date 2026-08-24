@@ -11,6 +11,7 @@ TRANSPOSE_MODE="${TRANSPOSE_MODE:-events}"
 BUCKET_TRANSPOSE_CHUNK_MIB="${BUCKET_TRANSPOSE_CHUNK_MIB:-1024}"
 BUCKET_RESERVE_MIB="${BUCKET_RESERVE_MIB:-8192}"
 BIN="${BIN:-$ONEESAN_BUILD_DIR/oneesan_cuda_gridfp_b300_bucket_fused_batch_n${N}}"
+WORK_DIR="${WORK_DIR:-$ONEESAN_ROOT/work/b300_bucket_exact_n${N}}"
 
 if (( NGPU != 8 )); then
   echo "bucket backend currently requires NGPU=8" >&2
@@ -36,6 +37,7 @@ export BUCKET_TRANSPOSE_CHUNK_MIB BUCKET_RESERVE_MIB
 
 exec python3 "$ONEESAN_ROOT/scripts/solve/solve_b300_exact_batch.py" "$N" \
   --binary "$BIN" \
+  --work-dir "$WORK_DIR" \
   --target-mib "$TARGET_MIB" \
   --max-window "$MAX_WINDOW" \
   --gpus "$NGPU" \
