@@ -659,7 +659,7 @@ struct CpuLowSparsePersistentPool {
         uint64_t seen = 0;
         for (;;) {
             {
-                std::unique_lock_lock<std::mutex> lock(mu);
+                std::unique_lock<std::mutex> lock(mu);
                 start_cv.wait(lock, [&] { return stopping || generation != seen; });
                 if (stopping) return;
                 seen = generation;
