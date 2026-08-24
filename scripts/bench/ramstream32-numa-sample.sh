@@ -21,6 +21,7 @@ CPU_HIGH_CPU_LIST="${CPU_HIGH_CPU_LIST:-}"
 CPU_LOW_CPU_LIST="${CPU_LOW_CPU_LIST:-}"
 CPU_LOW_SCHEDULE="${CPU_LOW_SCHEDULE:-dynamic}"
 CPU_LOW_DOMAIN_SIZE="${CPU_LOW_DOMAIN_SIZE:-}"
+CPU_LOW_DOMAIN_REFINE="${CPU_LOW_DOMAIN_REFINE:-1}"
 NUMA_SAMPLE_MIB="${NUMA_SAMPLE_MIB:-64}"
 BUILD="${BUILD:-1}"
 OUT_DIR="${OUT_DIR:-$ROOT/work/bench_ramstream32_numa_sample}"
@@ -35,6 +36,10 @@ if [[ "$CPU_HIGH_MODE" != scratch && "$CPU_HIGH_MODE" != direct ]]; then
 fi
 if [[ "$CPU_HIGH_OVERLAP" != 0 && "$CPU_HIGH_OVERLAP" != 1 ]]; then
   echo "CPU_HIGH_OVERLAP must be 0 or 1" >&2
+  exit 2
+fi
+if [[ "$CPU_LOW_DOMAIN_REFINE" != 0 && "$CPU_LOW_DOMAIN_REFINE" != 1 ]]; then
+  echo "CPU_LOW_DOMAIN_REFINE must be 0 or 1" >&2
   exit 2
 fi
 case "$CPU_LOW_SCHEDULE" in
@@ -101,6 +106,7 @@ cpu_high_cpu_list=${CPU_HIGH_CPU_LIST:-none}
 cpu_low_cpu_list=${CPU_LOW_CPU_LIST:-none}
 cpu_low_schedule=$CPU_LOW_SCHEDULE
 cpu_low_domain_size=${CPU_LOW_DOMAIN_SIZE:-none}
+cpu_low_domain_refine=$CPU_LOW_DOMAIN_REFINE
 numa_sample_mib=$NUMA_SAMPLE_MIB
 binary_sha256=$(file_sha256 "$bin")
 EOF
@@ -117,6 +123,7 @@ CPU_HIGH_CPU_LIST="$CPU_HIGH_CPU_LIST" \
 CPU_LOW_CPU_LIST="$CPU_LOW_CPU_LIST" \
 CPU_LOW_SCHEDULE="$CPU_LOW_SCHEDULE" \
 CPU_LOW_DOMAIN_SIZE="$CPU_LOW_DOMAIN_SIZE" \
+CPU_LOW_DOMAIN_REFINE="$CPU_LOW_DOMAIN_REFINE" \
 RAMSTREAM_NUMA_SAMPLE_MIB="$NUMA_SAMPLE_MIB" \
   "$bin" "$N" "$MODULUS" "$GPU_TARGET_MIB" "$CPU_WORKERS" \
   >"$stdout_file" 2>"$stderr_file"
@@ -126,9 +133,15 @@ if [[ "$(field "$result_line" cpu_low_schedule)" != "$CPU_LOW_SCHEDULE" ]]; then
   echo "LOW schedule provenance mismatch in solver output" >&2
   exit 7
 fi
-if [[ "$CPU_LOW_SCHEDULE" == domain && "$(field "$result_line" cpu_low_domain_size)" != "$CPU_LOW_DOMAIN_SIZE" ]]; then
-  echo "LOW domain provenance mismatch in solver output" >&2
-  exit 7
+if [[ "$CPU_LOW_SCHEDULE" == domain ]]; then
+  if [[ "$(field "$result_line" cpu_low_domain_size)" != "$CPU_LOW_DOMAIN_SIZE" ]]; then
+    echo "LOW domain provenance mismatch in solver output" >&2
+    exit 7
+  fi
+  grep -Eq "cpu_low_domain_schedule .* refine=${CPU_LOW_DOMAIN_REFINE}( |$)" "$stderr_file" || {
+    echo "LOW domain refinement provenance mismatch in solver stderr" >&2
+    exit 7
+  }
 fi
 
 python3 scripts/tools/analyze_ramstream_numa_samples.py "$stderr_file" \
