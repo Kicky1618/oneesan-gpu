@@ -162,3 +162,7 @@ __global__ void maskshard_main_lowdesc_closure_cols_inplace_kernel(
 #ifdef MASKSHARD_LOW_PAIR_SYNC
 #include "maskshard_low_pair_sync.cuh"
 #endif
+
+#ifdef MASKSHARD_LOW_GROUP_SYNC
+#include "maskshard_low_group_sync.cuh"
+#endif
