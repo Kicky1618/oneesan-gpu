@@ -55,25 +55,20 @@ def load_groups(path: str) -> list[Group]:
 
 
 def logdet(matrix: list[list[float]]) -> float:
-    a = [row[:] for row in matrix]
-    n = len(a)
+    # Gram + ridge is symmetric positive definite. Cholesky preserves that
+    # structure and avoids determinant-sign artifacts from generic row pivoting.
+    n = len(matrix)
+    l = [[0.0] * n for _ in range(n)]
     ans = 0.0
     for i in range(n):
-        p = max(range(i, n), key=lambda r: abs(a[r][i]))
-        if abs(a[p][i]) < 1e-300:
+        diag = matrix[i][i] - sum(l[i][k] * l[i][k] for k in range(i))
+        if diag <= 0.0 or not math.isfinite(diag):
             return -math.inf
-        if p != i:
-            a[i], a[p] = a[p], a[i]
-        pivot = a[i][i]
-        if pivot <= 0.0:
-            return -math.inf
-        ans += math.log(pivot)
-        for r in range(i + 1, n):
-            q = a[r][i] / pivot
-            if q == 0.0:
-                continue
-            for c in range(i + 1, n):
-                a[r][c] -= q * a[i][c]
+        l[i][i] = math.sqrt(diag)
+        ans += 2.0 * math.log(l[i][i])
+        for j in range(i + 1, n):
+            z = matrix[j][i] - sum(l[j][k] * l[i][k] for k in range(i))
+            l[j][i] = z / l[i][i]
     return ans
 
 
