@@ -59,6 +59,12 @@ int main(){
     for(size_t m=0;m<B.size();++m)for(int h=0;h<L+2;++h)GB[size_t(ownerL[m])][size_t(h)]+=B[m][size_t(h)];
     auto gb=[&](int g,int h)->U64{return h>=0&&h<L+2?GB[size_t(g)][size_t(h)]:0;};
 
+    U64 max_owner_high_rows=0,max_owner_low_cols=0;
+    for(int g=0;g<8;++g){
+        for(int h=0;h<H+2;++h)max_owner_high_rows=std::max(max_owner_high_rows,GA[size_t(g)][size_t(h)]);
+        for(int h=0;h<L+2;++h)max_owner_low_cols=std::max(max_owner_low_cols,GB[size_t(g)][size_t(h)]);
+    }
+
     std::array<std::array<U64,8>,8>S{};U64 total=0,diag=0;
     for(int a=0;a<8;++a)for(int b=0;b<8;++b){
         U64 z=0;for(int h=0;h<H+2;++h)z+=GA[size_t(a)][size_t(h)]*(2*gb(b,h)+gb(b,h-1)+gb(b,h+1));
@@ -75,9 +81,16 @@ int main(){
         <<"remote_bytes_per_transpose="<<remote_bytes<<'\n'
         <<"remote_tib_per_residue="<<double(residue_bytes)/double(1ULL<<40)<<'\n'
         <<"local_fraction="<<double(diag)/double(total)<<'\n'
-        <<"bucket_min_states="<<mn<<" bucket_max_states="<<mx<<'\n';
+        <<"bucket_min_states="<<mn<<" bucket_max_states="<<mx<<'\n'
+        <<"max_owner_high_rows="<<max_owner_high_rows<<'\n'
+        <<"max_owner_low_cols="<<max_owner_low_cols<<'\n'
+        <<"locator_bits=19\n";
     U64 max_over=0;
     for(int g=0;g<8;++g){max_over=std::max(max_over,over[size_t(g)]);std::cout<<"gpu"<<g<<"_states="<<row[size_t(g)]<<" gpu"<<g<<"_gib="<<double(row[size_t(g)]*4)/double(1ULL<<30)<<" gpu"<<g<<"_slot_overhead_bytes="<<over[size_t(g)]<<'\n';}
     std::cout<<"max_slot_overhead_bytes="<<max_over<<'\n';
-    return total==520735012027ULL&&remote==455642447434ULL&&max_over==2154132ULL?0:2;
+    return total==520735012027ULL
+        &&remote==455642447434ULL
+        &&max_over==2154132ULL
+        &&max_owner_high_rows==19631ULL
+        &&max_owner_low_cols==30114ULL?0:2;
 }
