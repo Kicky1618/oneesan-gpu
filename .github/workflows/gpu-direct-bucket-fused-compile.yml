@@ -7,8 +7,12 @@ on:
       - 'src/cuda/gridfp/ramstream32_bucket_direct.hpp'
       - 'src/cuda/gridfp/ramstream32_bucket_fused.cuh'
       - 'src/cuda/gridfp/ramstream32_bucket_fused_v2.cuh'
+      - 'src/cuda/gridfp/ramstream32_bucket_fused_async.cuh'
       - 'src/cuda/gridfp/probes/ramstream32_bucket_fused_selftest.cu'
       - 'src/cuda/gridfp/probes/ramstream32_bucket_fused_plan.cu'
+      - 'src/cuda/b300/gridfp_bucket_transpose.cuh'
+      - 'src/cuda/b300/oneesan_cuda_gridfp_b300_bucket_fused.cu'
+      - 'scripts/build/b300-bucket-fused.sh'
       - '.github/workflows/gpu-direct-bucket-fused-compile.yml'
   pull_request:
     paths:
@@ -16,8 +20,12 @@ on:
       - 'src/cuda/gridfp/ramstream32_bucket_direct.hpp'
       - 'src/cuda/gridfp/ramstream32_bucket_fused.cuh'
       - 'src/cuda/gridfp/ramstream32_bucket_fused_v2.cuh'
+      - 'src/cuda/gridfp/ramstream32_bucket_fused_async.cuh'
       - 'src/cuda/gridfp/probes/ramstream32_bucket_fused_selftest.cu'
       - 'src/cuda/gridfp/probes/ramstream32_bucket_fused_plan.cu'
+      - 'src/cuda/b300/gridfp_bucket_transpose.cuh'
+      - 'src/cuda/b300/oneesan_cuda_gridfp_b300_bucket_fused.cu'
+      - 'scripts/build/b300-bucket-fused.sh'
       - '.github/workflows/gpu-direct-bucket-fused-compile.yml'
   workflow_dispatch:
 
@@ -59,3 +67,28 @@ jobs:
           grep -Fq 'owner_low_max=30114' /tmp/bkf-w28.txt
           grep -Fq 'locator_bits=18' /tmp/bkf-w28.txt
           grep -Fq 'closure_atomic=0' /tmp/bkf-w28.txt
+      - name: Compile and run W22 B300 bucket driver plan
+        shell: bash
+        run: |
+          nvcc -O3 -std=c++17 -lineinfo -arch=sm_80 \
+            -DTARGET_W=22 -DLOW_LUT_K=11 -DHIGH_LUT_K=10 \
+            src/cuda/b300/oneesan_cuda_gridfp_b300_bucket_fused.cu \
+            -o build/oneesan_cuda_gridfp_b300_bucket_fused_n21
+          build/oneesan_cuda_gridfp_b300_bucket_fused_n21 \
+            21 4294967291 256 16 8 256 --plan-only 2>&1 | tee /tmp/bkb-w22.txt
+          grep -Fq 'backend=gridfp-b300-bucket-fused-v0.1-plan' /tmp/bkb-w22.txt
+          grep -Fq 'transposes_per_residue=43' /tmp/bkb-w22.txt
+          grep -Fq 'closure_atomic=0' /tmp/bkb-w22.txt
+      - name: Compile and run W28 B300 bucket driver plan
+        shell: bash
+        run: |
+          nvcc -O3 -std=c++17 -lineinfo -arch=sm_80 \
+            -DTARGET_W=28 -DLOW_LUT_K=14 -DHIGH_LUT_K=13 \
+            src/cuda/b300/oneesan_cuda_gridfp_b300_bucket_fused.cu \
+            -o build/oneesan_cuda_gridfp_b300_bucket_fused_n27
+          build/oneesan_cuda_gridfp_b300_bucket_fused_n27 \
+            27 4294967291 256 16 8 4096 --plan-only 2>&1 | tee /tmp/bkb-w28.txt
+          grep -Fq 'backend=gridfp-b300-bucket-fused-v0.1-plan' /tmp/bkb-w28.txt
+          grep -Fq 'transposes_per_residue=55' /tmp/bkb-w28.txt
+          grep -Fq 'locator_bits=18' /tmp/bkb-w28.txt
+          grep -Fq 'closure_atomic=0' /tmp/bkb-w28.txt
