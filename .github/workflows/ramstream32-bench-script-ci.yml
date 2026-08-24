@@ -9,6 +9,7 @@ on:
       - 'scripts/build/gridfp-ramstream32-cpu-high-cost-plan.sh'
       - 'scripts/tools/profile_high_group_transfer.py'
       - 'scripts/tools/analyze_cpu_high_sweep.py'
+      - 'scripts/tools/analyze_cpu_high_numa.py'
       - 'scripts/tools/plan_cpu_high_groups.py'
       - 'docs/ramstream32-factorized-ab.md'
       - 'docs/ramstream32-hybrid-sparse.md'
@@ -22,6 +23,7 @@ on:
       - 'scripts/build/gridfp-ramstream32-cpu-high-cost-plan.sh'
       - 'scripts/tools/profile_high_group_transfer.py'
       - 'scripts/tools/analyze_cpu_high_sweep.py'
+      - 'scripts/tools/analyze_cpu_high_numa.py'
       - 'scripts/tools/plan_cpu_high_groups.py'
       - 'docs/ramstream32-factorized-ab.md'
       - 'docs/ramstream32-hybrid-sparse.md'
@@ -43,6 +45,7 @@ jobs:
           bash -n scripts/build/gridfp-ramstream32-cpu-high-cost-plan.sh
           python3 -m py_compile scripts/tools/profile_high_group_transfer.py
           python3 -m py_compile scripts/tools/analyze_cpu_high_sweep.py
+          python3 -m py_compile scripts/tools/analyze_cpu_high_numa.py
           python3 -m py_compile scripts/tools/plan_cpu_high_groups.py
       - name: Check HIGH transfer profile regression
         shell: bash
@@ -85,6 +88,22 @@ jobs:
             > /tmp/groups.txt 2> /tmp/planner.log
           test "$(cat /tmp/groups.txt)" = 0
           grep -Fq 'selected=1' /tmp/planner.log
+      - name: Check CPU HIGH NUMA page analysis
+        shell: bash
+        run: |
+          cat >/tmp/numa-cost.tsv <<'EOF'
+          group	mask	roundtrip_bytes	main_states	blocked_states	authoritative_bytes	page4k_boundary_upper_bytes	page2m_boundary_upper_bytes	nn_cells	nrnl_cells	block_closure_cells	cross_closure_cells	total_cells
+          0	0	2048	1	1	1024	512	1024	1	1	1	1	4
+          1	1	4096	1	1	2048	0	1024	1	1	1	1	4
+          EOF
+          printf '0\n' >/tmp/numa.groups
+          python3 scripts/tools/analyze_cpu_high_numa.py /tmp/numa-cost.tsv \
+            --groups-file /tmp/numa.groups > /tmp/numa-analysis.txt
+          grep -Fq 'selection=all groups=2' /tmp/numa-analysis.txt
+          grep -Fq 'page4k_boundary_upper_fraction=0.166666667' /tmp/numa-analysis.txt
+          grep -Fq 'selection=file groups=1' /tmp/numa-analysis.txt
+          grep -Fq 'page4k_boundary_upper_fraction=0.500000000' /tmp/numa-analysis.txt
+          grep -Fq 'page2m_boundary_upper_fraction=1.000000000' /tmp/numa-analysis.txt
       - name: Check documented entry points
         shell: bash
         run: |
@@ -94,5 +113,7 @@ jobs:
             docs/ramstream32-cpu-high.md
           grep -Fq 'CPU_HIGH_MODE=direct' docs/ramstream32-cpu-high.md
           grep -Fq 'CPU_HIGH_GROUPS_FILE' docs/ramstream32-cpu-high.md
+          grep -Fq 'CPU_HIGH_CPU_LIST' docs/ramstream32-cpu-high.md
+          grep -Fq 'analyze_cpu_high_numa.py' docs/ramstream32-cpu-high.md
           grep -Fq 'c8de8d73af1c44f075aee937bc8f37e8b7b79d27' \
             docs/ramstream32-hybrid-sparse.md
