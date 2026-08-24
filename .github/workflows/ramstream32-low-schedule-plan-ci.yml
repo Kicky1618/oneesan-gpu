@@ -36,7 +36,7 @@ jobs:
             -DTARGET_W=10 -DLOW_LUT_K=5 -DHIGH_LUT_K=4 \
             src/cuda/gridfp/probes/ramstream32_cpu_low_schedule_plan.cu \
             -o build/ramstream32_cpu_low_schedule_plan
-      - name: Validate exact LPT and contiguous accounting
+      - name: Validate exact production LPT and contiguous accounting
         shell: bash
         run: |
           build/ramstream32_cpu_low_schedule_plan 9 2 --workers \
@@ -49,10 +49,12 @@ jobs:
           head -n1 /tmp/low-plan.tsv | grep -Fq 'contiguous_imbalance='
           head -n1 /tmp/low-plan.tsv | grep -Fq 'contiguous_cross_worker_pages_4k='
           head -n1 /tmp/low-plan.tsv | grep -Fq 'contiguous_cross_worker_pages_2m='
-          grep -Fq $'worker\tjobs\tcells\tfraction\tcontiguous_cells\tcontiguous_fraction\tdomain' \
+          head -n1 /tmp/low-plan.tsv | grep -Fq 'contiguous_build_s='
+          grep -Fq $'worker\tjobs\tcells\tfraction\tcontiguous_jobs\tcontiguous_cells\tcontiguous_fraction\tdomain' \
             /tmp/low-plan.tsv
           test "$(tail -n +3 /tmp/low-plan.tsv | wc -l)" -eq 2
           grep -Fq 'cpu_low_sticky_schedule jobs=' /tmp/low-plan.log
+          grep -Fq 'cpu_low_contiguous_schedule jobs=' /tmp/low-plan.log
       - name: Validate domain-cut model
         shell: bash
         run: |
