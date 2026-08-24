@@ -8,7 +8,8 @@
 #endif
 
 // Exact structural max-height filter using one byte per factor code. HIGH peak
-// entries are aligned with D_F_HIGH_ALL_CODES; LOW entries are aligned with
+// entries are aligned with D_F_HIGH_ALL_CODES, i.e. occupancy-major storage
+// order within each ending height. LOW entries are aligned with
 // D_F_LOW_MASK_CODES and are computed with the appropriate LOW starting height.
 // A composed state's exact frontier depth is max(high_peak, low_peak), because
 // low_peak includes the post-center starting height hs.
@@ -42,10 +43,11 @@ struct MaskShardRowDepthExactCache {
         constexpr int L = LOW_LUT_K;
         constexpr int H = HIGH_LUT_K;
         constexpr int S = FactorTablesHost::STRIDE;
-        constexpr std::uint32_t NM = 1u << L;
+        constexpr std::uint32_t LNM = 1u << L;
+        constexpr std::uint32_t HNM = 1u << H;
 
         low_peak.assign(G_FACTOR.low_mask_codes.size(), 0xffu);
-        for (std::uint32_t mask = 0; mask < NM; ++mask) {
+        for (std::uint32_t mask = 0; mask < LNM; ++mask) {
             for (int hs = 0; hs <= L + 1; ++hs) {
                 const std::size_t ix = std::size_t(mask) * S + hs;
                 const std::uint32_t a = G_FACTOR.low_mask_off[ix];
@@ -61,12 +63,33 @@ struct MaskShardRowDepthExactCache {
             std::exit(260);
         }
 
+        // IMPORTANT: HIGH scratch rows are not G_FACTOR.high_all_codes order.
+        // StorageFactorHost groups each ending-height slice by occupancy mask,
+        // then by rank within that mask. Reconstruct exactly that order here so
+        // D_MS_ROW_DEPTH_HIGH_PEAK[D_F_HIGH_ALL_OFF[h] + hr] refers to the same
+        // physical row as D_F_HIGH_ALL_CODES[D_F_HIGH_ALL_OFF[h] + hr].
         high_peak.assign(G_FACTOR.high_all_codes.size(), 0xffu);
         for (int he = 0; he <= H + 1; ++he) {
-            const std::uint32_t a = G_FACTOR.high_all_off[he];
-            const std::uint32_t z = G_FACTOR.high_all_off[he + 1];
-            for (std::uint32_t qi = a; qi < z; ++qi)
-                high_peak[qi] = peak_code(G_FACTOR.high_all_codes[qi], H, 1);
+            std::uint32_t dst = G_FACTOR.high_all_off[he];
+            for (std::uint32_t mask = 0; mask < HNM; ++mask) {
+                const std::size_t ix = std::size_t(mask) * S + he;
+                const std::uint32_t a = G_FACTOR.high_mask_off[ix];
+                const std::uint32_t z = G_FACTOR.high_mask_off[ix + 1];
+                for (std::uint32_t qi = a; qi < z; ++qi) {
+                    if (dst >= high_peak.size()) {
+                        std::cerr << "row-depth exact HIGH storage-order overflow he="
+                                  << he << '\n';
+                        std::exit(261);
+                    }
+                    high_peak[dst++] = peak_code(G_FACTOR.high_mask_codes[qi], H, 1);
+                }
+            }
+            if (dst != G_FACTOR.high_all_off[he + 1]) {
+                std::cerr << "row-depth exact HIGH storage-order count mismatch he="
+                          << he << " got=" << dst
+                          << " expected=" << G_FACTOR.high_all_off[he + 1] << '\n';
+                std::exit(261);
+            }
         }
         for (std::uint8_t x : high_peak) if (x == 0xffu) {
             std::cerr << "row-depth exact HIGH peak table has unfilled entry\n";
@@ -76,6 +99,7 @@ struct MaskShardRowDepthExactCache {
         built = true;
         std::cerr << "row-depth exact peak metadata low_entries=" << low_peak.size()
                   << " high_entries=" << high_peak.size()
+                  << " high_order=occupancy-major-storage"
                   << " mib=" << double(low_peak.size() + high_peak.size())
                                   / double(1ULL << 20) << '\n';
     }
