@@ -142,6 +142,12 @@ int main(int argc, char** argv) {
     bool cpu_low_explicit_affinity = env_nonempty("CPU_LOW_CPU_LIST");
     CpuLowScheduleMode cpu_low_schedule_mode = cpu_low_schedule_mode_from_env();
     const char* cpu_low_schedule = cpu_low_schedule_name(cpu_low_schedule_mode);
+    int cpu_low_domain_size = cpu_low_domain_size_from_env();
+    if (cpu_low_schedule_mode == CPU_LOW_SCHEDULE_DOMAIN
+        && (cpu_low_domain_size <= 0 || cpu_low_domain_size > cpu_workers)) {
+        std::cerr << "CPU_LOW_DOMAIN_SIZE must be in 1..CPU_WORKERS for domain schedule\n";
+        return 2;
+    }
     const char* cpu_high_mode_env = std::getenv("CPU_HIGH_MODE");
     bool cpu_high_direct_mode = cpu_high_mode_env
         && std::strcmp(cpu_high_mode_env, "direct") == 0;
@@ -273,9 +279,23 @@ int main(int argc, char** argv) {
         ? double(pcie_removed_bytes / pcie_baseline_bytes) : 0.0;
     double pcie_remaining_50gib_s = double(pcie_remaining_bytes / (50.0L * double(1ULL << 30)));
 
+    double cpu_low_plan_build_s = 0.0;
+    uint64_t cpu_low_plan_contiguous_cap = 0;
+    uint64_t cpu_low_plan_domain_cap = 0;
+    int cpu_low_plan_active_domains = 0;
+    if (plan_only && cpu_low_schedule_mode != CPU_LOW_SCHEDULE_DYNAMIC) {
+        CpuLowSparsePersistentPool low_plan(
+            cpu_workers, cpu_low_schedule_mode, cpu_low_domain_size);
+        low_plan.prepare_static_schedule(cpu_low_jobs, sparse);
+        cpu_low_plan_build_s = low_plan.schedule_build_s;
+        cpu_low_plan_contiguous_cap = low_plan.contiguous_optimal_cap;
+        cpu_low_plan_domain_cap = low_plan.domain_normalized_cap;
+        cpu_low_plan_active_domains = low_plan.domain_active_domains;
+    }
+
     if (plan_only) {
         std::cout
-            << "backend=gridfp-ramstream32-factorized-hybrid-sparse-v5.18-plan"
+            << "backend=gridfp-ramstream32-factorized-hybrid-sparse-v5.19-plan"
             << " n=" << n
             << " gpu_high_desc_mib=" << highdesc_mib
             << " gpu_mask_mib=" << mask_mib
@@ -305,6 +325,11 @@ int main(int argc, char** argv) {
             << " cpu_low_persistent_workers=1"
             << " cpu_low_pointer_workspace=stack"
             << " cpu_low_schedule=" << cpu_low_schedule
+            << " cpu_low_domain_size=" << cpu_low_domain_size
+            << " cpu_low_schedule_build_s=" << cpu_low_plan_build_s
+            << " cpu_low_contiguous_optimal_cap=" << cpu_low_plan_contiguous_cap
+            << " cpu_low_domain_normalized_cap=" << cpu_low_plan_domain_cap
+            << " cpu_low_domain_active_domains=" << cpu_low_plan_active_domains
             << " cpu_high_affinity=" << (cpu_high_explicit_affinity ? "explicit" : "default")
             << " cpu_low_affinity=" << (cpu_low_explicit_affinity ? "explicit" : "default")
             << " numa_sample_mib=" << numa_sample_mib
@@ -347,7 +372,8 @@ int main(int argc, char** argv) {
     main_auth.ptr[init_rank]=1;
 
     Direct2DCtx gpu; gpu.init(mod);
-    CpuLowSparsePersistentPool cpu_low(cpu_workers, cpu_low_schedule_mode);
+    CpuLowSparsePersistentPool cpu_low(
+        cpu_workers, cpu_low_schedule_mode, cpu_low_domain_size);
     CpuHighPool cpu_high_scratch(cpu_high_workers);
     CpuHighDirectPersistentPool cpu_high_direct(cpu_high_workers);
     int gpu_threads=256;
@@ -425,7 +451,7 @@ int main(int argc, char** argv) {
         : double(cpu_high_scratch.peak_scratch_bytes())/double(1<<20);
 
     std::cout
-        << "backend=gridfp-ramstream32-factorized-hybrid-sparse-v5.18"
+        << "backend=gridfp-ramstream32-factorized-hybrid-sparse-v5.19"
         << " n="<<n<<" residue="<<answer<<" modulus="<<mod
         << " gpu_high_desc_mib="<<highdesc_mib<<" gpu_mask_mib="<<mask_mib
         << " cpu_sparse_nn_orbit_mib="<<sparse_nn_orbit_mib
@@ -451,6 +477,7 @@ int main(int argc, char** argv) {
         << " cpu_low_persistent_workers=1"
         << " cpu_low_pointer_workspace=stack"
         << " cpu_low_schedule=" << cpu_low_schedule
+        << " cpu_low_domain_size=" << cpu_low_domain_size
         << " cpu_high_affinity=" << (cpu_high_explicit_affinity ? "explicit" : "default")
         << " cpu_low_affinity=" << (cpu_low_explicit_affinity ? "explicit" : "default")
         << " numa_sample_mib=" << numa_sample_mib
@@ -458,6 +485,8 @@ int main(int argc, char** argv) {
         << " cpu_low_worker_start_s="<<cpu_low.worker_start_s
         << " cpu_low_schedule_build_s="<<cpu_low.schedule_build_s
         << " cpu_low_contiguous_optimal_cap="<<cpu_low.contiguous_optimal_cap
+        << " cpu_low_domain_normalized_cap="<<cpu_low.domain_normalized_cap
+        << " cpu_low_domain_active_domains="<<cpu_low.domain_active_domains
         << " cpu_high_selection_hash="<<selection_hash
         << " cpu_high_max_mib="<<cpu_high_max_mib
         << " cpu_high_peak_worker_scratch_mib="<<cpu_high_peak_scratch_mib
