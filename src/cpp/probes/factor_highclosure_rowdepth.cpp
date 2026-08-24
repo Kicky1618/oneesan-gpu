@@ -66,6 +66,7 @@ struct Entry {
     int q = 0;
     int k = 0;
     U64 groups = 0;
+    U64 dense_cols = 0;
     std::array<U64, 15> rows{};
     std::array<U64, 15> cols{};
 };
@@ -90,7 +91,10 @@ static Result evaluate(
         U128 tasks = 0;
         if (rows && cols) {
             out.useful += U128(e.groups) * rows * cols;
-            if (cols < U64(threshold)) {
+            // Preserve v0.11 attribution: packing policy is determined by the
+            // physical dense LOW-mask stride, not by the smaller active prefix
+            // that happens to survive an early row-depth cap.
+            if (e.dense_cols < U64(threshold)) {
                 tasks = (U128(rows) * cols + 31) / 32;
                 out.lanes += U128(e.groups) * tasks * 32;
             } else {
@@ -160,11 +164,12 @@ int main(int argc, char** argv) {
                     e.q = q;
                     e.k = k;
                     e.groups = choose_u64(low, k);
+                    e.dense_cols = low_fixed_count_capped(k, hs, full_cap);
                     for (int cap = 1; cap <= full_cap; ++cap) {
                         e.rows[size_t(cap)] = selected[size_t(cap)];
                         e.cols[size_t(cap)] = low_fixed_count_capped(k, hs, cap);
                     }
-                    if (e.cols[size_t(full_cap)]) entries.push_back(e);
+                    if (e.dense_cols) entries.push_back(e);
                 }
             }
         }
@@ -217,9 +222,9 @@ int main(int argc, char** argv) {
             || dense_useful != U128(42110612473384ULL)
             || active_useful != U128(36989860194307ULL)
             || dense_lanes != U128(50814816443776ULL)
-            || compact_lanes != U128(44720278768384ULL)
+            || compact_lanes != U128(44779140427808ULL)
             || dense_blocks != U128(117915540260ULL)
-            || compact_blocks != U128(104256200361ULL)) {
+            || compact_blocks != U128(104486127592ULL)) {
             std::cerr << "n=27 HIGH closure row-depth aggregate regression mismatch\n";
             return 3;
         }
