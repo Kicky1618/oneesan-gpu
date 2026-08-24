@@ -9,7 +9,8 @@
 // The recurrence and job body remain in ramstream32_cpu_high_direct.hpp; this
 // class only removes per-row std::thread construction/destruction. Workers bind
 // CPU affinity once and sleep between HIGH rows. Thread creation is lazy so
-// scratch-mode runs pay no persistent-pool cost.
+// scratch-mode runs pay no persistent-pool cost. start_run()/wait_run() expose
+// direct CPU/GPU overlap without a per-row coordinator std::thread.
 struct CpuHighDirectPersistentPool {
     int workers = 1;
     std::vector<CpuHighDirectStats> stats;
@@ -25,9 +26,11 @@ struct CpuHighDirectPersistentPool {
     std::condition_variable done_cv;
     std::vector<std::thread> threads;
     bool stopping = false;
+    bool in_flight = false;
     uint64_t generation = 0;
     int pending = 0;
     std::atomic<size_t> next{0};
+    std::chrono::steady_clock::time_point run_start{};
 
     RamCounts* run_main = nullptr;
     RamCounts* run_block = nullptr;
@@ -59,6 +62,7 @@ struct CpuHighDirectPersistentPool {
 
     void shutdown() {
         if (threads.empty()) return;
+        wait_run();
         {
             std::lock_guard<std::mutex> lock(mu);
             if (stopping) return;
@@ -92,7 +96,11 @@ struct CpuHighDirectPersistentPool {
 
             {
                 std::lock_guard<std::mutex> lock(mu);
-                if (--pending == 0) done_cv.notify_one();
+                if (--pending == 0) {
+                    wall_s += ram_seconds_since(run_start);
+                    in_flight = false;
+                    done_cv.notify_all();
+                }
             }
         }
     }
@@ -105,6 +113,7 @@ struct CpuHighDirectPersistentPool {
             && std::equal(schedule_source.begin(), schedule_source.end(), jobs.begin()))
             return;
 
+        wait_run();
         auto t0 = std::chrono::steady_clock::now();
         schedule_source = jobs;
         std::vector<std::pair<const CpuHighJob*,uint64_t>> ranked;
@@ -139,19 +148,22 @@ struct CpuHighDirectPersistentPool {
                   << " persistent=1\n";
     }
 
-    void run(
+    bool start_run(
         const std::vector<const CpuHighJob*>& jobs,
         RamCounts& main_auth, RamCounts& block_auth,
         const StorageFactorHost& storage, const StorageLayout& layout,
         const CpuHighDirectHost& direct, const CpuHighCrossHost& cross, Count mod
     ) {
         prepare_schedule(jobs, direct);
-        if (scheduled_jobs.empty()) return;
+        if (scheduled_jobs.empty()) return false;
         ensure_started();
 
-        auto t0 = std::chrono::steady_clock::now();
         {
             std::lock_guard<std::mutex> lock(mu);
+            if (in_flight || pending != 0) {
+                std::cerr << "cpu high persistent start while previous run is active\n";
+                std::exit(133);
+            }
             run_main = &main_auth;
             run_block = &block_auth;
             run_storage = &storage;
@@ -161,14 +173,27 @@ struct CpuHighDirectPersistentPool {
             run_mod = mod;
             next.store(0, std::memory_order_relaxed);
             pending = workers;
+            in_flight = true;
+            run_start = std::chrono::steady_clock::now();
             ++generation;
         }
         start_cv.notify_all();
-        {
-            std::unique_lock<std::mutex> lock(mu);
-            done_cv.wait(lock, [&] { return pending == 0; });
-        }
-        wall_s += ram_seconds_since(t0);
+        return true;
+    }
+
+    void wait_run() {
+        std::unique_lock<std::mutex> lock(mu);
+        done_cv.wait(lock, [&] { return !in_flight && pending == 0; });
+    }
+
+    void run(
+        const std::vector<const CpuHighJob*>& jobs,
+        RamCounts& main_auth, RamCounts& block_auth,
+        const StorageFactorHost& storage, const StorageLayout& layout,
+        const CpuHighDirectHost& direct, const CpuHighCrossHost& cross, Count mod
+    ) {
+        if (start_run(jobs, main_auth, block_auth, storage, layout, direct, cross, mod))
+            wait_run();
     }
 
     double kernel_s() const {
