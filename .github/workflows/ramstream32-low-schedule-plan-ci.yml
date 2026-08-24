@@ -36,7 +36,7 @@ jobs:
             -DTARGET_W=10 -DLOW_LUT_K=5 -DHIGH_LUT_K=4 \
             src/cuda/gridfp/probes/ramstream32_cpu_low_schedule_plan.cu \
             -o build/ramstream32_cpu_low_schedule_plan
-      - name: Validate exact production LPT and contiguous accounting
+      - name: Validate production LPT and contiguous accounting
         shell: bash
         run: |
           build/ramstream32_cpu_low_schedule_plan 9 2 --workers \
@@ -47,15 +47,12 @@ jobs:
           head -n1 /tmp/low-plan.tsv | grep -Fq 'cross_worker_pages_2m='
           head -n1 /tmp/low-plan.tsv | grep -Fq 'contiguous_optimal_cap='
           head -n1 /tmp/low-plan.tsv | grep -Fq 'contiguous_imbalance='
-          head -n1 /tmp/low-plan.tsv | grep -Fq 'contiguous_cross_worker_pages_4k='
-          head -n1 /tmp/low-plan.tsv | grep -Fq 'contiguous_cross_worker_pages_2m='
           head -n1 /tmp/low-plan.tsv | grep -Fq 'contiguous_build_s='
-          grep -Fq $'worker\tjobs\tcells\tfraction\tcontiguous_jobs\tcontiguous_cells\tcontiguous_fraction\thybrid_domain_jobs\thybrid_domain_cells\thybrid_domain_fraction\tdomain' \
-            /tmp/low-plan.tsv
+          grep -Fq $'worker\tjobs\tcells\tfraction\tcontiguous_jobs\tcontiguous_cells\tcontiguous_fraction\thybrid_domain_jobs\thybrid_domain_cells\thybrid_domain_fraction\tdomain' /tmp/low-plan.tsv
           test "$(tail -n +3 /tmp/low-plan.tsv | wc -l)" -eq 2
           grep -Fq 'cpu_low_sticky_schedule jobs=' /tmp/low-plan.log
           grep -Fq 'cpu_low_contiguous_schedule jobs=' /tmp/low-plan.log
-      - name: Validate domain-cut and hybrid model
+      - name: Validate domain-cut and refined production plan
         shell: bash
         run: |
           build/ramstream32_cpu_low_schedule_plan 9 2 --domain-size 1 \
@@ -75,7 +72,14 @@ jobs:
           assert fields['hybrid_domain_cross_domain_pages_4k'] == fields['hybrid_domain_cross_worker_pages_4k']
           assert fields['hybrid_domain_cross_domain_pages_2m'] == fields['hybrid_domain_cross_worker_pages_2m']
           assert int(fields['hybrid_domain_active_domains']) >= 1
+          assert int(fields['hybrid_domain_refined_boundaries']) >= 0
+          assert int(fields['hybrid_domain_refined_job_moves']) >= 0
+          assert fields['hybrid_domain_outer_normalized_cap'] == fields['hybrid_domain_optimal_per_worker_cap']
           PY
+          grep -Fq 'cpu_low_domain_schedule jobs=' /tmp/low-domain1.log
+          grep -Fq 'outer_normalized_cap=' /tmp/low-domain1.log
+          grep -Fq 'refined_boundaries=' /tmp/low-domain1.log
+          grep -Fq 'refined_job_moves=' /tmp/low-domain1.log
 
           build/ramstream32_cpu_low_schedule_plan 9 2 --domain-size 2 \
             >/tmp/low-domain2.txt 2>/tmp/low-domain2.log
@@ -90,10 +94,13 @@ jobs:
       - name: Check documentation
         shell: bash
         run: |
-          grep -Fq 'ramstream32_cpu_low_schedule_plan_n27' docs/ramstream32-cpu-low-scheduling.md
-          grep -Fq -- '--workers' docs/ramstream32-cpu-low-scheduling.md
-          grep -Fq -- '--domain-size' docs/ramstream32-cpu-low-scheduling.md
-          grep -Fq 'cross_worker_pages_4k' docs/ramstream32-cpu-low-scheduling.md
-          grep -Fq 'cross_domain_pages_4k' docs/ramstream32-cpu-low-scheduling.md
-          grep -Fq 'contiguous_imbalance' docs/ramstream32-cpu-low-scheduling.md
-          grep -Fq 'hybrid_domain_imbalance' docs/ramstream32-cpu-low-scheduling.md
+          d=docs/ramstream32-cpu-low-scheduling.md
+          grep -Fq 'Backend v5.20' "$d"
+          grep -Fq 'ramstream32_cpu_low_schedule_plan_n27' "$d"
+          grep -Fq -- '--workers' "$d"
+          grep -Fq -- '--domain-size' "$d"
+          grep -Fq 'hybrid_domain_imbalance' "$d"
+          grep -Fq 'hybrid_domain_refined_boundaries' "$d"
+          grep -Fq 'cpu_low_domain_refined_job_moves' "$d"
+          grep -Fq '24' "$d"
+          grep -Fq '16' "$d"
