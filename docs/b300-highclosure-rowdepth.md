@@ -1,4 +1,4 @@
-# B300 HIGH closure row-depth pruning
+# B300 HIGH closure row-depth research
 
 This note layers on v0.11 hybrid HIGH closure row packing and the v0.15 exact
 frontier-height metadata.
@@ -7,71 +7,117 @@ frontier-height metadata.
 
 At DP row `r`, a MAIN source whose exact maximum frontier height exceeds `r` is
 structurally zero. HIGH closure only reads that source count and adds it to a
-BLOCKED destination; therefore such a closure body can be skipped before the
-`mainv[i]` load without changing any reachable result.
-
-The exact source depth is already available from v0.15:
+BLOCKED destination, so such a source can be omitted before the `mainv[i]` load.
+The exact source depth is already available as
 
 ```text
-max(HIGH factor peak, LOW factor peak)
+max(HIGH factor peak, LOW factor peak).
 ```
 
-so v0.20 adds no persistent metadata.
+## v0.20: structural-zero body pruning
 
-## n=27 model
+v0.20 leaves v0.11 task mapping and launch geometry unchanged. Inside the row-pack
+source body it checks the exact factor peaks before reading `mainv[i]`. Full-depth
+rows bypass the check.
 
-`factor_highclosure_rowdepth.cpp` enumerates the selected HIGH closure rows and
-LOW occupancy classes, then caps both factor segments by row depth. For the
-v0.11 threshold-16 hybrid:
+For n=27 / W=28:
 
 ```text
 per-row dense useful closure states = 1,503,950,445,478
 28-row dense useful states          = 42,110,612,473,384
-28-row row-depth-active states      = 36,989,860,194,307
+28-row active useful states         = 36,989,860,194,307
 active ratio                        = 0.878397582502
 heavy-body reduction                = 12.1602417498%
 ```
 
-The active useful-state count by cap starts as:
+No additional persistent metadata is needed beyond v0.15.
+
+## v0.21: task-sized host launch
+
+The v0.11 kernel already transforms selected closure rows into fewer warp tasks,
+but the shared host historically sized the CUDA grid from the older v0.8 row
+count. v0.21 gates a host-only fix under `MASKSHARD_HIGH_CLOSURE_TASK_LAUNCH`
+and computes exactly the same fixed threshold-16 task count as the kernel.
+
+Pinned n=27 / 256-thread model per DP row:
 
 ```text
-cap 1      234,881,024
-cap 2   50,784,985,927
-cap 3  369,363,350,086
-cap 4  857,704,715,417
-cap 5 1,231,387,068,804
-cap 6 1,417,752,205,726
-cap 7 1,483,630,545,931
-cap 8 1,500,453,105,892
+v0.8 row-sized launch blocks = 8,923,348,057
+v0.11 task-sized blocks      = 4,211,269,295
 ```
 
-and approaches the dense 1,503,950,445,478 by cap 14.
+This is a launch-count model, not a wall-time claim.
 
-The same probe also models a future exact compact closure launch. If active HIGH
-rows and LOW columns are enumerated directly while preserving the v0.11
-threshold-16 policy, the 28-row totals become:
+## v0.22: exact row-depth task mapping
+
+Inside one MAIN FBlock the exact active closure source set factorizes as
 
 ```text
-dense hybrid lane slots      = 50,814,816,443,776
-exact row-depth lane slots   = 44,720,278,768,384
-lane-slot reduction          = 11.9936233207%
-
-dense launch blocks          = 117,915,540,260
-exact row-depth blocks       = 104,256,200,361
-launch-block reduction       = 11.5840031508%
+{selected HIGH closure rows with HIGH peak <= cap}
+    x
+{LOW ranks with LOW peak <= cap}.
 ```
 
-Those compact figures are a future launch model, not the current v0.20 runtime.
+v0.22 reuses v0.19's peak-sorted LOW-rank permutation. It adds a peak-sorted
+copy of the selected HIGH closure rows and a tiny cumulative HIGH active-count
+table. The packing policy itself remains exactly v0.11's dense policy:
+`x.stride < 16` is packed; a smaller row-dependent active LOW count never changes
+that decision.
 
-## v0.20 implementation
+Persistent extra GPU metadata is:
 
-v0.20 keeps v0.11's current row-pack task mapping and launch geometry. Inside
-`maskshard_highclosure_rowpack_apply()` it checks the exact factor peaks before
-reading `mainv[i]`; unreachable sources return immediately.
+```text
+selected HIGH rows       9,301,929 * uint32 = 35.484043 MiB/GPU
+HIGH active-count table  13*65*15 * uint32  =  0.048351 MiB/GPU
+extra v0.22 metadata                           35.532394 MiB/GPU
+```
 
-At full depth the predicate is bypassed entirely, so saturated rows do not pay
-peak metadata reads. The A/B comparison therefore isolates the closure-body
-predicate reasonably well:
+With the existing v0.19-era memory model this gives approximately
+`249.215 GiB/GPU`, leaving about `19.375 GiB/GPU` under the 268.59 GiB planning
+budget.
+
+Early rows enumerate only the active Cartesian product. At full row depth all
+states are active, so the kernel switches back to the original closure-row order
+and physical LOW-rank order. Thus saturated rows do not pay compact-rank
+indirection or lose the v0.21 locality.
+
+The corrected fixed-policy n=27 model over all 28 rows is:
+
+```text
+dense hybrid lane slots = 50,814,816,443,776
+exact compact lane slots = 44,779,140,427,808
+reduction                = 11.8777876973%
+```
+
+v0.22 deliberately keeps the v0.21 dense task-sized host grid. If that host grid
+is also made row-depth exact, the model becomes:
+
+```text
+dense task-sized blocks = 117,915,540,260
+exact row-depth blocks   = 104,486,127,592
+reduction                = 11.3890099968%
+```
+
+That remaining launch reduction is a separate next candidate.
+
+## Semantic validation
+
+`factor_highclosure_rowdepth_taskmap.cpp` exhaustively compares, for every HIGH
+position, LOW occupancy mask and row cap, the mathematical exact source set with
+the compact task mapping. It also checks duplicate-free mapping and fixes the
+packing decision from dense LOW width.
+
+Local validation passed with
+`g++ -O3 -std=c++17 -Wall -Wextra -Werror`:
+
+```text
+W=10 LOW=5 expected=12,719  compact=12,719  warp_tasks=2,306
+W=12 LOW=6 expected=146,624 compact=146,624 warp_tasks=9,311
+```
+
+## A/B commands
+
+v0.19 -> v0.20 isolates the source-body predicate:
 
 ```bash
 python3 scripts/bench/b300_maskshard_highclosure_rowdepth_ab.py \
@@ -79,22 +125,23 @@ python3 scripts/bench/b300_maskshard_highclosure_rowdepth_ab.py \
   --modulus 4294967291 --vram-reserve-mib 1024
 ```
 
-Primary attribution metric: `high_closure_sum_s`. Retain only if `wall_s` also
-improves and residues match exactly.
+v0.20 -> v0.21 isolates task-sized host launch geometry:
 
-## More important next launch fix
-
-The current shared host still sizes HIGH closure launches from the v0.8 selected
-row count even when the v0.11 kernel has converted those rows into fewer hybrid
-warp tasks. The existing hybrid probe already pins the task-sized n=27 value:
-
-```text
-v0.8 row-sized launch blocks = 8,923,348,057 per DP row
-v0.11 task-sized blocks      = 4,211,269,295 per DP row
+```bash
+python3 scripts/bench/b300_maskshard_highclosure_tasklaunch_ab.py \
+  --n 27 --gpus 8 --threads 256 \
+  --modulus 4294967291 --vram-reserve-mib 1024
 ```
 
-This ~52.8% host-launch reduction is larger than the additional ~11.6% available
-from exact row-depth closure compaction, and should be implemented before a more
-complex v0.21 row-depth compact closure table.
+v0.21 -> v0.22 isolates exact closure task mapping:
+
+```bash
+python3 scripts/bench/b300_maskshard_highclosure_exacttasks_ab.py \
+  --n 27 --gpus 8 --threads 256 \
+  --modulus 4294967291 --vram-reserve-mib 1024
+```
+
+`high_closure_sum_s` is the attribution metric; residues must match exactly and
+`wall_s` decides retention.
 
 Fresh nvcc and real B300x8 full-P2P validation remain required before promotion.
