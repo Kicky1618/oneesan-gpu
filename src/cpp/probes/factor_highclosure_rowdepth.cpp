@@ -5,6 +5,7 @@
 #include <iomanip>
 #include <iostream>
 #include <map>
+#include <string>
 #include <tuple>
 #include <utility>
 #include <vector>
