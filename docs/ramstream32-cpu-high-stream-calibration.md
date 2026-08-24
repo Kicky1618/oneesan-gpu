@@ -21,7 +21,7 @@ python3 scripts/tools/design_cpu_high_stream_calibration.py high-cost.tsv \
 
 This writes one single-group `.groups` policy per sample, `manifest.tsv`, and `validation-all.groups` containing the union of selected calibration groups.
 
-Run the samples on the actual machine. The LOW schedule is part of the calibrated machine state and must be fixed across all samples. For example, using v5.19 domain scheduling:
+Run the samples on the actual machine. LOW scheduling is part of the calibrated machine state and must be fixed across all samples. For example:
 
 ```bash
 N=27 \
@@ -30,6 +30,7 @@ CPU_HIGH_CPU_LIST='0-31' \
 CPU_LOW_CPU_LIST='32-95' \
 CPU_LOW_SCHEDULE=domain \
 CPU_LOW_DOMAIN_SIZE=32 \
+CPU_LOW_DOMAIN_REFINE=1 \
 CPU_WORKERS=64 \
 CPU_HIGH_WORKERS=32 \
 CPU_HIGH_OVERLAP=0 \
@@ -37,9 +38,9 @@ REPEATS=2 \
 bash scripts/bench/ramstream32-cpu-high-stream-calibration.sh
 ```
 
-`CPU_LOW_SCHEDULE` accepts `dynamic`, `sticky`, `contiguous`, or `domain` and defaults to `dynamic`. `domain` additionally requires `CPU_LOW_DOMAIN_SIZE`, which must be positive and no larger than `CPU_WORKERS`. The harness propagates both values to every solver child, records them in metadata, and verifies the solver's schedule/domain provenance.
+`CPU_LOW_SCHEDULE` accepts `dynamic`, `sticky`, `contiguous`, or `domain` and defaults to `dynamic`. `domain` additionally requires `CPU_LOW_DOMAIN_SIZE`, which must be positive and no larger than `CPU_WORKERS`. `CPU_LOW_DOMAIN_REFINE` defaults to `1`; it selects refined versus initial domain boundaries. The harness propagates all of these controls to every solver child and records them in metadata.
 
-Keep LOW scheduling and LOW affinity fixed across all calibration samples. Even when `CPU_HIGH_OVERLAP=0`, the LOW pass shares the authoritative RAM and contributes to thermal/cache/NUMA state. Under overlap or repeated runs those effects can change the apparent CPU HIGH coefficients.
+Keep LOW scheduling, domain size/refinement, and LOW affinity fixed across all calibration samples. Even when `CPU_HIGH_OVERLAP=0`, the LOW pass shares the authoritative RAM and contributes to thermal/cache/NUMA state. Under overlap or repeated runs those effects can change the apparent CPU HIGH coefficients.
 
 Odd repeats execute samples in manifest order and even repeats reverse the order. Every run must produce the same residue. The optional `validation-all.groups` policy is run once after the calibration samples.
 
@@ -77,4 +78,6 @@ The geometric mean of positive stream coefficients is used as the common referen
 
 `validation-all.groups` is a useful holdout. Single-group calibration identifies stream ratios well, but its fixed-cost term also absorbs per-row wake/synchronization cost. The multi-group validation row exposes whether that fixed cost scales per group as assumed. Large holdout error means the model needs a separate per-row term or a different calibration design before its weights should be fed back into the production planner.
 
-For `CPU_HIGH_OVERLAP=1`, repeat calibration under overlap rather than reusing non-overlap weights. System-RAM contention can change relative stream costs, especially CROSS gathers. LOW schedule, `CPU_LOW_DOMAIN_SIZE`, affinity, CPU frequency policy, and NUMA conditions are therefore part of the calibrated contention regime and belong with the resulting coefficients.
+For `CPU_HIGH_OVERLAP=1`, repeat calibration under overlap rather than reusing non-overlap weights. System-RAM contention can change relative stream costs, especially CROSS gathers. `CPU_LOW_SCHEDULE`, `CPU_LOW_DOMAIN_SIZE`, `CPU_LOW_DOMAIN_REFINE`, affinity, CPU frequency policy, and NUMA conditions are therefore part of the calibrated contention regime and belong with the resulting coefficients.
+
+If the value of domain boundary refinement itself is under study, first use `scripts/bench/ramstream32-cpu-low-domain-refine-ab.sh`. Do not mix refine=0 and refine=1 samples into one HIGH stream-weight fit: that would make the fitted HIGH coefficients absorb a LOW-scheduler change.
