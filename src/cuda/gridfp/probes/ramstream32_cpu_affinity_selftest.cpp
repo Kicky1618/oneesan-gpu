@@ -12,6 +12,14 @@ int main() {
     if (!eq(cpu_high_parse_cpu_list(" 3 "), {3})) return 2;
     if (!cpu_high_parse_cpu_list("").empty()) return 3;
     if (!cpu_high_parse_cpu_list(nullptr).empty()) return 4;
-    std::cout << "cpu-high-affinity-selftest OK\n";
+
+    if (!eq(cpu_low_parse_cpu_list("1,4-6"), {1,4,5,6})) return 5;
+    if (!eq(cpu_low_parse_cpu_list(" 2-3, 9 "), {2,3,9})) return 6;
+    if (!cpu_low_parse_cpu_list("").empty()) return 7;
+    if (!cpu_low_parse_cpu_list(nullptr).empty()) return 8;
+
+    if (!eq(cpu_parse_cpu_list("TEST_CPU_LIST", "10-11,13"), {10,11,13})) return 9;
+
+    std::cout << "cpu-affinity-selftest OK\n";
     return 0;
 }
