@@ -1,0 +1,98 @@
+name: B300 LOW closure row-depth v0.24 research
+
+on:
+  push:
+    paths:
+      - 'src/cpp/probes/factor_lowclosure_rowdepth.cpp'
+      - 'src/cpp/probes/factor_rowdepth_high_storage_order.cpp'
+      - 'src/cuda/b300/maskshard_rowdepth_exact_io.cuh'
+      - 'src/cuda/b300/maskshard_lowclosure_rowdepth.cuh'
+      - 'src/cuda/b300/maskshard_lowclosure_kernel.cuh'
+      - 'src/cuda/b300/oneesan_cuda_gridfp_b300_hbm32_maskshard_blockorbit_compactaux_fullclosure_highrowpack16_lazyblockinit_rowdepthexact_tightlaunch_rowdepthorbit_rowcaplaunch_exacttasks_highclosurerowdepth_tasklaunch_exactclosuretasks_exactclosurelaunch_batch_guarded.cu'
+      - 'src/cuda/b300/oneesan_cuda_gridfp_b300_hbm32_maskshard_blockorbit_compactaux_fullclosure_highrowpack16_lazyblockinit_rowdepthexact_tightlaunch_rowdepthorbit_rowcaplaunch_exacttasks_highclosurerowdepth_tasklaunch_exactclosuretasks_exactclosurelaunch_lowclosurerowdepth_batch_guarded.cu'
+      - 'scripts/bench/b300_maskshard_lowclosure_rowdepth_ab.py'
+      - '.github/workflows/b300-lowclosure-rowdepth-v24.yml'
+  pull_request:
+    paths:
+      - 'src/cpp/probes/factor_lowclosure_rowdepth.cpp'
+      - 'src/cpp/probes/factor_rowdepth_high_storage_order.cpp'
+      - 'src/cuda/b300/maskshard_rowdepth_exact_io.cuh'
+      - 'src/cuda/b300/maskshard_lowclosure_rowdepth.cuh'
+      - 'src/cuda/b300/maskshard_lowclosure_kernel.cuh'
+      - 'src/cuda/b300/oneesan_cuda_gridfp_b300_hbm32_maskshard_blockorbit_compactaux_fullclosure_highrowpack16_lazyblockinit_rowdepthexact_tightlaunch_rowdepthorbit_rowcaplaunch_exacttasks_highclosurerowdepth_tasklaunch_exactclosuretasks_exactclosurelaunch_batch_guarded.cu'
+      - 'src/cuda/b300/oneesan_cuda_gridfp_b300_hbm32_maskshard_blockorbit_compactaux_fullclosure_highrowpack16_lazyblockinit_rowdepthexact_tightlaunch_rowdepthorbit_rowcaplaunch_exacttasks_highclosurerowdepth_tasklaunch_exactclosuretasks_exactclosurelaunch_lowclosurerowdepth_batch_guarded.cu'
+      - 'scripts/bench/b300_maskshard_lowclosure_rowdepth_ab.py'
+      - '.github/workflows/b300-lowclosure-rowdepth-v24.yml'
+  workflow_dispatch:
+
+jobs:
+  model:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build LOW closure row-depth model
+        run: |
+          mkdir -p build
+          g++ -O3 -std=c++17 -Wall -Wextra -Werror \
+            src/cpp/probes/factor_lowclosure_rowdepth.cpp \
+            -o build/factor_lowclosure_rowdepth
+      - name: Verify n=27 body-prune model
+        run: build/factor_lowclosure_rowdepth 28 14
+
+  high-storage-order:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build HIGH storage-order regression
+        run: |
+          mkdir -p build
+          g++ -O3 -std=c++17 -Wall -Wextra -Werror \
+            src/cpp/probes/factor_rowdepth_high_storage_order.cpp \
+            -o build/factor_rowdepth_high_storage_order
+      - name: Verify fixed HIGH peak indexing
+        run: build/factor_rowdepth_high_storage_order 13
+
+  cuda-compile:
+    runs-on: ubuntu-latest
+    container: nvidia/cuda:12.8.1-devel-ubuntu22.04
+    strategy:
+      matrix:
+        include:
+          - width: 22
+            low: 11
+            high: 10
+          - width: 28
+            low: 14
+            high: 13
+    steps:
+      - uses: actions/checkout@v4
+      - name: Compile v0.23
+        shell: bash
+        run: |
+          mkdir -p build
+          nvcc -O3 -std=c++17 -lineinfo -arch=sm_80 \
+            -DTARGET_W=${{ matrix.width }} \
+            -DLOW_LUT_K=${{ matrix.low }} \
+            -DHIGH_LUT_K=${{ matrix.high }} \
+            src/cuda/b300/oneesan_cuda_gridfp_b300_hbm32_maskshard_blockorbit_compactaux_fullclosure_highrowpack16_lazyblockinit_rowdepthexact_tightlaunch_rowdepthorbit_rowcaplaunch_exacttasks_highclosurerowdepth_tasklaunch_exactclosuretasks_exactclosurelaunch_batch_guarded.cu \
+            -o build/b300_maskshard_v23_w${{ matrix.width }}
+      - name: Compile v0.24
+        shell: bash
+        run: |
+          nvcc -O3 -std=c++17 -lineinfo -arch=sm_80 \
+            -DTARGET_W=${{ matrix.width }} \
+            -DLOW_LUT_K=${{ matrix.low }} \
+            -DHIGH_LUT_K=${{ matrix.high }} \
+            src/cuda/b300/oneesan_cuda_gridfp_b300_hbm32_maskshard_blockorbit_compactaux_fullclosure_highrowpack16_lazyblockinit_rowdepthexact_tightlaunch_rowdepthorbit_rowcaplaunch_exacttasks_highclosurerowdepth_tasklaunch_exactclosuretasks_exactclosurelaunch_lowclosurerowdepth_batch_guarded.cu \
+            -o build/b300_maskshard_v24_w${{ matrix.width }}
+
+  ab-driver:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Syntax-check v0.23-v0.24 A/B
+        run: python3 -m py_compile scripts/bench/b300_maskshard_lowclosure_rowdepth_ab.py
+      - name: Dry-run v0.23-v0.24 comparison
+        run: |
+          python3 scripts/bench/b300_maskshard_lowclosure_rowdepth_ab.py \
+            --dry-run --n 27 --gpus 8 --threads 256 --modulus 4294967291
