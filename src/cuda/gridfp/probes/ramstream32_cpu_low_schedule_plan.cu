@@ -33,6 +33,15 @@ struct CpuLowPageMetrics {
     double cross_auth_2m = 0.0;
 };
 
+struct CpuLowDomainHybridPlan {
+    std::vector<std::vector<size_t>> worker_jobs;
+    std::vector<uint64_t> worker_cells;
+    std::vector<int> owner;
+    uint64_t optimal_domain_per_worker_cap = 0;
+    int domains = 0;
+    int active_domains = 0;
+};
+
 static void cpu_low_add_boundary_page(
     CpuLowBoundaryPages& out, uint64_t boundary_byte,
     int left_owner, int right_owner
@@ -179,6 +188,104 @@ static size_t cpu_low_assigned_jobs(
     return z;
 }
 
+static CpuLowDomainHybridPlan cpu_low_build_domain_hybrid_plan(
+    const std::vector<CpuLowJob>& jobs, const CpuLowSparseHost& sparse,
+    int workers, int domain_size
+) {
+    CpuLowDomainHybridPlan out;
+    out.worker_jobs.assign(size_t(workers), {});
+    out.worker_cells.assign(size_t(workers), 0);
+    out.owner.assign(size_t(1) << HIGH_LUT_K, -1);
+    out.domains = (workers + domain_size - 1) / domain_size;
+
+    std::vector<CpuLowStaticJobCost> ordered;
+    uint64_t total_cells = 0;
+    for (size_t i = 0; i < jobs.size(); ++i) {
+        if (!jobs[i].main_size && !jobs[i].block_size) continue;
+        uint64_t cells = cpu_low_sparse_job_cells(jobs[i], sparse);
+        ordered.push_back({i, jobs[i].mask, cells});
+        total_cells += cells;
+    }
+    std::sort(ordered.begin(), ordered.end(), [](const auto& a, const auto& b) {
+        if (a.mask != b.mask) return a.mask < b.mask;
+        return a.index < b.index;
+    });
+    if (ordered.empty()) return out;
+
+    auto feasible = [&](uint64_t per_worker_cap) {
+        size_t i = 0;
+        for (int d = 0; d < out.domains && i < ordered.size(); ++d) {
+            int first_worker = d * domain_size;
+            int nworkers = std::min(domain_size, workers - first_worker);
+            unsigned __int128 cap =
+                static_cast<unsigned __int128>(per_worker_cap) * unsigned(nworkers);
+            unsigned __int128 acc = 0;
+            while (i < ordered.size()
+                   && acc + ordered[i].cells <= cap) {
+                acc += ordered[i].cells;
+                ++i;
+            }
+        }
+        return i == ordered.size();
+    };
+
+    uint64_t lo = 0, hi = total_cells;
+    while (lo < hi) {
+        uint64_t mid = lo + (hi - lo) / 2;
+        if (feasible(mid)) hi = mid;
+        else lo = mid + 1;
+    }
+    out.optimal_domain_per_worker_cap = lo;
+
+    size_t i = 0;
+    for (int d = 0; d < out.domains && i < ordered.size(); ++d) {
+        int first_worker = d * domain_size;
+        int nworkers = std::min(domain_size, workers - first_worker);
+        unsigned __int128 cap =
+            static_cast<unsigned __int128>(lo) * unsigned(nworkers);
+        unsigned __int128 acc = 0;
+        size_t begin = i;
+        while (i < ordered.size() && acc + ordered[i].cells <= cap) {
+            acc += ordered[i].cells;
+            ++i;
+        }
+        if (i == begin) continue;
+        ++out.active_domains;
+
+        std::vector<CpuLowStaticJobCost> local(
+            ordered.begin() + begin, ordered.begin() + i);
+        std::sort(local.begin(), local.end(), [&](const auto& a, const auto& b) {
+            if (a.cells != b.cells) return a.cells > b.cells;
+            if (jobs[a.index].scratch_bytes != jobs[b.index].scratch_bytes)
+                return jobs[a.index].scratch_bytes > jobs[b.index].scratch_bytes;
+            return jobs[a.index].g < jobs[b.index].g;
+        });
+
+        for (const auto& x : local) {
+            int best = first_worker;
+            for (int w = first_worker + 1; w < first_worker + nworkers; ++w) {
+                if (out.worker_cells[size_t(w)] < out.worker_cells[size_t(best)])
+                    best = w;
+            }
+            out.worker_jobs[size_t(best)].push_back(x.index);
+            out.worker_cells[size_t(best)] += x.cells;
+            if (out.owner[x.mask] >= 0) {
+                std::cerr << "cpu LOW domain-hybrid duplicate owner mask="
+                          << x.mask << '\n';
+                std::exit(6);
+            }
+            out.owner[x.mask] = best;
+        }
+    }
+
+    if (i != ordered.size()) {
+        std::cerr << "cpu LOW domain-hybrid reconstruction failed assigned="
+                  << i << " jobs=" << ordered.size() << '\n';
+        std::exit(7);
+    }
+    return out;
+}
+
 int main(int argc, char** argv) {
     int n = argc > 1 ? std::atoi(argv[1]) : TARGET_W - 1;
     int workers = argc > 2 ? std::max(1, std::atoi(argv[2])) : 32;
@@ -267,13 +374,31 @@ int main(int argc, char** argv) {
 
     CpuLowPageMetrics lpt_domain_pages;
     CpuLowPageMetrics contiguous_domain_pages;
+    CpuLowPageMetrics hybrid_pages;
+    CpuLowPageMetrics hybrid_domain_pages;
+    CpuLowDomainHybridPlan hybrid;
     int domains = 0;
+    double hybrid_imbalance = 0.0;
     if (domain_size > 0) {
         domains = (workers + domain_size - 1) / domain_size;
         lpt_domain_pages = cpu_low_page_metrics(
             layout, storage, cpu_low_domain_owner(lpt_owner, domain_size));
         contiguous_domain_pages = cpu_low_page_metrics(
             layout, storage, cpu_low_domain_owner(contiguous_owner, domain_size));
+        hybrid = cpu_low_build_domain_hybrid_plan(
+            jobs, sparse, workers, domain_size);
+        uint64_t hybrid_total = std::accumulate(
+            hybrid.worker_cells.begin(), hybrid.worker_cells.end(), uint64_t(0));
+        if (hybrid_total != exact_total
+            || cpu_low_assigned_jobs(hybrid.worker_jobs) != nonempty_jobs) {
+            std::cerr << "cpu LOW domain-hybrid accounting mismatch\n";
+            return 8;
+        }
+        hybrid_imbalance = avg > 0.0
+            ? double(cpu_low_max_cells(hybrid.worker_cells)) / avg : 0.0;
+        hybrid_pages = cpu_low_page_metrics(layout, storage, hybrid.owner);
+        hybrid_domain_pages = cpu_low_page_metrics(
+            layout, storage, cpu_low_domain_owner(hybrid.owner, domain_size));
     }
 
     size_t contiguous_active_workers = 0;
@@ -319,23 +444,43 @@ int main(int argc, char** argv) {
               << " contiguous_cross_domain_auth_page_fraction_4k=" << contiguous_domain_pages.cross_auth_4k
               << " contiguous_cross_domain_pages_2m=" << contiguous_domain_pages.cross_2m
               << " contiguous_cross_domain_auth_page_fraction_2m=" << contiguous_domain_pages.cross_auth_2m
+              << " hybrid_domain_active_domains=" << hybrid.active_domains
+              << " hybrid_domain_optimal_per_worker_cap="
+              << hybrid.optimal_domain_per_worker_cap
+              << " hybrid_domain_min_worker_cells="
+              << cpu_low_min_cells(hybrid.worker_cells)
+              << " hybrid_domain_max_worker_cells="
+              << cpu_low_max_cells(hybrid.worker_cells)
+              << " hybrid_domain_imbalance=" << hybrid_imbalance
+              << " hybrid_domain_cross_worker_pages_4k=" << hybrid_pages.cross_4k
+              << " hybrid_domain_cross_worker_auth_page_fraction_4k=" << hybrid_pages.cross_auth_4k
+              << " hybrid_domain_cross_worker_pages_2m=" << hybrid_pages.cross_2m
+              << " hybrid_domain_cross_worker_auth_page_fraction_2m=" << hybrid_pages.cross_auth_2m
+              << " hybrid_domain_cross_domain_pages_4k=" << hybrid_domain_pages.cross_4k
+              << " hybrid_domain_cross_domain_auth_page_fraction_4k=" << hybrid_domain_pages.cross_auth_4k
+              << " hybrid_domain_cross_domain_pages_2m=" << hybrid_domain_pages.cross_2m
+              << " hybrid_domain_cross_domain_auth_page_fraction_2m=" << hybrid_domain_pages.cross_auth_2m
               << " build_s=" << lpt_pool.schedule_build_s
               << " contiguous_build_s=" << contiguous_pool.schedule_build_s
               << '\n';
 
     if (dump_workers) {
-        std::cout << "worker\tjobs\tcells\tfraction\tcontiguous_jobs\tcontiguous_cells\tcontiguous_fraction\tdomain\n";
+        std::cout << "worker\tjobs\tcells\tfraction\tcontiguous_jobs\tcontiguous_cells\tcontiguous_fraction\thybrid_domain_jobs\thybrid_domain_cells\thybrid_domain_fraction\tdomain\n";
         for (int w = 0; w < workers; ++w) {
             uint64_t cells = lpt_pool.sticky_worker_cells[size_t(w)];
             uint64_t ccells = contiguous_pool.sticky_worker_cells[size_t(w)];
+            uint64_t hcells = domain_size > 0 ? hybrid.worker_cells[size_t(w)] : 0;
             double fraction = exact_total ? double(cells) / double(exact_total) : 0.0;
             double cfraction = exact_total ? double(ccells) / double(exact_total) : 0.0;
+            double hfraction = exact_total ? double(hcells) / double(exact_total) : 0.0;
             int domain = domain_size > 0 ? w / domain_size : -1;
             std::cout << w << '\t'
                       << lpt_pool.sticky_worker_jobs[size_t(w)].size() << '\t'
                       << cells << '\t' << fraction << '\t'
                       << contiguous_pool.sticky_worker_jobs[size_t(w)].size() << '\t'
                       << ccells << '\t' << cfraction << '\t'
+                      << (domain_size > 0 ? hybrid.worker_jobs[size_t(w)].size() : 0) << '\t'
+                      << hcells << '\t' << hfraction << '\t'
                       << domain << '\n';
         }
     }
