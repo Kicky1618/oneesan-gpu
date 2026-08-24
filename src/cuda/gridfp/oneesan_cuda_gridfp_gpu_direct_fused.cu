@@ -3,11 +3,12 @@
 #undef main
 
 #include "ramstream32_gpu_direct_fused.cuh"
+#include "ramstream32_gpu_direct_fused_validate.hpp"
 
 int main(int argc,char**argv){
     int n=argc>1?std::atoi(argv[1]):TARGET_W-1;Count mod=argc>2?Count(std::strtoul(argv[2],nullptr,10)):4294967291u;int threads=argc>3?std::atoi(argv[3]):256;int grid_x=argc>4?std::atoi(argv[4]):16;int grid_y=argc>5?std::atoi(argv[5]):8;bool plan_only=gdg_has_arg(argc,argv,"--plan-only");int W=n+1;
     if(W!=TARGET_W||n<2||W>MAXW||threads<=0||threads>1024||grid_x<=0||grid_y<=0)return 1;
-    auto prep0=std::chrono::steady_clock::now();build_full_dp();G_FACTOR=build_factor_tables();StorageFactorHost storage=build_storage_factor_tables(G_FACTOR);StorageLayout layout=build_storage_layout(storage);LowDescHost lowdesc=build_low_descriptors(storage,layout);HighDescHost highdesc=build_high_descriptors(storage,layout);LowOrbitHost loworbit=build_cpu_low_orbit(storage,layout,lowdesc);CpuHighDirectHost highdirect=build_cpu_high_direct(storage,layout,highdesc);GpuDirectCrossHost forward=build_gpu_direct_cross(storage);GpuDirectGatherHost ordinary=build_gpu_direct_gather(layout,lowdesc,loworbit,highdirect);GpuDirectCrossGatherHost cross=build_gpu_direct_cross_gather(storage,layout,lowdesc,loworbit,highdirect);GpuDirectFusedHost fused=build_gpu_direct_fused(layout,ordinary,cross);double prepare_s=gdg_seconds(prep0);
+    auto prep0=std::chrono::steady_clock::now();build_full_dp();G_FACTOR=build_factor_tables();StorageFactorHost storage=build_storage_factor_tables(G_FACTOR);StorageLayout layout=build_storage_layout(storage);LowDescHost lowdesc=build_low_descriptors(storage,layout);HighDescHost highdesc=build_high_descriptors(storage,layout);LowOrbitHost loworbit=build_cpu_low_orbit(storage,layout,lowdesc);CpuHighDirectHost highdirect=build_cpu_high_direct(storage,layout,highdesc);GpuDirectCrossHost forward=build_gpu_direct_cross(storage);GpuDirectGatherHost ordinary=build_gpu_direct_gather(layout,lowdesc,loworbit,highdirect);GpuDirectCrossGatherHost cross=build_gpu_direct_cross_gather(storage,layout,lowdesc,loworbit,highdirect);GpuDirectFusedHost fused=build_gpu_direct_fused_checked(layout,ordinary,cross);double prepare_s=gdg_seconds(prep0);
     size_t auth_bytes=size_t(layout.main_size+layout.block_size)*sizeof(Count);
     size_t base_resident=loworbit.rec.size()*sizeof(uint64_t)+(highdirect.orbit_ops.nn.size()+highdirect.orbit_ops.nrnl.size())*sizeof(CpuHighOrbitOp)+(highdirect.orbit_off.nn.size()+highdirect.orbit_off.nrnl.size())*sizeof(uint32_t);
     size_t ordinary_sources=(ordinary.low_src.size()+ordinary.high_src.size())*sizeof(uint32_t);
