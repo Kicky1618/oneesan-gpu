@@ -47,6 +47,16 @@ jobs:
           python3 -m py_compile scripts/tools/analyze_cpu_high_sweep.py
           python3 -m py_compile scripts/tools/analyze_cpu_high_numa.py
           python3 -m py_compile scripts/tools/plan_cpu_high_groups.py
+      - name: Check LOW schedule/domain sweep provenance
+        shell: bash
+        run: |
+          f=scripts/bench/ramstream32-cpu-high-sweep.sh
+          grep -Fq 'CPU_LOW_SCHEDULE="${CPU_LOW_SCHEDULE:-dynamic}"' "$f"
+          grep -Fq 'CPU_LOW_DOMAIN_SIZE="${CPU_LOW_DOMAIN_SIZE:-}"' "$f"
+          grep -Fq 'CPU_LOW_SCHEDULE="$CPU_LOW_SCHEDULE" CPU_LOW_DOMAIN_SIZE="$CPU_LOW_DOMAIN_SIZE"' "$f"
+          grep -Fq 'cpu_low_domain_size=${CPU_LOW_DOMAIN_SIZE:-none}' "$f"
+          grep -Fq 'LOW schedule provenance mismatch' "$f"
+          grep -Fq 'LOW domain provenance mismatch' "$f"
       - name: Check HIGH transfer profile regression
         shell: bash
         run: |
@@ -68,21 +78,11 @@ jobs:
           0	0	134217728	1	1	1000000000	2	1000000	1000000	1000000	1000000	4000000
           1	1	268435456	1	1	2000000000	1	3000000	3000000	3000000	3000000	12000000
           EOF
-          python3 scripts/tools/analyze_cpu_high_sweep.py /tmp/cpu-high.tsv \
-            --cost-plan /tmp/cost.tsv > /tmp/cpu-high-analysis.txt
-          grep -Fq 'best mode=direct overlap=0 threshold_mib=256 mean_wall_s=1.180000000' \
-            /tmp/cpu-high-analysis.txt
-          grep -Fq 'affine_calibration mode=direct overlap=0 pcie_gib_s=4.000000000 pcie_copy_overhead_us=1000.' \
-            /tmp/cpu-high-analysis.txt
-          grep -Fq 'affine_calibration mode=direct overlap=0 cpu_gcell_s=1.000000000 cpu_group_overhead_us=1000.' \
-            /tmp/cpu-high-analysis.txt
-          grep -Fq 'affine_calibration mode=direct overlap=0 gpu_gstate_s=2.000000000 gpu_group_overhead_us=500.' \
-            /tmp/cpu-high-analysis.txt
-          grep -Fq -- '--pcie-gib-s 4.000000000' /tmp/cpu-high-analysis.txt
-          grep -Fq -- '--pcie-copy-overhead-us 1000.' /tmp/cpu-high-analysis.txt
-          grep -Fq -- '--gpu-gstate-s 2.000000000' /tmp/cpu-high-analysis.txt
-          grep -Fq -- '--group-overhead-us 1000.' /tmp/cpu-high-analysis.txt
-          grep -Fq -- '--gpu-group-overhead-us 500.' /tmp/cpu-high-analysis.txt
+          python3 scripts/tools/analyze_cpu_high_sweep.py /tmp/cpu-high.tsv --cost-plan /tmp/cost.tsv > /tmp/cpu-high-analysis.txt
+          grep -Fq 'best mode=direct overlap=0 threshold_mib=256 mean_wall_s=1.180000000' /tmp/cpu-high-analysis.txt
+          grep -Fq 'affine_calibration mode=direct overlap=0 pcie_gib_s=4.000000000 pcie_copy_overhead_us=1000.' /tmp/cpu-high-analysis.txt
+          grep -Fq 'affine_calibration mode=direct overlap=0 cpu_gcell_s=1.000000000 cpu_group_overhead_us=1000.' /tmp/cpu-high-analysis.txt
+          grep -Fq 'affine_calibration mode=direct overlap=0 gpu_gstate_s=2.000000000 gpu_group_overhead_us=500.' /tmp/cpu-high-analysis.txt
           grep -Fq 'planner_command ' /tmp/cpu-high-analysis.txt
       - name: Check CPU HIGH group planner
         shell: bash
@@ -92,11 +92,7 @@ jobs:
           0	0	1073741824	1	1	1000000000	4	250000	250000	250000	250000	1000000
           1	1	1048576	1	1	1000000	2	250000000	250000000	250000000	250000000	1000000000
           EOF
-          python3 scripts/tools/plan_cpu_high_groups.py /tmp/planner-cost.tsv \
-            --pcie-gib-s 10 --pcie-copy-overhead-us 10 \
-            --cpu-gcell-s 1 --gpu-gstate-s 10 \
-            --group-overhead-us 100 --gpu-group-overhead-us 50 \
-            > /tmp/groups.txt 2> /tmp/planner.log
+          python3 scripts/tools/plan_cpu_high_groups.py /tmp/planner-cost.tsv --pcie-gib-s 10 --pcie-copy-overhead-us 10 --cpu-gcell-s 1 --gpu-gstate-s 10 --group-overhead-us 100 --gpu-group-overhead-us 50 > /tmp/groups.txt 2> /tmp/planner.log
           test "$(cat /tmp/groups.txt)" = 0
           grep -Fq 'mode=sequential' /tmp/planner.log
           grep -Fq 'selected=1' /tmp/planner.log
@@ -109,9 +105,7 @@ jobs:
           0	0	9663676416	1	1	25000000000	25000000000	25000000000	25000000000	100000000000
           1	1	1073741824	1	1	300000000	300000000	300000000	300000000	1200000000
           EOF
-          python3 scripts/tools/plan_cpu_high_groups.py /tmp/overlap-cost.tsv \
-            --pcie-gib-s 1 --cpu-gcell-s 1 --overlap \
-            > /tmp/overlap.groups 2> /tmp/overlap.log
+          python3 scripts/tools/plan_cpu_high_groups.py /tmp/overlap-cost.tsv --pcie-gib-s 1 --cpu-gcell-s 1 --overlap > /tmp/overlap.groups 2> /tmp/overlap.log
           test "$(cat /tmp/overlap.groups)" = 1
           grep -Fq 'planner mode=overlap' /tmp/overlap.log
           grep -Fq 'critical_s=9.000000' /tmp/overlap.log
@@ -124,8 +118,7 @@ jobs:
           1	1	4096	1	1	2048	0	1024	1	1	1	1	4
           EOF
           printf '0\n' >/tmp/numa.groups
-          python3 scripts/tools/analyze_cpu_high_numa.py /tmp/numa-cost.tsv \
-            --groups-file /tmp/numa.groups > /tmp/numa-analysis.txt
+          python3 scripts/tools/analyze_cpu_high_numa.py /tmp/numa-cost.tsv --groups-file /tmp/numa.groups > /tmp/numa-analysis.txt
           grep -Fq 'selection=all groups=2' /tmp/numa-analysis.txt
           grep -Fq 'page4k_boundary_upper_fraction=0.166666667' /tmp/numa-analysis.txt
           grep -Fq 'selection=file groups=1' /tmp/numa-analysis.txt
@@ -134,18 +127,18 @@ jobs:
       - name: Check documented entry points
         shell: bash
         run: |
-          grep -Fq 'scripts/bench/ramstream32-factorized-ab.sh' \
-            docs/ramstream32-factorized-ab.md
-          grep -Fq 'scripts/bench/ramstream32-cpu-high-sweep.sh' \
-            docs/ramstream32-cpu-high.md
-          grep -Fq 'CPU_HIGH_MODE=direct' docs/ramstream32-cpu-high.md
-          grep -Fq 'CPU_HIGH_GROUPS_FILE' docs/ramstream32-cpu-high.md
-          grep -Fq 'CPU_HIGH_CPU_LIST' docs/ramstream32-cpu-high.md
-          grep -Fq 'analyze_cpu_high_numa.py' docs/ramstream32-cpu-high.md
-          grep -Fq 'plan_cpu_high_groups.py' docs/ramstream32-cpu-high.md
-          grep -Fq -- '--overlap' docs/ramstream32-cpu-high.md
-          grep -Fq -- '--pcie-copy-overhead-us' docs/ramstream32-cpu-high.md
-          grep -Fq -- '--gpu-gstate-s' docs/ramstream32-cpu-high.md
-          grep -Fq -- '--gpu-group-overhead-us' docs/ramstream32-cpu-high.md
-          grep -Fq 'c8de8d73af1c44f075aee937bc8f37e8b7b79d27' \
-            docs/ramstream32-hybrid-sparse.md
+          grep -Fq 'scripts/bench/ramstream32-factorized-ab.sh' docs/ramstream32-factorized-ab.md
+          d=docs/ramstream32-cpu-high.md
+          grep -Fq 'scripts/bench/ramstream32-cpu-high-sweep.sh' "$d"
+          grep -Fq 'CPU_HIGH_MODE=direct' "$d"
+          grep -Fq 'CPU_HIGH_GROUPS_FILE' "$d"
+          grep -Fq 'CPU_HIGH_CPU_LIST' "$d"
+          grep -Fq 'CPU_LOW_SCHEDULE=domain' "$d"
+          grep -Fq 'CPU_LOW_DOMAIN_SIZE' "$d"
+          grep -Fq 'analyze_cpu_high_numa.py' "$d"
+          grep -Fq 'plan_cpu_high_groups.py' "$d"
+          grep -Fq -- '--overlap' "$d"
+          grep -Fq -- '--pcie-copy-overhead-us' "$d"
+          grep -Fq -- '--gpu-gstate-s' "$d"
+          grep -Fq -- '--gpu-group-overhead-us' "$d"
+          grep -Fq 'c8de8d73af1c44f075aee937bc8f37e8b7b79d27' docs/ramstream32-hybrid-sparse.md
