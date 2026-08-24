@@ -11,7 +11,9 @@ on:
       - 'src/cuda/gridfp/probes/ramstream32_bucket_fused_selftest.cu'
       - 'src/cuda/gridfp/probes/ramstream32_bucket_fused_plan.cu'
       - 'src/cuda/b300/gridfp_bucket_transpose.cuh'
+      - 'src/cuda/b300/gridfp_bucket_transpose_events.cuh'
       - 'src/cuda/b300/oneesan_cuda_gridfp_b300_bucket_fused.cu'
+      - 'src/cuda/b300/oneesan_cuda_gridfp_b300_bucket_fused_events.cu'
       - 'scripts/build/b300-bucket-fused.sh'
       - '.github/workflows/gpu-direct-bucket-fused-compile.yml'
   pull_request:
@@ -24,7 +26,9 @@ on:
       - 'src/cuda/gridfp/probes/ramstream32_bucket_fused_selftest.cu'
       - 'src/cuda/gridfp/probes/ramstream32_bucket_fused_plan.cu'
       - 'src/cuda/b300/gridfp_bucket_transpose.cuh'
+      - 'src/cuda/b300/gridfp_bucket_transpose_events.cuh'
       - 'src/cuda/b300/oneesan_cuda_gridfp_b300_bucket_fused.cu'
+      - 'src/cuda/b300/oneesan_cuda_gridfp_b300_bucket_fused_events.cu'
       - 'scripts/build/b300-bucket-fused.sh'
       - '.github/workflows/gpu-direct-bucket-fused-compile.yml'
   workflow_dispatch:
@@ -92,3 +96,15 @@ jobs:
           grep -Fq 'transposes_per_residue=55' /tmp/bkb-w28.txt
           grep -Fq 'locator_bits=18' /tmp/bkb-w28.txt
           grep -Fq 'closure_atomic=0' /tmp/bkb-w28.txt
+      - name: Compile and run W28 event-transpose driver plan
+        shell: bash
+        run: |
+          nvcc -O3 -std=c++17 -lineinfo -arch=sm_80 \
+            -DTARGET_W=28 -DLOW_LUT_K=14 -DHIGH_LUT_K=13 \
+            src/cuda/b300/oneesan_cuda_gridfp_b300_bucket_fused_events.cu \
+            -o build/oneesan_cuda_gridfp_b300_bucket_fused_events_n27
+          build/oneesan_cuda_gridfp_b300_bucket_fused_events_n27 \
+            27 4294967291 256 16 8 4096 --plan-only 2>&1 | tee /tmp/bkb-events-w28.txt
+          grep -Fq 'backend=gridfp-b300-bucket-fused-v0.1-plan' /tmp/bkb-events-w28.txt
+          grep -Fq 'transposes_per_residue=55' /tmp/bkb-events-w28.txt
+          grep -Fq 'closure_atomic=0' /tmp/bkb-events-w28.txt
