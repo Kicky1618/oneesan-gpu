@@ -8,10 +8,19 @@ NGPU="${NGPU:-8}"
 TARGET_MIB="${TARGET_MIB:-16384}"   # legacy batch-runner argument; bucket backend ignores it
 MAX_WINDOW="${MAX_WINDOW:-14}"      # legacy batch-runner argument; bucket backend ignores it
 TRANSPOSE_MODE="${TRANSPOSE_MODE:-events}"
+PM_ACCUM="${PM_ACCUM:-0}"
 BUCKET_TRANSPOSE_CHUNK_MIB="${BUCKET_TRANSPOSE_CHUNK_MIB:-1024}"
 BUCKET_RESERVE_MIB="${BUCKET_RESERVE_MIB:-8192}"
-BIN="${BIN:-$ONEESAN_BUILD_DIR/oneesan_cuda_gridfp_b300_bucket_fused_batch_n${N}}"
-WORK_DIR="${WORK_DIR:-$ONEESAN_ROOT/work/b300_bucket_exact_n${N}}"
+
+if [[ "$PM_ACCUM" != 0 && "$PM_ACCUM" != 1 ]]; then
+  echo "PM_ACCUM must be 0 or 1" >&2
+  exit 2
+fi
+case "$TRANSPOSE_MODE" in events|sync) ;; *) echo "TRANSPOSE_MODE must be events or sync" >&2; exit 2;; esac
+MODE_SUFFIX="${TRANSPOSE_MODE}"
+if [[ "$PM_ACCUM" == 1 ]]; then MODE_SUFFIX="${MODE_SUFFIX}_pm"; fi
+BIN="${BIN:-$ONEESAN_BUILD_DIR/oneesan_cuda_gridfp_b300_bucket_fused_batch_${MODE_SUFFIX}_n${N}}"
+WORK_DIR="${WORK_DIR:-$ONEESAN_ROOT/work/b300_bucket_${MODE_SUFFIX}_exact_n${N}}"
 
 if (( NGPU != 8 )); then
   echo "bucket backend currently requires NGPU=8" >&2
@@ -28,8 +37,8 @@ if (( visible < NGPU )); then
 fi
 
 if [[ ! -x "$BIN" ]]; then
-  echo "$BIN not found; building bucket-fused batch binary for n=$N transpose=$TRANSPOSE_MODE" >&2
-  N="$N" OUT="$BIN" TRANSPOSE_MODE="$TRANSPOSE_MODE" \
+  echo "$BIN not found; building bucket-fused batch binary for n=$N transpose=$TRANSPOSE_MODE pm_accum=$PM_ACCUM" >&2
+  N="$N" OUT="$BIN" TRANSPOSE_MODE="$TRANSPOSE_MODE" PM_ACCUM="$PM_ACCUM" \
     "$ONEESAN_ROOT/scripts/build/b300-bucket-fused-batch.sh"
 fi
 
