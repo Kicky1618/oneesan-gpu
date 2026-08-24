@@ -2,6 +2,7 @@
 
 #include "ramstream32_cpu_low_direct.hpp"
 
+#include <array>
 #include <cstdint>
 #include <iostream>
 #include <vector>
@@ -291,8 +292,14 @@ static void process_cpu_low_group_sparse(
     const CpuLowSparseHost& sparse, Count mod
 ) {
     if (!job.main_size && !job.block_size) return;
-    std::vector<Count*> mp(job.main_blocks.size(), nullptr);
-    std::vector<Count*> dp(job.block_blocks.size(), nullptr);
+    std::array<Count*, 3 * (HIGH_LUT_K + 2)> mp{};
+    std::array<Count*, HIGH_LUT_K + 2> dp{};
+    if (job.main_blocks.size() > mp.size() || job.block_blocks.size() > dp.size()) {
+        std::cerr << "cpu sparse pointer workspace overflow main="
+                  << job.main_blocks.size() << '/' << mp.size()
+                  << " block=" << job.block_blocks.size() << '/' << dp.size() << '\n';
+        std::exit(106);
+    }
     for (size_t bid = 0; bid < job.main_blocks.size(); ++bid)
         mp[bid] = cpu_low_direct_block_ptr(
             main_auth, layout.main_blocks[bid], job.main_blocks[bid], job.mask, storage);
