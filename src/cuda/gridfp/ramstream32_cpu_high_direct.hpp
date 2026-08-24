@@ -21,7 +21,9 @@
 // IDs are topology invariants and are reconstructed at runtime. v5.2 splits the
 // orbit stream into NN and NR/NL classes. Stream identity replaces the remaining
 // per-operation kind decode/branch and lets partner/drop block reconstruction be
-// hoisted outside the inner operation loop.
+// hoisted outside the inner operation loop. v5.3 likewise separates ordinary
+// blocked closures from boundary CROSS closures, removing the last descriptor-
+// kind branch from the CPU HIGH direct hot loops.
 
 enum CpuHighOrbitKind : uint8_t {
     CPU_HIGH_ORBIT_NN = 1,
@@ -93,15 +95,28 @@ struct CpuHighOrbitOffsets {
     size_t size() const { return nn.size() + nrnl.size(); }
 };
 
+struct CpuHighClosureStreams {
+    std::vector<CpuHighClosureOp> block;
+    std::vector<CpuHighClosureOp> cross;
+    size_t size() const { return block.size() + cross.size(); }
+};
+
+struct CpuHighClosureOffsets {
+    std::vector<uint32_t> block;
+    std::vector<uint32_t> cross;
+    size_t size() const { return block.size() + cross.size(); }
+};
+
 struct CpuHighDirectHost {
-    // Compatibility wrappers intentionally preserve orbit_ops.size() and
-    // orbit_off.size() for production metrics and existing selftests while the
-    // executor gets branch-free per-class streams.
+    // Compatibility wrappers intentionally preserve orbit_ops.size(),
+    // orbit_off.size(), closure_ops.size(), and closure_off.size() for
+    // production metrics and existing selftests while the executor gets
+    // branch-free per-class streams.
     CpuHighOrbitStreams orbit_ops;
-    std::vector<CpuHighClosureOp> closure_ops;
+    CpuHighClosureStreams closure_ops;
     // flattened [pi * (nblocks+1) + bid]
     CpuHighOrbitOffsets orbit_off;
-    std::vector<uint32_t> closure_off;
+    CpuHighClosureOffsets closure_off;
     uint32_t nblocks = 0;
 };
 
@@ -119,7 +134,8 @@ static CpuHighDirectHost build_cpu_high_direct(
     size_t pitch = size_t(out.nblocks) + 1;
     out.orbit_off.nn.resize(size_t(H) * pitch);
     out.orbit_off.nrnl.resize(size_t(H) * pitch);
-    out.closure_off.resize(size_t(H) * pitch);
+    out.closure_off.block.resize(size_t(H) * pitch);
+    out.closure_off.cross.resize(size_t(H) * pitch);
 
     auto representative_low = [&](int hs) -> uint32_t {
         uint32_t a = storage.low_all_off[hs];
@@ -133,7 +149,8 @@ static CpuHighDirectHost build_cpu_high_direct(
             size_t oi = size_t(pi) * pitch + bid;
             out.orbit_off.nn[oi] = uint32_t(out.orbit_ops.nn.size());
             out.orbit_off.nrnl[oi] = uint32_t(out.orbit_ops.nrnl.size());
-            out.closure_off[oi] = uint32_t(out.closure_ops.size());
+            out.closure_off.block[oi] = uint32_t(out.closure_ops.block.size());
+            out.closure_off.cross[oi] = uint32_t(out.closure_ops.cross.size());
 
             const StorageBlock& sb = layout.main_blocks[bid];
             if (!sb.valid || !sb.rows || !sb.cols) continue;
@@ -237,23 +254,29 @@ static CpuHighDirectHost build_cpu_high_direct(
                     size_t(pi) * desc.main_total + desc.main_base[bid] + hr];
                 uint32_t kind = cpu_high_desc_kind(word);
                 if (kind == HIGHDESC_INVALID) continue;
-                if (kind != HIGHDESC_BLOCK && kind != HIGHDESC_CROSS) {
+                if (kind == HIGHDESC_BLOCK) {
+                    out.closure_ops.block.push_back({hr, word});
+                } else if (kind == HIGHDESC_CROSS) {
+                    out.closure_ops.cross.push_back({hr, word});
+                } else {
                     std::cerr << "cpu high closure expected blocked destination p="
                               << p << " bid=" << bid << " hr=" << hr
                               << " kind=" << kind << '\n';
                     std::exit(126);
                 }
-                out.closure_ops.push_back({hr, word});
             }
         }
         size_t end = size_t(pi) * pitch + out.nblocks;
         out.orbit_off.nn[end] = uint32_t(out.orbit_ops.nn.size());
         out.orbit_off.nrnl[end] = uint32_t(out.orbit_ops.nrnl.size());
-        out.closure_off[end] = uint32_t(out.closure_ops.size());
+        out.closure_off.block[end] = uint32_t(out.closure_ops.block.size());
+        out.closure_off.cross[end] = uint32_t(out.closure_ops.cross.size());
     }
 
     std::cerr << "cpu_high_direct nn_orbit_ops=" << out.orbit_ops.nn.size()
               << " nrnl_orbit_ops=" << out.orbit_ops.nrnl.size()
+              << " block_closure_ops=" << out.closure_ops.block.size()
+              << " cross_closure_ops=" << out.closure_ops.cross.size()
               << " orbit_ops=" << out.orbit_ops.size()
               << " closure_ops=" << out.closure_ops.size()
               << " orbit_mib="
@@ -395,51 +418,63 @@ static void process_cpu_high_group_direct(
             }
         }
 
-        // Closure pass after all orbit updates, matching the LOW direct proof.
+        // Closure pass. BLOCK and CROSS write only blocked destinations and do
+        // not modify closure source values, so their stream order is irrelevant.
         for (uint32_t bid = 0; bid < direct.nblocks; ++bid) {
             const FBlock& x = job.main_blocks[bid];
             if (!x.stride) continue;
-            auto [ca, cb] = cpu_high_direct_range(
-                direct.closure_off, direct.nblocks, pi, bid);
-            if (ca == cb) continue;
-            uint32_t low0 = G_FACTOR.low_mask_off[
-                size_t(job.mask) * S + x.hs];
 
-            for (uint32_t q = ca; q < cb; ++q) {
-                const CpuHighClosureOp& op = direct.closure_ops[q];
+            auto [ba, bb] = cpu_high_direct_range(
+                direct.closure_off.block, direct.nblocks, pi, bid);
+            for (uint32_t q = ba; q < bb; ++q) {
+                const CpuHighClosureOp& op = direct.closure_ops.block[q];
                 Count* src = cpu_high_direct_row_ptr(
                     main_auth, layout.main_blocks[bid], x,
                     job.mask, storage, op.src_hr);
                 if (!src) continue;
-                uint32_t kind = cpu_high_desc_kind(op.desc);
                 uint32_t dbid = cpu_high_desc_block(op.desc);
                 const FBlock& y = job.block_blocks[dbid];
                 Count* dst = cpu_high_direct_row_ptr(
                     block_auth, layout.block_blocks[dbid], y,
                     job.mask, storage, cpu_high_desc_rank(op.desc));
                 if (!dst) continue;
+                if (y.stride != x.stride) {
+                    std::cerr << "cpu high direct closure LOW-width mismatch\n";
+                    std::exit(128);
+                }
+                for (uint32_t lr = 0; lr < x.stride; ++lr) {
+                    Count c = src[lr];
+                    if (c) dst[lr] = cpu_high_add(dst[lr], c, mod);
+                }
+            }
 
-                if (kind == HIGHDESC_BLOCK) {
-                    if (y.stride != x.stride) {
-                        std::cerr << "cpu high direct closure LOW-width mismatch\n";
-                        std::exit(128);
-                    }
-                    for (uint32_t lr = 0; lr < x.stride; ++lr) {
-                        Count c = src[lr];
-                        if (c) dst[lr] = cpu_high_add(dst[lr], c, mod);
-                    }
-                } else {
-                    uint32_t depth = cpu_high_desc_depth(op.desc);
-                    if (!depth || depth > uint32_t(LOW_LUT_K)) continue;
-                    const uint16_t* rank_row = cross.low_cross_rank.data()
-                        + size_t(depth - 1) * cross.pitch + low0;
-                    for (uint32_t lr = 0; lr < x.stride; ++lr) {
-                        Count c = src[lr];
-                        if (!c) continue;
-                        uint16_t lr2 = rank_row[lr];
-                        if (lr2 == CPU_HIGH_CROSS_INVALID) continue;
-                        dst[lr2] = cpu_high_add(dst[lr2], c, mod);
-                    }
+            auto [ca, cb] = cpu_high_direct_range(
+                direct.closure_off.cross, direct.nblocks, pi, bid);
+            if (ca == cb) continue;
+            uint32_t low0 = G_FACTOR.low_mask_off[
+                size_t(job.mask) * S + x.hs];
+            for (uint32_t q = ca; q < cb; ++q) {
+                const CpuHighClosureOp& op = direct.closure_ops.cross[q];
+                Count* src = cpu_high_direct_row_ptr(
+                    main_auth, layout.main_blocks[bid], x,
+                    job.mask, storage, op.src_hr);
+                if (!src) continue;
+                uint32_t dbid = cpu_high_desc_block(op.desc);
+                const FBlock& y = job.block_blocks[dbid];
+                Count* dst = cpu_high_direct_row_ptr(
+                    block_auth, layout.block_blocks[dbid], y,
+                    job.mask, storage, cpu_high_desc_rank(op.desc));
+                if (!dst) continue;
+                uint32_t depth = cpu_high_desc_depth(op.desc);
+                if (!depth || depth > uint32_t(LOW_LUT_K)) continue;
+                const uint16_t* rank_row = cross.low_cross_rank.data()
+                    + size_t(depth - 1) * cross.pitch + low0;
+                for (uint32_t lr = 0; lr < x.stride; ++lr) {
+                    Count c = src[lr];
+                    if (!c) continue;
+                    uint16_t lr2 = rank_row[lr];
+                    if (lr2 == CPU_HIGH_CROSS_INVALID) continue;
+                    dst[lr2] = cpu_high_add(dst[lr2], c, mod);
                 }
             }
         }
