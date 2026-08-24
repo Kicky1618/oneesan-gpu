@@ -4,11 +4,13 @@ on:
   push:
     paths:
       - 'scripts/bench/ramstream32-cpu-low-schedule-ab.sh'
+      - 'scripts/bench/ramstream32-cpu-low-schedule-compare.sh'
       - 'docs/ramstream32-cpu-low-scheduling.md'
       - '.github/workflows/ramstream32-low-schedule-script-ci.yml'
   pull_request:
     paths:
       - 'scripts/bench/ramstream32-cpu-low-schedule-ab.sh'
+      - 'scripts/bench/ramstream32-cpu-low-schedule-compare.sh'
       - 'docs/ramstream32-cpu-low-scheduling.md'
       - '.github/workflows/ramstream32-low-schedule-script-ci.yml'
   workflow_dispatch:
@@ -20,21 +22,35 @@ jobs:
       - uses: actions/checkout@v4
       - name: Check harness syntax
         shell: bash
-        run: bash -n scripts/bench/ramstream32-cpu-low-schedule-ab.sh
-      - name: Check alternating schedule guards
+        run: |
+          bash -n scripts/bench/ramstream32-cpu-low-schedule-ab.sh
+          bash -n scripts/bench/ramstream32-cpu-low-schedule-compare.sh
+      - name: Check two-way alternating schedule guards
         shell: bash
         run: |
           grep -Fq 'schedules=(dynamic sticky)' scripts/bench/ramstream32-cpu-low-schedule-ab.sh
           grep -Fq 'schedules=(sticky dynamic)' scripts/bench/ramstream32-cpu-low-schedule-ab.sh
-          grep -Fq 'CPU_LOW_SCHEDULE="$schedule"' scripts/bench/ramstream32-cpu-low-schedule-ab.sh
           grep -Fq 'RAMSTREAM_NUMA_SAMPLE_MIB=0' scripts/bench/ramstream32-cpu-low-schedule-ab.sh
           grep -Fq 'schedule provenance mismatch' scripts/bench/ramstream32-cpu-low-schedule-ab.sh
           grep -Fq 'sticky_wall_speedup' scripts/bench/ramstream32-cpu-low-schedule-ab.sh
           grep -Fq 'sticky_low_speedup' scripts/bench/ramstream32-cpu-low-schedule-ab.sh
+      - name: Check three-way cyclic order design
+        shell: bash
+        run: |
+          grep -Fq 'dynamic-sticky-contiguous' scripts/bench/ramstream32-cpu-low-schedule-compare.sh
+          grep -Fq 'sticky-contiguous-dynamic' scripts/bench/ramstream32-cpu-low-schedule-compare.sh
+          grep -Fq 'contiguous-dynamic-sticky' scripts/bench/ramstream32-cpu-low-schedule-compare.sh
+          grep -Fq 'CPU_LOW_SCHEDULE="$schedule"' scripts/bench/ramstream32-cpu-low-schedule-compare.sh
+          grep -Fq 'RAMSTREAM_NUMA_SAMPLE_MIB=0' scripts/bench/ramstream32-cpu-low-schedule-compare.sh
+          grep -Fq 'cpu_low_contiguous_optimal_cap' scripts/bench/ramstream32-cpu-low-schedule-compare.sh
+          grep -Fq 'contiguous_vs_dynamic_wall' scripts/bench/ramstream32-cpu-low-schedule-compare.sh
+          grep -Fq 'contiguous_vs_sticky_low' scripts/bench/ramstream32-cpu-low-schedule-compare.sh
       - name: Check documentation
         shell: bash
         run: |
           grep -Fq 'CPU_LOW_SCHEDULE=dynamic' docs/ramstream32-cpu-low-scheduling.md
           grep -Fq 'CPU_LOW_SCHEDULE=sticky' docs/ramstream32-cpu-low-scheduling.md
+          grep -Fq 'CPU_LOW_SCHEDULE=contiguous' docs/ramstream32-cpu-low-scheduling.md
           grep -Fq 'ramstream32-cpu-low-schedule-ab.sh' docs/ramstream32-cpu-low-scheduling.md
+          grep -Fq 'ramstream32-cpu-low-schedule-compare.sh' docs/ramstream32-cpu-low-scheduling.md
           grep -Fq 'cpu_low_schedule_build_s' docs/ramstream32-cpu-low-scheduling.md
