@@ -1,12 +1,12 @@
 # RAMstream32 CPU LOW scheduling
 
-Backend v5.19 provides four scheduling modes for the persistent sparse LOW executor. `dynamic` remains the default. `sticky`, `contiguous`, and `domain` are opt-in static-owner modes.
+Backend v5.20 provides four scheduling modes for the persistent sparse LOW executor. `dynamic` remains the default. `sticky`, `contiguous`, and `domain` are opt-in static-owner modes.
 
 ## Why static scheduling is exact
 
 The LOW window fixes the occupancy mask of the inactive HIGH positions. Each resulting `CpuLowJob` is transition-closed for the complete LOW+center window, so different fixed-HIGH occupancy groups do not write into one another. Scheduling changes only which persistent worker evaluates each closed group; it does not change the recurrence, descriptor streams, operation ordering inside a group, or authoritative addresses.
 
-The W=10 exhaustive selftest runs dynamic, LPT-sticky, contiguous, and domain pools for two consecutive LOW generations and compares each result with the exact reference recurrence after one and two LOW windows.
+The W=10 exhaustive selftest runs dynamic, LPT-sticky, contiguous, and domain pools for two consecutive LOW generations and compares each result with the exact reference recurrence after one and two LOW windows. v5.20 also has a deterministic unit case for the domain-boundary refiner: an initial `[8,8,8] | [1,1,1]` one-worker-per-domain split has pair makespan 24, and the bounded refinement moves one job to reach makespan 16 while preserving the single ordered boundary.
 
 ## Production modes
 
@@ -35,7 +35,7 @@ CPU_LOW_DOMAIN_SIZE=32 \
   27 4294967291 12288 64
 ```
 
-Domain ownership is contiguous in numeric HIGH-mask order, but jobs inside each domain are redistributed with exact-cell LPT. This is intended to preserve most of LPT's worker balance while sharply reducing cross-domain mask boundaries. `CPU_LOW_DOMAIN_SIZE` must be positive and no larger than `CPU_WORKERS`.
+Domain ownership is contiguous in numeric HIGH-mask order, but jobs inside each domain are redistributed with exact-cell LPT. `CPU_LOW_DOMAIN_SIZE` must be positive and no larger than `CPU_WORKERS`.
 
 Production provenance includes:
 
@@ -44,11 +44,13 @@ cpu_low_schedule=dynamic|sticky|contiguous|domain
 cpu_low_domain_size=...
 cpu_low_schedule_build_s=...
 cpu_low_contiguous_optimal_cap=...
-cpu_low_domain_normalized_cap=...
+cpu_low_domain_outer_normalized_cap=...
 cpu_low_domain_active_domains=...
+cpu_low_domain_refined_boundaries=...
+cpu_low_domain_refined_job_moves=...
 ```
 
-The domain fields are zero when the selected schedule does not use them.
+`cpu_low_domain_normalized_cap` is retained as a compatibility alias for `cpu_low_domain_outer_normalized_cap`.
 
 ## Exact work model
 
@@ -68,16 +70,40 @@ Groups are sorted by descending exact-cell work and assigned to the currently le
 
 Groups are sorted by numeric HIGH occupancy mask. Production binary-searches the smallest feasible maximum worker load under the contiguous-worker constraint. Greedy feasibility determines whether a candidate cap fits in the worker count. If the optimum needs fewer segments than workers, existing segments are split without increasing the cap.
 
-### Domain
+### Domain: outer partition
 
-For a domain containing `k` workers, the outer ordered partition gives it a contiguous mask range with a normalized capacity derived from `k * cap`. Production binary-searches the minimum feasible normalized per-worker cap across domains. Jobs inside each resulting domain range are then assigned to that domain's workers by exact-cell LPT.
+For a domain containing `k` workers, the initial ordered partition gives it a contiguous mask range with total exact work bounded by `k * outer_normalized_cap`. Production binary-searches the smallest outer normalized cap for which all ordered jobs fit across the available domains.
+
+This outer cap is a domain-total/worker-count normalization used to choose the initial boundaries. It is not a mathematical upper bound on each worker after LPT. A large indivisible job or LPT packing can produce a worker load greater than this value; actual `max_worker_cells` and `imbalance` are the relevant balance measurements.
+
+### v5.20 boundary refinement
+
+After the initial domain ranges are constructed, v5.20 optimizes the actual LPT makespan without giving up domain contiguity.
+
+For every adjacent pair of nonempty domains it searches at most 32 occupancy jobs to each side of the current boundary. Each candidate is evaluated by running the same exact-cell LPT assignment used by production inside the two affected domains. A move is accepted only when the pair objective improves lexicographically:
+
+```text
+1. smaller max(left LPT makespan, right LPT makespan)
+2. if tied, smaller left makespan + right makespan
+```
+
+Two bounded passes are used, with the second pass visiting boundaries in reverse order. Therefore an accepted move cannot increase the current maximum load of the two affected domains; all other domains are unchanged by that move. The search changes only the position of an ordered domain boundary, so each domain still owns one contiguous HIGH-mask interval.
+
+Metrics:
+
+```text
+cpu_low_domain_refined_boundaries = number of accepted boundary moves across passes
+cpu_low_domain_refined_job_moves  = sum of absolute boundary displacements in jobs
+```
+
+The radius and pass count are deliberately bounded because the schedule is built on the host before the repeated LOW generations. `cpu_low_schedule_build_s` must be checked together with runtime savings.
 
 Thus the structural tradeoff is:
 
 ```text
 sticky/LPT: best unconstrained worker balance, potentially many domain cuts
 contiguous: every worker owns one ordered mask interval
- domain:    every NUMA domain owns one ordered interval, LPT inside the domain
+ domain:    every NUMA domain owns one ordered interval, refined LPT inside domains
 ```
 
 ## Preflight balance and page-cut probe
@@ -95,8 +121,6 @@ Important fields include:
 
 ```text
 imbalance=...
-cross_worker_pages_4k=...
-cross_worker_pages_2m=...
 cross_domain_pages_4k=...
 cross_domain_pages_2m=...
 contiguous_imbalance=...
@@ -105,9 +129,12 @@ contiguous_cross_domain_pages_2m=...
 hybrid_domain_imbalance=...
 hybrid_domain_cross_domain_pages_4k=...
 hybrid_domain_cross_domain_pages_2m=...
+hybrid_domain_outer_normalized_cap=...
+hybrid_domain_refined_boundaries=...
+hybrid_domain_refined_job_moves=...
 ```
 
-The probe retains the historical `hybrid_domain_*` field names for compatibility; those fields now describe the production `CPU_LOW_SCHEDULE=domain` assignment.
+The raw probe retains the historical `hybrid_domain_*` prefix for compatibility; those fields describe the current production `CPU_LOW_SCHEDULE=domain` assignment.
 
 `--domain-size 32` models worker IDs `0..31` as domain 0, `32..63` as domain 1, and so on. This only matches the hardware experiment if `CPU_LOW_CPU_LIST` is arranged in corresponding socket-local blocks.
 
@@ -124,21 +151,17 @@ MAX_IMBALANCE=1.05 \
 bash scripts/bench/ramstream32-cpu-low-schedule-plan-sweep.sh
 ```
 
-Each entry is `workers:domain-size`. The persisted TSV uses the production terminology:
+Each entry is `workers:domain-size`. The persisted TSV uses production terminology:
 
 ```text
 lpt_*
 contiguous_*
 domain_*
+domain_refined_boundaries
+domain_refined_job_moves
 ```
 
-The analyzer:
-
-```text
-scripts/tools/analyze_cpu_low_schedule_plan_sweep.py
-```
-
-computes the Pareto frontier over three objectives:
+The analyzer `scripts/tools/analyze_cpu_low_schedule_plan_sweep.py` computes the Pareto frontier over three objectives:
 
 ```text
 minimize worker imbalance
@@ -148,7 +171,7 @@ minimize cross-domain 2 MiB boundary pages
 
 It reports `scheme=lpt`, `scheme=contiguous`, or `scheme=domain`. Legacy TSV files with `hybrid_*` columns and `--scheme hybrid` remain accepted as aliases for `domain`.
 
-A candidate is omitted only when another candidate is no worse in all three objectives and strictly better in at least one. This avoids inventing an arbitrary scalar weight between load balance and NUMA exposure.
+A candidate is omitted only when another candidate is no worse in all three objectives and strictly better in at least one. The refinement-count columns are diagnostic metadata rather than additional Pareto objectives.
 
 ## Clean timing comparison
 
@@ -185,7 +208,7 @@ domain -> dynamic -> sticky -> contiguous
 
 Over every four repeats each schedule appears once in every run position. The harness verifies identical residues, schedule provenance, and domain-size provenance; it forces `RAMSTREAM_NUMA_SAMPLE_MIB=0` and records whole-solver and LOW-only timings separately.
 
-No schedule is assumed faster. Dynamic can win from fine-grained balancing. Sticky can win from stable ownership with near-perfect load balance. Contiguous can win when page/address locality dominates. Domain is intended to retain most of sticky's load balance while reducing cross-NUMA-domain ownership boundaries.
+No schedule is assumed faster. Dynamic can win from fine-grained balancing. Sticky can win from stable ownership with near-perfect load balance. Contiguous can win when page/address locality dominates. Domain is intended to retain most of sticky's balance while reducing cross-NUMA-domain ownership boundaries; v5.20 specifically attacks the remaining makespan penalty at those domain boundaries.
 
 ## NUMA diagnosis
 
