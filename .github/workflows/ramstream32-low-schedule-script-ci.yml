@@ -43,7 +43,10 @@ jobs:
           grep -Fq 'CPU_LOW_DOMAIN_SIZE="${CPU_LOW_DOMAIN_SIZE:-}"' "$f"
           grep -Fq 'CPU_LOW_DOMAIN_SIZE="$CPU_LOW_DOMAIN_SIZE"' "$f"
           grep -Fq 'domain provenance mismatch' "$f"
-          grep -Fq 'cpu_low_domain_normalized_cap' "$f"
+          grep -Fq 'cpu_low_domain_outer_normalized_cap' "$f"
+          grep -Fq 'cpu_low_domain_refined_boundaries' "$f"
+          grep -Fq 'cpu_low_domain_refined_job_moves' "$f"
+          grep -Fq 'mean_refined_boundaries' "$f"
           grep -Fq 'domain_vs_dynamic_wall' "$f"
           grep -Fq 'domain_vs_contiguous_low' "$f"
           grep -Fq 'RAMSTREAM_NUMA_SAMPLE_MIB=0' "$f"
@@ -54,6 +57,9 @@ jobs:
           grep -Fq 'CONFIGS="${CONFIGS:-32:16 64:32 96:48 128:64}"' "$f"
           grep -Fq -- '--domain-size "$domain"' "$f"
           grep -Fq 'domain_imbalance' "$f"
+          grep -Fq 'domain_refined_boundaries' "$f"
+          grep -Fq 'domain_refined_job_moves' "$f"
+          grep -Fq 'hybrid_domain_refined_boundaries' "$f"
           grep -Fq 'analyze_cpu_low_schedule_plan_sweep.py' "$f"
           cat >/tmp/low-sweep.tsv <<'EOF'
           workers	domain_size	domains	lpt_imbalance	lpt_cross_domain_4k	lpt_cross_domain_2m	contiguous_imbalance	contiguous_cross_domain_4k	contiguous_cross_domain_2m	hybrid_imbalance	hybrid_cross_domain_4k	hybrid_cross_domain_2m	hybrid_cross_worker_4k	hybrid_cross_worker_2m	hybrid_domain_cap	hybrid_active_domains	raw
@@ -70,8 +76,11 @@ jobs:
         shell: bash
         run: |
           d=docs/ramstream32-cpu-low-scheduling.md
+          grep -Fq 'Backend v5.20' "$d"
           grep -Fq 'CPU_LOW_SCHEDULE=domain' "$d"
           grep -Fq 'CPU_LOW_DOMAIN_SIZE' "$d"
+          grep -Fq 'cpu_low_domain_refined_boundaries' "$d"
+          grep -Fq 'domain_refined_job_moves' "$d"
           grep -Fq 'cyclic-latin-4' "$d"
           grep -Fq 'scheme=domain' "$d"
           grep -Fq 'Pareto' "$d"
