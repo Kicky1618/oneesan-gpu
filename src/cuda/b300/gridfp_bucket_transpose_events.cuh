@@ -10,10 +10,14 @@
 #include <vector>
 
 // Event-driven variant of BucketTransposeCtx.
-// cudaStreamWaitEvent may wait on an event from another CUDA device.  Encode
-// in-place swap safety entirely as GPU dependencies and avoid per-chunk host
-// synchronization.  Fetch events are unique per (round,chunk), so correctness
-// does not depend on event re-record semantics.
+// cudaStreamWaitEvent may wait on an event from another CUDA device. Encode
+// in-place swap safety as GPU dependencies and avoid per-chunk host
+// synchronization. Fetch events are unique per (round,chunk).
+//
+// transpose() retains the blocking contract of the baseline context: it waits
+// once at the end of the complete 7-round transpose. This keeps transpose_s
+// directly comparable while replacing O(rounds*chunks*GPUs) host waits with
+// only one final wait per GPU.
 
 struct BucketTransposeEventCtx {
     static constexpr int N=BUCKET_TRANSPOSE_MAX_GPU;
@@ -33,21 +37,15 @@ struct BucketTransposeEventCtx {
     static void cke(cudaError_t e,const char*what){
         if(e!=cudaSuccess){std::cerr<<what<<": "<<cudaGetErrorString(e)<<'\n';std::exit(220);}
     }
-
     size_t fetch_index(size_t round,size_t chunk)const{return round*max_chunks+chunk;}
 
-    void init(
-        const BucketTransposePlan&plan,
-        const std::array<Count*,N>&ptrs,
-        size_t chunk
-    ){
+    void init(const BucketTransposePlan&plan,const std::array<Count*,N>&ptrs,size_t chunk){
         ngpu=plan.ngpu;chunk_bytes=chunk;rounds=bucket_transpose_rounds(ngpu);
         if(!chunk_bytes){std::cerr<<"bucket event transpose zero chunk\n";std::exit(221);}
         uint64_t max_cap=0;
-        for(int a=0;a<ngpu;++a)for(int b=0;b<ngpu;++b)
-            if(a!=b)max_cap=std::max(max_cap,plan.slot[a][b].capacity_bytes);
-        max_chunks=size_t((max_cap+chunk_bytes-1)/chunk_bytes);
-        if(!max_chunks)max_chunks=1;
+        for(int a=0;a<ngpu;++a)for(int b=0;b<ngpu;++b)if(a!=b)
+            max_cap=std::max(max_cap,plan.slot[a][b].capacity_bytes);
+        max_chunks=size_t((max_cap+chunk_bytes-1)/chunk_bytes);if(!max_chunks)max_chunks=1;
         size_t event_count=rounds.size()*max_chunks;
 
         for(int g=0;g<ngpu;++g){
@@ -69,13 +67,17 @@ struct BucketTransposeEventCtx {
         }
     }
 
+    void synchronize(){
+        for(int g=0;g<ngpu;++g){
+            cke(cudaSetDevice(g),"bucket event transpose set synchronize");
+            cke(cudaEventSynchronize(round_done[g]),"bucket event transpose synchronize");
+        }
+    }
+
     void transpose(const BucketTransposePlan&plan){
         if(plan.ngpu!=ngpu)std::exit(223);
         for(size_t ri=0;ri<rounds.size();++ri){
             auto const&round=rounds[ri];
-
-            // A new pair must not read a source slot while its peer still has
-            // writes pending from the preceding matching round.
             if(ri){
                 for(int i=0;i<ngpu/2;++i){
                     auto[a,b]=round[size_t(i)];
@@ -124,18 +126,8 @@ struct BucketTransposeEventCtx {
                 cke(cudaEventRecord(round_done[g],stream[g]),"bucket event transpose record round done");
             }
         }
-
-        // The next compute window uses the default stream. Queue a device-side
-        // wait rather than blocking the host here.
-        for(int g=0;g<ngpu;++g){
-            cke(cudaSetDevice(g),"bucket event transpose set final wait");
-            cke(cudaStreamWaitEvent(nullptr,round_done[g],0),"bucket event transpose default waits done");
-        }
+        synchronize();
         ++transposes;
-    }
-
-    void synchronize(){
-        for(int g=0;g<ngpu;++g){cke(cudaSetDevice(g),"bucket event transpose set synchronize");cke(cudaEventSynchronize(round_done[g]),"bucket event transpose synchronize");}
     }
 
     void release(){
