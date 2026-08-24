@@ -15,12 +15,14 @@
 // Dynamic mode preserves the historical atomic work queue. Sticky mode builds a
 // one-time exact-cell LPT partition. Contiguous mode keeps HIGH-occupancy masks
 // in numeric order and computes the min-max optimal contiguous worker partition.
-// Both static modes give each persistent worker the same occupancy groups on
-// every row so CPU affinity can preserve ownership across generations.
+// Domain mode keeps numeric mask ranges contiguous only across worker domains,
+// then restores exact-cell LPT inside each domain. Every static mode gives each
+// persistent worker the same occupancy groups on every row.
 enum CpuLowScheduleMode : uint8_t {
     CPU_LOW_SCHEDULE_DYNAMIC = 0,
     CPU_LOW_SCHEDULE_STICKY = 1,
     CPU_LOW_SCHEDULE_CONTIGUOUS = 2,
+    CPU_LOW_SCHEDULE_DOMAIN = 3,
 };
 
 static CpuLowScheduleMode cpu_low_schedule_mode_from_env() {
@@ -31,14 +33,29 @@ static CpuLowScheduleMode cpu_low_schedule_mode_from_env() {
         return CPU_LOW_SCHEDULE_STICKY;
     if (std::strcmp(s, "contiguous") == 0)
         return CPU_LOW_SCHEDULE_CONTIGUOUS;
-    std::cerr << "CPU_LOW_SCHEDULE must be dynamic, sticky, or contiguous\n";
+    if (std::strcmp(s, "domain") == 0)
+        return CPU_LOW_SCHEDULE_DOMAIN;
+    std::cerr << "CPU_LOW_SCHEDULE must be dynamic, sticky, contiguous, or domain\n";
     std::exit(135);
 }
 
 static const char* cpu_low_schedule_name(CpuLowScheduleMode mode) {
     if (mode == CPU_LOW_SCHEDULE_STICKY) return "sticky";
     if (mode == CPU_LOW_SCHEDULE_CONTIGUOUS) return "contiguous";
+    if (mode == CPU_LOW_SCHEDULE_DOMAIN) return "domain";
     return "dynamic";
+}
+
+static int cpu_low_domain_size_from_env() {
+    const char* s = std::getenv("CPU_LOW_DOMAIN_SIZE");
+    if (!s || !*s) return 0;
+    char* end = nullptr;
+    long v = std::strtol(s, &end, 10);
+    if (!end || *end || v <= 0 || v > 1'000'000) {
+        std::cerr << "CPU_LOW_DOMAIN_SIZE must be a positive integer\n";
+        std::exit(138);
+    }
+    return int(v);
 }
 
 static uint64_t cpu_low_sparse_job_cells(
@@ -151,8 +168,6 @@ static uint64_t cpu_low_build_contiguous_schedule(
     }
     segs.push_back({begin, ordered.size()});
 
-    // If the optimal cap needs fewer segments than workers, split existing
-    // segments. Splitting preserves contiguity and cannot increase max load.
     while (segs.size() < target_segments) {
         size_t best_seg = size_t(-1);
         uint64_t best_cells = 0;
@@ -201,14 +216,116 @@ static uint64_t cpu_low_build_contiguous_schedule(
     return optimal_cap;
 }
 
+static uint64_t cpu_low_saturating_mul(uint64_t a, uint64_t b) {
+    if (a && b > std::numeric_limits<uint64_t>::max() / a)
+        return std::numeric_limits<uint64_t>::max();
+    return a * b;
+}
+
+static uint64_t cpu_low_build_domain_schedule(
+    const std::vector<CpuLowJob>& jobs, const CpuLowSparseHost& sparse,
+    int workers, int domain_size,
+    std::vector<std::vector<size_t>>& worker_jobs,
+    std::vector<uint64_t>& worker_cells,
+    int& active_domains
+) {
+    worker_jobs.assign(size_t(workers), {});
+    worker_cells.assign(size_t(workers), 0);
+    active_domains = 0;
+    int domains = (workers + domain_size - 1) / domain_size;
+
+    std::vector<CpuLowStaticJobCost> ordered;
+    ordered.reserve(jobs.size());
+    uint64_t total_cells = 0;
+    for (size_t i = 0; i < jobs.size(); ++i) {
+        if (!jobs[i].main_size && !jobs[i].block_size) continue;
+        uint64_t cells = cpu_low_sparse_job_cells(jobs[i], sparse);
+        ordered.push_back({i, jobs[i].mask, cells});
+        total_cells += cells;
+    }
+    std::sort(ordered.begin(), ordered.end(), [](const auto& a, const auto& b) {
+        if (a.mask != b.mask) return a.mask < b.mask;
+        return a.index < b.index;
+    });
+    if (ordered.empty()) return 0;
+
+    auto feasible = [&](uint64_t per_worker_cap) {
+        size_t i = 0;
+        for (int d = 0; d < domains && i < ordered.size(); ++d) {
+            int first_worker = d * domain_size;
+            int nworkers = std::min(domain_size, workers - first_worker);
+            uint64_t cap = cpu_low_saturating_mul(
+                per_worker_cap, uint64_t(nworkers));
+            uint64_t acc = 0;
+            while (i < ordered.size() && ordered[i].cells <= cap - acc) {
+                acc += ordered[i].cells;
+                ++i;
+            }
+        }
+        return i == ordered.size();
+    };
+
+    uint64_t lo = 0, hi = total_cells;
+    while (lo < hi) {
+        uint64_t mid = lo + (hi - lo) / 2;
+        if (feasible(mid)) hi = mid;
+        else lo = mid + 1;
+    }
+    uint64_t normalized_cap = lo;
+
+    size_t i = 0;
+    for (int d = 0; d < domains && i < ordered.size(); ++d) {
+        int first_worker = d * domain_size;
+        int nworkers = std::min(domain_size, workers - first_worker);
+        uint64_t cap = cpu_low_saturating_mul(normalized_cap, uint64_t(nworkers));
+        uint64_t acc = 0;
+        size_t begin = i;
+        while (i < ordered.size() && ordered[i].cells <= cap - acc) {
+            acc += ordered[i].cells;
+            ++i;
+        }
+        if (i == begin) continue;
+        ++active_domains;
+
+        std::vector<CpuLowStaticJobCost> local(
+            ordered.begin() + begin, ordered.begin() + i);
+        std::sort(local.begin(), local.end(), [&](const auto& a, const auto& b) {
+            if (a.cells != b.cells) return a.cells > b.cells;
+            if (jobs[a.index].scratch_bytes != jobs[b.index].scratch_bytes)
+                return jobs[a.index].scratch_bytes > jobs[b.index].scratch_bytes;
+            return jobs[a.index].g < jobs[b.index].g;
+        });
+
+        for (const auto& x : local) {
+            int best = first_worker;
+            for (int w = first_worker + 1; w < first_worker + nworkers; ++w) {
+                if (worker_cells[size_t(w)] < worker_cells[size_t(best)])
+                    best = w;
+            }
+            worker_jobs[size_t(best)].push_back(x.index);
+            worker_cells[size_t(best)] += x.cells;
+        }
+    }
+
+    if (i != ordered.size()) {
+        std::cerr << "cpu LOW domain schedule reconstruction failed assigned="
+                  << i << " jobs=" << ordered.size() << '\n';
+        std::exit(139);
+    }
+    return normalized_cap;
+}
+
 struct CpuLowSparsePersistentPool {
     int workers = 1;
     CpuLowScheduleMode schedule_mode = CPU_LOW_SCHEDULE_DYNAMIC;
+    int domain_size = 0;
     std::vector<CpuLowSparseStats> stats;
     double wall_s = 0.0;
     double worker_start_s = 0.0;
     double schedule_build_s = 0.0;
     uint64_t contiguous_optimal_cap = 0;
+    uint64_t domain_normalized_cap = 0;
+    int domain_active_domains = 0;
 
     std::mutex mu;
     std::condition_variable start_cv;
@@ -229,17 +346,23 @@ struct CpuLowSparsePersistentPool {
     const CpuLowSparseHost* run_sparse = nullptr;
     Count run_mod = 0;
 
-    // Legacy names retained because probes inspect the static assignment.
-    // They contain the cached worker partition for sticky or contiguous mode.
     const std::vector<CpuLowJob>* sticky_source_jobs = nullptr;
     const CpuLowSparseHost* sticky_source_sparse = nullptr;
     std::vector<std::vector<size_t>> sticky_worker_jobs;
     std::vector<uint64_t> sticky_worker_cells;
 
     explicit CpuLowSparsePersistentPool(
-        int n, CpuLowScheduleMode mode = cpu_low_schedule_mode_from_env()
+        int n,
+        CpuLowScheduleMode mode = cpu_low_schedule_mode_from_env(),
+        int requested_domain_size = cpu_low_domain_size_from_env()
     ) : workers(std::max(1, n)), schedule_mode(mode),
-        stats(size_t(std::max(1, n))) {}
+        domain_size(requested_domain_size), stats(size_t(std::max(1, n))) {
+        if (schedule_mode == CPU_LOW_SCHEDULE_DOMAIN
+            && (domain_size <= 0 || domain_size > workers)) {
+            std::cerr << "CPU_LOW_DOMAIN_SIZE must be in 1..CPU_WORKERS for domain schedule\n";
+            std::exit(140);
+        }
+    }
 
     CpuLowSparsePersistentPool(const CpuLowSparsePersistentPool&) = delete;
     CpuLowSparsePersistentPool& operator=(const CpuLowSparsePersistentPool&) = delete;
@@ -254,8 +377,10 @@ struct CpuLowSparsePersistentPool {
             threads.emplace_back([this, w] { worker_loop(w); });
         worker_start_s += ram_seconds_since(t0);
         std::cerr << "cpu_low_sparse_persistent workers=" << workers
-                  << " schedule=" << cpu_low_schedule_name(schedule_mode)
-                  << " start_s=" << worker_start_s << '\n';
+                  << " schedule=" << cpu_low_schedule_name(schedule_mode);
+        if (schedule_mode == CPU_LOW_SCHEDULE_DOMAIN)
+            std::cerr << " domain_size=" << domain_size;
+        std::cerr << " start_s=" << worker_start_s << '\n';
     }
 
     void prepare_static_schedule(
@@ -264,16 +389,25 @@ struct CpuLowSparsePersistentPool {
         if (schedule_mode == CPU_LOW_SCHEDULE_DYNAMIC) return;
         if (sticky_source_jobs == &jobs && sticky_source_sparse == &sparse) return;
 
-        // Static schedules are read lock-free by workers during a generation.
-        // Rebuild only after the previous generation is complete.
         wait_run();
 
         auto t0 = std::chrono::steady_clock::now();
         uint64_t total_cells = 0;
         size_t nonempty_jobs = 0;
         contiguous_optimal_cap = 0;
+        domain_normalized_cap = 0;
+        domain_active_domains = 0;
 
-        if (schedule_mode == CPU_LOW_SCHEDULE_CONTIGUOUS) {
+        if (schedule_mode == CPU_LOW_SCHEDULE_DOMAIN) {
+            domain_normalized_cap = cpu_low_build_domain_schedule(
+                jobs, sparse, workers, domain_size,
+                sticky_worker_jobs, sticky_worker_cells, domain_active_domains);
+            for (size_t i = 0; i < jobs.size(); ++i) {
+                if (!jobs[i].main_size && !jobs[i].block_size) continue;
+                ++nonempty_jobs;
+                total_cells += cpu_low_sparse_job_cells(jobs[i], sparse);
+            }
+        } else if (schedule_mode == CPU_LOW_SCHEDULE_CONTIGUOUS) {
             contiguous_optimal_cap = cpu_low_build_contiguous_schedule(
                 jobs, sparse, workers, sticky_worker_jobs, sticky_worker_cells);
             for (size_t i = 0; i < jobs.size(); ++i) {
@@ -323,8 +457,11 @@ struct CpuLowSparsePersistentPool {
             max_cells = std::max(max_cells, x);
         }
         double avg = workers ? double(total_cells) / workers : 0.0;
-        const char* prefix = schedule_mode == CPU_LOW_SCHEDULE_CONTIGUOUS
-            ? "cpu_low_contiguous_schedule" : "cpu_low_sticky_schedule";
+        const char* prefix = "cpu_low_sticky_schedule";
+        if (schedule_mode == CPU_LOW_SCHEDULE_CONTIGUOUS)
+            prefix = "cpu_low_contiguous_schedule";
+        else if (schedule_mode == CPU_LOW_SCHEDULE_DOMAIN)
+            prefix = "cpu_low_domain_schedule";
         std::cerr << prefix
                   << " jobs=" << nonempty_jobs
                   << " workers=" << workers
@@ -334,11 +471,13 @@ struct CpuLowSparsePersistentPool {
                   << " imbalance=" << (avg > 0.0 ? double(max_cells) / avg : 0.0);
         if (schedule_mode == CPU_LOW_SCHEDULE_CONTIGUOUS)
             std::cerr << " optimal_cap=" << contiguous_optimal_cap;
+        if (schedule_mode == CPU_LOW_SCHEDULE_DOMAIN)
+            std::cerr << " domain_size=" << domain_size
+                      << " active_domains=" << domain_active_domains
+                      << " normalized_cap=" << domain_normalized_cap;
         std::cerr << " build_s=" << dt << '\n';
     }
 
-    // Compatibility entry point for existing probes. It now builds whichever
-    // static mode the pool was constructed with.
     void prepare_sticky_schedule(
         const std::vector<CpuLowJob>& jobs, const CpuLowSparseHost& sparse
     ) {
