@@ -133,6 +133,10 @@ if [[ "$(field "$result_line" cpu_low_schedule)" != "$CPU_LOW_SCHEDULE" ]]; then
   echo "LOW schedule provenance mismatch in solver output" >&2
   exit 7
 fi
+if [[ "$(field "$result_line" cpu_low_domain_refine)" != "$CPU_LOW_DOMAIN_REFINE" ]]; then
+  echo "LOW refine provenance mismatch in solver output" >&2
+  exit 7
+fi
 if [[ "$CPU_LOW_SCHEDULE" == domain ]]; then
   if [[ "$(field "$result_line" cpu_low_domain_size)" != "$CPU_LOW_DOMAIN_SIZE" ]]; then
     echo "LOW domain provenance mismatch in solver output" >&2
