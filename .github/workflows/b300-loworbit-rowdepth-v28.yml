@@ -9,7 +9,8 @@ on:
       - 'src/cuda/b300/maskshard_lowclosure_rowdepth.cuh'
       - 'src/cuda/b300/maskshard_loworbit_rowdepth.cuh'
       - 'src/cuda/b300/maskshard_lowclosure_kernel.cuh'
-      - 'src/cuda/b300/oneesan_cuda_gridfp_b300_hbm32_maskshard_blockorbit_compactaux_fullclosure_highrowpack29_lazyblockinit_rowdepthexact_tightlaunch_rowdepthorbit_rowcaplaunch_exacttasks_highclosurerowdepth_tasklaunch_exactclosuretasks_exactclosurelaunch_lowclosurerowdepth_exacttasks_batch_guarded.cu'
+      - 'src/cuda/b300/oneesan_cuda_gridfp_b300_hbm32_maskshard_fullorbit_batch.cu'
+      - 'src/cuda/b300/oneesan_b300_maskshard_v027_lowclosure_exactlaunch.cu'
       - 'src/cuda/b300/oneesan_cuda_gridfp_b300_hbm32_maskshard_blockorbit_compactaux_fullclosure_highrowpack29_lazyblockinit_rowdepthexact_tightlaunch_rowdepthorbit_rowcaplaunch_exacttasks_highclosurerowdepth_tasklaunch_exactclosuretasks_exactclosurelaunch_lowclosurerowdepth_exacttasks_loworbitrowdepth_batch_guarded.cu'
       - 'scripts/bench/b300_maskshard_loworbit_rowdepth_ab.py'
       - '.github/workflows/b300-loworbit-rowdepth-v28.yml'
@@ -21,7 +22,8 @@ on:
       - 'src/cuda/b300/maskshard_lowclosure_rowdepth.cuh'
       - 'src/cuda/b300/maskshard_loworbit_rowdepth.cuh'
       - 'src/cuda/b300/maskshard_lowclosure_kernel.cuh'
-      - 'src/cuda/b300/oneesan_cuda_gridfp_b300_hbm32_maskshard_blockorbit_compactaux_fullclosure_highrowpack29_lazyblockinit_rowdepthexact_tightlaunch_rowdepthorbit_rowcaplaunch_exacttasks_highclosurerowdepth_tasklaunch_exactclosuretasks_exactclosurelaunch_lowclosurerowdepth_exacttasks_batch_guarded.cu'
+      - 'src/cuda/b300/oneesan_cuda_gridfp_b300_hbm32_maskshard_fullorbit_batch.cu'
+      - 'src/cuda/b300/oneesan_b300_maskshard_v027_lowclosure_exactlaunch.cu'
       - 'src/cuda/b300/oneesan_cuda_gridfp_b300_hbm32_maskshard_blockorbit_compactaux_fullclosure_highrowpack29_lazyblockinit_rowdepthexact_tightlaunch_rowdepthorbit_rowcaplaunch_exacttasks_highclosurerowdepth_tasklaunch_exactclosuretasks_exactclosurelaunch_lowclosurerowdepth_exacttasks_loworbitrowdepth_batch_guarded.cu'
       - 'scripts/bench/b300_maskshard_loworbit_rowdepth_ab.py'
       - '.github/workflows/b300-loworbit-rowdepth-v28.yml'
@@ -68,7 +70,7 @@ jobs:
             high: 13
     steps:
       - uses: actions/checkout@v4
-      - name: Compile v0.26 baseline
+      - name: Compile v0.27 exact LOW launch baseline
         shell: bash
         run: |
           mkdir -p build
@@ -76,8 +78,8 @@ jobs:
             -DTARGET_W=${{ matrix.width }} \
             -DLOW_LUT_K=${{ matrix.low }} \
             -DHIGH_LUT_K=${{ matrix.high }} \
-            src/cuda/b300/oneesan_cuda_gridfp_b300_hbm32_maskshard_blockorbit_compactaux_fullclosure_highrowpack29_lazyblockinit_rowdepthexact_tightlaunch_rowdepthorbit_rowcaplaunch_exacttasks_highclosurerowdepth_tasklaunch_exactclosuretasks_exactclosurelaunch_lowclosurerowdepth_exacttasks_batch_guarded.cu \
-            -o build/b300_maskshard_v26_w${{ matrix.width }}
+            src/cuda/b300/oneesan_b300_maskshard_v027_lowclosure_exactlaunch.cu \
+            -o build/b300_maskshard_v27_w${{ matrix.width }}
       - name: Compile v0.28 LOW orbit row-depth pruning
         shell: bash
         run: |
@@ -92,9 +94,9 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - name: Syntax-check v0.26-v0.28 A/B
+      - name: Syntax-check v0.27-v0.28 A/B
         run: python3 -m py_compile scripts/bench/b300_maskshard_loworbit_rowdepth_ab.py
-      - name: Dry-run v0.26-v0.28 comparison
+      - name: Dry-run v0.27-v0.28 comparison
         run: |
           python3 scripts/bench/b300_maskshard_loworbit_rowdepth_ab.py \
             --dry-run --n 27 --gpus 8 --threads 256 --modulus 4294967291
