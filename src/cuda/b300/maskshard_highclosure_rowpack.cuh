@@ -5,12 +5,21 @@
 #ifndef MASKSHARD_HIGH_CLOSURE_ROWS
 #error "MASKSHARD_HIGH_CLOSURE_ROWPACK requires MASKSHARD_HIGH_CLOSURE_ROWS"
 #endif
+#ifdef MASKSHARD_HIGH_CLOSURE_ROW_DEPTH
+#ifndef MASKSHARD_ROW_DEPTH_EXACT_IO
+#error "HIGH closure row-depth pruning requires v0.15 exact peak metadata"
+#endif
+#endif
 
 // v0.10/v0.11 research: pack selected HIGH closure rows within each source
 // FBlock. With MASKSHARD_HIGH_CLOSURE_ROWPACK_THRESHOLD defined, only FBlocks
 // whose fixed LOW-mask width is smaller than that threshold are packed; wider
 // blocks keep the v0.8 one-row-per-warp mapping. This allows a hybrid tradeoff
 // between warp-tail waste and row-list/HighDesc subgroup loads.
+//
+// v0.20 optionally reuses v0.15 exact factor-peak metadata before reading the
+// source count. This changes only the heavy closure body: launch/task mapping is
+// still v0.11, so v0.19 -> v0.20 isolates row-depth source pruning cleanly.
 __device__ __forceinline__ void maskshard_highclosure_rowpack_apply(
     Count* mainv,
     Count* blockv,
@@ -21,6 +30,19 @@ __device__ __forceinline__ void maskshard_highclosure_rowpack_apply(
 ) {
     constexpr int S = MAXW + 2;
     constexpr uint32_t LR_MASK = (1u << LOW_LUT_K) - 1u;
+#ifdef MASKSHARD_HIGH_CLOSURE_ROW_DEPTH
+    constexpr int FULL_CAP = TARGET_W / 2;
+    const int cap = min(D_MS_ROW_DEPTH_INDEX + 1, FULL_CAP);
+    if (cap < FULL_CAP) {
+        if (int(x.he) > cap || int(x.hs) > cap) return;
+        const uint32_t hi = D_F_HIGH_ALL_OFF[x.he] + hr;
+        const uint32_t lo = D_F_LOW_MASK_OFF[
+            size_t(D_F_MASK) * S + x.hs] + lr;
+        const int hp = int(D_MS_ROW_DEPTH_HIGH_PEAK[hi]);
+        const int lp = int(D_MS_ROW_DEPTH_LOW_PEAK[lo]);
+        if ((hp > lp ? hp : lp) > cap) return;
+    }
+#endif
     const Code i = x.off + Code(hr) * x.stride + lr;
     const Count c = mainv[i];
     if (!c) return;
