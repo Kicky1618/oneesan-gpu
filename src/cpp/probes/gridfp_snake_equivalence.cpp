@@ -26,6 +26,52 @@ static void add(Vec& v, MateID k, Count x) {
     else v.erase(it);
 }
 
+static std::uint32_t occ_segment(MateID m, int start, int len) {
+    std::uint32_t z = 0;
+    for (int i = 0; i < len; ++i) {
+        if (mget(m, start + i) != N) z |= 1u << i;
+    }
+    return z;
+}
+
+static void check_reverse_occupancy(const Vec& main, const Vec& block, int W, int p) {
+    const int Lw = W / 2;
+    const int Hw = W - Lw - 1;
+    const bool low_window = p <= Lw;
+    auto main_occ = [&](MateID m) {
+        return low_window ? occ_segment(m, Lw + 1, Hw) : occ_segment(m, 0, Lw);
+    };
+    auto block_occ = [&](MateID m) {
+        return low_window ? occ_segment(m, Lw, Hw) : occ_segment(m, 0, Lw);
+    };
+
+    for (auto [m, c] : main) {
+        (void)c;
+        std::uint32_t before = main_occ(m);
+        IncludeResult z = include_horizontal_reverse(m, W, p);
+        if (!z.valid) continue;
+        std::uint32_t after = z.blocked ? block_occ(z.mate) : main_occ(z.mate);
+        if (before != after) {
+            std::cerr << "FAIL reverse occupancy main W=" << W << " p=" << p
+                      << " window=" << (low_window ? "LOW" : "HIGH")
+                      << " before=" << before << " after=" << after << '\n';
+            std::exit(5);
+        }
+    }
+    for (auto [b, c] : block) {
+        (void)c;
+        std::uint32_t before = block_occ(b);
+        MateID d = blocked_exclude_reverse(b, W, p);
+        std::uint32_t after = main_occ(d);
+        if (before != after) {
+            std::cerr << "FAIL reverse occupancy blocked W=" << W << " p=" << p
+                      << " window=" << (low_window ? "LOW" : "HIGH")
+                      << " before=" << before << " after=" << after << '\n';
+            std::exit(6);
+        }
+    }
+}
+
 static std::pair<Vec, Vec> step_forward(const Vec& main, const Vec& block, int W, int p) {
     Vec nm, nb;
     nm.reserve(main.size() * 2 + block.size());
@@ -41,6 +87,7 @@ static std::pair<Vec, Vec> step_forward(const Vec& main, const Vec& block, int W
 }
 
 static std::pair<Vec, Vec> step_reverse(const Vec& main, const Vec& block, int W, int p) {
+    check_reverse_occupancy(main, block, W, p);
     Vec nm, nb;
     nm.reserve(main.size() * 2 + block.size());
     nb.reserve(main.size() / 2 + 1);
@@ -123,8 +170,9 @@ int main(int argc, char** argv) {
             return 4;
         }
         std::cout << "snake-row-equivalence n=" << n << " residue=" << answer
-                  << " rows=" << (n + 1) << " OK\n";
+                  << " rows=" << (n + 1) << " reverse_occ=OK\n";
     }
-    std::cout << "gridfp-snake-equivalence OK max_n=" << max_n << '\n';
+    std::cout << "gridfp-snake-equivalence OK max_n=" << max_n
+              << " reverse_window_occupancy=OK\n";
     return 0;
 }
