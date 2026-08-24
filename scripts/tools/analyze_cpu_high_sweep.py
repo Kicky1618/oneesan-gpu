@@ -20,6 +20,7 @@ class Sample:
     threshold_mib: float
     wall_s: float
     dma_s: float
+    gpu_kernel_s: float
     cpu_high_wall_s: float
     cpu_low_wall_s: float
     removed_tib: float
@@ -31,6 +32,7 @@ class Sample:
 class CostGroup:
     group: int
     roundtrip_bytes: int
+    gpu_state_steps: int
     nn_cells: int
     nrnl_cells: int
     block_cells: int
@@ -58,8 +60,8 @@ def load(path: str) -> list[Sample]:
         rd = csv.DictReader(f, delimiter="\t")
         required = {
             "mode", "threshold_mib", "wall_s", "h2d_s", "d2h_s",
-            "cpu_high_wall_s", "cpu_low_wall_s", "pcie_removed_tib",
-            "pcie_remaining_tib", "cpu_high_groups",
+            "gpu_kernel_s", "cpu_high_wall_s", "cpu_low_wall_s",
+            "pcie_removed_tib", "pcie_remaining_tib", "cpu_high_groups",
         }
         missing = required.difference(rd.fieldnames or [])
         if missing:
@@ -74,6 +76,7 @@ def load(path: str) -> list[Sample]:
                     threshold_mib=float(row["threshold_mib"]),
                     wall_s=float(row["wall_s"]),
                     dma_s=float(row["h2d_s"]) + float(row["d2h_s"]),
+                    gpu_kernel_s=float(row["gpu_kernel_s"]),
                     cpu_high_wall_s=float(row["cpu_high_wall_s"]),
                     cpu_low_wall_s=float(row["cpu_low_wall_s"]),
                     removed_tib=float(row["pcie_removed_tib"]),
@@ -97,11 +100,13 @@ def load_costs(path: str) -> list[CostGroup]:
         missing = required.difference(rd.fieldnames or [])
         if missing:
             raise SystemExit(f"missing cost columns: {', '.join(sorted(missing))}")
+        has_gpu_steps = "gpu_state_steps" in (rd.fieldnames or [])
         for row in rd:
             out.append(
                 CostGroup(
                     group=int(row["group"]),
                     roundtrip_bytes=int(row["roundtrip_bytes"]),
+                    gpu_state_steps=int(row["gpu_state_steps"]) if has_gpu_steps else 0,
                     nn_cells=int(row["nn_cells"]),
                     nrnl_cells=int(row["nrnl_cells"]),
                     block_cells=int(row["block_closure_cells"]),
@@ -116,8 +121,8 @@ def load_costs(path: str) -> list[CostGroup]:
 def main() -> None:
     ap = argparse.ArgumentParser(
         description=(
-            "Analyze CPU HIGH threshold sweeps, measure DMA/offload break-even, "
-            "and optionally calibrate the exact per-group direct cost model."
+            "Analyze CPU HIGH threshold sweeps and calibrate DMA, GPU-HIGH, and "
+            "CPU-direct per-group cost models."
         )
     )
     ap.add_argument("tsv")
@@ -151,23 +156,28 @@ def main() -> None:
         baseline_threshold = 0.0 if 0.0 in rows else min(rows)
         baseline = rows[baseline_threshold]
         baseline_dma = mean([s.dma_s for s in baseline])
+        baseline_gpu_kernel = mean([s.gpu_kernel_s for s in baseline])
         baseline_wall = mean([s.wall_s for s in baseline])
 
         print(
             f"config mode={mode} overlap={overlap} "
             f"baseline_threshold_mib={baseline_threshold:g} "
-            f"baseline_wall_s={baseline_wall:.9f} baseline_dma_s={baseline_dma:.9f}"
+            f"baseline_wall_s={baseline_wall:.9f} "
+            f"baseline_dma_s={baseline_dma:.9f} "
+            f"baseline_gpu_kernel_s={baseline_gpu_kernel:.9f}"
         )
 
         best_threshold = baseline_threshold
         best_wall = baseline_wall
         pcie_rates: list[float] = []
         cpu_rates: list[float] = []
+        gpu_rates: list[float] = []
 
         for threshold in sorted(rows):
             group = rows[threshold]
             wall = mean([s.wall_s for s in group])
             dma = mean([s.dma_s for s in group])
+            gpu_kernel = mean([s.gpu_kernel_s for s in group])
             cpu_high = mean([s.cpu_high_wall_s for s in group])
             cpu_low = mean([s.cpu_low_wall_s for s in group])
             removed = mean([s.removed_tib for s in group])
@@ -175,11 +185,13 @@ def main() -> None:
             cpu_groups = mean([float(s.cpu_high_groups) for s in group])
 
             dma_saved = baseline_dma - dma
+            gpu_kernel_saved = baseline_gpu_kernel - gpu_kernel
+            gpu_total_saved = dma_saved + gpu_kernel_saved
             wall_saved = baseline_wall - wall
             dma_saved_per_tib = dma_saved / removed if removed > 0 else 0.0
             cpu_cost_per_tib = cpu_high / removed if removed > 0 else 0.0
-            sequential_margin = dma_saved - cpu_high
-            efficiency = dma_saved / cpu_high if cpu_high > 0 else math.inf
+            sequential_margin = gpu_total_saved - cpu_high
+            efficiency = gpu_total_saved / cpu_high if cpu_high > 0 else math.inf
 
             extra = ""
             if removed > 0 and dma_saved > 0:
@@ -198,6 +210,7 @@ def main() -> None:
                     )
                     for g in selected_costs
                 )
+                selected_gpu_steps_per_row = sum(g.gpu_state_steps for g in selected_costs)
                 if selected_bytes_per_row > 0 and removed > 0:
                     rows_est = removed * TIB / selected_bytes_per_row
                     total_cells = selected_cells_per_row * rows_est
@@ -208,11 +221,20 @@ def main() -> None:
                             f" model_rows={rows_est:.6f}"
                             f" measured_cpu_gcell_s={measured_cpu_gcell_s:.9f}"
                         )
+                    if selected_gpu_steps_per_row > 0 and gpu_kernel_saved > 0:
+                        total_gpu_steps = selected_gpu_steps_per_row * rows_est
+                        measured_gpu_gstate_s = total_gpu_steps / gpu_kernel_saved / 1e9
+                        if math.isfinite(measured_gpu_gstate_s) and measured_gpu_gstate_s > 0:
+                            gpu_rates.append(measured_gpu_gstate_s)
+                            extra += f" measured_gpu_gstate_s={measured_gpu_gstate_s:.9f}"
 
             print(
                 f"threshold_mib={threshold:g} runs={len(group)} "
                 f"mean_wall_s={wall:.9f} wall_saved_s={wall_saved:.9f} "
                 f"mean_dma_s={dma:.9f} dma_saved_s={dma_saved:.9f} "
+                f"mean_gpu_kernel_s={gpu_kernel:.9f} "
+                f"gpu_kernel_saved_s={gpu_kernel_saved:.9f} "
+                f"gpu_total_saved_s={gpu_total_saved:.9f} "
                 f"mean_cpu_high_wall_s={cpu_high:.9f} "
                 f"mean_cpu_low_wall_s={cpu_low:.9f} "
                 f"removed_tib={removed:.9f} remaining_tib={remaining:.9f} "
@@ -232,26 +254,26 @@ def main() -> None:
             f"speedup_vs_baseline={baseline_wall / best_wall:.9f}x"
         )
 
-        if pcie_rates:
-            pcie_med = statistics.median(pcie_rates)
+        pcie_med = statistics.median(pcie_rates) if pcie_rates else math.nan
+        cpu_med = statistics.median(cpu_rates) if cpu_rates else math.nan
+        gpu_med = statistics.median(gpu_rates) if gpu_rates else math.nan
+        if math.isfinite(pcie_med):
             print(f"calibration mode={mode} overlap={overlap} pcie_gib_s={pcie_med:.9f}")
-        else:
-            pcie_med = math.nan
-        if cpu_rates:
-            cpu_med = statistics.median(cpu_rates)
+        if math.isfinite(cpu_med):
             print(f"calibration mode={mode} overlap={overlap} cpu_gcell_s={cpu_med:.9f}")
-        else:
-            cpu_med = math.nan
+        if math.isfinite(gpu_med):
+            print(f"calibration mode={mode} overlap={overlap} gpu_gstate_s={gpu_med:.9f}")
 
         if costs is not None and mode == "direct" and math.isfinite(pcie_med) and math.isfinite(cpu_med):
             overlap_arg = " --overlap" if overlap else ""
+            gpu_arg = f" --gpu-gstate-s {gpu_med:.9f}" if math.isfinite(gpu_med) else ""
             print(
                 "planner_command "
                 f"python3 scripts/tools/plan_cpu_high_groups.py {args.cost_plan} "
                 f"--pcie-gib-s {pcie_med:.9f} --cpu-gcell-s {cpu_med:.9f} "
                 f"--nn-weight {args.nn_weight:g} --nrnl-weight {args.nrnl_weight:g} "
                 f"--block-weight {args.block_weight:g} --cross-weight {args.cross_weight:g}"
-                f"{overlap_arg}"
+                f"{gpu_arg}{overlap_arg}"
             )
 
 
