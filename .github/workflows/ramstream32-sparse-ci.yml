@@ -10,7 +10,9 @@ on:
       - 'src/cuda/gridfp/ramstream32_cpu_high.hpp'
       - 'src/cuda/gridfp/ramstream32_cpu_high_direct.hpp'
       - 'src/cuda/gridfp/probes/ramstream32_cpu_low_selftest.cu'
+      - 'src/cuda/gridfp/probes/ramstream32_cpu_high_cost_plan.cu'
       - 'scripts/build/gridfp-ramstream32-factorized-hybrid-sparse.sh'
+      - 'scripts/build/gridfp-ramstream32-cpu-high-cost-plan.sh'
       - '.github/workflows/ramstream32-sparse-ci.yml'
   pull_request:
     paths:
@@ -21,7 +23,9 @@ on:
       - 'src/cuda/gridfp/ramstream32_cpu_high.hpp'
       - 'src/cuda/gridfp/ramstream32_cpu_high_direct.hpp'
       - 'src/cuda/gridfp/probes/ramstream32_cpu_low_selftest.cu'
+      - 'src/cuda/gridfp/probes/ramstream32_cpu_high_cost_plan.cu'
       - 'scripts/build/gridfp-ramstream32-factorized-hybrid-sparse.sh'
+      - 'scripts/build/gridfp-ramstream32-cpu-high-cost-plan.sh'
       - '.github/workflows/ramstream32-sparse-ci.yml'
   workflow_dispatch:
 
@@ -66,6 +70,7 @@ jobs:
             27 4294967291 12288 4 --plan-only | tee /tmp/high-offload-scratch.txt
           grep -Fq 'cpu_high_groups=12911' /tmp/high-offload-scratch.txt
           grep -Fq 'cpu_high_mode=scratch' /tmp/high-offload-scratch.txt
+          grep -Fq 'cpu_high_policy=threshold' /tmp/high-offload-scratch.txt
       - name: Validate n27 CPU HIGH direct metadata plan
         if: matrix.width == 28
         shell: bash
@@ -75,10 +80,35 @@ jobs:
             27 4294967291 12288 4 --plan-only 2>&1 | tee /tmp/high-offload-direct.txt
           grep -Fq 'cpu_high_groups=12911' /tmp/high-offload-direct.txt
           grep -Fq 'cpu_high_mode=direct' /tmp/high-offload-direct.txt
+          grep -Fq 'cpu_high_policy=threshold' /tmp/high-offload-direct.txt
           grep -Fq 'nn_orbit_ops=' /tmp/high-offload-direct.txt
           grep -Fq 'nrnl_orbit_ops=' /tmp/high-offload-direct.txt
           grep -Fq 'block_closure_ops=' /tmp/high-offload-direct.txt
           grep -Fq 'cross_closure_ops=' /tmp/high-offload-direct.txt
+      - name: Validate n27 explicit CPU HIGH group file
+        if: matrix.width == 28
+        shell: bash
+        run: |
+          printf '0\n1\n' >/tmp/cpu-high.groups
+          CPU_HIGH_MODE=direct CPU_HIGH_GROUPS_FILE=/tmp/cpu-high.groups \
+            build/ramstream32_hybrid_sparse_w28 \
+            27 4294967291 12288 4 --plan-only 2>&1 | tee /tmp/high-offload-file.txt
+          grep -Fq 'cpu_high_policy=file' /tmp/high-offload-file.txt
+          grep -Fq 'cpu_high_groups=2' /tmp/high-offload-file.txt
+          grep -Fq 'cpu_high_selection_hash=' /tmp/high-offload-file.txt
+      - name: Validate exact CPU HIGH cost plan
+        if: matrix.width == 22
+        shell: bash
+        run: |
+          nvcc -O3 -std=c++17 -arch=sm_80 \
+            -DTARGET_W=10 -DLOW_LUT_K=5 -DHIGH_LUT_K=4 \
+            src/cuda/gridfp/probes/ramstream32_cpu_high_cost_plan.cu \
+            -o build/ramstream32_cpu_high_cost_plan
+          build/ramstream32_cpu_high_cost_plan 9 \
+            >/tmp/cpu-high-cost.tsv 2>/tmp/cpu-high-cost.log
+          test "$(wc -l </tmp/cpu-high-cost.tsv)" -eq 33
+          grep -Fq $'group\tmask\troundtrip_bytes' /tmp/cpu-high-cost.tsv
+          grep -Fq 'cpu_high_cost_plan OK n=9 groups=32' /tmp/cpu-high-cost.log
       - name: Validate CPU LOW/HIGH executors against reference
         if: matrix.width == 22
         shell: bash
