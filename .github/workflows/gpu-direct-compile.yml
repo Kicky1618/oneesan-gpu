@@ -3,6 +3,8 @@ name: gpu direct compile validation
 on:
   push:
     paths:
+      - 'src/common/gridfp_transition.hpp'
+      - 'src/cpp/probes/gpu_direct_work_model.cpp'
       - 'src/cuda/gridfp/ramstream32_gpu_direct.cuh'
       - 'src/cuda/gridfp/oneesan_cuda_gridfp_gpu_direct.cu'
       - 'src/cuda/gridfp/probes/ramstream32_gpu_direct_selftest.cu'
@@ -17,6 +19,8 @@ on:
       - '.github/workflows/gpu-direct-compile.yml'
   pull_request:
     paths:
+      - 'src/common/gridfp_transition.hpp'
+      - 'src/cpp/probes/gpu_direct_work_model.cpp'
       - 'src/cuda/gridfp/ramstream32_gpu_direct.cuh'
       - 'src/cuda/gridfp/oneesan_cuda_gridfp_gpu_direct.cu'
       - 'src/cuda/gridfp/probes/ramstream32_gpu_direct_selftest.cu'
@@ -37,6 +41,20 @@ jobs:
     container: nvidia/cuda:12.8.1-devel-ubuntu22.04
     steps:
       - uses: actions/checkout@v4
+      - name: Validate direct work model
+        shell: bash
+        run: |
+          g++ -O3 -std=c++17 src/cpp/probes/gpu_direct_work_model.cpp \
+            -o build/gpu_direct_work_model
+          build/gpu_direct_work_model 10 11 | tee /tmp/direct-work-n21.txt
+          grep -Fq 'main_states=728997192 blocked_states=258215664' /tmp/direct-work-n21.txt
+          grep -Fq 'direct=9886412088' /tmp/direct-work-n21.txt || \
+            grep -Fq 'direct_cells=9886412088' /tmp/direct-work-n21.txt
+          grep -Fq 'direct_iteration_fraction=0.476879454252' /tmp/direct-work-n21.txt
+          build/gpu_direct_work_model 13 14 | tee /tmp/direct-work-n27.txt
+          grep -Fq 'main_states=385719506620 blocked_states=135015505407' /tmp/direct-work-n27.txt
+          grep -Fq 'direct_cells=6769008032751' /tmp/direct-work-n27.txt
+          grep -Fq 'direct_iteration_fraction=0.481442567568' /tmp/direct-work-n27.txt
       - name: Compile W10 GPU direct exhaustive probe
         shell: bash
         run: |
