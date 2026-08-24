@@ -24,6 +24,10 @@ static_assert(HIGH_LUT_K <= LOW_LUT_K,
 // per-cap cumulative counts stay host-only and generate a tiny per-job constant
 // plan (task prefix + LOW active count, ~150 B at W=28). Thus persistent GPU
 // metadata is only the two compact-rank permutations.
+//
+// Once cap reaches the full possible frontier height, every BLOCKED state is
+// active. In that saturated regime the kernel bypasses compact permutations and
+// traverses the physical BLOCKED order directly, preserving v0.17 locality.
 __device__ __constant__ std::uint16_t* D_MS_ROW_DEPTH_LOW_COMPACT_RANK;
 __device__ __constant__ std::uint32_t* D_MS_ROW_DEPTH_HIGH_COMPACT_RANK;
 __device__ __constant__ Code D_MS_ROW_DEPTH_COMPACT_TASK_PREFIX[HIGH_LUT_K + 3];
@@ -238,38 +242,55 @@ __global__ void maskshard_main_block_highorbit_rowdepth_compact_kernel(
     Count* mainv, Count* blockv, Code n, int p
 ) {
     constexpr int S = MAXW + 2;
+    constexpr int FULL_CAP = TARGET_W / 2;
     const int nb = D_F_BLOCK_NBLOCKS;
-    const Code total = D_MS_ROW_DEPTH_COMPACT_TASK_PREFIX[nb];
+    if (nb <= 0) return;
+    const int cap = min(D_MS_ROW_DEPTH_INDEX + 1, FULL_CAP);
+    const bool saturated = cap >= FULL_CAP;
+    const Code total = saturated
+        ? D_F_BLOCK_BLOCKS[nb - 1].end
+        : D_MS_ROW_DEPTH_COMPACT_TASK_PREFIX[nb];
     Code task = Code(blockIdx.x) * blockDim.x + threadIdx.x;
     const Code step = Code(gridDim.x) * blockDim.x;
     const std::uint32_t pi = std::uint32_t((TARGET_W - 1) - p);
     const bool first_high = p == TARGET_W - 1;
 
     for (; task < total; task += step) {
-        int lo = 0, hi = nb + 1;
-        while (lo < hi) {
-            const int mid = (lo + hi) >> 1;
-            if (D_MS_ROW_DEPTH_COMPACT_TASK_PREFIX[mid] <= task) lo = mid + 1;
-            else hi = mid;
-        }
-        const int dbid = lo - 1;
-        const FBlock dx = D_F_BLOCK_BLOCKS[dbid];
-        const int h = int(dx.he);
-        const Code local = task - D_MS_ROW_DEPTH_COMPACT_TASK_PREFIX[dbid];
-        const std::uint16_t lc = D_MS_ROW_DEPTH_COMPACT_JOB_LOW_COUNT[dbid];
-        if (!lc) continue;
+        int dbid = 0;
+        FBlock dx{};
+        std::uint32_t dhr = 0, dlr = 0;
+        Code di = 0;
 
-        const std::uint32_t compact_hr = std::uint32_t(local / Code(lc));
-        const std::uint32_t compact_lr =
-            std::uint32_t(local - Code(compact_hr) * Code(lc));
-        const std::uint32_t hi_base = D_F_HIGH_ALL_OFF[h];
-        const std::uint32_t lo_base = D_F_LOW_MASK_OFF[
-            std::size_t(D_F_MASK) * S + h];
-        const std::uint32_t dhr = D_MS_ROW_DEPTH_HIGH_COMPACT_RANK[
-            hi_base + compact_hr];
-        const std::uint32_t dlr = std::uint32_t(
-            D_MS_ROW_DEPTH_LOW_COMPACT_RANK[lo_base + compact_lr]);
-        const Code di = dx.off + Code(dhr) * dx.stride + dlr;
+        if (saturated) {
+            di = task;
+            dbid = f_find_block(di);
+            dx = D_F_BLOCK_BLOCKS[dbid];
+            maskshard_split_rank(di, dx, dhr, dlr);
+        } else {
+            int lo = 0, hi = nb + 1;
+            while (lo < hi) {
+                const int mid = (lo + hi) >> 1;
+                if (D_MS_ROW_DEPTH_COMPACT_TASK_PREFIX[mid] <= task) lo = mid + 1;
+                else hi = mid;
+            }
+            dbid = lo - 1;
+            dx = D_F_BLOCK_BLOCKS[dbid];
+            const int h = int(dx.he);
+            const Code local = task - D_MS_ROW_DEPTH_COMPACT_TASK_PREFIX[dbid];
+            const std::uint16_t lc = D_MS_ROW_DEPTH_COMPACT_JOB_LOW_COUNT[dbid];
+            if (!lc) continue;
+
+            const std::uint32_t compact_hr = std::uint32_t(local / Code(lc));
+            const std::uint32_t compact_lr =
+                std::uint32_t(local - Code(compact_hr) * Code(lc));
+            const std::uint32_t hi_base = D_F_HIGH_ALL_OFF[h];
+            const std::uint32_t lo_base = D_F_LOW_MASK_OFF[
+                std::size_t(D_F_MASK) * S + h];
+            dhr = D_MS_ROW_DEPTH_HIGH_COMPACT_RANK[hi_base + compact_hr];
+            dlr = std::uint32_t(
+                D_MS_ROW_DEPTH_LOW_COMPACT_RANK[lo_base + compact_lr]);
+            di = dx.off + Code(dhr) * dx.stride + dlr;
+        }
 
         const std::size_t bdi = std::size_t(pi) * D_HIGHDESC_BLOCK_TOTAL
                               + D_HIGHDESC_BLOCK_BASE[dbid] + dhr;
