@@ -3,6 +3,23 @@
 // Non-synchronizing launchers for the multi-GPU bucket driver. Call one on
 // every GPU first, then synchronize all GPUs once at the window boundary.
 
+#if GPU_DIRECT_PM_ACCUM
+#include "ramstream32_bucket_fused_pm.cuh"
+
+static void bucket_launch_low_fused(
+    const StorageLayout&layout,int threads=256,int grid_x=16,int grid_y=8
+){
+    bucket_launch_low_fused_pm(layout,threads,grid_x,grid_y);
+}
+
+static void bucket_launch_high_fused(
+    const StorageLayout&layout,int threads=256,int grid_x=16,int grid_y=8
+){
+    bucket_launch_high_fused_pm(layout,threads,grid_x,grid_y);
+}
+
+#else
+
 static void bucket_launch_low_fused(
     const StorageLayout&layout,int threads=256,int grid_x=16,int grid_y=8
 ){
@@ -23,6 +40,8 @@ static void bucket_launch_high_fused(
         bucket_high_fused_closure_kernel<<<cg,block>>>(p);ck(cudaGetLastError(),"bucket high closure async");
     }
 }
+
+#endif
 
 static void bucket_sync_devices(int ngpu){
     for(int g=0;g<ngpu;++g){ck(cudaSetDevice(g),"bucket sync set device");ck(cudaDeviceSynchronize(),"bucket window sync");}
