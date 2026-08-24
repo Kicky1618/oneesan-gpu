@@ -12,6 +12,7 @@ on:
       - 'src/cuda/gridfp/ramstream32_cpu_high_direct.hpp'
       - 'src/cuda/gridfp/ramstream32_cpu_high_direct_persistent.hpp'
       - 'src/cuda/gridfp/ramstream32_cpu_affinity.hpp'
+      - 'src/cuda/gridfp/ramstream32_numa_sample.hpp'
       - 'src/cuda/gridfp/probes/ramstream32_cpu_low_selftest.cu'
       - 'src/cuda/gridfp/probes/ramstream32_cpu_high_cost_plan.cu'
       - 'src/cuda/gridfp/probes/ramstream32_cpu_affinity_selftest.cpp'
@@ -29,6 +30,7 @@ on:
       - 'src/cuda/gridfp/ramstream32_cpu_high_direct.hpp'
       - 'src/cuda/gridfp/ramstream32_cpu_high_direct_persistent.hpp'
       - 'src/cuda/gridfp/ramstream32_cpu_affinity.hpp'
+      - 'src/cuda/gridfp/ramstream32_numa_sample.hpp'
       - 'src/cuda/gridfp/probes/ramstream32_cpu_low_selftest.cu'
       - 'src/cuda/gridfp/probes/ramstream32_cpu_high_cost_plan.cu'
       - 'src/cuda/gridfp/probes/ramstream32_cpu_affinity_selftest.cpp'
@@ -70,7 +72,7 @@ jobs:
           build/ramstream32_hybrid_sparse_w${{ matrix.width }} \
             ${{ matrix.n }} 4294967291 12288 4 --plan-only \
             | tee /tmp/hybrid-plan.txt
-          grep -Fq 'backend=gridfp-ramstream32-factorized-hybrid-sparse-v5.15-plan' \
+          grep -Fq 'backend=gridfp-ramstream32-factorized-hybrid-sparse-v5.16-plan' \
             /tmp/hybrid-plan.txt
           grep -Fq 'cpu_high_persistent_workers=1' /tmp/hybrid-plan.txt
           grep -Fq 'cpu_high_async_overlap=1' /tmp/hybrid-plan.txt
@@ -78,16 +80,18 @@ jobs:
           grep -Fq 'cpu_low_pointer_workspace=stack' /tmp/hybrid-plan.txt
           grep -Fq 'cpu_high_affinity=default' /tmp/hybrid-plan.txt
           grep -Fq 'cpu_low_affinity=default' /tmp/hybrid-plan.txt
-      - name: Validate explicit affinity provenance
+          grep -Fq 'numa_sample_mib=0' /tmp/hybrid-plan.txt
+      - name: Validate explicit affinity and NUMA sampling provenance
         if: matrix.width == 22
         shell: bash
         run: |
-          CPU_HIGH_CPU_LIST=0 CPU_LOW_CPU_LIST=1 \
+          CPU_HIGH_CPU_LIST=0 CPU_LOW_CPU_LIST=1 RAMSTREAM_NUMA_SAMPLE_MIB=64 \
             build/ramstream32_hybrid_sparse_w22 \
             21 4294967291 12288 4 --plan-only \
             | tee /tmp/hybrid-affinity-plan.txt
           grep -Fq 'cpu_high_affinity=explicit' /tmp/hybrid-affinity-plan.txt
           grep -Fq 'cpu_low_affinity=explicit' /tmp/hybrid-affinity-plan.txt
+          grep -Fq 'numa_sample_mib=64' /tmp/hybrid-affinity-plan.txt
       - name: Validate n27 CPU HIGH scratch partition plan
         if: matrix.width == 28
         shell: bash
@@ -105,7 +109,7 @@ jobs:
           CPU_HIGH_MAX_MIB=256 CPU_HIGH_MODE=direct \
             build/ramstream32_hybrid_sparse_w28 \
             27 4294967291 12288 4 --plan-only 2>&1 | tee /tmp/high-offload-direct.txt
-          grep -Fq 'backend=gridfp-ramstream32-factorized-hybrid-sparse-v5.15-plan' \
+          grep -Fq 'backend=gridfp-ramstream32-factorized-hybrid-sparse-v5.16-plan' \
             /tmp/high-offload-direct.txt
           grep -Fq 'cpu_high_groups=12911' /tmp/high-offload-direct.txt
           grep -Fq 'cpu_high_mode=direct' /tmp/high-offload-direct.txt
