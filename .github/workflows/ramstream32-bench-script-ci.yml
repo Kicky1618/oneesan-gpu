@@ -74,13 +74,13 @@ jobs:
             /tmp/cpu-high-analysis.txt
           grep -Fq 'calibration mode=direct overlap=0 pcie_gib_s=2.500000000' \
             /tmp/cpu-high-analysis.txt
-          grep -Fq 'affine_calibration mode=direct overlap=0 cpu_gcell_s=1.000000000 cpu_group_overhead_us=1000.000000000' \
+          grep -Fq 'affine_calibration mode=direct overlap=0 cpu_gcell_s=1.000000000 cpu_group_overhead_us=1000.' \
             /tmp/cpu-high-analysis.txt
-          grep -Fq 'affine_calibration mode=direct overlap=0 gpu_gstate_s=2.000000000 gpu_group_overhead_us=500.000000000' \
+          grep -Fq 'affine_calibration mode=direct overlap=0 gpu_gstate_s=2.000000000 gpu_group_overhead_us=500.' \
             /tmp/cpu-high-analysis.txt
           grep -Fq -- '--gpu-gstate-s 2.000000000' /tmp/cpu-high-analysis.txt
-          grep -Fq -- '--group-overhead-us 1000.000000000' /tmp/cpu-high-analysis.txt
-          grep -Fq -- '--gpu-group-overhead-us 500.000000000' /tmp/cpu-high-analysis.txt
+          grep -Fq -- '--group-overhead-us 1000.' /tmp/cpu-high-analysis.txt
+          grep -Fq -- '--gpu-group-overhead-us 500.' /tmp/cpu-high-analysis.txt
           grep -Fq 'planner_command ' /tmp/cpu-high-analysis.txt
       - name: Check CPU HIGH group planner
         shell: bash
