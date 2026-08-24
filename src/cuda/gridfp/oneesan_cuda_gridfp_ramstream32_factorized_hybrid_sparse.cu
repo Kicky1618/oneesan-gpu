@@ -283,6 +283,8 @@ int main(int argc, char** argv) {
     uint64_t cpu_low_plan_contiguous_cap = 0;
     uint64_t cpu_low_plan_domain_cap = 0;
     int cpu_low_plan_active_domains = 0;
+    int cpu_low_plan_refined_boundaries = 0;
+    uint64_t cpu_low_plan_refined_job_moves = 0;
     if (plan_only && cpu_low_schedule_mode != CPU_LOW_SCHEDULE_DYNAMIC) {
         CpuLowSparsePersistentPool low_plan(
             cpu_workers, cpu_low_schedule_mode, cpu_low_domain_size);
@@ -291,11 +293,13 @@ int main(int argc, char** argv) {
         cpu_low_plan_contiguous_cap = low_plan.contiguous_optimal_cap;
         cpu_low_plan_domain_cap = low_plan.domain_normalized_cap;
         cpu_low_plan_active_domains = low_plan.domain_active_domains;
+        cpu_low_plan_refined_boundaries = low_plan.domain_refined_boundaries;
+        cpu_low_plan_refined_job_moves = low_plan.domain_refined_job_moves;
     }
 
     if (plan_only) {
         std::cout
-            << "backend=gridfp-ramstream32-factorized-hybrid-sparse-v5.19-plan"
+            << "backend=gridfp-ramstream32-factorized-hybrid-sparse-v5.20-plan"
             << " n=" << n
             << " gpu_high_desc_mib=" << highdesc_mib
             << " gpu_mask_mib=" << mask_mib
@@ -329,7 +333,10 @@ int main(int argc, char** argv) {
             << " cpu_low_schedule_build_s=" << cpu_low_plan_build_s
             << " cpu_low_contiguous_optimal_cap=" << cpu_low_plan_contiguous_cap
             << " cpu_low_domain_normalized_cap=" << cpu_low_plan_domain_cap
+            << " cpu_low_domain_outer_normalized_cap=" << cpu_low_plan_domain_cap
             << " cpu_low_domain_active_domains=" << cpu_low_plan_active_domains
+            << " cpu_low_domain_refined_boundaries=" << cpu_low_plan_refined_boundaries
+            << " cpu_low_domain_refined_job_moves=" << cpu_low_plan_refined_job_moves
             << " cpu_high_affinity=" << (cpu_high_explicit_affinity ? "explicit" : "default")
             << " cpu_low_affinity=" << (cpu_low_explicit_affinity ? "explicit" : "default")
             << " numa_sample_mib=" << numa_sample_mib
@@ -451,7 +458,7 @@ int main(int argc, char** argv) {
         : double(cpu_high_scratch.peak_scratch_bytes())/double(1<<20);
 
     std::cout
-        << "backend=gridfp-ramstream32-factorized-hybrid-sparse-v5.19"
+        << "backend=gridfp-ramstream32-factorized-hybrid-sparse-v5.20"
         << " n="<<n<<" residue="<<answer<<" modulus="<<mod
         << " gpu_high_desc_mib="<<highdesc_mib<<" gpu_mask_mib="<<mask_mib
         << " cpu_sparse_nn_orbit_mib="<<sparse_nn_orbit_mib
@@ -486,7 +493,10 @@ int main(int argc, char** argv) {
         << " cpu_low_schedule_build_s="<<cpu_low.schedule_build_s
         << " cpu_low_contiguous_optimal_cap="<<cpu_low.contiguous_optimal_cap
         << " cpu_low_domain_normalized_cap="<<cpu_low.domain_normalized_cap
+        << " cpu_low_domain_outer_normalized_cap="<<cpu_low.domain_normalized_cap
         << " cpu_low_domain_active_domains="<<cpu_low.domain_active_domains
+        << " cpu_low_domain_refined_boundaries="<<cpu_low.domain_refined_boundaries
+        << " cpu_low_domain_refined_job_moves="<<cpu_low.domain_refined_job_moves
         << " cpu_high_selection_hash="<<selection_hash
         << " cpu_high_max_mib="<<cpu_high_max_mib
         << " cpu_high_peak_worker_scratch_mib="<<cpu_high_peak_scratch_mib
