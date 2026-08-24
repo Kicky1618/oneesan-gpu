@@ -30,6 +30,7 @@ static std::vector<MateID> enumerate_states(int width) {
             if (h == 0) out.push_back(m);
             return;
         }
+        if (h < 0 || h > pos + 1) return;
         self(self, pos - 1, h, m);
         if (h > 0) self(self, pos - 1, h - 1, m | (MateID(R) << (2 * pos)));
         self(self, pos - 1, h + 1, m | (MateID(L) << (2 * pos)));
@@ -53,6 +54,10 @@ static U64 capped_state_count(int width, int cap) {
     return cur[0];
 }
 
+static bool orbit_rep(MateValuePair w) {
+    return w == NN || w == NR || w == NL;
+}
+
 static void verify_width(int W, int low) {
     const auto blocked = enumerate_states(W - 1);
     const int max_cap = (W + 1) / 2;
@@ -60,23 +65,29 @@ static void verify_width(int W, int low) {
 
     for (int p = W - 1; p >= low + 1; --p) {
         for (MateID d : blocked) {
-            const MateID excluded = blocked_exclude(d, p);
-            const IncludeResult z = include_horizontal(excluded, W, p);
-            if (!z.valid || z.blocked) {
-                std::cerr << "blocked orbit expansion is not a MAIN pair W=" << W
-                          << " p=" << p << '\n';
+            const MateID source = blocked_exclude(d, p);
+            const MateValuePair w = mpair(source, p);
+            if (!orbit_rep(w)) {
+                std::cerr << "blocked exclusion did not create orbit representative W="
+                          << W << " p=" << p << '\n';
                 std::exit(20);
             }
+
+            MateValuePair cw = LR;
+            if (w == NR) cw = RN;
+            else if (w == NL) cw = LN;
+            const MateID companion = msetpair(source, p, cw);
+
             const int dd = max_height(d, W - 1);
-            const int de = max_height(excluded, W);
-            const int dz = max_height(z.mate, W);
+            const int ds = max_height(source, W);
+            const int dc = max_height(companion, W);
             for (int cap = 1; cap <= max_cap; ++cap) {
-                if (dd > cap && (de <= cap || dz <= cap)) {
+                if (dd > cap && (ds <= cap || dc <= cap)) {
                     std::cerr << "unsafe BLOCKED row-depth prune W=" << W
                               << " p=" << p << " cap=" << cap
                               << " blocked_depth=" << dd
-                              << " excluded_depth=" << de
-                              << " companion_depth=" << dz << '\n';
+                              << " source_depth=" << ds
+                              << " companion_depth=" << dc << '\n';
                     std::exit(21);
                 }
                 ++checked;
