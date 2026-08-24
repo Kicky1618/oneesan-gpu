@@ -84,7 +84,9 @@ max_imbalance=${MAX_IMBALANCE:-none}
 binary_sha256=$(file_sha256 "$bin")
 EOF
 
-printf 'workers\tdomain_size\tdomains\tlpt_imbalance\tlpt_cross_domain_4k\tlpt_cross_domain_2m\tcontiguous_imbalance\tcontiguous_cross_domain_4k\tcontiguous_cross_domain_2m\thybrid_imbalance\thybrid_cross_domain_4k\thybrid_cross_domain_2m\thybrid_cross_worker_4k\thybrid_cross_worker_2m\thybrid_domain_cap\thybrid_active_domains\traw\n' >"$out"
+# The probe still exposes historical hybrid_domain_* field names; the persisted
+# sweep schema uses domain_* because this plan is now CPU_LOW_SCHEDULE=domain.
+printf 'workers\tdomain_size\tdomains\tlpt_imbalance\tlpt_cross_domain_4k\tlpt_cross_domain_2m\tcontiguous_imbalance\tcontiguous_cross_domain_4k\tcontiguous_cross_domain_2m\tdomain_imbalance\tdomain_cross_domain_4k\tdomain_cross_domain_2m\tdomain_cross_worker_4k\tdomain_cross_worker_2m\tdomain_normalized_cap\tdomain_active_domains\traw\n' >"$out"
 
 for cfg in "${configs[@]}"; do
   workers="${cfg%%:*}"
@@ -119,7 +121,7 @@ done
 awk -F '\t' '
   NR==1 {next}
   {
-    printf("summary workers=%s domain_size=%s domains=%s lpt_imbalance=%s contiguous_imbalance=%s hybrid_imbalance=%s lpt_cross_domain_4k=%s contiguous_cross_domain_4k=%s hybrid_cross_domain_4k=%s lpt_cross_domain_2m=%s contiguous_cross_domain_2m=%s hybrid_cross_domain_2m=%s\n",
+    printf("summary workers=%s domain_size=%s domains=%s lpt_imbalance=%s contiguous_imbalance=%s domain_imbalance=%s lpt_cross_domain_4k=%s contiguous_cross_domain_4k=%s domain_cross_domain_4k=%s lpt_cross_domain_2m=%s contiguous_cross_domain_2m=%s domain_cross_domain_2m=%s\n",
            $1,$2,$3,$4,$7,$10,$5,$8,$11,$6,$9,$12)
   }
 ' "$out"
