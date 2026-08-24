@@ -17,6 +17,7 @@ CPU_HIGH_OVERLAP="${CPU_HIGH_OVERLAP:-0}"
 CPU_HIGH_CPU_LIST="${CPU_HIGH_CPU_LIST:-}"
 CPU_LOW_CPU_LIST="${CPU_LOW_CPU_LIST:-}"
 CPU_LOW_SCHEDULE="${CPU_LOW_SCHEDULE:-dynamic}"
+CPU_LOW_DOMAIN_SIZE="${CPU_LOW_DOMAIN_SIZE:-}"
 MANIFEST="${MANIFEST:-}"
 REPEATS="${REPEATS:-2}"
 BUILD="${BUILD:-1}"
@@ -36,10 +37,16 @@ if [[ "$CPU_HIGH_OVERLAP" != 0 && "$CPU_HIGH_OVERLAP" != 1 ]]; then
   echo "CPU_HIGH_OVERLAP must be 0 or 1" >&2
   exit 2
 fi
-if [[ "$CPU_LOW_SCHEDULE" != dynamic && "$CPU_LOW_SCHEDULE" != sticky && "$CPU_LOW_SCHEDULE" != contiguous ]]; then
-  echo "CPU_LOW_SCHEDULE must be dynamic, sticky, or contiguous" >&2
-  exit 2
-fi
+case "$CPU_LOW_SCHEDULE" in
+  dynamic|sticky|contiguous) ;;
+  domain)
+    if [[ ! "$CPU_LOW_DOMAIN_SIZE" =~ ^[1-9][0-9]*$ ]] || (( CPU_LOW_DOMAIN_SIZE > CPU_WORKERS )); then
+      echo "CPU_LOW_DOMAIN_SIZE must be a positive integer <= CPU_WORKERS for domain schedule" >&2
+      exit 2
+    fi
+    ;;
+  *) echo "CPU_LOW_SCHEDULE must be dynamic, sticky, contiguous, or domain" >&2; exit 2 ;;
+esac
 if [[ "$RUN_VALIDATION" != 0 && "$RUN_VALIDATION" != 1 ]]; then
   echo "RUN_VALIDATION must be 0 or 1" >&2
   exit 2
@@ -90,6 +97,7 @@ cpu_high_overlap=$CPU_HIGH_OVERLAP
 cpu_high_cpu_list=${CPU_HIGH_CPU_LIST:-none}
 cpu_low_cpu_list=${CPU_LOW_CPU_LIST:-none}
 cpu_low_schedule=$CPU_LOW_SCHEDULE
+cpu_low_domain_size=${CPU_LOW_DOMAIN_SIZE:-none}
 manifest=$MANIFEST
 manifest_sha256=$(file_sha256 "$MANIFEST")
 repeats=$REPEATS
@@ -112,14 +120,26 @@ run_policy() {
   [[ "$path" = /* ]] || path="$manifest_dir/$path"
   [[ -f "$path" ]] || { echo "missing groups file: $path" >&2; exit 3; }
 
-  local line residue
+  local line residue got_schedule got_domain
   line="$(CPU_HIGH_MODE=direct CPU_HIGH_MAX_MIB=0 \
     CPU_HIGH_GROUPS_FILE="$path" CPU_HIGH_WORKERS="$CPU_HIGH_WORKERS" \
     CPU_HIGH_OVERLAP="$CPU_HIGH_OVERLAP" \
     CPU_HIGH_CPU_LIST="$CPU_HIGH_CPU_LIST" CPU_LOW_CPU_LIST="$CPU_LOW_CPU_LIST" \
-    CPU_LOW_SCHEDULE="$CPU_LOW_SCHEDULE" \
+    CPU_LOW_SCHEDULE="$CPU_LOW_SCHEDULE" CPU_LOW_DOMAIN_SIZE="$CPU_LOW_DOMAIN_SIZE" \
     "$bin" "$N" "$MODULUS" "$GPU_TARGET_MIB" "$CPU_WORKERS" | tail -n1)"
   residue="$(field "$line" residue)"
+  got_schedule="$(field "$line" cpu_low_schedule)"
+  if [[ "$got_schedule" != "$CPU_LOW_SCHEDULE" ]]; then
+    echo "LOW schedule provenance mismatch requested=$CPU_LOW_SCHEDULE got=$got_schedule" >&2
+    exit 7
+  fi
+  if [[ "$CPU_LOW_SCHEDULE" == domain ]]; then
+    got_domain="$(field "$line" cpu_low_domain_size)"
+    if [[ "$got_domain" != "$CPU_LOW_DOMAIN_SIZE" ]]; then
+      echo "LOW domain provenance mismatch requested=$CPU_LOW_DOMAIN_SIZE got=$got_domain" >&2
+      exit 7
+    fi
+  fi
   printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
     "$repeat" "$order" "$role" "$sample" "$group" "$groups_file" "$residue" \
     "$(field "$line" wall_s)" "$(field "$line" cpu_high_wall_s)" \
@@ -141,7 +161,7 @@ for ((r=1; r<=REPEATS; ++r)); do
     indices=()
     for ((i=${#sample_rows[@]}-1; i>=0; --i)); do indices+=("$i"); done
   fi
-  echo "repeat $r/$REPEATS low_schedule=$CPU_LOW_SCHEDULE ($order)" >&2
+  echo "repeat $r/$REPEATS low_schedule=$CPU_LOW_SCHEDULE low_domain_size=${CPU_LOW_DOMAIN_SIZE:-none} ($order)" >&2
   for i in "${indices[@]}"; do
     IFS=$'\t' read -r sample groups_file group <<<"${sample_rows[i]}"
     echo "  sample=$sample group=$group" >&2
