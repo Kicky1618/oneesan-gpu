@@ -59,36 +59,39 @@ jobs:
         run: |
           cat >/tmp/cpu-high.tsv <<'EOF'
           repeat	order	mode	overlap	threshold_mib	residue	wall_s	h2d_s	gpu_kernel_s	d2h_s	cpu_high_wall_s	cpu_high_kernel_sum_s	cpu_low_wall_s	pcie_removed_tib	pcie_remaining_tib	cpu_high_groups	raw
-          1	ascending	direct	0	0	1	100	30	5	30	0	0	10	0	100	0	baseline
+          1	ascending	direct	0	0	1	100	30	10	30	0	0	10	0	100	0	baseline
           1	ascending	direct	0	256	1	80	20	5	20	10	10	10	20	80	1	offload
           EOF
           cat >/tmp/cost.tsv <<'EOF'
-          group	mask	roundtrip_bytes	main_states	blocked_states	nn_cells	nrnl_cells	block_closure_cells	cross_closure_cells	total_cells
-          0	0	134217728	1	1	1000000	1000000	1000000	1000000	4000000
-          1	1	536870912	1	1	1000000	1000000	1000000	1000000	4000000
+          group	mask	roundtrip_bytes	main_states	blocked_states	gpu_state_steps	nn_cells	nrnl_cells	block_closure_cells	cross_closure_cells	total_cells
+          0	0	134217728	1	1	1000000000	1000000	1000000	1000000	1000000	4000000
+          1	1	536870912	1	1	2000000000	1000000	1000000	1000000	1000000	4000000
           EOF
           python3 scripts/tools/analyze_cpu_high_sweep.py /tmp/cpu-high.tsv \
             --cost-plan /tmp/cost.tsv > /tmp/cpu-high-analysis.txt
           grep -Fq 'best mode=direct overlap=0 threshold_mib=256 mean_wall_s=80.000000000' \
             /tmp/cpu-high-analysis.txt
-          grep -Fq 'sequential_margin_s=10.000000000' /tmp/cpu-high-analysis.txt
+          grep -Fq 'sequential_margin_s=15.000000000' /tmp/cpu-high-analysis.txt
           grep -Fq 'calibration mode=direct overlap=0 pcie_gib_s=' /tmp/cpu-high-analysis.txt
           grep -Fq 'calibration mode=direct overlap=0 cpu_gcell_s=' /tmp/cpu-high-analysis.txt
+          grep -Fq 'calibration mode=direct overlap=0 gpu_gstate_s=' /tmp/cpu-high-analysis.txt
+          grep -Fq -- '--gpu-gstate-s ' /tmp/cpu-high-analysis.txt
           grep -Fq 'planner_command ' /tmp/cpu-high-analysis.txt
       - name: Check CPU HIGH group planner
         shell: bash
         run: |
           cat >/tmp/planner-cost.tsv <<'EOF'
-          group	mask	roundtrip_bytes	main_states	blocked_states	nn_cells	nrnl_cells	block_closure_cells	cross_closure_cells	total_cells
-          0	0	1073741824	1	1	250000	250000	250000	250000	1000000
-          1	1	1048576	1	1	250000000	250000000	250000000	250000000	1000000000
+          group	mask	roundtrip_bytes	main_states	blocked_states	gpu_state_steps	nn_cells	nrnl_cells	block_closure_cells	cross_closure_cells	total_cells
+          0	0	1073741824	1	1	1000000000	250000	250000	250000	250000	1000000
+          1	1	1048576	1	1	1000000	250000000	250000000	250000000	250000000	1000000000
           EOF
           python3 scripts/tools/plan_cpu_high_groups.py /tmp/planner-cost.tsv \
-            --pcie-gib-s 10 --cpu-gcell-s 1 \
+            --pcie-gib-s 10 --cpu-gcell-s 1 --gpu-gstate-s 10 \
             > /tmp/groups.txt 2> /tmp/planner.log
           test "$(cat /tmp/groups.txt)" = 0
           grep -Fq 'mode=sequential' /tmp/planner.log
           grep -Fq 'selected=1' /tmp/planner.log
+          grep -Fq 'est_gpu_kernel_saved_s=' /tmp/planner.log
 
           cat >/tmp/overlap-cost.tsv <<'EOF'
           group	mask	roundtrip_bytes	main_states	blocked_states	nn_cells	nrnl_cells	block_closure_cells	cross_closure_cells	total_cells
@@ -130,5 +133,6 @@ jobs:
           grep -Fq 'analyze_cpu_high_numa.py' docs/ramstream32-cpu-high.md
           grep -Fq 'plan_cpu_high_groups.py' docs/ramstream32-cpu-high.md
           grep -Fq -- '--overlap' docs/ramstream32-cpu-high.md
+          grep -Fq -- '--gpu-gstate-s' docs/ramstream32-cpu-high.md
           grep -Fq 'c8de8d73af1c44f075aee937bc8f37e8b7b79d27' \
             docs/ramstream32-hybrid-sparse.md
