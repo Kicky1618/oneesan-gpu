@@ -405,7 +405,7 @@ CPU_HIGH_OVERLAP=1 \
 
 `CPU_LOW_CPU_LIST` is parsed by the same strict CPU-list parser as `CPU_HIGH_CPU_LIST`; malformed lists or affinity failures abort rather than silently changing benchmark conditions. LOW workers bind once at persistent-thread startup.
 
-The backend now reports
+The backend reports
 
 ```text
 cpu_high_affinity=explicit|default
@@ -416,16 +416,43 @@ and the threshold sweep, policy A/B harness, and stream-calibration harness reco
 
 Separate HIGH/LOW CPU lists are useful experimental controls, not a NUMA-memory-placement policy. LOW processing touches all fixed-HIGH occupancy groups, and the authoritative anonymous mappings still use ordinary Linux first-touch semantics with `MADV_HUGEPAGE` advice. No `mbind` policy is imposed yet.
 
+## v5.20 LOW scheduling as a HIGH calibration condition
+
+HIGH throughput is not independent of the LOW executor. LOW consumes the same authoritative System RAM, affects NUMA placement/cache state, and under repeated or overlapping experiments changes the machine state seen by CPU HIGH and PCIe DMA. Therefore the selected LOW schedule is part of the calibration condition.
+
+The production LOW modes are:
+
+```text
+CPU_LOW_SCHEDULE=dynamic
+CPU_LOW_SCHEDULE=sticky
+CPU_LOW_SCHEDULE=contiguous
+CPU_LOW_SCHEDULE=domain
+```
+
+`domain` additionally requires:
+
+```text
+CPU_LOW_DOMAIN_SIZE=<workers per modeled NUMA domain>
+```
+
+v5.20 refines the initial ordered domain boundaries by bounded local search using the actual exact-cell LPT makespan inside adjacent domains. The backend reports `cpu_low_domain_outer_normalized_cap`, `cpu_low_domain_refined_boundaries`, and `cpu_low_domain_refined_job_moves`. See `docs/ramstream32-cpu-low-scheduling.md` for the algorithm and static page-cut/Pareto analysis.
+
+The HIGH threshold sweep, policy A/B harness, and stream-weight calibration now propagate and record `CPU_LOW_SCHEDULE` and `CPU_LOW_DOMAIN_SIZE`, and verify the final solver provenance. Coefficients measured under one LOW schedule/domain configuration should not be silently reused under another.
+
 ## Policy A/B and stream-weight calibration
 
-The generated non-monotone group policy can be compared directly with the best size threshold using alternating order:
+The generated non-monotone group policy can be compared directly with the best size threshold using alternating order. Example with a two-domain LOW layout:
 
 ```bash
 GROUPS_FILE=/path/to/cpu-high.groups \
 THRESHOLD_MIB=256 \
 CPU_HIGH_OVERLAP=1 \
 CPU_HIGH_CPU_LIST='0-31' \
-CPU_LOW_CPU_LIST='32-63' \
+CPU_LOW_CPU_LIST='32-95' \
+CPU_LOW_SCHEDULE=domain \
+CPU_LOW_DOMAIN_SIZE=32 \
+CPU_WORKERS=64 \
+CPU_HIGH_WORKERS=32 \
 REPEATS=4 \
 bash scripts/bench/ramstream32-cpu-high-policy-ab.sh
 ```
@@ -474,15 +501,17 @@ These are transfer-volume reference points, not predicted wall-time improvements
 
 ## One-command calibration
 
-For direct mode, the sweep builds the exact cost plan automatically, calibrates the machine model, and emits a candidate group policy:
+For direct mode, the sweep builds the exact cost plan automatically, calibrates the machine model, and emits a candidate group policy. Keep the LOW schedule/domain fixed for the entire sweep:
 
 ```bash
 N=27 \
 CPU_HIGH_MODE=direct \
 CPU_HIGH_OVERLAP=1 \
 CPU_HIGH_CPU_LIST='0-31' \
-CPU_LOW_CPU_LIST='32-63' \
-CPU_WORKERS=32 \
+CPU_LOW_CPU_LIST='32-95' \
+CPU_LOW_SCHEDULE=domain \
+CPU_LOW_DOMAIN_SIZE=32 \
+CPU_WORKERS=64 \
 CPU_HIGH_WORKERS=32 \
 THRESHOLDS='0 64 128 256 512 1024' \
 REPEATS=2 \
@@ -495,15 +524,16 @@ Set `COST_PLAN=none` to disable automatic cost-plan generation or provide `COST_
 
 ## Validation
 
-`.github/workflows/ramstream32-sparse-ci.yml` covers W=22/W=28 compilation, v5.15 provenance, default/explicit affinity plan output, scratch/direct CPU HIGH plans, all four direct stream classes, explicit group-file selection, HIGH/LOW affinity parser behavior, the W=10 exhaustive reference comparison, two-generation persistent LOW and HIGH checks, concurrent disjoint HIGH execution, and the exact group-cost probe including `gpu_state_steps` and `pcie_copy_calls`.
+`.github/workflows/ramstream32-sparse-ci.yml` covers W=22/W=28 compilation and v5.20 plan provenance, default/explicit affinity, all four LOW scheduling modes, strict domain-size validation, domain boundary-refinement metrics, scratch/direct CPU HIGH plans, all four direct stream classes, explicit group-file selection, HIGH/LOW affinity parser behavior, the W=10 exhaustive reference comparison, two-generation persistent LOW and HIGH checks, the deterministic LOW domain-refiner case, concurrent disjoint HIGH execution, and the exact group-cost probe including `gpu_state_steps` and `pcie_copy_calls`.
 
-`.github/workflows/ramstream32-bench-script-ci.yml` syntax-checks the sweep/build scripts, compiles the Python tools, validates affine PCIe/CPU/GPU calibration on synthetic data with known throughput/overhead coefficients, checks sequential and overlap-critical-path group planning, and validates the 4 KiB/2 MiB NUMA page-exposure analyzer.
+`.github/workflows/ramstream32-bench-script-ci.yml` syntax-checks the sweep/build scripts, verifies LOW schedule/domain propagation in the HIGH calibration harness, compiles the Python tools, validates affine PCIe/CPU/GPU calibration on synthetic data with known throughput/overhead coefficients, checks sequential and overlap-critical-path group planning, and validates the 4 KiB/2 MiB NUMA page-exposure analyzer.
 
 ## Next experiments
 
 The remaining large opportunities are increasingly memory-topology and model-fitting problems:
 
-1. measure actual NUMA placement of sampled authoritative pages before adding `mbind`; compare the observed node distribution against HIGH/LOW worker affinity and GPU DMA behavior;
-2. only after those measurements, evaluate THP, 4 KiB pages, interleave, or coarse socket-local placement rather than imposing per-group NUMA policy blindly;
-3. regenerate targeted NN/NRNL/BLOCK/CROSS weights on v5.15 and compare the resulting non-monotone policy against the best threshold with the alternating A/B harness;
-4. for multi-GPU B300 nodes, keep the largest HIGH occupancy groups resident across more than one local step when dependencies permit, while CPU handles the long tail of small groups.
+1. run the n=27 LOW topology preflight and four-way timing under the actual socket-local CPU lists; compare v5.20 domain imbalance/page cuts with sticky and contiguous before adding a memory-placement policy;
+2. measure actual NUMA placement of sampled authoritative pages and compare the observed node distribution against LOW domain ownership, HIGH worker affinity, and GPU DMA behavior;
+3. regenerate targeted NN/NRNL/BLOCK/CROSS HIGH weights on v5.20 under the selected LOW schedule/domain condition, then compare the resulting non-monotone policy against the best threshold with the alternating A/B harness;
+4. only after those measurements, evaluate THP, 4 KiB pages, interleave, or coarse socket-local placement rather than imposing per-group `mbind` blindly;
+5. for multi-GPU B300 nodes, keep the largest HIGH occupancy groups resident across more than one local step when dependencies permit, while CPU handles the long tail of small groups.
