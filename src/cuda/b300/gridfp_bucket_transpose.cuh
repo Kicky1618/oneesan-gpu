@@ -17,9 +17,7 @@
 // those raw slots therefore changes ownership without repacking any state.
 //
 // Safety rule: both peer reads of a chunk complete before either source slot is
-// overwritten. v0 uses one staging buffer per GPU and runs the four disjoint
-// pairs of each K8 round concurrently. A later version can double-buffer the
-// same protocol to overlap peer fetch with local commit.
+// overwritten. v0 uses one staging buffer per GPU and host stream barriers.
 
 static constexpr int BUCKET_TRANSPOSE_MAX_GPU=8;
 
@@ -112,12 +110,10 @@ struct BucketTransposeCtx {
     void transpose(const BucketTransposePlan& plan){
         if(plan.ngpu!=ngpu)std::exit(208);
         for(auto const& round:rounds){
-            // All pairs in a round are disjoint, so every GPU can fetch at once.
             uint64_t max_cap=0;
             for(int i=0;i<ngpu/2;++i){auto[a,b]=round[size_t(i)];max_cap=std::max(max_cap,plan.slot[a][b].capacity_bytes);}
             for(uint64_t off=0;off<max_cap;off+=chunk_bytes){
                 std::array<size_t,BUCKET_TRANSPOSE_MAX_GPU> nbytes{};
-                // Stage both directions before any overwrite.
                 for(int i=0;i<ngpu/2;++i){
                     auto[a,b]=round[size_t(i)];uint64_t cap=plan.slot[a][b].capacity_bytes;
                     if(off>=cap)continue;size_t n=size_t(std::min<uint64_t>(chunk_bytes,cap-off));nbytes[a]=nbytes[b]=n;
@@ -127,9 +123,7 @@ struct BucketTransposeCtx {
                     ckbt(cudaMemcpyPeerAsync(staging[b],b,base[a]+plan.slot[a][b].off_bytes+off,a,n,stream[b]),"bucket transpose fetch A to B");
                     peer_gib+=double(2*n)/double(1ULL<<30);
                 }
-                // Barrier is required: committing A before B finished reading A is unsafe.
                 for(int g=0;g<ngpu;++g)if(nbytes[g]){ckbt(cudaSetDevice(g),"bucket transpose set fetch sync");ckbt(cudaStreamSynchronize(stream[g]),"bucket transpose fetch sync");}
-                // Commit locally. Paired slot capacities are equal, including tail padding.
                 for(int i=0;i<ngpu/2;++i){
                     auto[a,b]=round[size_t(i)];size_t n=nbytes[a];if(!n)continue;
                     ckbt(cudaSetDevice(a),"bucket transpose set A commit");
@@ -149,3 +143,12 @@ struct BucketTransposeCtx {
         ngpu=0;chunk_bytes=0;rounds.clear();
     }
 };
+
+// Selection hook used by the event-driven wrapper. This point is intentionally
+// after all baseline types are defined, so the event header sees Count,
+// BucketTransposePlan and the K8 round helper through the normal driver include
+// order. The macro alias affects only code appearing after this include.
+#ifdef BUCKET_TRANSPOSE_USE_EVENTS
+#include "gridfp_bucket_transpose_events.cuh"
+#define BucketTransposeCtx BucketTransposeEventCtx
+#endif
