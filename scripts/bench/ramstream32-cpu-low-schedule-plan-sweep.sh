@@ -84,9 +84,9 @@ max_imbalance=${MAX_IMBALANCE:-none}
 binary_sha256=$(file_sha256 "$bin")
 EOF
 
-# The probe still exposes historical hybrid_domain_* field names; the persisted
-# sweep schema uses domain_* because this plan is now CPU_LOW_SCHEDULE=domain.
-printf 'workers\tdomain_size\tdomains\tlpt_imbalance\tlpt_cross_domain_4k\tlpt_cross_domain_2m\tcontiguous_imbalance\tcontiguous_cross_domain_4k\tcontiguous_cross_domain_2m\tdomain_imbalance\tdomain_cross_domain_4k\tdomain_cross_domain_2m\tdomain_cross_worker_4k\tdomain_cross_worker_2m\tdomain_normalized_cap\tdomain_active_domains\traw\n' >"$out"
+# Raw probe names retain hybrid_domain_* for compatibility; persisted sweep
+# columns use the production v5.20 domain terminology.
+printf 'workers\tdomain_size\tdomains\tlpt_imbalance\tlpt_cross_domain_4k\tlpt_cross_domain_2m\tcontiguous_imbalance\tcontiguous_cross_domain_4k\tcontiguous_cross_domain_2m\tdomain_imbalance\tdomain_cross_domain_4k\tdomain_cross_domain_2m\tdomain_cross_worker_4k\tdomain_cross_worker_2m\tdomain_outer_normalized_cap\tdomain_active_domains\tdomain_refined_boundaries\tdomain_refined_job_moves\traw\n' >"$out"
 
 for cfg in "${configs[@]}"; do
   workers="${cfg%%:*}"
@@ -100,7 +100,7 @@ for cfg in "${configs[@]}"; do
     echo "domain provenance mismatch for $cfg" >&2; exit 4;
   }
 
-  printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
+  printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
     "$workers" "$domain" "$(field "$line" domains)" \
     "$(field "$line" imbalance)" \
     "$(field "$line" cross_domain_pages_4k)" \
@@ -113,16 +113,18 @@ for cfg in "${configs[@]}"; do
     "$(field "$line" hybrid_domain_cross_domain_pages_2m)" \
     "$(field "$line" hybrid_domain_cross_worker_pages_4k)" \
     "$(field "$line" hybrid_domain_cross_worker_pages_2m)" \
-    "$(field "$line" hybrid_domain_optimal_per_worker_cap)" \
+    "$(field "$line" hybrid_domain_outer_normalized_cap)" \
     "$(field "$line" hybrid_domain_active_domains)" \
+    "$(field "$line" hybrid_domain_refined_boundaries)" \
+    "$(field "$line" hybrid_domain_refined_job_moves)" \
     "$line" >>"$out"
 done
 
 awk -F '\t' '
   NR==1 {next}
   {
-    printf("summary workers=%s domain_size=%s domains=%s lpt_imbalance=%s contiguous_imbalance=%s domain_imbalance=%s lpt_cross_domain_4k=%s contiguous_cross_domain_4k=%s domain_cross_domain_4k=%s lpt_cross_domain_2m=%s contiguous_cross_domain_2m=%s domain_cross_domain_2m=%s\n",
-           $1,$2,$3,$4,$7,$10,$5,$8,$11,$6,$9,$12)
+    printf("summary workers=%s domain_size=%s domains=%s lpt_imbalance=%s contiguous_imbalance=%s domain_imbalance=%s lpt_cross_domain_4k=%s contiguous_cross_domain_4k=%s domain_cross_domain_4k=%s lpt_cross_domain_2m=%s contiguous_cross_domain_2m=%s domain_cross_domain_2m=%s refined_boundaries=%s refined_job_moves=%s\n",
+           $1,$2,$3,$4,$7,$10,$5,$8,$11,$6,$9,$12,$17,$18)
   }
 ' "$out"
 
