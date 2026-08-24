@@ -5,6 +5,7 @@ on:
     paths:
       - 'src/cpp/probes/factor_row_depth_factorpeak.cpp'
       - 'src/cpp/probes/factor_row_depth_factorpeak_semantics.cpp'
+      - 'src/cpp/probes/factor_rowdepth_high_storage_order.cpp'
       - 'src/cuda/b300/maskshard_rowdepth_fblock_io.cuh'
       - 'src/cuda/b300/maskshard_rowdepth_exact_io.cuh'
       - 'src/cuda/b300/maskshard_lowclosure_kernel.cuh'
@@ -17,6 +18,7 @@ on:
     paths:
       - 'src/cpp/probes/factor_row_depth_factorpeak.cpp'
       - 'src/cpp/probes/factor_row_depth_factorpeak_semantics.cpp'
+      - 'src/cpp/probes/factor_rowdepth_high_storage_order.cpp'
       - 'src/cuda/b300/maskshard_rowdepth_fblock_io.cuh'
       - 'src/cuda/b300/maskshard_rowdepth_exact_io.cuh'
       - 'src/cuda/b300/maskshard_lowclosure_kernel.cuh'
@@ -53,6 +55,19 @@ jobs:
             -o build/factor_row_depth_factorpeak_semantics
       - name: Verify exact factor peak equals full frontier peak through W=12
         run: build/factor_row_depth_factorpeak_semantics 12
+
+  high-storage-order:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build HIGH storage-order alignment probe
+        run: |
+          mkdir -p build
+          g++ -O3 -std=c++17 -Wall -Wextra -Werror \
+            src/cpp/probes/factor_rowdepth_high_storage_order.cpp \
+            -o build/factor_rowdepth_high_storage_order
+      - name: Pin n=27 legacy misindex and fixed storage alignment
+        run: build/factor_rowdepth_high_storage_order 13
 
   cuda-compile:
     runs-on: ubuntu-latest
