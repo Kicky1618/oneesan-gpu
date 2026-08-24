@@ -1,17 +1,24 @@
 #pragma once
 
-// Non-synchronizing launchers for the multi-GPU bucket driver.  Call one on
+// Non-synchronizing launchers for the multi-GPU bucket driver. Call one on
 // every GPU first, then synchronize all GPUs once at the window boundary.
 
-static void bucket_launch_low_fused_v2(
+static void bucket_launch_low_fused(
     const StorageLayout&layout,int threads=256,int grid_x=16,int grid_y=8
 ){
     dim3 block(threads),grid(grid_x,grid_y,unsigned(layout.main_blocks.size()));
     for(int p=LOW_LUT_K;p>=1;--p){
-        bucket_low_orbit_kernel_v2<<<grid,block>>>(p);ck(cudaGetLastError(),"bucket low orbit async");
+        bucket_low_orbit_kernel<<<grid,block>>>(p);ck(cudaGetLastError(),"bucket low orbit async");
         unsigned nt=p==1?unsigned(layout.main_blocks.size()):unsigned(layout.block_blocks.size());
         dim3 cg(grid_x,grid_y,nt);bucket_low_fused_closure_kernel<<<cg,block>>>(p);ck(cudaGetLastError(),"bucket low closure async");
     }
+}
+
+// Temporary source-compatibility alias for the first B300 driver revision.
+static void bucket_launch_low_fused_v2(
+    const StorageLayout&layout,int threads=256,int grid_x=16,int grid_y=8
+){
+    bucket_launch_low_fused(layout,threads,grid_x,grid_y);
 }
 
 static void bucket_launch_high_fused(
