@@ -59,6 +59,37 @@ cpu_low_sticky_schedule jobs=...
 
 The purpose is not primarily to reduce scheduling instructions. With `CPU_LOW_CPU_LIST` set, sticky ownership makes the same occupancy group return to the same pinned worker on every row, which can improve cache and NUMA locality compared with the dynamic queue.
 
+## Preflight balance probe
+
+The exact LPT balance can be inspected without allocating the authoritative RAM arrays:
+
+```bash
+N=27 bash scripts/build/gridfp-ramstream32-cpu-low-schedule-plan.sh
+./build/ramstream32_cpu_low_schedule_plan_n27 27 32
+```
+
+The first output line reports:
+
+```text
+cpu_low_schedule_plan OK n=27 workers=32 jobs=...
+  total_cells=...
+  min_worker_cells=...
+  max_worker_cells=...
+  avg_worker_cells=...
+  imbalance=...
+  build_s=...
+```
+
+`imbalance` is `max_worker_cells / avg_worker_cells`; values near 1 mean the static LPT partition is well balanced before any locality effect is considered.
+
+Use `--workers` to dump every worker's assigned job count and exact cell load:
+
+```bash
+./build/ramstream32_cpu_low_schedule_plan_n27 27 32 --workers
+```
+
+This probe constructs only topology/descriptor metadata and the LOW job plan. It does not mmap the multi-terabyte authoritative state arrays and does not require an actual solver residue run.
+
 ## Clean dynamic/sticky A/B
 
 Use the alternating harness:
