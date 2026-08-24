@@ -6,8 +6,10 @@
 #include <cstring>
 #include <iomanip>
 #include <iostream>
+#include <limits>
 #include <numeric>
 #include <unordered_set>
+#include <utility>
 #include <vector>
 
 #define RAMSTREAM_BIDESC_COMPACT_NO_MAIN
@@ -20,6 +22,32 @@ struct CpuLowBoundaryPages {
     std::unordered_set<uint64_t> cross_worker_4k;
     std::unordered_set<uint64_t> shared_2m;
     std::unordered_set<uint64_t> cross_worker_2m;
+};
+
+struct CpuLowPageMetrics {
+    uint64_t shared_4k = 0;
+    uint64_t cross_4k = 0;
+    uint64_t shared_2m = 0;
+    uint64_t cross_2m = 0;
+    double cross_of_shared_4k = 0.0;
+    double cross_of_shared_2m = 0.0;
+    double cross_auth_4k = 0.0;
+    double cross_auth_2m = 0.0;
+};
+
+struct CpuLowOrderedEntry {
+    uint32_t mask = 0;
+    uint64_t cells = 0;
+};
+
+struct CpuLowContiguousPlan {
+    std::vector<int> owner;
+    std::vector<uint64_t> worker_cells;
+    uint64_t min_cells = 0;
+    uint64_t max_cells = 0;
+    double imbalance = 0.0;
+    uint64_t optimal_cap = 0;
+    size_t active_workers = 0;
 };
 
 static void cpu_low_add_boundary_page(
@@ -92,6 +120,164 @@ static uint64_t cpu_low_page_count(uint64_t bytes, uint64_t page) {
     return bytes ? (bytes + page - 1) / page : 0;
 }
 
+static CpuLowPageMetrics cpu_low_page_metrics(
+    const StorageLayout& layout, const StorageFactorHost& storage,
+    const std::vector<int>& owner
+) {
+    CpuLowBoundaryPages main_pages = cpu_low_boundary_pages(
+        layout.main_blocks, storage, owner);
+    CpuLowBoundaryPages block_pages = cpu_low_boundary_pages(
+        layout.block_blocks, storage, owner);
+
+    CpuLowPageMetrics m;
+    m.shared_4k = main_pages.shared_4k.size() + block_pages.shared_4k.size();
+    m.cross_4k = main_pages.cross_worker_4k.size() + block_pages.cross_worker_4k.size();
+    m.shared_2m = main_pages.shared_2m.size() + block_pages.shared_2m.size();
+    m.cross_2m = main_pages.cross_worker_2m.size() + block_pages.cross_worker_2m.size();
+
+    uint64_t main_bytes = uint64_t(layout.main_size) * sizeof(Count);
+    uint64_t block_bytes = uint64_t(layout.block_size) * sizeof(Count);
+    uint64_t total_pages_4k = cpu_low_page_count(main_bytes, 4096)
+        + cpu_low_page_count(block_bytes, 4096);
+    uint64_t total_pages_2m = cpu_low_page_count(main_bytes, 2ull << 20)
+        + cpu_low_page_count(block_bytes, 2ull << 20);
+
+    m.cross_of_shared_4k = m.shared_4k ? double(m.cross_4k) / m.shared_4k : 0.0;
+    m.cross_of_shared_2m = m.shared_2m ? double(m.cross_2m) / m.shared_2m : 0.0;
+    m.cross_auth_4k = total_pages_4k ? double(m.cross_4k) / total_pages_4k : 0.0;
+    m.cross_auth_2m = total_pages_2m ? double(m.cross_2m) / total_pages_2m : 0.0;
+    return m;
+}
+
+static size_t cpu_low_ordered_segments_needed(
+    const std::vector<CpuLowOrderedEntry>& entries, uint64_t cap
+) {
+    if (entries.empty()) return 0;
+    size_t segments = 1;
+    uint64_t acc = 0;
+    for (const auto& e : entries) {
+        if (e.cells > cap) return std::numeric_limits<size_t>::max();
+        if (acc && acc > cap - e.cells) {
+            ++segments;
+            acc = 0;
+        }
+        acc += e.cells;
+    }
+    return segments;
+}
+
+static uint64_t cpu_low_segment_cells(
+    const std::vector<CpuLowOrderedEntry>& entries,
+    const std::pair<size_t,size_t>& seg
+) {
+    uint64_t z = 0;
+    for (size_t i = seg.first; i < seg.second; ++i) z += entries[i].cells;
+    return z;
+}
+
+static CpuLowContiguousPlan cpu_low_build_optimal_contiguous_plan(
+    const std::vector<CpuLowOrderedEntry>& entries, int workers,
+    uint64_t exact_total
+) {
+    CpuLowContiguousPlan out;
+    out.owner.assign(size_t(1) << HIGH_LUT_K, -1);
+    out.worker_cells.assign(size_t(workers), 0);
+    if (entries.empty()) return out;
+
+    size_t target_segments = std::min<size_t>(size_t(workers), entries.size());
+    uint64_t lo = 0;
+    for (const auto& e : entries) lo = std::max(lo, e.cells);
+    uint64_t hi = exact_total;
+    while (lo < hi) {
+        uint64_t mid = lo + (hi - lo) / 2;
+        if (cpu_low_ordered_segments_needed(entries, mid) <= target_segments)
+            hi = mid;
+        else
+            lo = mid + 1;
+    }
+    out.optimal_cap = lo;
+
+    std::vector<std::pair<size_t,size_t>> segs;
+    size_t begin = 0;
+    uint64_t acc = 0;
+    for (size_t i = 0; i < entries.size(); ++i) {
+        uint64_t w = entries[i].cells;
+        if (acc && acc > out.optimal_cap - w) {
+            segs.push_back({begin, i});
+            begin = i;
+            acc = 0;
+        }
+        acc += w;
+    }
+    segs.push_back({begin, entries.size()});
+
+    // The optimal cap may need fewer than target_segments. Split existing
+    // segments until every available worker owns one contiguous run. Splitting
+    // cannot increase the max load, so the min-max optimum is preserved.
+    while (segs.size() < target_segments) {
+        size_t best_seg = size_t(-1);
+        uint64_t best_cells = 0;
+        for (size_t s = 0; s < segs.size(); ++s) {
+            if (segs[s].second - segs[s].first <= 1) continue;
+            uint64_t cells = cpu_low_segment_cells(entries, segs[s]);
+            if (best_seg == size_t(-1) || cells > best_cells) {
+                best_seg = s;
+                best_cells = cells;
+            }
+        }
+        if (best_seg == size_t(-1)) {
+            std::cerr << "cpu LOW contiguous split reconstruction failed\n";
+            std::exit(6);
+        }
+
+        auto seg = segs[best_seg];
+        uint64_t prefix = 0;
+        uint64_t best_delta = std::numeric_limits<uint64_t>::max();
+        size_t split = seg.first + 1;
+        for (size_t i = seg.first; i + 1 < seg.second; ++i) {
+            prefix += entries[i].cells;
+            uint64_t right = best_cells - prefix;
+            uint64_t delta = prefix > right ? prefix - right : right - prefix;
+            if (delta < best_delta) {
+                best_delta = delta;
+                split = i + 1;
+            }
+        }
+        segs[best_seg] = {seg.first, split};
+        segs.insert(segs.begin() + best_seg + 1, {split, seg.second});
+    }
+
+    out.active_workers = segs.size();
+    for (size_t w = 0; w < segs.size(); ++w) {
+        uint64_t cells = 0;
+        for (size_t i = segs[w].first; i < segs[w].second; ++i) {
+            uint32_t mask = entries[i].mask;
+            if (out.owner[mask] >= 0) {
+                std::cerr << "cpu LOW contiguous duplicate owner mask=" << mask << '\n';
+                std::exit(7);
+            }
+            out.owner[mask] = int(w);
+            cells += entries[i].cells;
+        }
+        out.worker_cells[w] = cells;
+        if (cells > out.optimal_cap) {
+            std::cerr << "cpu LOW contiguous cap violation worker=" << w
+                      << " cells=" << cells << " cap=" << out.optimal_cap << '\n';
+            std::exit(8);
+        }
+    }
+
+    out.min_cells = out.worker_cells.empty() ? 0 : out.worker_cells[0];
+    out.max_cells = 0;
+    for (uint64_t x : out.worker_cells) {
+        out.min_cells = std::min(out.min_cells, x);
+        out.max_cells = std::max(out.max_cells, x);
+    }
+    double avg = workers ? double(exact_total) / workers : 0.0;
+    out.imbalance = avg > 0.0 ? double(out.max_cells) / avg : 0.0;
+    return out;
+}
+
 int main(int argc, char** argv) {
     int n = argc > 1 ? std::atoi(argv[1]) : TARGET_W - 1;
     int workers = argc > 2 ? std::max(1, std::atoi(argv[2])) : 32;
@@ -115,11 +301,18 @@ int main(int argc, char** argv) {
 
     size_t nonempty_jobs = 0;
     uint64_t exact_total = 0;
+    std::vector<CpuLowOrderedEntry> ordered;
+    ordered.reserve(jobs.size());
     for (const auto& job : jobs) {
         if (!job.main_size && !job.block_size) continue;
+        uint64_t cells = cpu_low_sparse_job_cells(job, sparse);
         ++nonempty_jobs;
-        exact_total += cpu_low_sparse_job_cells(job, sparse);
+        exact_total += cells;
+        ordered.push_back({job.mask, cells});
     }
+    std::sort(ordered.begin(), ordered.end(), [](const auto& a, const auto& b) {
+        return a.mask < b.mask;
+    });
 
     uint64_t assigned_total = std::accumulate(
         pool.sticky_worker_cells.begin(), pool.sticky_worker_cells.end(), uint64_t(0));
@@ -153,26 +346,11 @@ int main(int argc, char** argv) {
         }
     }
 
-    CpuLowBoundaryPages main_pages = cpu_low_boundary_pages(
-        layout.main_blocks, storage, owner);
-    CpuLowBoundaryPages block_pages = cpu_low_boundary_pages(
-        layout.block_blocks, storage, owner);
-
-    uint64_t shared_4k = main_pages.shared_4k.size() + block_pages.shared_4k.size();
-    uint64_t cross_4k = main_pages.cross_worker_4k.size() + block_pages.cross_worker_4k.size();
-    uint64_t shared_2m = main_pages.shared_2m.size() + block_pages.shared_2m.size();
-    uint64_t cross_2m = main_pages.cross_worker_2m.size() + block_pages.cross_worker_2m.size();
-    uint64_t main_bytes = uint64_t(layout.main_size) * sizeof(Count);
-    uint64_t block_bytes = uint64_t(layout.block_size) * sizeof(Count);
-    uint64_t total_pages_4k = cpu_low_page_count(main_bytes, 4096)
-        + cpu_low_page_count(block_bytes, 4096);
-    uint64_t total_pages_2m = cpu_low_page_count(main_bytes, 2ull << 20)
-        + cpu_low_page_count(block_bytes, 2ull << 20);
-
-    double cross_of_shared_4k = shared_4k ? double(cross_4k) / shared_4k : 0.0;
-    double cross_of_shared_2m = shared_2m ? double(cross_2m) / shared_2m : 0.0;
-    double cross_auth_4k = total_pages_4k ? double(cross_4k) / total_pages_4k : 0.0;
-    double cross_auth_2m = total_pages_2m ? double(cross_2m) / total_pages_2m : 0.0;
+    CpuLowPageMetrics lpt_pages = cpu_low_page_metrics(layout, storage, owner);
+    CpuLowContiguousPlan contiguous = cpu_low_build_optimal_contiguous_plan(
+        ordered, workers, exact_total);
+    CpuLowPageMetrics contiguous_pages = cpu_low_page_metrics(
+        layout, storage, contiguous.owner);
 
     std::cout << std::setprecision(12)
               << "cpu_low_schedule_plan OK"
@@ -184,25 +362,39 @@ int main(int argc, char** argv) {
               << " max_worker_cells=" << max_cells
               << " avg_worker_cells=" << avg
               << " imbalance=" << imbalance
-              << " shared_pages_4k=" << shared_4k
-              << " cross_worker_pages_4k=" << cross_4k
-              << " cross_worker_of_shared_4k=" << cross_of_shared_4k
-              << " cross_worker_auth_page_fraction_4k=" << cross_auth_4k
-              << " shared_pages_2m=" << shared_2m
-              << " cross_worker_pages_2m=" << cross_2m
-              << " cross_worker_of_shared_2m=" << cross_of_shared_2m
-              << " cross_worker_auth_page_fraction_2m=" << cross_auth_2m
+              << " shared_pages_4k=" << lpt_pages.shared_4k
+              << " cross_worker_pages_4k=" << lpt_pages.cross_4k
+              << " cross_worker_of_shared_4k=" << lpt_pages.cross_of_shared_4k
+              << " cross_worker_auth_page_fraction_4k=" << lpt_pages.cross_auth_4k
+              << " shared_pages_2m=" << lpt_pages.shared_2m
+              << " cross_worker_pages_2m=" << lpt_pages.cross_2m
+              << " cross_worker_of_shared_2m=" << lpt_pages.cross_of_shared_2m
+              << " cross_worker_auth_page_fraction_2m=" << lpt_pages.cross_auth_2m
+              << " contiguous_active_workers=" << contiguous.active_workers
+              << " contiguous_optimal_cap=" << contiguous.optimal_cap
+              << " contiguous_min_worker_cells=" << contiguous.min_cells
+              << " contiguous_max_worker_cells=" << contiguous.max_cells
+              << " contiguous_imbalance=" << contiguous.imbalance
+              << " contiguous_cross_worker_pages_4k=" << contiguous_pages.cross_4k
+              << " contiguous_cross_worker_of_shared_4k=" << contiguous_pages.cross_of_shared_4k
+              << " contiguous_cross_worker_auth_page_fraction_4k=" << contiguous_pages.cross_auth_4k
+              << " contiguous_cross_worker_pages_2m=" << contiguous_pages.cross_2m
+              << " contiguous_cross_worker_of_shared_2m=" << contiguous_pages.cross_of_shared_2m
+              << " contiguous_cross_worker_auth_page_fraction_2m=" << contiguous_pages.cross_auth_2m
               << " build_s=" << pool.schedule_build_s
               << '\n';
 
     if (dump_workers) {
-        std::cout << "worker\tjobs\tcells\tfraction\n";
+        std::cout << "worker\tjobs\tcells\tfraction\tcontiguous_cells\tcontiguous_fraction\n";
         for (int w = 0; w < workers; ++w) {
             uint64_t cells = pool.sticky_worker_cells[size_t(w)];
+            uint64_t ccells = contiguous.worker_cells[size_t(w)];
             double fraction = exact_total ? double(cells) / double(exact_total) : 0.0;
+            double cfraction = exact_total ? double(ccells) / double(exact_total) : 0.0;
             std::cout << w << '\t'
                       << pool.sticky_worker_jobs[size_t(w)].size() << '\t'
-                      << cells << '\t' << fraction << '\n';
+                      << cells << '\t' << fraction << '\t'
+                      << ccells << '\t' << cfraction << '\n';
         }
     }
     return 0;
