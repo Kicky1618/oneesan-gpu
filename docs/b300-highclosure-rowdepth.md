@@ -124,20 +124,20 @@ whether further setup reduction is useful.
 
 ## v0.25: threshold-29 HIGH row packing
 
-v0.24 is the separate LOW-closure row-depth experiment. The next HIGH-closure
-candidate is therefore numbered v0.25.
+v0.24 adds exact row-depth pruning to LOW closure. v0.25 is cumulative over
+v0.24 and changes only the HIGH closure row-packing threshold from 16 to 29.
+Thus a direct v0.24 -> v0.25 A/B isolates the HIGH packing policy while retaining
+LOW closure row-depth pruning in both binaries.
 
 The v0.11 threshold of 16 was intentionally conservative. After v0.22 exact
-row-depth task compaction and v0.23 exact launch sizing, the tradeoff changes:
-we can evaluate the threshold against the actual active LOW prefix on every DP
-row while still making the packing decision from the dense physical stride.
+row-depth task compaction and v0.23 exact launch sizing, the tradeoff changes.
+`factor_highclosure_rowdepth_threshold.cpp` evaluates the actual row-dependent
+LOW prefix while keeping the packing decision tied to the dense physical stride.
 
-`factor_highclosure_rowdepth_threshold.cpp` reproduces the v0.23 threshold-16
-aggregate exactly and evaluates the same task map for alternate compile-time
-thresholds. For n=27 / W=28 / 256 threads:
+For n=27 / W=28 / 256 threads, the HIGH closure phase model is:
 
 ```text
-                         v0.23 threshold 16     v0.25 threshold 29
+                         threshold 16           threshold 29
 active useful items       36,989,860,194,307     36,989,860,194,307
 lane slots                44,779,140,427,808     42,734,081,059,456
 row/descriptor subgroups   1,948,871,708,005      2,131,117,327,561
@@ -146,7 +146,7 @@ launch blocks                104,486,127,592         96,497,498,944
 capped group-positions                    0                      0
 ```
 
-Relative to v0.23 this is:
+Relative to v0.24's threshold-16 HIGH phase:
 
 ```text
 lane slots       -4.566991123%
@@ -155,15 +155,23 @@ launch blocks    -7.645635676%
 descriptor loads +9.351339999%
 ```
 
-An exhaustive integer threshold scan `1..1002` in the same analytical model
-places both the minimum warp-task count and the minimum launch-block count at
-threshold 29. Threshold 36 reduces lane slots slightly further, but already
-increases task/block count and descriptor work, so threshold 29 is the clean
-A/B candidate rather than an assumption that more packing is always better.
+The committed probe scans every integer threshold in `1..1002` and pins both
+optima at 29:
 
-v0.25 adds no persistent GPU metadata and changes no source set. It only changes
-`MASKSHARD_HIGH_CLOSURE_ROWPACK_THRESHOLD` from 16 to 29; both the compact CUDA
-task map and the v0.23 host launch table consume that same compile-time policy.
+```text
+best_tasks_threshold  = 29
+best_tasks            = 771,962,761,132
+best_blocks_threshold = 29
+best_blocks           = 96,497,498,944
+```
+
+Threshold 36 reduces lane slots slightly further, but already increases task and
+block counts and descriptor work. Threshold 29 is therefore the clean launch/task
+optimum in this model rather than an arbitrary wider packing choice.
+
+v0.25 adds no metadata beyond v0.24 and changes no source set. Both the compact
+CUDA task map and the exact host launch table consume the same compile-time
+threshold.
 
 ## Semantic validation
 
@@ -180,8 +188,8 @@ W=10 LOW=5 expected=12,719  compact=12,719  warp_tasks=2,306
 W=12 LOW=6 expected=146,624 compact=146,624 warp_tasks=9,311
 ```
 
-The v0.25 threshold model also passes the same warning-clean local build and
-contains pinned threshold-16 and threshold-29 n=27 regressions.
+The v0.25 threshold probe also passes the same warning-clean local build and
+contains pinned threshold-16, threshold-29, and global-optimum n=27 regressions.
 
 ## A/B commands
 
@@ -217,7 +225,7 @@ python3 scripts/bench/b300_maskshard_highclosure_exactlaunch_ab.py \
   --modulus 4294967291 --vram-reserve-mib 1024
 ```
 
-v0.23 -> v0.25 isolates the threshold-16 -> threshold-29 packing policy:
+v0.24 -> v0.25 isolates threshold-16 -> threshold-29 HIGH packing:
 
 ```bash
 python3 scripts/bench/b300_maskshard_highclosure_threshold29_ab.py \
