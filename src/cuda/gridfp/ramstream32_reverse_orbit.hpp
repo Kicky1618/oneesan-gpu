@@ -78,7 +78,7 @@ static ReverseOrbitHost build_reverse_orbit(
                             if(jhc!=hc||dhc!=hc)std::exit(271);
                             if(jrank>=layout.main_blocks[jbid].cols||drank>=layout.block_blocks[dbid].cols)std::exit(272);
                         }else{
-                            uint32_t jhc=uint32_t((jm>>(2*(L+1)))&HM),dhc=uint32_t((dm>>(2*L))&HM;
+                            uint32_t jhc=uint32_t((jm>>(2*(L+1)))&HM),dhc=uint32_t((dm>>(2*L))&HM);
                             uint32_t jp=storage.high_packed_rank[jhc],dp=storage.high_packed_rank[dhc];if(jp==0xffffffffu||dp==0xffffffffu)std::exit(273);
                             jrank=jp>>H;drank=dp>>H;
                             uint32_t jlc=uint32_t(jm)&LM,dlc=uint32_t(dm)&LM;if(jlc!=lc||dlc!=lc)std::exit(274);
