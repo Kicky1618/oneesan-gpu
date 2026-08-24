@@ -1,0 +1,94 @@
+name: B300 HIGH closure task launch v0.21 research
+
+on:
+  push:
+    paths:
+      - 'src/cpp/probes/factor_highclosure_rowpack_hybrid.cpp'
+      - 'src/cpp/probes/factor_highclosure_rowpack_hybrid_taskmap.cpp'
+      - 'src/cuda/b300/oneesan_cuda_gridfp_b300_hbm32_maskshard_fullorbit_batch.cu'
+      - 'src/cuda/b300/oneesan_cuda_gridfp_b300_hbm32_maskshard_blockorbit_compactaux_fullclosure_highrowpack16_lazyblockinit_rowdepthexact_tightlaunch_rowdepthorbit_rowcaplaunch_exacttasks_highclosurerowdepth_batch_guarded.cu'
+      - 'src/cuda/b300/oneesan_cuda_gridfp_b300_hbm32_maskshard_blockorbit_compactaux_fullclosure_highrowpack16_lazyblockinit_rowdepthexact_tightlaunch_rowdepthorbit_rowcaplaunch_exacttasks_highclosurerowdepth_tasklaunch_batch_guarded.cu'
+      - 'scripts/bench/b300_maskshard_highclosure_tasklaunch_ab.py'
+      - '.github/workflows/b300-highclosure-tasklaunch-v21.yml'
+  pull_request:
+    paths:
+      - 'src/cpp/probes/factor_highclosure_rowpack_hybrid.cpp'
+      - 'src/cpp/probes/factor_highclosure_rowpack_hybrid_taskmap.cpp'
+      - 'src/cuda/b300/oneesan_cuda_gridfp_b300_hbm32_maskshard_fullorbit_batch.cu'
+      - 'src/cuda/b300/oneesan_cuda_gridfp_b300_hbm32_maskshard_blockorbit_compactaux_fullclosure_highrowpack16_lazyblockinit_rowdepthexact_tightlaunch_rowdepthorbit_rowcaplaunch_exacttasks_highclosurerowdepth_batch_guarded.cu'
+      - 'src/cuda/b300/oneesan_cuda_gridfp_b300_hbm32_maskshard_blockorbit_compactaux_fullclosure_highrowpack16_lazyblockinit_rowdepthexact_tightlaunch_rowdepthorbit_rowcaplaunch_exacttasks_highclosurerowdepth_tasklaunch_batch_guarded.cu'
+      - 'scripts/bench/b300_maskshard_highclosure_tasklaunch_ab.py'
+      - '.github/workflows/b300-highclosure-tasklaunch-v21.yml'
+  workflow_dispatch:
+
+jobs:
+  model:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build hybrid row-pack launch model
+        run: |
+          mkdir -p build
+          g++ -O3 -std=c++17 -Wall -Wextra -Werror \
+            src/cpp/probes/factor_highclosure_rowpack_hybrid.cpp \
+            -o build/factor_highclosure_rowpack_hybrid
+      - name: Verify n27 threshold-16 task launch count
+        run: build/factor_highclosure_rowpack_hybrid 28 14 256 16
+
+  taskmap:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build hybrid task-map semantics probe
+        run: |
+          mkdir -p build
+          g++ -O3 -std=c++17 -Wall -Wextra -Werror \
+            src/cpp/probes/factor_highclosure_rowpack_hybrid_taskmap.cpp \
+            -o build/factor_highclosure_rowpack_hybrid_taskmap
+      - name: Verify hybrid task map
+        run: build/factor_highclosure_rowpack_hybrid_taskmap
+
+  cuda-compile:
+    runs-on: ubuntu-latest
+    container: nvidia/cuda:12.8.1-devel-ubuntu22.04
+    strategy:
+      matrix:
+        include:
+          - width: 22
+            low: 11
+            high: 10
+          - width: 28
+            low: 14
+            high: 13
+    steps:
+      - uses: actions/checkout@v4
+      - name: Compile v0.20
+        shell: bash
+        run: |
+          mkdir -p build
+          nvcc -O3 -std=c++17 -lineinfo -arch=sm_80 \
+            -DTARGET_W=${{ matrix.width }} \
+            -DLOW_LUT_K=${{ matrix.low }} \
+            -DHIGH_LUT_K=${{ matrix.high }} \
+            src/cuda/b300/oneesan_cuda_gridfp_b300_hbm32_maskshard_blockorbit_compactaux_fullclosure_highrowpack16_lazyblockinit_rowdepthexact_tightlaunch_rowdepthorbit_rowcaplaunch_exacttasks_highclosurerowdepth_batch_guarded.cu \
+            -o build/b300_maskshard_v20_w${{ matrix.width }}
+      - name: Compile v0.21
+        shell: bash
+        run: |
+          nvcc -O3 -std=c++17 -lineinfo -arch=sm_80 \
+            -DTARGET_W=${{ matrix.width }} \
+            -DLOW_LUT_K=${{ matrix.low }} \
+            -DHIGH_LUT_K=${{ matrix.high }} \
+            src/cuda/b300/oneesan_cuda_gridfp_b300_hbm32_maskshard_blockorbit_compactaux_fullclosure_highrowpack16_lazyblockinit_rowdepthexact_tightlaunch_rowdepthorbit_rowcaplaunch_exacttasks_highclosurerowdepth_tasklaunch_batch_guarded.cu \
+            -o build/b300_maskshard_v21_w${{ matrix.width }}
+
+  ab-driver:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Syntax-check v0.20-v0.21 A/B
+        run: python3 -m py_compile scripts/bench/b300_maskshard_highclosure_tasklaunch_ab.py
+      - name: Dry-run v0.20-v0.21 comparison
+        run: |
+          python3 scripts/bench/b300_maskshard_highclosure_tasklaunch_ab.py \
+            --dry-run --n 27 --gpus 8 --threads 256 --modulus 4294967291
