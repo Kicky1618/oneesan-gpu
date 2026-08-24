@@ -6,6 +6,7 @@
 #include <cstring>
 #include <iomanip>
 #include <iostream>
+#include <limits>
 #include <numeric>
 #include <unordered_set>
 #include <vector>
@@ -188,6 +189,12 @@ static size_t cpu_low_assigned_jobs(
     return z;
 }
 
+static uint64_t cpu_low_saturating_mul(uint64_t a, uint64_t b) {
+    if (a && b > std::numeric_limits<uint64_t>::max() / a)
+        return std::numeric_limits<uint64_t>::max();
+    return a * b;
+}
+
 static CpuLowDomainHybridPlan cpu_low_build_domain_hybrid_plan(
     const std::vector<CpuLowJob>& jobs, const CpuLowSparseHost& sparse,
     int workers, int domain_size
@@ -217,11 +224,11 @@ static CpuLowDomainHybridPlan cpu_low_build_domain_hybrid_plan(
         for (int d = 0; d < out.domains && i < ordered.size(); ++d) {
             int first_worker = d * domain_size;
             int nworkers = std::min(domain_size, workers - first_worker);
-            unsigned __int128 cap =
-                static_cast<unsigned __int128>(per_worker_cap) * unsigned(nworkers);
-            unsigned __int128 acc = 0;
+            uint64_t cap = cpu_low_saturating_mul(
+                per_worker_cap, uint64_t(nworkers));
+            uint64_t acc = 0;
             while (i < ordered.size()
-                   && acc + ordered[i].cells <= cap) {
+                   && ordered[i].cells <= cap - acc) {
                 acc += ordered[i].cells;
                 ++i;
             }
@@ -241,11 +248,10 @@ static CpuLowDomainHybridPlan cpu_low_build_domain_hybrid_plan(
     for (int d = 0; d < out.domains && i < ordered.size(); ++d) {
         int first_worker = d * domain_size;
         int nworkers = std::min(domain_size, workers - first_worker);
-        unsigned __int128 cap =
-            static_cast<unsigned __int128>(lo) * unsigned(nworkers);
-        unsigned __int128 acc = 0;
+        uint64_t cap = cpu_low_saturating_mul(lo, uint64_t(nworkers));
+        uint64_t acc = 0;
         size_t begin = i;
-        while (i < ordered.size() && acc + ordered[i].cells <= cap) {
+        while (i < ordered.size() && ordered[i].cells <= cap - acc) {
             acc += ordered[i].cells;
             ++i;
         }
