@@ -45,8 +45,9 @@ int main(int argc, char** argv) {
     rec(rec, H - 1, 1, 0u);
 
     std::uint64_t entries = 0;
-    std::uint64_t mismatched_positions = 0;
-    std::uint64_t peak_mismatches = 0;
+    std::uint64_t code_order_mismatches = 0;
+    std::uint64_t legacy_peak_mismatches = 0;
+    std::uint64_t storage_peak_mismatches = 0;
     for (int h = 0; h <= H + 1; ++h) {
         std::vector<std::uint32_t> storage;
         for (std::uint32_t mask = 0; mask < NM; ++mask) {
@@ -55,29 +56,40 @@ int main(int argc, char** argv) {
         }
         if (storage.size() != all[h].size()) return 2;
         entries += storage.size();
+
+        std::vector<int> legacy_peak(all[h].size());
+        std::vector<int> storage_peak(storage.size());
+        for (std::size_t r = 0; r < all[h].size(); ++r)
+            legacy_peak[r] = peak(all[h][r], H);
+        for (std::size_t r = 0; r < storage.size(); ++r)
+            storage_peak[r] = peak(storage[r], H);
+
         for (std::size_t r = 0; r < storage.size(); ++r) {
-            if (storage[r] != all[h][r]) ++mismatched_positions;
-            // The fixed v0.15 table is defined directly in storage order.
-            const int table_peak = peak(storage[r], H);
-            const int direct_peak = peak(storage[r], H);
-            if (table_peak != direct_peak) ++peak_mismatches;
+            if (storage[r] != all[h][r]) ++code_order_mismatches;
+            // Old v0.15 indexed a legacy all-order peak table by storage row r.
+            if (legacy_peak[r] != peak(storage[r], H)) ++legacy_peak_mismatches;
+            // Fixed v0.15 constructs the table itself in storage order.
+            if (storage_peak[r] != peak(storage[r], H)) ++storage_peak_mismatches;
         }
     }
 
     if (H == 13) {
         if (entries != 787333ULL
-            || mismatched_positions != 786934ULL
-            || peak_mismatches != 0ULL) {
+            || code_order_mismatches != 786934ULL
+            || legacy_peak_mismatches != 452880ULL
+            || storage_peak_mismatches != 0ULL) {
             std::cerr << "n=27 HIGH storage-order regression entries=" << entries
-                      << " mismatched_positions=" << mismatched_positions
-                      << " peak_mismatches=" << peak_mismatches << '\n';
+                      << " code_order_mismatches=" << code_order_mismatches
+                      << " legacy_peak_mismatches=" << legacy_peak_mismatches
+                      << " storage_peak_mismatches=" << storage_peak_mismatches << '\n';
             return 3;
         }
     }
 
     std::cout << "factor-rowdepth-high-storage-order OK H=" << H
               << " entries=" << entries
-              << " legacy_order_mismatches=" << mismatched_positions
-              << " storage_peak_mismatches=" << peak_mismatches << '\n';
+              << " legacy_code_order_mismatches=" << code_order_mismatches
+              << " legacy_peak_mismatches=" << legacy_peak_mismatches
+              << " storage_peak_mismatches=" << storage_peak_mismatches << '\n';
     return 0;
 }
