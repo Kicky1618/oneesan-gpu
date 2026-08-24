@@ -4,10 +4,12 @@ on:
   push:
     paths:
       - 'src/cpp/probes/gpu_direct_bucket_plan.cpp'
+      - 'src/cpp/probes/gpu_direct_bucket_layout_selftest.cpp'
       - '.github/workflows/gpu-direct-bucket-plan.yml'
   pull_request:
     paths:
       - 'src/cpp/probes/gpu_direct_bucket_plan.cpp'
+      - 'src/cpp/probes/gpu_direct_bucket_layout_selftest.cpp'
       - '.github/workflows/gpu-direct-bucket-plan.yml'
   workflow_dispatch:
 
@@ -16,7 +18,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - name: Build and validate exact bucket planner
+      - name: Build and validate exact n27 bucket planner
         shell: bash
         run: |
           mkdir -p build
@@ -26,3 +28,14 @@ jobs:
           grep -Fq 'main_plus_blocked_states=520735012027' /tmp/bucket-plan.txt
           grep -Fq 'remote_states_per_transpose=455642447434' /tmp/bucket-plan.txt
           grep -Fq 'max_slot_overhead_bytes=2154132' /tmp/bucket-plan.txt
+          grep -Fq 'max_owner_high_rows=19631' /tmp/bucket-plan.txt
+          grep -Fq 'max_owner_low_cols=30114' /tmp/bucket-plan.txt
+          grep -Fq 'owner_bits=3 local_rank_bits=15 locator_bits=18' /tmp/bucket-plan.txt
+      - name: Validate physical bucket address and raw transpose
+        shell: bash
+        run: |
+          g++ -O3 -std=c++17 src/cpp/probes/gpu_direct_bucket_layout_selftest.cpp \
+            -o build/gpu_direct_bucket_layout_selftest
+          build/gpu_direct_bucket_layout_selftest | tee /tmp/bucket-layout.txt
+          grep -Fq 'gpu-direct-bucket-layout-selftest OK' /tmp/bucket-layout.txt
+          grep -Fq 'pairs=28' /tmp/bucket-layout.txt
