@@ -164,6 +164,7 @@ N=27 bash scripts/build/gridfp-ramstream32-cpu-high-cost-plan.sh
 For each group it reports:
 
 - round-trip bytes removed from PCIe if that group moves to CPU;
+- exact H2D+D2H factor-slice copy-call count (`pcie_copy_calls`);
 - main and blocked state counts;
 - authoritative bytes in the factorized state arrays;
 - NN cell iterations;
@@ -289,21 +290,44 @@ affine_calibration ... cpu_gcell_s=... cpu_group_overhead_us=...
 affine_calibration ... gpu_gstate_s=... gpu_group_overhead_us=...
 ```
 
-When a stable affine fit is available, the sweep prefers it over the older median throughput estimates and automatically passes
+If the fit is underdetermined or collapses to a zero throughput coefficient, the harness falls back to the v5.8 median-rate calibration.
+
+## v5.10 affine PCIe copy-call model
+
+Payload throughput alone also misses fixed transfer-call cost. HIGH groups use `fix_low=true`; for each nonempty main or blocked factor slice the production path issues exactly one H2D and one D2H `cudaMemcpy2D`. The cost-plan probe therefore records
 
 ```text
---group-overhead-us ...
---gpu-gstate-s ...
---gpu-group-overhead-us ...
+pcie_copy_calls = 2 * number_of_nonempty_factor_slices
 ```
 
-to `plan_cpu_high_groups.py`. If the fit is underdetermined or collapses to a zero throughput coefficient, the harness falls back to the v5.8 median-rate calibration.
+per HIGH group and row.
 
-A manually calibrated affine policy can be generated with:
+Across threshold points the analyzer fits
+
+```text
+H2D+D2H seconds ~= a_pcie * payload_bytes
+                  + b_pcie * copy_calls
+```
+
+with the same non-negative two-predictor fit used for CPU/GPU costs. It reports
+
+```text
+affine_calibration ... pcie_gib_s=... pcie_copy_overhead_us=...
+```
+
+and the planner evaluates a group's removable DMA time as
+
+```text
+roundtrip_bytes / pcie_rate
++ pcie_copy_calls * pcie_copy_overhead
+```
+
+A fully specified manual affine policy is therefore:
 
 ```bash
 python3 scripts/tools/plan_cpu_high_groups.py high-cost.tsv \
   --pcie-gib-s 38 \
+  --pcie-copy-overhead-us 5 \
   --cpu-gcell-s 2.7 \
   --group-overhead-us 15 \
   --gpu-gstate-s 7.5 \
@@ -312,6 +336,8 @@ python3 scripts/tools/plan_cpu_high_groups.py high-cost.tsv \
   --overlap \
   > cpu-high-overlap.groups
 ```
+
+`ramstream32-cpu-high-sweep.sh` prefers the affine PCIe/CPU/GPU coefficients when they are identifiable and passes `--pcie-copy-overhead-us`, `--group-overhead-us`, and `--gpu-group-overhead-us` automatically. Each component independently falls back to the older rate-only estimate if its affine fit is unavailable.
 
 Empty zero-byte occupancy groups are excluded from affine fitting and planning because the production backend never executes them.
 
@@ -371,15 +397,15 @@ Set `COST_PLAN=none` to disable automatic cost-plan generation or provide `COST_
 
 ## Validation
 
-`.github/workflows/ramstream32-sparse-ci.yml` covers W=22/W=28 compilation, normal plans, scratch/direct CPU HIGH plans, all four direct stream classes, explicit group-file selection, affinity parser behavior, exact-work schedule construction, the W=10 exhaustive reference comparison, concurrent disjoint HIGH execution, and the exact group-cost probe.
+`.github/workflows/ramstream32-sparse-ci.yml` covers W=22/W=28 compilation, normal plans, scratch/direct CPU HIGH plans, all four direct stream classes, explicit group-file selection, affinity parser behavior, exact-work schedule construction, the W=10 exhaustive reference comparison, concurrent disjoint HIGH execution, and the exact group-cost probe including `gpu_state_steps` and `pcie_copy_calls`.
 
-`.github/workflows/ramstream32-bench-script-ci.yml` syntax-checks the sweep/build scripts, compiles the Python tools, validates PCIe and affine CPU/GPU calibration on synthetic data with known throughput/overhead coefficients, checks sequential and overlap-critical-path group planning, and validates the 4 KiB/2 MiB NUMA page-exposure analyzer.
+`.github/workflows/ramstream32-bench-script-ci.yml` syntax-checks the sweep/build scripts, compiles the Python tools, validates affine PCIe/CPU/GPU calibration on synthetic data with known throughput/overhead coefficients, checks sequential and overlap-critical-path group planning, and validates the 4 KiB/2 MiB NUMA page-exposure analyzer.
 
 ## Next experiments
 
 The remaining large opportunities are increasingly memory-topology and model-fitting problems:
 
 1. use page-exposure results to choose THP, 4 KiB pages, or a coarse socket-level memory policy for CPU-owned slices;
-2. estimate separate NN, NR/NL, BLOCK, and CROSS CPU weights from hardware counters;
-3. fit GPU HIGH cost more finely than the current state-step proxy if measured residuals justify it;
+2. estimate separate NN, NR/NL, BLOCK, and CROSS CPU weights from hardware counters or targeted calibration policies;
+3. compare the generated non-monotone cost policy directly against the best size-threshold policy with alternating A/B runs;
 4. for multi-GPU B300 nodes, keep the largest HIGH occupancy groups resident across more than one local step when dependencies permit, while CPU handles the long tail of small groups.
