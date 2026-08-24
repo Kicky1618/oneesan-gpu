@@ -191,7 +191,7 @@ python3 scripts/tools/plan_cpu_high_groups.py high-cost.tsv \
   > cpu-high.groups
 ```
 
-The planner evaluates each group independently using estimated DMA time saved versus CPU direct time. Groups larger than `--gpu-target-mib` are forced to CPU so the remaining GPU set still fits. The resulting list is not required to be monotone in group size.
+The sequential planner evaluates each group using estimated DMA time saved versus CPU direct time. Groups larger than `--gpu-target-mib` are forced to CPU so the remaining GPU set still fits. The resulting list is not required to be monotone in group size.
 
 Run that exact policy with:
 
@@ -237,6 +237,36 @@ sum over (HIGH position, source factor block):
 The selected groups are sorted in descending exact cell work and cached for all later rows. Workers still consume an atomic dynamic queue, so this is a largest-work-first ordering rather than a static partition. It specifically reduces the risk that one large topology-heavy group is discovered at the end and becomes the row tail.
 
 The executor logs `cpu_high_direct_schedule` with group count, total/min/max cells, and one-time schedule-build time. The W=10 selftest path is wired to require that the schedule is actually built.
+
+## v5.7 overlap-critical-path group planning
+
+When `CPU_HIGH_OVERLAP=0`, an offloaded group is useful only if its CPU cost is smaller than the GPU/DMA work it removes. That independent margin rule is wrong once CPU HIGH and GPU HIGH overlap.
+
+For overlap, the approximate HIGH-phase objective is instead
+
+```text
+max(
+  sum CPU-direct time of selected groups,
+  sum DMA time of unselected groups
+)
+```
+
+using rates measured under the same overlap setting. A group can therefore have a negative sequential margin and still reduce the critical path while the GPU/DMA branch has slack.
+
+`plan_cpu_high_groups.py --overlap` sorts optional groups by `DMA time removed / CPU time added`, evaluates every prefix, and chooses the prefix with the smallest modeled critical path. This is exact for the fractional relaxation and a deterministic `O(G log G)` approximation to the discrete group partition.
+
+```bash
+python3 scripts/tools/plan_cpu_high_groups.py high-cost.tsv \
+  --pcie-gib-s 38 \
+  --cpu-gcell-s 2.7 \
+  --gpu-target-mib 12288 \
+  --overlap \
+  > cpu-high-overlap.groups
+```
+
+The threshold sweep automatically adds `--overlap` when `CPU_HIGH_OVERLAP=1`. It also calibrates PCIe and CPU rates from that overlapped run rather than reusing the non-overlap rates, because contention changes both. The generated policy is then passed through the NUMA page-exposure analyzer automatically.
+
+The current overlap model deliberately includes DMA and CPU-direct time but not a per-group GPU-kernel cost model. That makes it conservative when offloading also removes meaningful GPU kernel work; a later hardware-counter fit can add that term.
 
 ## NUMA page-boundary analysis
 
@@ -286,7 +316,7 @@ REPEATS=2 \
 bash scripts/bench/ramstream32-cpu-high-sweep.sh
 ```
 
-Repeat with `CPU_HIGH_OVERLAP=1`, because memory-bandwidth contention changes both measured DMA and CPU rates. Generated artifacts include the raw sweep TSV, metadata, exact group-cost TSV, analysis output, and a candidate `.groups` policy file.
+Repeat with `CPU_HIGH_OVERLAP=1`, because memory-bandwidth contention changes both measured DMA and CPU rates. Generated artifacts include the raw sweep TSV, metadata, exact group-cost TSV, analysis output, a candidate `.groups` policy file, and the NUMA page-exposure summary for that policy.
 
 Set `COST_PLAN=none` to disable automatic cost-plan generation or provide `COST_PLAN=/path/to/existing.tsv` to reuse one.
 
@@ -294,13 +324,13 @@ Set `COST_PLAN=none` to disable automatic cost-plan generation or provide `COST_
 
 `.github/workflows/ramstream32-sparse-ci.yml` covers W=22/W=28 compilation, normal plans, scratch/direct CPU HIGH plans, all four direct stream classes, explicit group-file selection, affinity parser behavior, exact-work schedule construction, the W=10 exhaustive reference comparison, concurrent disjoint HIGH execution, and the exact group-cost probe.
 
-`.github/workflows/ramstream32-bench-script-ci.yml` syntax-checks the sweep/build scripts, compiles the Python tools, validates sweep calibration on synthetic data, checks profitable-group planning, and validates the 4 KiB/2 MiB NUMA page-exposure analyzer.
+`.github/workflows/ramstream32-bench-script-ci.yml` syntax-checks the sweep/build scripts, compiles the Python tools, validates sweep calibration on synthetic data, checks sequential and overlap-critical-path group planning, and validates the 4 KiB/2 MiB NUMA page-exposure analyzer.
 
 ## Next experiments
 
-The remaining large opportunities are increasingly memory-topology and critical-path problems:
+The remaining large opportunities are increasingly memory-topology and model-fitting problems:
 
 1. use the page-exposure results to decide whether authoritative CPU-owned slices should stay under THP, use 4 KiB pages, or receive a coarse socket-level memory policy;
 2. estimate separate NN, NR/NL, BLOCK, and CROSS weights from hardware counters instead of using equal cell weights;
-3. allocate CPU workers dynamically between HIGH and LOW according to the measured critical path, especially when `CPU_HIGH_OVERLAP=1`;
+3. extend the overlap model with measured per-group GPU-kernel cost rather than treating DMA as the entire removable GPU branch;
 4. for multi-GPU B300 nodes, keep the largest HIGH occupancy groups resident across more than one local step when dependencies permit, while CPU handles the long tail of small groups.
