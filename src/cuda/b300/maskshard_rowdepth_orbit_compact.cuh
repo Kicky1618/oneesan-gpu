@@ -21,14 +21,11 @@ static_assert(HIGH_LUT_K <= LOW_LUT_K,
 //   {HIGH ranks with peak <= cap} x {LOW mask-ranks with peak <= cap}.
 //
 // Build one peak-sorted rank permutation per factor group during setup. The
-// per-cap cumulative counts select exact active prefixes. A tiny per-job plan
-// (task prefix + LOW active count, ~150 B at W=28) is copied to constant memory
-// once before launching the 13 HIGH-position kernels, avoiding per-CTA prefix
-// construction.
+// per-cap cumulative counts stay host-only and generate a tiny per-job constant
+// plan (task prefix + LOW active count, ~150 B at W=28). Thus persistent GPU
+// metadata is only the two compact-rank permutations.
 __device__ __constant__ std::uint16_t* D_MS_ROW_DEPTH_LOW_COMPACT_RANK;
 __device__ __constant__ std::uint32_t* D_MS_ROW_DEPTH_HIGH_COMPACT_RANK;
-__device__ __constant__ std::uint16_t* D_MS_ROW_DEPTH_LOW_ACTIVE_COUNT;
-__device__ __constant__ std::uint32_t* D_MS_ROW_DEPTH_HIGH_ACTIVE_COUNT;
 __device__ __constant__ Code D_MS_ROW_DEPTH_COMPACT_TASK_PREFIX[HIGH_LUT_K + 3];
 __device__ __constant__ std::uint16_t D_MS_ROW_DEPTH_COMPACT_JOB_LOW_COUNT[HIGH_LUT_K + 2];
 
@@ -38,13 +35,12 @@ struct MaskShardRowDepthOrbitCompactCache {
 
     std::vector<std::uint16_t> low_rank;
     std::vector<std::uint32_t> high_rank;
+    // Host-only cumulative active counts used to construct each job plan.
     std::vector<std::uint16_t> low_count;
     std::vector<std::uint32_t> high_count;
 
     std::array<std::uint16_t*, 8> d_low_rank{};
     std::array<std::uint32_t*, 8> d_high_rank{};
-    std::array<std::uint16_t*, 8> d_low_count{};
-    std::array<std::uint32_t*, 8> d_high_count{};
     std::array<bool, 8> installed{};
     bool built = false;
 
@@ -127,15 +123,15 @@ struct MaskShardRowDepthOrbitCompactCache {
         }
 
         built = true;
-        const std::size_t bytes = low_rank.size() * sizeof(std::uint16_t)
-            + high_rank.size() * sizeof(std::uint32_t)
-            + low_count.size() * sizeof(std::uint16_t)
-            + high_count.size() * sizeof(std::uint32_t);
+        const std::size_t gpu_bytes = low_rank.size() * sizeof(std::uint16_t)
+                                    + high_rank.size() * sizeof(std::uint32_t);
+        const std::size_t host_count_bytes = low_count.size() * sizeof(std::uint16_t)
+                                           + high_count.size() * sizeof(std::uint32_t);
         std::cerr << "row-depth compact orbit metadata low_rank=" << low_rank.size()
                   << " high_rank=" << high_rank.size()
-                  << " low_counts=" << low_count.size()
-                  << " high_counts=" << high_count.size()
-                  << " mib=" << double(bytes) / double(1ULL << 20) << '\n';
+                  << " gpu_mib=" << double(gpu_bytes) / double(1ULL << 20)
+                  << " host_count_mib="
+                  << double(host_count_bytes) / double(1ULL << 20) << '\n';
     }
 
     Code make_job_plan(
@@ -184,22 +180,6 @@ struct MaskShardRowDepthOrbitCompactCache {
                           cudaMemcpyHostToDevice),
                "row-depth compact copy HIGH ranks");
         }
-        if (!low_count.empty()) {
-            ck(cudaMalloc(&d_low_count[dev], low_count.size() * sizeof(std::uint16_t)),
-               "row-depth compact alloc LOW counts");
-            ck(cudaMemcpy(d_low_count[dev], low_count.data(),
-                          low_count.size() * sizeof(std::uint16_t),
-                          cudaMemcpyHostToDevice),
-               "row-depth compact copy LOW counts");
-        }
-        if (!high_count.empty()) {
-            ck(cudaMalloc(&d_high_count[dev], high_count.size() * sizeof(std::uint32_t)),
-               "row-depth compact alloc HIGH counts");
-            ck(cudaMemcpy(d_high_count[dev], high_count.data(),
-                          high_count.size() * sizeof(std::uint32_t),
-                          cudaMemcpyHostToDevice),
-               "row-depth compact copy HIGH counts");
-        }
 
         ck(cudaMemcpyToSymbol(D_MS_ROW_DEPTH_LOW_COMPACT_RANK,
                               &d_low_rank[dev], sizeof(d_low_rank[dev])),
@@ -207,12 +187,6 @@ struct MaskShardRowDepthOrbitCompactCache {
         ck(cudaMemcpyToSymbol(D_MS_ROW_DEPTH_HIGH_COMPACT_RANK,
                               &d_high_rank[dev], sizeof(d_high_rank[dev])),
            "row-depth compact HIGH rank ptr");
-        ck(cudaMemcpyToSymbol(D_MS_ROW_DEPTH_LOW_ACTIVE_COUNT,
-                              &d_low_count[dev], sizeof(d_low_count[dev])),
-           "row-depth compact LOW count ptr");
-        ck(cudaMemcpyToSymbol(D_MS_ROW_DEPTH_HIGH_ACTIVE_COUNT,
-                              &d_high_count[dev], sizeof(d_high_count[dev])),
-           "row-depth compact HIGH count ptr");
         installed[dev] = true;
     }
 };
@@ -240,8 +214,8 @@ static Code maskshard_configure_row_depth_compact_group(
 
 // The v0.15 header already redirects report_high_mask_shard_layout() to a setup
 // hook that installs exact peak bytes. Replace that macro with one more setup
-// layer so compact permutations/counts are also built and uploaded before
-// setup_s is finalized.
+// layer so compact rank permutations are also built/uploaded before setup_s is
+// finalized. Active-count tables remain host-only.
 #ifdef report_high_mask_shard_layout
 #undef report_high_mask_shard_layout
 #endif
