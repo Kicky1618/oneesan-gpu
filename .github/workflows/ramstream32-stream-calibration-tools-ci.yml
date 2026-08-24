@@ -31,14 +31,12 @@ jobs:
       - name: Check LOW schedule propagation
         shell: bash
         run: |
-          grep -Fq 'CPU_LOW_SCHEDULE="${CPU_LOW_SCHEDULE:-dynamic}"' \
-            scripts/bench/ramstream32-cpu-high-stream-calibration.sh
-          grep -Fq '"$CPU_LOW_SCHEDULE" != contiguous' \
-            scripts/bench/ramstream32-cpu-high-stream-calibration.sh
-          grep -Fq 'CPU_LOW_SCHEDULE="$CPU_LOW_SCHEDULE"' \
-            scripts/bench/ramstream32-cpu-high-stream-calibration.sh
-          grep -Fq 'cpu_low_schedule=$CPU_LOW_SCHEDULE' \
-            scripts/bench/ramstream32-cpu-high-stream-calibration.sh
+          grep -Fq 'CPU_LOW_SCHEDULE="${CPU_LOW_SCHEDULE:-dynamic}"' scripts/bench/ramstream32-cpu-high-stream-calibration.sh
+          grep -Fq 'CPU_LOW_DOMAIN_SIZE="${CPU_LOW_DOMAIN_SIZE:-}"' scripts/bench/ramstream32-cpu-high-stream-calibration.sh
+          grep -Fq 'domain)' scripts/bench/ramstream32-cpu-high-stream-calibration.sh
+          grep -Fq 'CPU_LOW_DOMAIN_SIZE="$CPU_LOW_DOMAIN_SIZE"' scripts/bench/ramstream32-cpu-high-stream-calibration.sh
+          grep -Fq 'cpu_low_domain_size=${CPU_LOW_DOMAIN_SIZE:-none}' scripts/bench/ramstream32-cpu-high-stream-calibration.sh
+          grep -Fq 'LOW domain provenance mismatch' scripts/bench/ramstream32-cpu-high-stream-calibration.sh
       - name: Check calibration design
         shell: bash
         run: |
@@ -54,10 +52,7 @@ jobs:
           7	268435456	5000000	3000000	2000000	6000000
           EOF
           rm -rf /tmp/stream-design
-          python3 scripts/tools/design_cpu_high_stream_calibration.py \
-            /tmp/design-cost.tsv --out-dir /tmp/stream-design --samples 5 \
-            --min-roundtrip-mib 64 --max-roundtrip-mib 512 \
-            > /tmp/design.log
+          python3 scripts/tools/design_cpu_high_stream_calibration.py /tmp/design-cost.tsv --out-dir /tmp/stream-design --samples 5 --min-roundtrip-mib 64 --max-roundtrip-mib 512 > /tmp/design.log
           test "$(wc -l </tmp/stream-design/manifest.tsv)" -eq 6
           test "$(wc -l </tmp/stream-design/validation-all.groups)" -eq 5
           grep -Fq 'designed samples=5' /tmp/design.log
@@ -81,9 +76,7 @@ jobs:
           sample	5	4	0.101	10
           validation	0	-1	0.401	50
           EOF
-          python3 scripts/tools/fit_cpu_high_stream_weights.py \
-            /tmp/fit-cost.tsv /tmp/fit-runs.tsv \
-            --write-args /tmp/planner-weights.txt > /tmp/fit.log
+          python3 scripts/tools/fit_cpu_high_stream_weights.py /tmp/fit-cost.tsv /tmp/fit-runs.tsv --write-args /tmp/planner-weights.txt > /tmp/fit.log
           grep -Fq 'fit samples=5' /tmp/fit.log
           grep -Fq 'planner_args --cpu-gcell-s' /tmp/fit.log
           grep -Fq 'validation groups=5' /tmp/fit.log
@@ -91,11 +84,8 @@ jobs:
       - name: Check docs
         shell: bash
         run: |
-          grep -Fq 'design_cpu_high_stream_calibration.py' \
-            docs/ramstream32-cpu-high-stream-calibration.md
-          grep -Fq 'ramstream32-cpu-high-stream-calibration.sh' \
-            docs/ramstream32-cpu-high-stream-calibration.md
-          grep -Fq 'CPU_LOW_SCHEDULE' \
-            docs/ramstream32-cpu-high-stream-calibration.md
-          grep -Fq 'fit_cpu_high_stream_weights.py' \
-            docs/ramstream32-cpu-high-stream-calibration.md
+          grep -Fq 'design_cpu_high_stream_calibration.py' docs/ramstream32-cpu-high-stream-calibration.md
+          grep -Fq 'ramstream32-cpu-high-stream-calibration.sh' docs/ramstream32-cpu-high-stream-calibration.md
+          grep -Fq 'CPU_LOW_SCHEDULE' docs/ramstream32-cpu-high-stream-calibration.md
+          grep -Fq 'CPU_LOW_DOMAIN_SIZE' docs/ramstream32-cpu-high-stream-calibration.md
+          grep -Fq 'fit_cpu_high_stream_weights.py' docs/ramstream32-cpu-high-stream-calibration.md
