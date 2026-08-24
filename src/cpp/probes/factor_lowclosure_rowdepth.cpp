@@ -5,6 +5,7 @@
 #include <iomanip>
 #include <iostream>
 #include <map>
+#include <string>
 #include <vector>
 
 using U64 = std::uint64_t;
@@ -45,9 +46,6 @@ int main(int argc, char** argv) {
     if (W < 4 || W > 30 || low < 1 || high < 1 || low >= 16 || high >= 16
         || full_cap >= 16) return 1;
 
-    // HIGH prefix: aggregate by ending height and exact peak. Occupancy masks
-    // only partition owner-local groups; summed LOW closure body work depends on
-    // the total number of HIGH rows in each (height,peak) bucket.
     std::vector<std::map<int, U64>> high_hist(high + 2);
     auto high_rec = [&](auto&& self, int pos, int h, int peak) -> void {
         if (pos < 0) {
@@ -132,10 +130,10 @@ int main(int argc, char** argv) {
             1597591185761ULL,
             1615842182786ULL,
             1619178764930ULL,
-            1619587481367ULL,
-            1619635242592ULL,
-            1619638847461ULL,
-            1619638939340ULL,
+            1619601916817ULL,
+            1619637146593ULL,
+            1619638897486ULL,
+            1619638940933ULL,
             1619638941284ULL,
         };
         for (int cap = 1; cap <= full_cap; ++cap)
