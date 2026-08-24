@@ -9,8 +9,10 @@ on:
       - 'src/cuda/gridfp/ramstream32_cpu_low_inplace.hpp'
       - 'src/cuda/gridfp/ramstream32_cpu_high.hpp'
       - 'src/cuda/gridfp/ramstream32_cpu_high_direct.hpp'
+      - 'src/cuda/gridfp/ramstream32_cpu_affinity.hpp'
       - 'src/cuda/gridfp/probes/ramstream32_cpu_low_selftest.cu'
       - 'src/cuda/gridfp/probes/ramstream32_cpu_high_cost_plan.cu'
+      - 'src/cuda/gridfp/probes/ramstream32_cpu_affinity_selftest.cpp'
       - 'scripts/build/gridfp-ramstream32-factorized-hybrid-sparse.sh'
       - 'scripts/build/gridfp-ramstream32-cpu-high-cost-plan.sh'
       - '.github/workflows/ramstream32-sparse-ci.yml'
@@ -22,8 +24,10 @@ on:
       - 'src/cuda/gridfp/ramstream32_cpu_low_inplace.hpp'
       - 'src/cuda/gridfp/ramstream32_cpu_high.hpp'
       - 'src/cuda/gridfp/ramstream32_cpu_high_direct.hpp'
+      - 'src/cuda/gridfp/ramstream32_cpu_affinity.hpp'
       - 'src/cuda/gridfp/probes/ramstream32_cpu_low_selftest.cu'
       - 'src/cuda/gridfp/probes/ramstream32_cpu_high_cost_plan.cu'
+      - 'src/cuda/gridfp/probes/ramstream32_cpu_affinity_selftest.cpp'
       - 'scripts/build/gridfp-ramstream32-factorized-hybrid-sparse.sh'
       - 'scripts/build/gridfp-ramstream32-cpu-high-cost-plan.sh'
       - '.github/workflows/ramstream32-sparse-ci.yml'
@@ -96,6 +100,14 @@ jobs:
           grep -Fq 'cpu_high_policy=file' /tmp/high-offload-file.txt
           grep -Fq 'cpu_high_groups=2' /tmp/high-offload-file.txt
           grep -Fq 'cpu_high_selection_hash=' /tmp/high-offload-file.txt
+      - name: Validate CPU HIGH affinity parser
+        if: matrix.width == 22
+        shell: bash
+        run: |
+          g++ -O2 -std=c++17 -pthread \
+            src/cuda/gridfp/probes/ramstream32_cpu_affinity_selftest.cpp \
+            -o build/ramstream32_cpu_affinity_selftest
+          build/ramstream32_cpu_affinity_selftest
       - name: Validate exact CPU HIGH cost plan
         if: matrix.width == 22
         shell: bash
@@ -117,4 +129,5 @@ jobs:
             -DTARGET_W=10 -DLOW_LUT_K=5 -DHIGH_LUT_K=4 \
             src/cuda/gridfp/probes/ramstream32_cpu_low_selftest.cu \
             -o build/ramstream32_cpu_low_selftest
-          build/ramstream32_cpu_low_selftest
+          build/ramstream32_cpu_low_selftest 2>&1 | tee /tmp/cpu-low-selftest.txt
+          grep -Fq 'cpu_high_direct_schedule jobs=' /tmp/cpu-low-selftest.txt
