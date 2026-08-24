@@ -58,8 +58,8 @@ int main(int argc, char** argv) {
 
     std::cout
         << "group\tmask\troundtrip_bytes\tmain_states\tblocked_states"
-        << "\tauthoritative_bytes\tpage4k_boundary_upper_bytes"
-        << "\tpage2m_boundary_upper_bytes"
+        << "\tauthoritative_bytes\tgpu_state_steps"
+        << "\tpage4k_boundary_upper_bytes\tpage2m_boundary_upper_bytes"
         << "\tnn_cells\tnrnl_cells\tblock_closure_cells\tcross_closure_cells"
         << "\ttotal_cells\n";
 
@@ -115,11 +115,13 @@ int main(int argc, char** argv) {
         unsigned long long authoritative_bytes =
             (main_states + blocked_states) * sizeof(Count);
         unsigned long long roundtrip_bytes = 2ull * authoritative_bytes;
+        unsigned long long gpu_state_steps =
+            static_cast<unsigned long long>(H) * (main_states + blocked_states);
         uint32_t group = group_from_low_mask(mask);
 
         std::cout << group << '\t' << mask << '\t' << roundtrip_bytes
                   << '\t' << main_states << '\t' << blocked_states
-                  << '\t' << authoritative_bytes
+                  << '\t' << authoritative_bytes << '\t' << gpu_state_steps
                   << '\t' << page4k_upper << '\t' << page2m_upper
                   << '\t' << nn_cells << '\t' << nrnl_cells
                   << '\t' << block_cells << '\t' << cross_cells
