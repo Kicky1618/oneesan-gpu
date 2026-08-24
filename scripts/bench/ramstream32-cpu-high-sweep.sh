@@ -18,6 +18,7 @@ CPU_HIGH_OVERLAP="${CPU_HIGH_OVERLAP:-0}"
 CPU_HIGH_CPU_LIST="${CPU_HIGH_CPU_LIST:-}"
 CPU_LOW_CPU_LIST="${CPU_LOW_CPU_LIST:-}"
 CPU_LOW_SCHEDULE="${CPU_LOW_SCHEDULE:-dynamic}"
+CPU_LOW_DOMAIN_SIZE="${CPU_LOW_DOMAIN_SIZE:-}"
 THRESHOLDS="${THRESHOLDS:-0 64 128 256 512 1024}"
 REPEATS="${REPEATS:-1}"
 BUILD="${BUILD:-1}"
@@ -42,9 +43,15 @@ if [[ "$CPU_HIGH_OVERLAP" != 0 && "$CPU_HIGH_OVERLAP" != 1 ]]; then
   echo "CPU_HIGH_OVERLAP must be 0 or 1" >&2
   exit 2
 fi
-if [[ "$CPU_LOW_SCHEDULE" != dynamic && "$CPU_LOW_SCHEDULE" != sticky && "$CPU_LOW_SCHEDULE" != contiguous ]]; then
-  echo "CPU_LOW_SCHEDULE must be dynamic, sticky, or contiguous" >&2
+if [[ "$CPU_LOW_SCHEDULE" != dynamic && "$CPU_LOW_SCHEDULE" != sticky && "$CPU_LOW_SCHEDULE" != contiguous && "$CPU_LOW_SCHEDULE" != domain ]]; then
+  echo "CPU_LOW_SCHEDULE must be dynamic, sticky, contiguous, or domain" >&2
   exit 2
+fi
+if [[ "$CPU_LOW_SCHEDULE" == domain ]]; then
+  if [[ ! "$CPU_LOW_DOMAIN_SIZE" =~ ^[1-9][0-9]*$ ]] || (( CPU_LOW_DOMAIN_SIZE > CPU_WORKERS )); then
+    echo "CPU_LOW_DOMAIN_SIZE must be in 1..CPU_WORKERS for domain schedule" >&2
+    exit 2
+  fi
 fi
 if [[ "$ANALYZE" != 0 && "$ANALYZE" != 1 ]]; then
   echo "ANALYZE must be 0 or 1" >&2
@@ -136,6 +143,7 @@ cpu_high_overlap=$CPU_HIGH_OVERLAP
 cpu_high_cpu_list=${CPU_HIGH_CPU_LIST:-none}
 cpu_low_cpu_list=${CPU_LOW_CPU_LIST:-none}
 cpu_low_schedule=$CPU_LOW_SCHEDULE
+cpu_low_domain_size=${CPU_LOW_DOMAIN_SIZE:-none}
 thresholds=$THRESHOLDS
 repeats=$REPEATS
 analyze=$ANALYZE
@@ -156,7 +164,7 @@ run_one() {
   line="$(CPU_HIGH_MAX_MIB="$threshold" CPU_HIGH_WORKERS="$CPU_HIGH_WORKERS" \
     CPU_HIGH_MODE="$CPU_HIGH_MODE" CPU_HIGH_OVERLAP="$CPU_HIGH_OVERLAP" \
     CPU_HIGH_CPU_LIST="$CPU_HIGH_CPU_LIST" CPU_LOW_CPU_LIST="$CPU_LOW_CPU_LIST" \
-    CPU_LOW_SCHEDULE="$CPU_LOW_SCHEDULE" \
+    CPU_LOW_SCHEDULE="$CPU_LOW_SCHEDULE" CPU_LOW_DOMAIN_SIZE="$CPU_LOW_DOMAIN_SIZE" \
     "$bin" "$N" "$MODULUS" "$GPU_TARGET_MIB" "$CPU_WORKERS" | tail -n1)"
   residue="$(field "$line" residue)"
   printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
