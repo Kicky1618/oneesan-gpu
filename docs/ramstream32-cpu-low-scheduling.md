@@ -90,7 +90,7 @@ cross_worker_auth_page_fraction_2m=...
 
 The factorized storage orders HIGH codes by occupancy mask within each height. If two adjacent nonempty mask ranges meet inside one 4 KiB or 2 MiB page, the page is shared by the two LOW groups. The probe counts unique shared boundary pages and the subset whose logical owners differ.
 
-The same probe computes the contiguous partition using the same min-max formulation used by production and reports:
+The same probe constructs the actual production contiguous pool and reports its cached assignment:
 
 ```text
 contiguous_active_workers=...
@@ -135,11 +135,41 @@ contiguous_cross_domain_pages_2m=...
 contiguous_cross_domain_auth_page_fraction_2m=...
 ```
 
+### Domain-hybrid research plan
+
+The same `--domain-size` run also evaluates a research-only middle ground that is not yet a production `CPU_LOW_SCHEDULE` mode. `domain-hybrid` constrains only NUMA-domain ownership to contiguous numeric mask ranges, then uses exact-cell LPT among workers inside each domain.
+
+The outer partition binary-searches a normalized per-worker domain capacity. For a domain containing `k` workers, its contiguous mask interval may contain at most `k * cap` exact cells. Once the domain ranges are fixed, jobs inside each range are sorted by exact work and assigned LPT to that domain's workers.
+
+This gives a three-way structural comparison:
+
+```text
+sticky/LPT:     best unconstrained worker balance; many possible domain cuts
+contiguous:     every worker owns one mask interval; minimum worker-order cuts
+ domain-hybrid: each domain owns one mask interval; LPT restored inside domain
+```
+
+The probe reports:
+
+```text
+hybrid_domain_active_domains=...
+hybrid_domain_optimal_per_worker_cap=...
+hybrid_domain_min_worker_cells=...
+hybrid_domain_max_worker_cells=...
+hybrid_domain_imbalance=...
+hybrid_domain_cross_worker_pages_4k=...
+hybrid_domain_cross_worker_pages_2m=...
+hybrid_domain_cross_domain_pages_4k=...
+hybrid_domain_cross_domain_pages_2m=...
+```
+
+The important comparison is `hybrid_domain_imbalance` versus `contiguous_imbalance`, together with `hybrid_domain_cross_domain_pages_*` versus ordinary LPT's `cross_domain_pages_*`. If domain-hybrid preserves most of LPT's balance while driving domain cuts close to contiguous, it is the stronger candidate for the next production scheduler. It deliberately allows many cross-worker boundaries inside one domain because those do not by themselves imply remote-NUMA traffic.
+
 Sanity cases are `--domain-size 1`, where cross-domain equals cross-worker, and `--domain-size <workers>`, where all workers are one modeled domain and cross-domain cuts are zero.
 
 These are static ownership exposures, not measured remote-memory bytes. First-touch placement, AutoNUMA, THP, caches, and GPU DMA still determine actual traffic.
 
-Use `--workers` to dump every worker's LPT and contiguous exact-cell load. The probe constructs topology/descriptor metadata and LOW jobs only; it does not mmap the multi-terabyte authoritative state arrays.
+Use `--workers` to dump every worker's LPT, contiguous, and domain-hybrid exact-cell load. The probe constructs topology/descriptor metadata and LOW jobs only; it does not mmap the multi-terabyte authoritative state arrays.
 
 ## Clean timing comparisons
 
@@ -176,7 +206,7 @@ so each schedule occupies each run position equally over multiples of three repe
 
 A cost-model HIGH policy can be supplied with `CPU_HIGH_GROUPS_FILE=/path/to/groups` instead of relying on `CPU_HIGH_MAX_MIB`.
 
-No schedule is assumed faster. Dynamic can win from finer load balancing; LPT can win from stable ownership with near-perfect balance; contiguous can win when reduced address/page boundary sharing outweighs its additional balance constraint.
+No schedule is assumed faster. Dynamic can win from finer load balancing; LPT can win from stable ownership with near-perfect balance; contiguous can win when reduced address/page boundary sharing outweighs its additional balance constraint. Domain-hybrid should not be timed as a production mode until its static tradeoff justifies promoting it from the probe.
 
 ## NUMA diagnosis
 
@@ -192,4 +222,4 @@ Keep affinity, HIGH policy, overlap mode, and sample spacing identical. Compare 
 
 ## Benchmark provenance
 
-The LOW schedule comparison and NUMA diagnostic runners explicitly propagate and record the selected schedule. The CPU HIGH threshold/policy/stream calibration harnesses should likewise record the LOW schedule whenever they are used to calibrate a mixed CPU/GPU configuration.
+The LOW schedule comparison and NUMA diagnostic runners explicitly propagate and record the selected schedule. CPU HIGH threshold sweeps, policy A/B runs, and stream calibration now also propagate and record `CPU_LOW_SCHEDULE`, including `contiguous`, so mixed CPU/GPU calibration results retain the LOW scheduling condition that produced them.
