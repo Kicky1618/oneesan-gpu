@@ -94,7 +94,7 @@ static void gpu_direct_drop_unused_low_block_desc(GpuDirectDeviceTables& tables)
     // Therefore D_LOWDESC_BLOCK is never read by the four direct kernels.
     // LowDescDeviceTables currently installs both arrays for compatibility with
     // older out-of-place kernels; release the unused one immediately so it does
-    // not occupy resident HBM.  A future metadata installer can avoid even this
+    // not occupy resident HBM. A future metadata installer can avoid even this
     // transient allocation.
     if (tables.lowdesc.block_desc) {
         ck(cudaFree(tables.lowdesc.block_desc), "gpu direct free unused low block desc");
@@ -148,7 +148,7 @@ int main(int argc, char** argv) {
         + highdirect.closure_off.block.size() + highdirect.closure_off.cross.size()) * sizeof(uint32_t);
     metadata_bytes += (cross.high_rank.size() + cross.low_rank.size()) * sizeof(uint32_t);
     size_t total_device_bytes = authoritative_bytes + metadata_bytes;
-    double active_fraction = work.baseline_state_steps
+    double iteration_fraction = work.baseline_state_steps
         ? double(work.direct_cells()) / double(work.baseline_state_steps) : 0.0;
 
     if (plan_only) {
@@ -164,8 +164,8 @@ int main(int argc, char** argv) {
             << " total_device_gib=" << double(total_device_bytes) / double(1ULL << 30)
             << " baseline_state_steps=" << work.baseline_state_steps
             << " direct_cells=" << work.direct_cells()
-            << " direct_active_fraction=" << active_fraction
-            << " direct_scan_reduction=" << (1.0 - active_fraction)
+            << " direct_iteration_fraction=" << iteration_fraction
+            << " direct_scan_reduction=" << (1.0 - iteration_fraction)
             << " low_orbit_cells=" << work.low_orbit_cells
             << " low_closure_cells=" << work.low_closure_cells
             << " high_nn_cells=" << work.high_nn_cells
@@ -251,7 +251,8 @@ int main(int argc, char** argv) {
         << " metadata_mib=" << double(metadata_bytes) / double(1ULL << 20)
         << " baseline_state_steps=" << work.baseline_state_steps
         << " direct_cells=" << work.direct_cells()
-        << " direct_active_fraction=" << active_fraction
+        << " direct_iteration_fraction=" << iteration_fraction
+        << " direct_scan_reduction=" << (1.0 - iteration_fraction)
         << " threads=" << threads
         << " grid_x=" << grid_x
         << " grid_y=" << grid_y
