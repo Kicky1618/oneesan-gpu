@@ -18,8 +18,8 @@ spec.loader.exec_module(base)
 
 base.VARIANTS.update(
     {
-        "v0.24": "src/cuda/b300/oneesan_cuda_gridfp_b300_hbm32_maskshard_blockorbit_compactaux_fullclosure_highrowpack16_lazyblockinit_rowdepthexact_tightlaunch_rowdepthorbit_rowcaplaunch_exacttasks_highclosurerowdepth_tasklaunch_exactclosuretasks_exactclosurelaunch_lowclosurerowdepth_batch_guarded.cu",
-        "v0.25": "src/cuda/b300/oneesan_cuda_gridfp_b300_hbm32_maskshard_blockorbit_compactaux_fullclosure_highrowpack29_lazyblockinit_rowdepthexact_tightlaunch_rowdepthorbit_rowcaplaunch_exacttasks_highclosurerowdepth_tasklaunch_exactclosuretasks_exactclosurelaunch_lowclosurerowdepth_batch_guarded.cu",
+        "v0.24": "src/cuda/b300/oneesan_b300_maskshard_v024_lowclosure_rowdepth.cu",
+        "v0.25": "src/cuda/b300/oneesan_b300_maskshard_v025_highrowpack29.cu",
     }
 )
 
