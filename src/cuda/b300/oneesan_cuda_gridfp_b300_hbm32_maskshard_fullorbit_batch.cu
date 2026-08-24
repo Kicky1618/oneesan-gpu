@@ -40,6 +40,9 @@
 #if defined(MASKSHARD_LOW_BLOCK_ORBIT_TIGHT_LAUNCH) && !defined(MASKSHARD_BLOCK_ORBIT)
 #error "tight LOW BLOCKED-domain launch requires BLOCKED-domain orbit"
 #endif
+#if defined(MASKSHARD_LOW_ORBIT_ROW_DEPTH_COMPACT_LAUNCH) && !defined(MASKSHARD_LOW_ORBIT_ROW_DEPTH_COMPACT)
+#error "exact LOW orbit launch requires exact compact LOW orbit task mapping"
+#endif
 
 struct FullOrbitBatchAddress {
     int owner = -1;
@@ -399,8 +402,21 @@ static void process_fullorbit_batch_low_group(
     Count* mainv = authoritative_main + shard.main_base[mask];
     Count* blockv = authoritative_block + shard.block_base[mask];
     const int bm = int(std::min<Code>(65535, (main_n + threads - 1) / threads));
-#ifdef MASKSHARD_LOW_BLOCK_ORBIT_TIGHT_LAUNCH
+#if defined(MASKSHARD_LOW_BLOCK_ORBIT_TIGHT_LAUNCH) && !defined(MASKSHARD_LOW_ORBIT_ROW_DEPTH_COMPACT_LAUNCH)
     const int bd = int(std::min<Code>(65535, (block_n + threads - 1) / threads));
+#endif
+#ifdef MASKSHARD_LOW_ORBIT_ROW_DEPTH_COMPACT_LAUNCH
+    const Code low_orbit_n = maskshard_loworbit_compact_total_current_device();
+    const int low_orbit_cap = std::min(zero_based_row + 1, TARGET_W / 2);
+    if (low_orbit_cap == TARGET_W / 2 && low_orbit_n != block_n) {
+        std::cerr << "fullorbit-batch exact LOW orbit full-cap mismatch mask="
+                  << mask << " got=" << low_orbit_n
+                  << " expected=" << block_n << '\n';
+        std::exit(212);
+    }
+    const int bd_low_orbit = low_orbit_n
+        ? int(std::min<Code>(65535, (low_orbit_n + threads - 1) / threads))
+        : 0;
 #endif
 #ifdef MASKSHARD_LOW_CLOSURE_COLS
     const int warps_per_block = (threads + 31) / 32;
@@ -410,7 +426,10 @@ static void process_fullorbit_batch_low_group(
 
     for (int p = LOW_LUT_K; p >= 1; --p) {
         auto t = std::chrono::steady_clock::now();
-#ifdef MASKSHARD_LOW_BLOCK_ORBIT_TIGHT_LAUNCH
+#ifdef MASKSHARD_LOW_ORBIT_ROW_DEPTH_COMPACT_LAUNCH
+        if (bd_low_orbit)
+            maskshard_main_block_loworbit_kernel<<<bd_low_orbit, threads>>>(mainv, blockv, main_n, p);
+#elif defined(MASKSHARD_LOW_BLOCK_ORBIT_TIGHT_LAUNCH)
         if (block_n)
             maskshard_main_block_loworbit_kernel<<<bd, threads>>>(mainv, blockv, main_n, p);
 #else
