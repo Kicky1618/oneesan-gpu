@@ -4,6 +4,7 @@ on:
   push:
     paths:
       - 'src/cuda/gridfp/ramstream32_gpu_direct.cuh'
+      - 'src/cuda/gridfp/oneesan_cuda_gridfp_gpu_direct.cu'
       - 'src/cuda/gridfp/probes/ramstream32_gpu_direct_selftest.cu'
       - 'src/cuda/gridfp/probes/ramstream32_cpu_low_selftest.cu'
       - 'src/cuda/gridfp/ramstream32_cpu_low_inplace.hpp'
@@ -12,10 +13,12 @@ on:
       - 'src/cuda/gridfp/ramstream32_cpu_high_direct.hpp'
       - 'src/cuda/gridfp/ramstream32_lowdesc.cuh'
       - 'src/cuda/gridfp/ramstream32_highdesc.cuh'
+      - 'scripts/build/gridfp-gpu-direct.sh'
       - '.github/workflows/gpu-direct-compile.yml'
   pull_request:
     paths:
       - 'src/cuda/gridfp/ramstream32_gpu_direct.cuh'
+      - 'src/cuda/gridfp/oneesan_cuda_gridfp_gpu_direct.cu'
       - 'src/cuda/gridfp/probes/ramstream32_gpu_direct_selftest.cu'
       - 'src/cuda/gridfp/probes/ramstream32_cpu_low_selftest.cu'
       - 'src/cuda/gridfp/ramstream32_cpu_low_inplace.hpp'
@@ -24,6 +27,7 @@ on:
       - 'src/cuda/gridfp/ramstream32_cpu_high_direct.hpp'
       - 'src/cuda/gridfp/ramstream32_lowdesc.cuh'
       - 'src/cuda/gridfp/ramstream32_highdesc.cuh'
+      - 'scripts/build/gridfp-gpu-direct.sh'
       - '.github/workflows/gpu-direct-compile.yml'
   workflow_dispatch:
 
@@ -41,3 +45,24 @@ jobs:
             -DTARGET_W=10 -DLOW_LUT_K=5 -DHIGH_LUT_K=4 \
             src/cuda/gridfp/probes/ramstream32_gpu_direct_selftest.cu \
             -o build/ramstream32_gpu_direct_selftest_w10
+      - name: Compile W22 resident GPU direct backend
+        shell: bash
+        run: |
+          nvcc -O3 -std=c++17 -lineinfo -arch=sm_80 \
+            -DTARGET_W=22 -DLOW_LUT_K=11 -DHIGH_LUT_K=10 \
+            src/cuda/gridfp/oneesan_cuda_gridfp_gpu_direct.cu \
+            -o build/oneesan_cuda_gridfp_gpu_direct_n21
+      - name: Validate W22 host-side direct plan
+        shell: bash
+        run: |
+          build/oneesan_cuda_gridfp_gpu_direct_n21 \
+            21 4294967291 256 16 8 --plan-only 2>&1 | tee /tmp/gpu-direct-plan.txt
+          grep -Fq 'backend=gridfp-gpu-direct-v0.1-plan' /tmp/gpu-direct-plan.txt
+          grep -Fq 'scratch_bytes=0' /tmp/gpu-direct-plan.txt
+      - name: Compile W28 resident GPU direct backend
+        shell: bash
+        run: |
+          nvcc -O3 -std=c++17 -lineinfo -arch=sm_80 \
+            -DTARGET_W=28 -DLOW_LUT_K=14 -DHIGH_LUT_K=13 \
+            src/cuda/gridfp/oneesan_cuda_gridfp_gpu_direct.cu \
+            -o build/oneesan_cuda_gridfp_gpu_direct_n27
