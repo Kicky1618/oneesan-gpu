@@ -18,6 +18,7 @@
 #include "ramstream32_cpu_low_sparse_persistent.hpp"
 #include "ramstream32_cpu_high.hpp"
 #include "ramstream32_cpu_high_direct_persistent.hpp"
+#include "ramstream32_numa_sample.hpp"
 
 static void hybrid_sparse_release_dense_host(StorageFactorHost& storage) {
     storage.low_packed_rank.clear(); storage.low_packed_rank.shrink_to_fit();
@@ -132,6 +133,7 @@ int main(int argc, char** argv) {
     int cpu_workers = argc > 4 ? std::max(1, std::atoi(argv[4])) : 4;
     bool plan_only = argc > 5 && std::strcmp(argv[5], "--plan-only") == 0;
     double cpu_high_max_mib = env_nonnegative_double("CPU_HIGH_MAX_MIB", 0.0);
+    double numa_sample_mib = env_nonnegative_double("RAMSTREAM_NUMA_SAMPLE_MIB", 0.0);
     int cpu_high_workers = env_positive_int("CPU_HIGH_WORKERS", cpu_workers);
     bool cpu_high_overlap = env_bool("CPU_HIGH_OVERLAP", false);
     const char* cpu_high_groups_file = std::getenv("CPU_HIGH_GROUPS_FILE");
@@ -271,7 +273,7 @@ int main(int argc, char** argv) {
 
     if (plan_only) {
         std::cout
-            << "backend=gridfp-ramstream32-factorized-hybrid-sparse-v5.15-plan"
+            << "backend=gridfp-ramstream32-factorized-hybrid-sparse-v5.16-plan"
             << " n=" << n
             << " gpu_high_desc_mib=" << highdesc_mib
             << " gpu_mask_mib=" << mask_mib
@@ -302,6 +304,7 @@ int main(int argc, char** argv) {
             << " cpu_low_pointer_workspace=stack"
             << " cpu_high_affinity=" << (cpu_high_explicit_affinity ? "explicit" : "default")
             << " cpu_low_affinity=" << (cpu_low_explicit_affinity ? "explicit" : "default")
+            << " numa_sample_mib=" << numa_sample_mib
             << " cpu_high_selection_hash=" << selection_hash
             << " cpu_high_max_mib=" << cpu_high_max_mib
             << " cpu_high_groups=" << selected_cpu_high_jobs.size()
@@ -385,12 +388,24 @@ int main(int argc, char** argv) {
             run_cpu_high();
         }
         cpu_low.run(cpu_low_jobs,main_auth,block_auth,storage,layout,sparse,mod);
+        if (row == 0 && numa_sample_mib > 0.0) {
+            ramstream_print_numa_sample(
+                "row1", "main", main_auth.ptr, main_auth.bytes, numa_sample_mib);
+            ramstream_print_numa_sample(
+                "row1", "block", block_auth.ptr, block_auth.bytes, numa_sample_mib);
+        }
         uint64_t cpu_high_groups = cpu_high_direct_mode
             ? cpu_high_direct.groups() : cpu_high_scratch.groups();
         std::cerr<<"row "<<row+1<<'/'<<W
                  <<" gpu_groups="<<gpu.groups
                  <<" cpu_high_groups="<<cpu_high_groups
                  <<" cpu_low_groups="<<cpu_low.groups()<<'\n';
+    }
+    if (numa_sample_mib > 0.0) {
+        ramstream_print_numa_sample(
+            "final", "main", main_auth.ptr, main_auth.bytes, numa_sample_mib);
+        ramstream_print_numa_sample(
+            "final", "block", block_auth.ptr, block_auth.bytes, numa_sample_mib);
     }
 
     double wall_s=ram_seconds_since(wall0);
@@ -407,7 +422,7 @@ int main(int argc, char** argv) {
         : double(cpu_high_scratch.peak_scratch_bytes())/double(1<<20);
 
     std::cout
-        << "backend=gridfp-ramstream32-factorized-hybrid-sparse-v5.15"
+        << "backend=gridfp-ramstream32-factorized-hybrid-sparse-v5.16"
         << " n="<<n<<" residue="<<answer<<" modulus="<<mod
         << " gpu_high_desc_mib="<<highdesc_mib<<" gpu_mask_mib="<<mask_mib
         << " cpu_sparse_nn_orbit_mib="<<sparse_nn_orbit_mib
@@ -434,6 +449,7 @@ int main(int argc, char** argv) {
         << " cpu_low_pointer_workspace=stack"
         << " cpu_high_affinity=" << (cpu_high_explicit_affinity ? "explicit" : "default")
         << " cpu_low_affinity=" << (cpu_low_explicit_affinity ? "explicit" : "default")
+        << " numa_sample_mib=" << numa_sample_mib
         << " cpu_high_worker_start_s="<<cpu_high_direct.worker_start_s
         << " cpu_low_worker_start_s="<<cpu_low.worker_start_s
         << " cpu_high_selection_hash="<<selection_hash
