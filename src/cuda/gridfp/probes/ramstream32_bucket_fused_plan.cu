@@ -15,6 +15,7 @@
 #include "../ramstream32_gpu_direct_gather.cuh"
 #include "../ramstream32_gpu_direct_gather_cross.cuh"
 #include "../ramstream32_gpu_direct_fused.cuh"
+#include "../ramstream32_gpu_direct_fused_validate.hpp"
 #include "../ramstream32_bucket_layout.hpp"
 #include "../ramstream32_bucket_direct.hpp"
 #include "../ramstream32_bucket_fused.cuh"
@@ -30,7 +31,7 @@ int main(){
     CpuHighDirectHost highdirect=build_cpu_high_direct(storage,layout,highdesc);
     GpuDirectGatherHost ordinary=build_gpu_direct_gather(layout,lowdesc,loworbit,highdirect);
     GpuDirectCrossGatherHost cross=build_gpu_direct_cross_gather(storage,layout,lowdesc,loworbit,highdirect);
-    GpuDirectFusedHost fused=build_gpu_direct_fused(layout,ordinary,cross);
+    GpuDirectFusedHost fused=build_gpu_direct_fused_checked(layout,ordinary,cross);
     CpuLowSparseHost lowsparse=build_cpu_low_sparse(storage,layout,lowdesc,loworbit);
     BucketOwnerHost owner=build_bucket_owners(G_FACTOR,storage);
     BucketPhysicalLayoutHost phy=build_bucket_physical_layout(layout,owner);
