@@ -12,6 +12,10 @@
 #error "LOW group sync currently layers on the compact LOW group host hook"
 #endif
 
+#ifdef MASKSHARD_LOW_ORBIT_WARP_ROW_TASKS
+#include "maskshard_loworbit_warprow.cuh"
+#endif
+
 // Queue the complete LOW orbit/closure chain for one fixed HIGH-mask group on
 // the same CUDA default stream and wait only after the final closure.  Stream
 // order preserves every orbit -> closure -> next-orbit dependency.  The final
