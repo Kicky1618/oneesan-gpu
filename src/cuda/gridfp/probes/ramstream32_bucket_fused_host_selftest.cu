@@ -53,8 +53,9 @@ static Count bkh_sum_high_preimages(
             if(s==1){
                 uint32_t z=3u<<(2*pos),src_code=(dest_code&~z)|(uint32_t(::L)<<(2*pos));
                 uint32_t x=f.high_direct[gpu_direct_ternary_key_host(src_code,HIGH_LUT_K)];
-                if(x!=BKF_DIRECT_INVALID&&bkf_direct_height(x)==sb.he){
-                    uint32_t hl=bkf_direct_locator(x);
+                uint32_t xh=(x>>BKF_DIRECT_HEIGHT_SHIFT)&BKF_DIRECT_HEIGHT_MASK;
+                if(x!=BKF_DIRECT_INVALID&&xh==sb.he){
+                    uint32_t hl=x&BKF_LOC_MASK;
                     if(bkf_loc_owner(hl)==fixed){
                         uint32_t hr=bkf_loc_rank(hl);
                         Count v0=g[fixed][low_slot][size_t(sb.off+Code(hr)*sb.cols+low_rank)];
@@ -83,8 +84,9 @@ static Count bkh_sum_low_preimages(
             if(s==1){
                 uint32_t z=3u<<(2*pos),src_code=(dest_code&~z)|(uint32_t(R)<<(2*pos));
                 uint32_t x=f.low_direct[gpu_direct_ternary_key_host(src_code,LOW_LUT_K)];
-                if(x!=BKF_DIRECT_INVALID&&bkf_direct_height(x)==sb.hs){
-                    uint32_t ll=bkf_direct_locator(x);
+                uint32_t xh=(x>>BKF_DIRECT_HEIGHT_SHIFT)&BKF_DIRECT_HEIGHT_MASK;
+                if(x!=BKF_DIRECT_INVALID&&xh==sb.hs){
+                    uint32_t ll=x&BKF_LOC_MASK;
                     if(bkf_loc_owner(ll)==fixed){
                         uint32_t lr=bkf_loc_rank(ll);
                         Count v0=g[high_slot][fixed][size_t(sb.off+Code(high_rank)*sb.cols+lr)];
