@@ -1,0 +1,98 @@
+name: B300 LOW orbit exact tasks v0.30 research
+
+on:
+  push:
+    paths:
+      - 'src/cpp/probes/factor_loworbit_rowdepth_tasks.cpp'
+      - 'src/cpp/probes/factor_loworbit_rowdepth_taskmap.cpp'
+      - 'src/cuda/b300/maskshard_loworbit_rowdepth_compact.cuh'
+      - 'src/cuda/b300/maskshard_loworbit_rowdepth_compact_host.cuh'
+      - 'src/cuda/b300/maskshard_lowclosure_kernel.cuh'
+      - 'src/cuda/b300/oneesan_b300_maskshard_v029_loworbit_tightlaunch.cu'
+      - 'src/cuda/b300/oneesan_b300_maskshard_v030_loworbit_exacttasks.cu'
+      - 'scripts/bench/b300_maskshard_loworbit_exacttasks_ab.py'
+      - '.github/workflows/b300-loworbit-exacttasks-v30.yml'
+  pull_request:
+    paths:
+      - 'src/cpp/probes/factor_loworbit_rowdepth_tasks.cpp'
+      - 'src/cpp/probes/factor_loworbit_rowdepth_taskmap.cpp'
+      - 'src/cuda/b300/maskshard_loworbit_rowdepth_compact.cuh'
+      - 'src/cuda/b300/maskshard_loworbit_rowdepth_compact_host.cuh'
+      - 'src/cuda/b300/maskshard_lowclosure_kernel.cuh'
+      - 'src/cuda/b300/oneesan_b300_maskshard_v029_loworbit_tightlaunch.cu'
+      - 'src/cuda/b300/oneesan_b300_maskshard_v030_loworbit_exacttasks.cu'
+      - 'scripts/bench/b300_maskshard_loworbit_exacttasks_ab.py'
+      - '.github/workflows/b300-loworbit-exacttasks-v30.yml'
+  workflow_dispatch:
+
+jobs:
+  task-model:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build exact LOW orbit task model
+        run: |
+          mkdir -p build
+          g++ -O3 -std=c++17 -Wall -Wextra -Werror \
+            src/cpp/probes/factor_loworbit_rowdepth_tasks.cpp \
+            -o build/factor_loworbit_rowdepth_tasks
+      - name: Verify n=27 LOW orbit task model
+        run: build/factor_loworbit_rowdepth_tasks 28 14 256
+
+  taskmap:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build exact LOW orbit task-map semantics
+        run: |
+          mkdir -p build
+          g++ -O3 -std=c++17 -Wall -Wextra -Werror \
+            src/cpp/probes/factor_loworbit_rowdepth_taskmap.cpp \
+            -o build/factor_loworbit_rowdepth_taskmap
+      - name: Verify compact task map
+        run: build/factor_loworbit_rowdepth_taskmap
+
+  cuda-compile:
+    runs-on: ubuntu-latest
+    container: nvidia/cuda:12.8.1-devel-ubuntu22.04
+    strategy:
+      matrix:
+        include:
+          - width: 22
+            low: 11
+            high: 10
+          - width: 28
+            low: 14
+            high: 13
+    steps:
+      - uses: actions/checkout@v4
+      - name: Compile v0.29 tight LOW orbit launch
+        shell: bash
+        run: |
+          mkdir -p build
+          nvcc -O3 -std=c++17 -lineinfo -arch=sm_80 \
+            -DTARGET_W=${{ matrix.width }} \
+            -DLOW_LUT_K=${{ matrix.low }} \
+            -DHIGH_LUT_K=${{ matrix.high }} \
+            src/cuda/b300/oneesan_b300_maskshard_v029_loworbit_tightlaunch.cu \
+            -o build/b300_maskshard_v29_w${{ matrix.width }}
+      - name: Compile v0.30 exact LOW orbit tasks
+        shell: bash
+        run: |
+          nvcc -O3 -std=c++17 -lineinfo -arch=sm_80 \
+            -DTARGET_W=${{ matrix.width }} \
+            -DLOW_LUT_K=${{ matrix.low }} \
+            -DHIGH_LUT_K=${{ matrix.high }} \
+            src/cuda/b300/oneesan_b300_maskshard_v030_loworbit_exacttasks.cu \
+            -o build/b300_maskshard_v30_w${{ matrix.width }}
+
+  ab-driver:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Syntax-check v0.29-v0.30 A/B
+        run: python3 -m py_compile scripts/bench/b300_maskshard_loworbit_exacttasks_ab.py
+      - name: Dry-run v0.29-v0.30 comparison
+        run: |
+          python3 scripts/bench/b300_maskshard_loworbit_exacttasks_ab.py \
+            --dry-run --n 27 --gpus 8 --threads 256 --modulus 4294967291
