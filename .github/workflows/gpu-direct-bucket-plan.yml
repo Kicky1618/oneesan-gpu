@@ -1,0 +1,28 @@
+name: gpu direct bucket plan validation
+
+on:
+  push:
+    paths:
+      - 'src/cpp/probes/gpu_direct_bucket_plan.cpp'
+      - '.github/workflows/gpu-direct-bucket-plan.yml'
+  pull_request:
+    paths:
+      - 'src/cpp/probes/gpu_direct_bucket_plan.cpp'
+      - '.github/workflows/gpu-direct-bucket-plan.yml'
+  workflow_dispatch:
+
+jobs:
+  plan:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build and validate exact bucket planner
+        shell: bash
+        run: |
+          mkdir -p build
+          g++ -O3 -std=c++17 src/cpp/probes/gpu_direct_bucket_plan.cpp \
+            -o build/gpu_direct_bucket_plan
+          build/gpu_direct_bucket_plan | tee /tmp/bucket-plan.txt
+          grep -Fq 'main_plus_blocked_states=520735012027' /tmp/bucket-plan.txt
+          grep -Fq 'remote_states_per_transpose=455642447434' /tmp/bucket-plan.txt
+          grep -Fq 'max_slot_overhead_bytes=2154132' /tmp/bucket-plan.txt
