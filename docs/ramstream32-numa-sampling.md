@@ -32,8 +32,16 @@ CPU_HIGH_OVERLAP=1 \
 CPU_HIGH_MAX_MIB=256 \
 CPU_HIGH_CPU_LIST='0-31' \
 CPU_LOW_CPU_LIST='32-63' \
+CPU_LOW_SCHEDULE=dynamic \
 NUMA_SAMPLE_MIB=64 \
 bash scripts/bench/ramstream32-numa-sample.sh
+```
+
+Backend v5.17 also supports `CPU_LOW_SCHEDULE=sticky`, which keeps each fixed-HIGH occupancy group on the same persistent LOW worker after a one-time exact-cell LPT partition. To isolate scheduling/locality effects, run the same diagnostic twice with only the schedule changed:
+
+```bash
+CPU_LOW_SCHEDULE=dynamic bash scripts/bench/ramstream32-numa-sample.sh
+CPU_LOW_SCHEDULE=sticky  bash scripts/bench/ramstream32-numa-sample.sh
 ```
 
 For a cost-model group policy, replace the threshold with:
@@ -43,9 +51,9 @@ CPU_HIGH_MAX_MIB=0 \
 CPU_HIGH_GROUPS_FILE=/path/to/cpu-high.groups
 ```
 
-The runner saves stdout, stderr, environment metadata, binary hash, optional groups-file hash, and an analyzed placement summary.
+The runner saves stdout, stderr, environment metadata, binary hash, optional groups-file hash, LOW schedule mode, and an analyzed placement summary.
 
-Sampling perturbs the run through syscalls and cache/TLB effects. Do not use the sampled run's `wall_s` as the clean performance number; repeat the same configuration with `RAMSTREAM_NUMA_SAMPLE_MIB=0` for timing.
+Sampling perturbs the run through syscalls and cache/TLB effects. Do not use the sampled run's `wall_s` as the clean performance number; repeat the same configuration with `RAMSTREAM_NUMA_SAMPLE_MIB=0` for timing. For clean dynamic/sticky timing, use `scripts/bench/ramstream32-cpu-low-schedule-ab.sh`, which forces NUMA sampling off and alternates run order.
 
 ## Analyzer
 
@@ -77,12 +85,14 @@ for `main` and `block`. A substantial drift indicates that placement changed dur
 
 Run at least these configurations on the same host before adding a memory policy:
 
-1. default CPU scheduling and default memory policy;
-2. explicit `CPU_HIGH_CPU_LIST` only;
-3. explicit `CPU_LOW_CPU_LIST` only;
-4. both lists, including same-socket and split-socket layouts;
+1. dynamic LOW scheduling with default affinity;
+2. dynamic scheduling with explicit `CPU_HIGH_CPU_LIST` and `CPU_LOW_CPU_LIST`;
+3. sticky scheduling with the same explicit lists;
+4. same-socket and split-socket HIGH/LOW CPU-list layouts;
 5. overlap 0 and overlap 1.
 
-Compare node histograms together with `cpu_high_wall_s`, `cpu_low_wall_s`, H2D/D2H time, and clean no-sampling wall time. The purpose is to determine whether the workload is actually remote-memory limited before experimenting with interleave, 4 KiB pages, THP changes, or `mbind`.
+Compare node histograms together with `cpu_high_wall_s`, `cpu_low_wall_s`, H2D/D2H time, and clean no-sampling wall time. Sticky scheduling is useful only if stable group ownership outweighs any loss of dynamic load balancing, so placement and timing must be considered together.
+
+The purpose is to determine whether the workload is actually remote-memory limited before experimenting with interleave, 4 KiB pages, THP changes, or `mbind`.
 
 Per-group `mbind` is intentionally not implemented yet. Factorized group slices can share boundary pages, especially with 2 MiB huge pages, and the existing `analyze_cpu_high_numa.py` page-exposure analysis should be considered together with these measured node distributions.
