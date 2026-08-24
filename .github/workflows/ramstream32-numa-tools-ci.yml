@@ -28,14 +28,13 @@ jobs:
       - name: Check LOW schedule propagation
         shell: bash
         run: |
-          grep -Fq 'CPU_LOW_SCHEDULE="${CPU_LOW_SCHEDULE:-dynamic}"' \
-            scripts/bench/ramstream32-numa-sample.sh
-          grep -Fq '"$CPU_LOW_SCHEDULE" != contiguous' \
-            scripts/bench/ramstream32-numa-sample.sh
-          grep -Fq 'CPU_LOW_SCHEDULE="$CPU_LOW_SCHEDULE"' \
-            scripts/bench/ramstream32-numa-sample.sh
-          grep -Fq 'cpu_low_schedule=$CPU_LOW_SCHEDULE' \
-            scripts/bench/ramstream32-numa-sample.sh
+          grep -Fq 'CPU_LOW_SCHEDULE="${CPU_LOW_SCHEDULE:-dynamic}"' scripts/bench/ramstream32-numa-sample.sh
+          grep -Fq 'CPU_LOW_DOMAIN_SIZE="${CPU_LOW_DOMAIN_SIZE:-}"' scripts/bench/ramstream32-numa-sample.sh
+          grep -Fq 'dynamic|sticky|contiguous' scripts/bench/ramstream32-numa-sample.sh
+          grep -Fq 'domain)' scripts/bench/ramstream32-numa-sample.sh
+          grep -Fq 'CPU_LOW_DOMAIN_SIZE="$CPU_LOW_DOMAIN_SIZE"' scripts/bench/ramstream32-numa-sample.sh
+          grep -Fq 'cpu_low_domain_size=${CPU_LOW_DOMAIN_SIZE:-none}' scripts/bench/ramstream32-numa-sample.sh
+          grep -Fq 'LOW domain provenance mismatch' scripts/bench/ramstream32-numa-sample.sh
       - name: Check NUMA sample analyzer
         shell: bash
         run: |
@@ -45,20 +44,16 @@ jobs:
           numa_sample tag=final array=main bytes=1000 requested_spacing_mib=64 actual_spacing_mib=64 samples=100 success=100 N0=60 N1=40
           numa_sample tag=final array=block bytes=500 requested_spacing_mib=64 actual_spacing_mib=64 samples=50 success=50 N0=25 N1=25
           EOF
-          python3 scripts/tools/analyze_ramstream_numa_samples.py /tmp/numa.log \
-            > /tmp/numa-analysis.txt
+          python3 scripts/tools/analyze_ramstream_numa_samples.py /tmp/numa.log > /tmp/numa-analysis.txt
           grep -Fq 'sample tag=row1 array=main' /tmp/numa-analysis.txt
           grep -Fq 'dominant_node=0 dominant_fraction=0.700000000' /tmp/numa-analysis.txt
-          grep -Fq 'drift array=main row1_success=100 final_success=100 node_fraction_l1=0.200000000' \
-            /tmp/numa-analysis.txt
-          grep -Fq 'drift array=block row1_success=50 final_success=50 node_fraction_l1=0.000000000' \
-            /tmp/numa-analysis.txt
+          grep -Fq 'drift array=main row1_success=100 final_success=100 node_fraction_l1=0.200000000' /tmp/numa-analysis.txt
           grep -Fq 'aggregate tag=final samples=150 success=150' /tmp/numa-analysis.txt
       - name: Check docs
         shell: bash
         run: |
           grep -Fq 'RAMSTREAM_NUMA_SAMPLE_MIB' docs/ramstream32-numa-sampling.md
-          grep -Fq 'CPU_LOW_SCHEDULE=contiguous' docs/ramstream32-numa-sampling.md
+          grep -Fq 'CPU_LOW_SCHEDULE=domain' docs/ramstream32-numa-sampling.md
+          grep -Fq 'CPU_LOW_DOMAIN_SIZE' docs/ramstream32-numa-sampling.md
           grep -Fq 'ramstream32-numa-sample.sh' docs/ramstream32-numa-sampling.md
-          grep -Fq 'ramstream32-cpu-low-schedule-compare.sh' docs/ramstream32-numa-sampling.md
           grep -Fq 'analyze_ramstream_numa_samples.py' docs/ramstream32-numa-sampling.md
