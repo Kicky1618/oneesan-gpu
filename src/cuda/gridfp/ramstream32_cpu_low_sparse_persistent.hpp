@@ -6,18 +6,21 @@
 #include <condition_variable>
 #include <cstdlib>
 #include <cstring>
+#include <limits>
 #include <mutex>
 #include <utility>
 
 // Persistent worker wrapper for the sparse zero-scratch CPU LOW executor.
 // The LOW recurrence and per-group body remain in ramstream32_cpu_low_sparse.hpp.
 // Dynamic mode preserves the historical atomic work queue. Sticky mode builds a
-// one-time exact-cell LPT partition and gives each persistent worker the same
-// occupancy groups on every row, so CPU affinity can preserve group ownership
-// across generations.
+// one-time exact-cell LPT partition. Contiguous mode keeps HIGH-occupancy masks
+// in numeric order and computes the min-max optimal contiguous worker partition.
+// Both static modes give each persistent worker the same occupancy groups on
+// every row so CPU affinity can preserve ownership across generations.
 enum CpuLowScheduleMode : uint8_t {
     CPU_LOW_SCHEDULE_DYNAMIC = 0,
     CPU_LOW_SCHEDULE_STICKY = 1,
+    CPU_LOW_SCHEDULE_CONTIGUOUS = 2,
 };
 
 static CpuLowScheduleMode cpu_low_schedule_mode_from_env() {
@@ -26,12 +29,16 @@ static CpuLowScheduleMode cpu_low_schedule_mode_from_env() {
         return CPU_LOW_SCHEDULE_DYNAMIC;
     if (std::strcmp(s, "sticky") == 0)
         return CPU_LOW_SCHEDULE_STICKY;
-    std::cerr << "CPU_LOW_SCHEDULE must be dynamic or sticky\n";
+    if (std::strcmp(s, "contiguous") == 0)
+        return CPU_LOW_SCHEDULE_CONTIGUOUS;
+    std::cerr << "CPU_LOW_SCHEDULE must be dynamic, sticky, or contiguous\n";
     std::exit(135);
 }
 
 static const char* cpu_low_schedule_name(CpuLowScheduleMode mode) {
-    return mode == CPU_LOW_SCHEDULE_STICKY ? "sticky" : "dynamic";
+    if (mode == CPU_LOW_SCHEDULE_STICKY) return "sticky";
+    if (mode == CPU_LOW_SCHEDULE_CONTIGUOUS) return "contiguous";
+    return "dynamic";
 }
 
 static uint64_t cpu_low_sparse_job_cells(
@@ -62,6 +69,138 @@ static uint64_t cpu_low_sparse_job_cells(
     return total;
 }
 
+struct CpuLowStaticJobCost {
+    size_t index = 0;
+    uint32_t mask = 0;
+    uint64_t cells = 0;
+};
+
+static size_t cpu_low_contiguous_segments_needed(
+    const std::vector<CpuLowStaticJobCost>& ordered, uint64_t cap
+) {
+    if (ordered.empty()) return 0;
+    size_t segments = 1;
+    uint64_t acc = 0;
+    for (const auto& x : ordered) {
+        if (x.cells > cap) return std::numeric_limits<size_t>::max();
+        if (acc && acc > cap - x.cells) {
+            ++segments;
+            acc = 0;
+        }
+        acc += x.cells;
+    }
+    return segments;
+}
+
+static uint64_t cpu_low_contiguous_segment_cells(
+    const std::vector<CpuLowStaticJobCost>& ordered,
+    const std::pair<size_t,size_t>& seg
+) {
+    uint64_t z = 0;
+    for (size_t i = seg.first; i < seg.second; ++i) z += ordered[i].cells;
+    return z;
+}
+
+static uint64_t cpu_low_build_contiguous_schedule(
+    const std::vector<CpuLowJob>& jobs, const CpuLowSparseHost& sparse,
+    int workers, std::vector<std::vector<size_t>>& worker_jobs,
+    std::vector<uint64_t>& worker_cells
+) {
+    std::vector<CpuLowStaticJobCost> ordered;
+    ordered.reserve(jobs.size());
+    uint64_t total_cells = 0;
+    for (size_t i = 0; i < jobs.size(); ++i) {
+        if (!jobs[i].main_size && !jobs[i].block_size) continue;
+        uint64_t cells = cpu_low_sparse_job_cells(jobs[i], sparse);
+        ordered.push_back({i, jobs[i].mask, cells});
+        total_cells += cells;
+    }
+    std::sort(ordered.begin(), ordered.end(), [](const auto& a, const auto& b) {
+        if (a.mask != b.mask) return a.mask < b.mask;
+        return a.index < b.index;
+    });
+
+    worker_jobs.assign(size_t(workers), {});
+    worker_cells.assign(size_t(workers), 0);
+    if (ordered.empty()) return 0;
+
+    size_t target_segments = std::min<size_t>(size_t(workers), ordered.size());
+    uint64_t lo = 0;
+    for (const auto& x : ordered) lo = std::max(lo, x.cells);
+    uint64_t hi = total_cells;
+    while (lo < hi) {
+        uint64_t mid = lo + (hi - lo) / 2;
+        if (cpu_low_contiguous_segments_needed(ordered, mid) <= target_segments)
+            hi = mid;
+        else
+            lo = mid + 1;
+    }
+    uint64_t optimal_cap = lo;
+
+    std::vector<std::pair<size_t,size_t>> segs;
+    size_t begin = 0;
+    uint64_t acc = 0;
+    for (size_t i = 0; i < ordered.size(); ++i) {
+        uint64_t cells = ordered[i].cells;
+        if (acc && acc > optimal_cap - cells) {
+            segs.push_back({begin, i});
+            begin = i;
+            acc = 0;
+        }
+        acc += cells;
+    }
+    segs.push_back({begin, ordered.size()});
+
+    // If the optimal cap needs fewer segments than workers, split existing
+    // segments. Splitting preserves contiguity and cannot increase max load.
+    while (segs.size() < target_segments) {
+        size_t best_seg = size_t(-1);
+        uint64_t best_cells = 0;
+        for (size_t s = 0; s < segs.size(); ++s) {
+            if (segs[s].second - segs[s].first <= 1) continue;
+            uint64_t cells = cpu_low_contiguous_segment_cells(ordered, segs[s]);
+            if (best_seg == size_t(-1) || cells > best_cells) {
+                best_seg = s;
+                best_cells = cells;
+            }
+        }
+        if (best_seg == size_t(-1)) {
+            std::cerr << "cpu LOW contiguous split reconstruction failed\n";
+            std::exit(136);
+        }
+
+        auto seg = segs[best_seg];
+        uint64_t prefix = 0;
+        uint64_t best_delta = std::numeric_limits<uint64_t>::max();
+        size_t split = seg.first + 1;
+        for (size_t i = seg.first; i + 1 < seg.second; ++i) {
+            prefix += ordered[i].cells;
+            uint64_t right = best_cells - prefix;
+            uint64_t delta = prefix > right ? prefix - right : right - prefix;
+            if (delta < best_delta) {
+                best_delta = delta;
+                split = i + 1;
+            }
+        }
+        segs[best_seg] = {seg.first, split};
+        segs.insert(segs.begin() + best_seg + 1, {split, seg.second});
+    }
+
+    for (size_t w = 0; w < segs.size(); ++w) {
+        for (size_t i = segs[w].first; i < segs[w].second; ++i) {
+            worker_jobs[w].push_back(ordered[i].index);
+            worker_cells[w] += ordered[i].cells;
+        }
+        if (worker_cells[w] > optimal_cap) {
+            std::cerr << "cpu LOW contiguous cap violation worker=" << w
+                      << " cells=" << worker_cells[w]
+                      << " cap=" << optimal_cap << '\n';
+            std::exit(137);
+        }
+    }
+    return optimal_cap;
+}
+
 struct CpuLowSparsePersistentPool {
     int workers = 1;
     CpuLowScheduleMode schedule_mode = CPU_LOW_SCHEDULE_DYNAMIC;
@@ -69,6 +208,7 @@ struct CpuLowSparsePersistentPool {
     double wall_s = 0.0;
     double worker_start_s = 0.0;
     double schedule_build_s = 0.0;
+    uint64_t contiguous_optimal_cap = 0;
 
     std::mutex mu;
     std::condition_variable start_cv;
@@ -89,6 +229,8 @@ struct CpuLowSparsePersistentPool {
     const CpuLowSparseHost* run_sparse = nullptr;
     Count run_mod = 0;
 
+    // Legacy names retained because probes inspect the static assignment.
+    // They contain the cached worker partition for sticky or contiguous mode.
     const std::vector<CpuLowJob>* sticky_source_jobs = nullptr;
     const CpuLowSparseHost* sticky_source_sparse = nullptr;
     std::vector<std::vector<size_t>> sticky_worker_jobs;
@@ -116,48 +258,63 @@ struct CpuLowSparsePersistentPool {
                   << " start_s=" << worker_start_s << '\n';
     }
 
-    void prepare_sticky_schedule(
+    void prepare_static_schedule(
         const std::vector<CpuLowJob>& jobs, const CpuLowSparseHost& sparse
     ) {
-        if (schedule_mode != CPU_LOW_SCHEDULE_STICKY) return;
+        if (schedule_mode == CPU_LOW_SCHEDULE_DYNAMIC) return;
         if (sticky_source_jobs == &jobs && sticky_source_sparse == &sparse) return;
 
-        // A schedule is read lock-free by workers during a generation. Rebuild
-        // only after the previous generation is complete, matching the HIGH
-        // persistent pool's cached-schedule safety rule.
+        // Static schedules are read lock-free by workers during a generation.
+        // Rebuild only after the previous generation is complete.
         wait_run();
 
         auto t0 = std::chrono::steady_clock::now();
-        std::vector<std::pair<size_t, uint64_t>> ranked;
-        ranked.reserve(jobs.size());
         uint64_t total_cells = 0;
-        for (size_t i = 0; i < jobs.size(); ++i) {
-            if (!jobs[i].main_size && !jobs[i].block_size) continue;
-            uint64_t cells = cpu_low_sparse_job_cells(jobs[i], sparse);
-            ranked.push_back({i, cells});
-            total_cells += cells;
-        }
-        std::sort(ranked.begin(), ranked.end(), [&](const auto& a, const auto& b) {
-            if (a.second != b.second) return a.second > b.second;
-            if (jobs[a.first].scratch_bytes != jobs[b.first].scratch_bytes)
-                return jobs[a.first].scratch_bytes > jobs[b.first].scratch_bytes;
-            return jobs[a.first].g < jobs[b.first].g;
-        });
+        size_t nonempty_jobs = 0;
+        contiguous_optimal_cap = 0;
 
-        sticky_worker_jobs.assign(size_t(workers), {});
-        sticky_worker_cells.assign(size_t(workers), 0);
-        for (const auto& [index, cells] : ranked) {
-            int best = 0;
-            for (int w = 1; w < workers; ++w) {
-                if (sticky_worker_cells[size_t(w)] < sticky_worker_cells[size_t(best)])
-                    best = w;
+        if (schedule_mode == CPU_LOW_SCHEDULE_CONTIGUOUS) {
+            contiguous_optimal_cap = cpu_low_build_contiguous_schedule(
+                jobs, sparse, workers, sticky_worker_jobs, sticky_worker_cells);
+            for (size_t i = 0; i < jobs.size(); ++i) {
+                if (!jobs[i].main_size && !jobs[i].block_size) continue;
+                ++nonempty_jobs;
+                total_cells += cpu_low_sparse_job_cells(jobs[i], sparse);
             }
-            sticky_worker_jobs[size_t(best)].push_back(index);
-            sticky_worker_cells[size_t(best)] += cells;
+        } else {
+            std::vector<std::pair<size_t, uint64_t>> ranked;
+            ranked.reserve(jobs.size());
+            for (size_t i = 0; i < jobs.size(); ++i) {
+                if (!jobs[i].main_size && !jobs[i].block_size) continue;
+                uint64_t cells = cpu_low_sparse_job_cells(jobs[i], sparse);
+                ranked.push_back({i, cells});
+                total_cells += cells;
+            }
+            nonempty_jobs = ranked.size();
+            std::sort(ranked.begin(), ranked.end(), [&](const auto& a, const auto& b) {
+                if (a.second != b.second) return a.second > b.second;
+                if (jobs[a.first].scratch_bytes != jobs[b.first].scratch_bytes)
+                    return jobs[a.first].scratch_bytes > jobs[b.first].scratch_bytes;
+                return jobs[a.first].g < jobs[b.first].g;
+            });
+
+            sticky_worker_jobs.assign(size_t(workers), {});
+            sticky_worker_cells.assign(size_t(workers), 0);
+            for (const auto& [index, cells] : ranked) {
+                int best = 0;
+                for (int w = 1; w < workers; ++w) {
+                    if (sticky_worker_cells[size_t(w)] < sticky_worker_cells[size_t(best)])
+                        best = w;
+                }
+                sticky_worker_jobs[size_t(best)].push_back(index);
+                sticky_worker_cells[size_t(best)] += cells;
+            }
         }
+
         sticky_source_jobs = &jobs;
         sticky_source_sparse = &sparse;
-        schedule_build_s += ram_seconds_since(t0);
+        double dt = ram_seconds_since(t0);
+        schedule_build_s += dt;
 
         uint64_t min_cells = sticky_worker_cells.empty() ? 0 : sticky_worker_cells[0];
         uint64_t max_cells = 0;
@@ -166,13 +323,26 @@ struct CpuLowSparsePersistentPool {
             max_cells = std::max(max_cells, x);
         }
         double avg = workers ? double(total_cells) / workers : 0.0;
-        std::cerr << "cpu_low_sticky_schedule jobs=" << ranked.size()
+        const char* prefix = schedule_mode == CPU_LOW_SCHEDULE_CONTIGUOUS
+            ? "cpu_low_contiguous_schedule" : "cpu_low_sticky_schedule";
+        std::cerr << prefix
+                  << " jobs=" << nonempty_jobs
                   << " workers=" << workers
                   << " total_cells=" << total_cells
                   << " min_worker_cells=" << min_cells
                   << " max_worker_cells=" << max_cells
-                  << " imbalance=" << (avg > 0.0 ? double(max_cells) / avg : 0.0)
-                  << " build_s=" << schedule_build_s << '\n';
+                  << " imbalance=" << (avg > 0.0 ? double(max_cells) / avg : 0.0);
+        if (schedule_mode == CPU_LOW_SCHEDULE_CONTIGUOUS)
+            std::cerr << " optimal_cap=" << contiguous_optimal_cap;
+        std::cerr << " build_s=" << dt << '\n';
+    }
+
+    // Compatibility entry point for existing probes. It now builds whichever
+    // static mode the pool was constructed with.
+    void prepare_sticky_schedule(
+        const std::vector<CpuLowJob>& jobs, const CpuLowSparseHost& sparse
+    ) {
+        prepare_static_schedule(jobs, sparse);
     }
 
     void shutdown() {
@@ -208,7 +378,7 @@ struct CpuLowSparsePersistentPool {
                 seen = generation;
             }
 
-            if (schedule_mode == CPU_LOW_SCHEDULE_STICKY) {
+            if (schedule_mode != CPU_LOW_SCHEDULE_DYNAMIC) {
                 for (size_t q : sticky_worker_jobs[size_t(w)]) process_job(w, q);
             } else {
                 for (;;) {
@@ -236,7 +406,7 @@ struct CpuLowSparsePersistentPool {
         const CpuLowSparseHost& sparse, Count mod
     ) {
         if (jobs.empty()) return false;
-        prepare_sticky_schedule(jobs, sparse);
+        prepare_static_schedule(jobs, sparse);
         ensure_started();
         {
             std::lock_guard<std::mutex> lock(mu);
