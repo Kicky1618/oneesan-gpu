@@ -5,12 +5,16 @@ on:
     paths:
       - 'scripts/bench/ramstream32-cpu-low-schedule-ab.sh'
       - 'scripts/bench/ramstream32-cpu-low-schedule-compare.sh'
+      - 'scripts/bench/ramstream32-cpu-low-schedule-plan-sweep.sh'
+      - 'scripts/tools/analyze_cpu_low_schedule_plan_sweep.py'
       - 'docs/ramstream32-cpu-low-scheduling.md'
       - '.github/workflows/ramstream32-low-schedule-script-ci.yml'
   pull_request:
     paths:
       - 'scripts/bench/ramstream32-cpu-low-schedule-ab.sh'
       - 'scripts/bench/ramstream32-cpu-low-schedule-compare.sh'
+      - 'scripts/bench/ramstream32-cpu-low-schedule-plan-sweep.sh'
+      - 'scripts/tools/analyze_cpu_low_schedule_plan_sweep.py'
       - 'docs/ramstream32-cpu-low-scheduling.md'
       - '.github/workflows/ramstream32-low-schedule-script-ci.yml'
   workflow_dispatch:
@@ -25,6 +29,8 @@ jobs:
         run: |
           bash -n scripts/bench/ramstream32-cpu-low-schedule-ab.sh
           bash -n scripts/bench/ramstream32-cpu-low-schedule-compare.sh
+          bash -n scripts/bench/ramstream32-cpu-low-schedule-plan-sweep.sh
+          python3 -m py_compile scripts/tools/analyze_cpu_low_schedule_plan_sweep.py
       - name: Check two-way alternating schedule guards
         shell: bash
         run: |
@@ -45,6 +51,41 @@ jobs:
           grep -Fq 'cpu_low_contiguous_optimal_cap' scripts/bench/ramstream32-cpu-low-schedule-compare.sh
           grep -Fq 'contiguous_vs_dynamic_wall' scripts/bench/ramstream32-cpu-low-schedule-compare.sh
           grep -Fq 'contiguous_vs_sticky_low' scripts/bench/ramstream32-cpu-low-schedule-compare.sh
+      - name: Check topology sweep guards
+        shell: bash
+        run: |
+          grep -Fq 'CONFIGS="${CONFIGS:-32:16 64:32 96:48 128:64}"' \
+            scripts/bench/ramstream32-cpu-low-schedule-plan-sweep.sh
+          grep -Fq -- '--domain-size "$domain"' \
+            scripts/bench/ramstream32-cpu-low-schedule-plan-sweep.sh
+          grep -Fq 'analyze_cpu_low_schedule_plan_sweep.py' \
+            scripts/bench/ramstream32-cpu-low-schedule-plan-sweep.sh
+          grep -Fq 'MAX_IMBALANCE' \
+            scripts/bench/ramstream32-cpu-low-schedule-plan-sweep.sh
+      - name: Check Pareto analyzer
+        shell: bash
+        run: |
+          cat >/tmp/low-sweep.tsv <<'EOF'
+          workers	domain_size	domains	lpt_imbalance	lpt_cross_domain_4k	lpt_cross_domain_2m	contiguous_imbalance	contiguous_cross_domain_4k	contiguous_cross_domain_2m	hybrid_imbalance	hybrid_cross_domain_4k	hybrid_cross_domain_2m	hybrid_cross_worker_4k	hybrid_cross_worker_2m	hybrid_domain_cap	hybrid_active_domains	raw
+          32	16	2	1.000	100	100	1.200	10	10	1.050	20	20	40	40	1000	2	x
+          64	32	2	0.990	120	120	1.150	8	8	1.020	15	15	35	35	900	2	y
+          EOF
+          python3 scripts/tools/analyze_cpu_low_schedule_plan_sweep.py \
+            /tmp/low-sweep.tsv >/tmp/low-pareto.txt
+          grep -Fq 'pareto scheme=hybrid workers=64 domain_size=32' /tmp/low-pareto.txt
+          grep -Fq 'pareto scheme=contiguous workers=64 domain_size=32' /tmp/low-pareto.txt
+          grep -Fq 'best_balance scheme=lpt workers=64 domain_size=32' /tmp/low-pareto.txt
+          if grep -Fq 'pareto scheme=hybrid workers=32 domain_size=16' /tmp/low-pareto.txt; then
+            echo 'dominated hybrid point appeared on Pareto frontier' >&2
+            exit 1
+          fi
+          python3 scripts/tools/analyze_cpu_low_schedule_plan_sweep.py \
+            /tmp/low-sweep.tsv --max-imbalance 1.03 >/tmp/low-pareto-filtered.txt
+          grep -Fq 'schemes=contiguous,hybrid,lpt' /tmp/low-pareto-filtered.txt
+          if grep -Fq 'scheme=contiguous' /tmp/low-pareto-filtered.txt; then
+            echo 'imbalance filter retained contiguous point unexpectedly' >&2
+            exit 1
+          fi
       - name: Check documentation
         shell: bash
         run: |
@@ -53,4 +94,7 @@ jobs:
           grep -Fq 'CPU_LOW_SCHEDULE=contiguous' docs/ramstream32-cpu-low-scheduling.md
           grep -Fq 'ramstream32-cpu-low-schedule-ab.sh' docs/ramstream32-cpu-low-scheduling.md
           grep -Fq 'ramstream32-cpu-low-schedule-compare.sh' docs/ramstream32-cpu-low-scheduling.md
+          grep -Fq 'ramstream32-cpu-low-schedule-plan-sweep.sh' docs/ramstream32-cpu-low-scheduling.md
+          grep -Fq 'analyze_cpu_low_schedule_plan_sweep.py' docs/ramstream32-cpu-low-scheduling.md
+          grep -Fq 'Pareto' docs/ramstream32-cpu-low-scheduling.md
           grep -Fq 'cpu_low_schedule_build_s' docs/ramstream32-cpu-low-scheduling.md
