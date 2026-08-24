@@ -54,6 +54,38 @@ def mean(xs: list[float]) -> float:
     return statistics.fmean(xs) if xs else math.nan
 
 
+def nnls_two_predictors(rows: list[tuple[float, float, float]]) -> tuple[float, float] | None:
+    """Fit y ~= a*x + b*g with a,b >= 0 and no intercept."""
+    if len(rows) < 2:
+        return None
+    sxx = sum(x * x for x, _, _ in rows)
+    sgg = sum(g * g for _, g, _ in rows)
+    sxg = sum(x * g for x, g, _ in rows)
+    sxy = sum(x * y for x, _, y in rows)
+    sgy = sum(g * y for _, g, y in rows)
+
+    candidates: list[tuple[float, float]] = []
+    det = sxx * sgg - sxg * sxg
+    scale = max(1.0, sxx * sgg)
+    if det > 1e-12 * scale:
+        a = (sxy * sgg - sgy * sxg) / det
+        b = (sgy * sxx - sxy * sxg) / det
+        if a >= 0.0 and b >= 0.0:
+            candidates.append((a, b))
+    if sxx > 0.0:
+        candidates.append((max(0.0, sxy / sxx), 0.0))
+    if sgg > 0.0:
+        candidates.append((0.0, max(0.0, sgy / sgg)))
+    if not candidates:
+        return None
+
+    def sse(ab: tuple[float, float]) -> float:
+        a, b = ab
+        return sum((y - a * x - b * g) ** 2 for x, g, y in rows)
+
+    return min(candidates, key=sse)
+
+
 def load(path: str) -> list[Sample]:
     out: list[Sample] = []
     with open(path, newline="", encoding="utf-8") as f:
@@ -140,6 +172,7 @@ def main() -> None:
 
     samples = load(args.tsv)
     costs = load_costs(args.cost_plan) if args.cost_plan else None
+    nonempty_costs = [g for g in costs or [] if g.roundtrip_bytes > 0]
     grouped: dict[tuple[str, int, float], list[Sample]] = defaultdict(list)
     for s in samples:
         grouped[(s.mode, s.overlap, s.threshold_mib)].append(s)
@@ -172,6 +205,8 @@ def main() -> None:
         pcie_rates: list[float] = []
         cpu_rates: list[float] = []
         gpu_rates: list[float] = []
+        model_rows_samples: list[float] = []
+        cpu_affine_rows: list[tuple[float, float, float]] = []
 
         for threshold in sorted(rows):
             group = rows[threshold]
@@ -201,7 +236,9 @@ def main() -> None:
 
             if costs is not None and mode == "direct" and threshold > 0 and cpu_high > 0:
                 limit_bytes = int(threshold * MIB)
-                selected_costs = [g for g in costs if g.roundtrip_bytes <= limit_bytes]
+                selected_costs = [
+                    g for g in nonempty_costs if g.roundtrip_bytes <= limit_bytes
+                ]
                 selected_bytes_per_row = sum(g.roundtrip_bytes for g in selected_costs)
                 selected_cells_per_row = sum(
                     g.weighted_cells(
@@ -213,7 +250,9 @@ def main() -> None:
                 selected_gpu_steps_per_row = sum(g.gpu_state_steps for g in selected_costs)
                 if selected_bytes_per_row > 0 and removed > 0:
                     rows_est = removed * TIB / selected_bytes_per_row
+                    model_rows_samples.append(rows_est)
                     total_cells = selected_cells_per_row * rows_est
+                    total_group_execs = len(selected_costs) * rows_est
                     measured_cpu_gcell_s = total_cells / cpu_high / 1e9
                     if math.isfinite(measured_cpu_gcell_s) and measured_cpu_gcell_s > 0:
                         cpu_rates.append(measured_cpu_gcell_s)
@@ -221,6 +260,7 @@ def main() -> None:
                             f" model_rows={rows_est:.6f}"
                             f" measured_cpu_gcell_s={measured_cpu_gcell_s:.9f}"
                         )
+                    cpu_affine_rows.append((total_cells, total_group_execs, cpu_high))
                     if selected_gpu_steps_per_row > 0 and gpu_kernel_saved > 0:
                         total_gpu_steps = selected_gpu_steps_per_row * rows_est
                         measured_gpu_gstate_s = total_gpu_steps / gpu_kernel_saved / 1e9
@@ -264,17 +304,69 @@ def main() -> None:
         if math.isfinite(gpu_med):
             print(f"calibration mode={mode} overlap={overlap} gpu_gstate_s={gpu_med:.9f}")
 
-        if costs is not None and mode == "direct" and math.isfinite(pcie_med) and math.isfinite(cpu_med):
-            overlap_arg = " --overlap" if overlap else ""
-            gpu_arg = f" --gpu-gstate-s {gpu_med:.9f}" if math.isfinite(gpu_med) else ""
+        cpu_affine = nnls_two_predictors(cpu_affine_rows)
+        affine_cpu_rate = math.nan
+        affine_cpu_group_us = math.nan
+        if cpu_affine is not None and cpu_affine[0] > 0.0:
+            affine_cpu_rate = 1.0 / cpu_affine[0] / 1e9
+            affine_cpu_group_us = cpu_affine[1] * 1e6
             print(
-                "planner_command "
-                f"python3 scripts/tools/plan_cpu_high_groups.py {args.cost_plan} "
-                f"--pcie-gib-s {pcie_med:.9f} --cpu-gcell-s {cpu_med:.9f} "
-                f"--nn-weight {args.nn_weight:g} --nrnl-weight {args.nrnl_weight:g} "
-                f"--block-weight {args.block_weight:g} --cross-weight {args.cross_weight:g}"
-                f"{gpu_arg}{overlap_arg}"
+                f"affine_calibration mode={mode} overlap={overlap} "
+                f"cpu_gcell_s={affine_cpu_rate:.9f} "
+                f"cpu_group_overhead_us={affine_cpu_group_us:.9f}"
             )
+
+        gpu_affine_rows: list[tuple[float, float, float]] = []
+        if costs is not None and model_rows_samples:
+            rows_est = statistics.median(model_rows_samples)
+            total_nonempty = len(nonempty_costs)
+            for threshold, group in rows.items():
+                limit_bytes = int(threshold * MIB)
+                selected_costs = [
+                    g for g in nonempty_costs
+                    if threshold > 0 and g.roundtrip_bytes <= limit_bytes
+                ]
+                selected_ids = {g.group for g in selected_costs}
+                remaining_costs = [g for g in nonempty_costs if g.group not in selected_ids]
+                remaining_steps = sum(g.gpu_state_steps for g in remaining_costs) * rows_est
+                remaining_execs = len(remaining_costs) * rows_est
+                gpu_y = mean([s.gpu_kernel_s for s in group])
+                gpu_affine_rows.append((remaining_steps, remaining_execs, gpu_y))
+
+        gpu_affine = nnls_two_predictors(gpu_affine_rows)
+        affine_gpu_rate = math.nan
+        affine_gpu_group_us = math.nan
+        if gpu_affine is not None and gpu_affine[0] > 0.0:
+            affine_gpu_rate = 1.0 / gpu_affine[0] / 1e9
+            affine_gpu_group_us = gpu_affine[1] * 1e6
+            print(
+                f"affine_calibration mode={mode} overlap={overlap} "
+                f"gpu_gstate_s={affine_gpu_rate:.9f} "
+                f"gpu_group_overhead_us={affine_gpu_group_us:.9f}"
+            )
+
+        if costs is not None and mode == "direct" and math.isfinite(pcie_med):
+            use_cpu_rate = affine_cpu_rate if math.isfinite(affine_cpu_rate) else cpu_med
+            use_gpu_rate = affine_gpu_rate if math.isfinite(affine_gpu_rate) else gpu_med
+            if math.isfinite(use_cpu_rate):
+                overlap_arg = " --overlap" if overlap else ""
+                gpu_arg = f" --gpu-gstate-s {use_gpu_rate:.9f}" if math.isfinite(use_gpu_rate) else ""
+                cpu_overhead_arg = (
+                    f" --group-overhead-us {affine_cpu_group_us:.9f}"
+                    if math.isfinite(affine_cpu_group_us) and affine_cpu_group_us > 0 else ""
+                )
+                gpu_overhead_arg = (
+                    f" --gpu-group-overhead-us {affine_gpu_group_us:.9f}"
+                    if math.isfinite(affine_gpu_group_us) and affine_gpu_group_us > 0 else ""
+                )
+                print(
+                    "planner_command "
+                    f"python3 scripts/tools/plan_cpu_high_groups.py {args.cost_plan} "
+                    f"--pcie-gib-s {pcie_med:.9f} --cpu-gcell-s {use_cpu_rate:.9f} "
+                    f"--nn-weight {args.nn_weight:g} --nrnl-weight {args.nrnl_weight:g} "
+                    f"--block-weight {args.block_weight:g} --cross-weight {args.cross_weight:g}"
+                    f"{gpu_arg}{cpu_overhead_arg}{gpu_overhead_arg}{overlap_arg}"
+                )
 
 
 if __name__ == "__main__":
