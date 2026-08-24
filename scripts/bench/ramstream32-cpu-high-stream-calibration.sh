@@ -15,6 +15,7 @@ CPU_WORKERS="${CPU_WORKERS:-32}"
 CPU_HIGH_WORKERS="${CPU_HIGH_WORKERS:-$CPU_WORKERS}"
 CPU_HIGH_OVERLAP="${CPU_HIGH_OVERLAP:-0}"
 CPU_HIGH_CPU_LIST="${CPU_HIGH_CPU_LIST:-}"
+CPU_LOW_CPU_LIST="${CPU_LOW_CPU_LIST:-}"
 MANIFEST="${MANIFEST:-}"
 REPEATS="${REPEATS:-2}"
 BUILD="${BUILD:-1}"
@@ -82,6 +83,7 @@ cpu_workers=$CPU_WORKERS
 cpu_high_workers=$CPU_HIGH_WORKERS
 cpu_high_overlap=$CPU_HIGH_OVERLAP
 cpu_high_cpu_list=${CPU_HIGH_CPU_LIST:-none}
+cpu_low_cpu_list=${CPU_LOW_CPU_LIST:-none}
 manifest=$MANIFEST
 manifest_sha256=$(file_sha256 "$MANIFEST")
 repeats=$REPEATS
@@ -108,6 +110,7 @@ run_policy() {
   line="$(CPU_HIGH_MODE=direct CPU_HIGH_MAX_MIB=0 \
     CPU_HIGH_GROUPS_FILE="$path" CPU_HIGH_WORKERS="$CPU_HIGH_WORKERS" \
     CPU_HIGH_OVERLAP="$CPU_HIGH_OVERLAP" \
+    CPU_HIGH_CPU_LIST="$CPU_HIGH_CPU_LIST" CPU_LOW_CPU_LIST="$CPU_LOW_CPU_LIST" \
     "$bin" "$N" "$MODULUS" "$GPU_TARGET_MIB" "$CPU_WORKERS" | tail -n1)"
   residue="$(field "$line" residue)"
   printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
