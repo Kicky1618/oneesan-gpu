@@ -3,6 +3,7 @@ name: gpu direct bucket fused validation
 on:
   push:
     paths:
+      - 'src/cuda/gridfp/ramstream32_gpu_direct_fused_validate.hpp'
       - 'src/cuda/gridfp/ramstream32_bucket_layout.hpp'
       - 'src/cuda/gridfp/ramstream32_bucket_direct.hpp'
       - 'src/cuda/gridfp/ramstream32_bucket_fused.cuh'
@@ -12,12 +13,14 @@ on:
       - 'src/cuda/gridfp/probes/ramstream32_bucket_fused_plan.cu'
       - 'src/cuda/b300/gridfp_bucket_transpose.cuh'
       - 'src/cuda/b300/gridfp_bucket_transpose_events.cuh'
+      - 'src/cuda/b300/probes/bucket_transpose_ab.cu'
       - 'src/cuda/b300/oneesan_cuda_gridfp_b300_bucket_fused.cu'
       - 'src/cuda/b300/oneesan_cuda_gridfp_b300_bucket_fused_events.cu'
       - 'scripts/build/b300-bucket-fused.sh'
       - '.github/workflows/gpu-direct-bucket-fused-compile.yml'
   pull_request:
     paths:
+      - 'src/cuda/gridfp/ramstream32_gpu_direct_fused_validate.hpp'
       - 'src/cuda/gridfp/ramstream32_bucket_layout.hpp'
       - 'src/cuda/gridfp/ramstream32_bucket_direct.hpp'
       - 'src/cuda/gridfp/ramstream32_bucket_fused.cuh'
@@ -27,6 +30,7 @@ on:
       - 'src/cuda/gridfp/probes/ramstream32_bucket_fused_plan.cu'
       - 'src/cuda/b300/gridfp_bucket_transpose.cuh'
       - 'src/cuda/b300/gridfp_bucket_transpose_events.cuh'
+      - 'src/cuda/b300/probes/bucket_transpose_ab.cu'
       - 'src/cuda/b300/oneesan_cuda_gridfp_b300_bucket_fused.cu'
       - 'src/cuda/b300/oneesan_cuda_gridfp_b300_bucket_fused_events.cu'
       - 'scripts/build/b300-bucket-fused.sh'
@@ -54,7 +58,9 @@ jobs:
             -DTARGET_W=22 -DLOW_LUT_K=11 -DHIGH_LUT_K=10 \
             src/cuda/gridfp/probes/ramstream32_bucket_fused_plan.cu \
             -o build/ramstream32_bucket_fused_plan_w22
-          build/ramstream32_bucket_fused_plan_w22 | tee /tmp/bkf-w22.txt
+          build/ramstream32_bucket_fused_plan_w22 2>&1 | tee /tmp/bkf-w22.txt
+          grep -Fq 'gpu_direct_fused_p1_disjoint' /tmp/bkf-w22.txt
+          grep -Fq 'overlap=0' /tmp/bkf-w22.txt
           grep -Fq 'backend=gridfp-bucket-fused-plan' /tmp/bkf-w22.txt
           grep -Fq 'locator_bits=18' /tmp/bkf-w22.txt
           grep -Fq 'closure_atomic=0' /tmp/bkf-w22.txt
@@ -65,7 +71,9 @@ jobs:
             -DTARGET_W=28 -DLOW_LUT_K=14 -DHIGH_LUT_K=13 \
             src/cuda/gridfp/probes/ramstream32_bucket_fused_plan.cu \
             -o build/ramstream32_bucket_fused_plan_w28
-          build/ramstream32_bucket_fused_plan_w28 | tee /tmp/bkf-w28.txt
+          build/ramstream32_bucket_fused_plan_w28 2>&1 | tee /tmp/bkf-w28.txt
+          grep -Fq 'gpu_direct_fused_p1_disjoint' /tmp/bkf-w28.txt
+          grep -Fq 'overlap=0' /tmp/bkf-w28.txt
           grep -Fq 'states=520735012027' /tmp/bkf-w28.txt
           grep -Fq 'owner_high_max=19631' /tmp/bkf-w28.txt
           grep -Fq 'owner_low_max=30114' /tmp/bkf-w28.txt
@@ -80,6 +88,8 @@ jobs:
             -o build/oneesan_cuda_gridfp_b300_bucket_fused_n21
           build/oneesan_cuda_gridfp_b300_bucket_fused_n21 \
             21 4294967291 256 16 8 256 --plan-only 2>&1 | tee /tmp/bkb-w22.txt
+          grep -Fq 'gpu_direct_fused_p1_disjoint' /tmp/bkb-w22.txt
+          grep -Fq 'overlap=0' /tmp/bkb-w22.txt
           grep -Fq 'backend=gridfp-b300-bucket-fused-v0.1-plan' /tmp/bkb-w22.txt
           grep -Fq 'transposes_per_residue=43' /tmp/bkb-w22.txt
           grep -Fq 'closure_atomic=0' /tmp/bkb-w22.txt
@@ -92,6 +102,8 @@ jobs:
             -o build/oneesan_cuda_gridfp_b300_bucket_fused_n27
           build/oneesan_cuda_gridfp_b300_bucket_fused_n27 \
             27 4294967291 256 16 8 4096 --plan-only 2>&1 | tee /tmp/bkb-w28.txt
+          grep -Fq 'gpu_direct_fused_p1_disjoint' /tmp/bkb-w28.txt
+          grep -Fq 'overlap=0' /tmp/bkb-w28.txt
           grep -Fq 'backend=gridfp-b300-bucket-fused-v0.1-plan' /tmp/bkb-w28.txt
           grep -Fq 'transposes_per_residue=55' /tmp/bkb-w28.txt
           grep -Fq 'locator_bits=18' /tmp/bkb-w28.txt
@@ -105,6 +117,15 @@ jobs:
             -o build/oneesan_cuda_gridfp_b300_bucket_fused_events_n27
           build/oneesan_cuda_gridfp_b300_bucket_fused_events_n27 \
             27 4294967291 256 16 8 4096 --plan-only 2>&1 | tee /tmp/bkb-events-w28.txt
+          grep -Fq 'gpu_direct_fused_p1_disjoint' /tmp/bkb-events-w28.txt
+          grep -Fq 'overlap=0' /tmp/bkb-events-w28.txt
           grep -Fq 'backend=gridfp-b300-bucket-fused-v0.1-plan' /tmp/bkb-events-w28.txt
           grep -Fq 'transposes_per_residue=55' /tmp/bkb-events-w28.txt
           grep -Fq 'closure_atomic=0' /tmp/bkb-events-w28.txt
+      - name: Compile transpose A/B microbenchmark
+        shell: bash
+        run: |
+          nvcc -O3 -std=c++17 -lineinfo -arch=sm_80 \
+            -DTARGET_W=10 -DLOW_LUT_K=5 -DHIGH_LUT_K=4 \
+            src/cuda/b300/probes/bucket_transpose_ab.cu \
+            -o build/bucket_transpose_ab
