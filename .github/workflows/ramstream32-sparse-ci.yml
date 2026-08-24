@@ -64,7 +64,10 @@ jobs:
         shell: bash
         run: |
           build/ramstream32_hybrid_sparse_w${{ matrix.width }} \
-            ${{ matrix.n }} 4294967291 12288 4 --plan-only
+            ${{ matrix.n }} 4294967291 12288 4 --plan-only \
+            | tee /tmp/hybrid-plan.txt
+          grep -Fq 'backend=gridfp-ramstream32-factorized-hybrid-sparse-v5.8-plan' \
+            /tmp/hybrid-plan.txt
       - name: Validate n27 CPU HIGH scratch partition plan
         if: matrix.width == 28
         shell: bash
@@ -82,6 +85,8 @@ jobs:
           CPU_HIGH_MAX_MIB=256 CPU_HIGH_MODE=direct \
             build/ramstream32_hybrid_sparse_w28 \
             27 4294967291 12288 4 --plan-only 2>&1 | tee /tmp/high-offload-direct.txt
+          grep -Fq 'backend=gridfp-ramstream32-factorized-hybrid-sparse-v5.8-plan' \
+            /tmp/high-offload-direct.txt
           grep -Fq 'cpu_high_groups=12911' /tmp/high-offload-direct.txt
           grep -Fq 'cpu_high_mode=direct' /tmp/high-offload-direct.txt
           grep -Fq 'cpu_high_policy=threshold' /tmp/high-offload-direct.txt
@@ -120,6 +125,7 @@ jobs:
             >/tmp/cpu-high-cost.tsv 2>/tmp/cpu-high-cost.log
           test "$(wc -l </tmp/cpu-high-cost.tsv)" -eq 33
           grep -Fq $'group\tmask\troundtrip_bytes' /tmp/cpu-high-cost.tsv
+          grep -Fq $'gpu_state_steps' /tmp/cpu-high-cost.tsv
           grep -Fq 'cpu_high_cost_plan OK n=9 groups=32' /tmp/cpu-high-cost.log
       - name: Validate CPU LOW/HIGH executors against reference
         if: matrix.width == 22
