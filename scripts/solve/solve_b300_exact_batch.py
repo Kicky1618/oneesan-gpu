@@ -1,6 +1,8 @@
 #!/usr/bin/env python3
 import argparse
+import hashlib
 import json
+import math
 import os
 import re
 import subprocess
@@ -12,21 +14,51 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 from solve_b300_exact import PRIMES, crt_pair, simple_path_upper_bound, primes_for_bound
 
 RESULT_RE = re.compile(r"residue=(\d+).*?modulus=(\d+).*?wall_s=([0-9.eE+-]+)")
+CHECKPOINT_SCHEMA = 2
 
 
-def load_checkpoint(path: Path, n: int) -> dict[int, dict]:
+def file_sha256(path: Path) -> str:
+    h = hashlib.sha256()
+    with path.open("rb") as f:
+        for chunk in iter(lambda: f.read(1 << 20), b""):
+            h.update(chunk)
+    return h.hexdigest()
+
+
+def solver_fingerprint(binary: Path) -> dict:
+    return {
+        "schema": CHECKPOINT_SCHEMA,
+        "binary_sha256": file_sha256(binary),
+    }
+
+
+def load_checkpoint(path: Path, n: int, fingerprint: dict) -> dict[int, dict]:
     if not path.exists():
         return {}
     data = json.loads(path.read_text())
     if int(data.get("n", -1)) != n:
         raise SystemExit(f"checkpoint {path} belongs to n={data.get('n')}")
-    return {int(k): v for k, v in data.get("residues", {}).items()}
+    stored = data.get("solver_fingerprint")
+    if stored != fingerprint:
+        raise SystemExit(
+            f"checkpoint {path} has no compatible solver fingerprint; "
+            "move/remove it or use a separate --work-dir"
+        )
+    residues = {int(k): v for k, v in data.get("residues", {}).items()}
+    for p, rec in residues.items():
+        r = int(rec["residue"])
+        if p <= 1 or not (0 <= r < p):
+            raise SystemExit(f"checkpoint {path} has invalid residue {r} mod {p}")
+    return residues
 
 
-def save_checkpoint(path: Path, n: int, residues: dict[int, dict]) -> None:
+def save_checkpoint(
+    path: Path, n: int, fingerprint: dict, residues: dict[int, dict]
+) -> None:
     tmp = path.with_suffix(path.suffix + ".tmp")
     tmp.write_text(json.dumps({
         "n": n,
+        "solver_fingerprint": fingerprint,
         "residues": {str(k): v for k, v in residues.items()},
     }, indent=2, sort_keys=True) + "\n")
     tmp.replace(path)
@@ -38,7 +70,10 @@ def reconstruct(prefix: list[int], residues: dict[int, dict]) -> tuple[int, int,
         if p not in residues:
             break
         rec = residues[p]
-        x, m = crt_pair(x, m, int(rec["residue"]), p)
+        r = int(rec["residue"])
+        if not (0 <= r < p):
+            raise RuntimeError(f"invalid cached residue {r} mod {p}")
+        x, m = crt_pair(x, m, r, p)
         wall += float(rec.get("wall_s", 0.0))
     return x, m, wall
 
@@ -67,15 +102,20 @@ def main() -> int:
     if not binary.exists():
         raise SystemExit(f"batch binary not found: {binary}")
     binary = binary.resolve()
+    fingerprint = solver_fingerprint(binary)
+    print(
+        f"solver fingerprint: sha256={fingerprint['binary_sha256']}",
+        file=sys.stderr,
+    )
 
     work = Path(args.work_dir) if args.work_dir else REPO_ROOT / "work" / f"b300_exact_n{n}"
     work.mkdir(parents=True, exist_ok=True)
     checkpoint = work / "checkpoint.json"
-    residues = load_checkpoint(checkpoint, n)
+    residues = load_checkpoint(checkpoint, n, fingerprint)
 
     x, m, total_wall = reconstruct(prefix, residues)
     if m > path_bound:
-        return finish(work, n, path_bound, prefix, residues)
+        return finish(work, n, path_bound, prefix, residues, fingerprint)
 
     missing = [p for p in prefix if p not in residues]
     if args.max_runs:
@@ -109,10 +149,19 @@ def main() -> int:
         if p not in missing:
             proc.terminate()
             raise SystemExit(f"batch binary returned unexpected modulus {p}")
+        if p in seen:
+            proc.terminate()
+            raise SystemExit(f"batch binary returned duplicate modulus {p}")
+        if not (0 <= r < p):
+            proc.terminate()
+            raise SystemExit(f"batch binary returned invalid residue {r} mod {p}")
+        if not math.isfinite(wall) or wall < 0:
+            proc.terminate()
+            raise SystemExit(f"batch binary returned invalid wall_s={wall} for modulus {p}")
         residues[p] = {"residue": r, "wall_s": wall}
         seen.add(p)
-        save_checkpoint(checkpoint, n, residues)
-        xx, mm, _ = reconstruct(prefix, residues)
+        save_checkpoint(checkpoint, n, fingerprint, residues)
+        _, mm, _ = reconstruct(prefix, residues)
         print(f"checkpoint p={p}: contiguous CRT bits={mm.bit_length()} / bound_bits={required_bits}", file=sys.stderr, flush=True)
 
     rc = proc.wait()
@@ -124,16 +173,32 @@ def main() -> int:
 
     x, m, total_wall = reconstruct(prefix, residues)
     if m > path_bound:
-        return finish(work, n, path_bound, prefix, residues)
+        return finish(work, n, path_bound, prefix, residues, fingerprint)
     print(f"partial: CRT bits={m.bit_length()} bound_bits={required_bits}; cached={len(residues)}", file=sys.stderr)
     return 0 if args.max_runs else 2
 
 
-def finish(work: Path, n: int, path_bound: int, prefix: list[int], residues: dict[int, dict]) -> int:
+def finish(
+    work: Path,
+    n: int,
+    path_bound: int,
+    prefix: list[int],
+    residues: dict[int, dict],
+    fingerprint: dict,
+) -> int:
     required_bits = path_bound.bit_length()
     x, m, total_wall = reconstruct(prefix, residues)
     if m <= path_bound:
         raise RuntimeError("finish called before CRT capacity reached")
+    # Since the proven path bound satisfies exact <= path_bound < CRT modulus,
+    # the canonical CRT representative must itself lie below the bound.  A
+    # larger value proves that at least one residue/checkpoint/solver result is
+    # inconsistent and must never be emitted as an exact answer.
+    if x > path_bound:
+        raise RuntimeError(
+            f"CRT reconstruction exceeds rigorous path bound: exact_candidate={x} "
+            f"> bound={path_bound}"
+        )
     used = 0
     mm = 1
     for p in prefix:
@@ -151,6 +216,7 @@ def finish(work: Path, n: int, path_bound: int, prefix: list[int], residues: dic
         f"modulus_bits={m.bit_length()}\n"
         f"primes_used={used}\n"
         f"solver_wall_s_sum={total_wall:.9f}\n"
+        f"solver_binary_sha256={fingerprint['binary_sha256']}\n"
     )
     print(f"n={n}")
     print(f"exact={x}")
@@ -158,6 +224,7 @@ def finish(work: Path, n: int, path_bound: int, prefix: list[int], residues: dic
     print(f"modulus_bits={m.bit_length()}")
     print(f"primes_used={used}")
     print(f"solver_wall_s_sum={total_wall:.9f}")
+    print(f"solver_binary_sha256={fingerprint['binary_sha256']}")
     print(f"result_file={out}")
     return 0
 
