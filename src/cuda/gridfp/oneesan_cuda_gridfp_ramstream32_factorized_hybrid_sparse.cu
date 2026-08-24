@@ -17,7 +17,7 @@
 
 #include "ramstream32_cpu_low_sparse.hpp"
 #include "ramstream32_cpu_high.hpp"
-#include "ramstream32_cpu_high_direct.hpp"
+#include "ramstream32_cpu_high_direct_persistent.hpp"
 
 static void hybrid_sparse_release_dense_host(StorageFactorHost& storage) {
     storage.low_packed_rank.clear(); storage.low_packed_rank.shrink_to_fit();
@@ -264,7 +264,7 @@ int main(int argc, char** argv) {
 
     if (plan_only) {
         std::cout
-            << "backend=gridfp-ramstream32-factorized-hybrid-sparse-v5.8-plan"
+            << "backend=gridfp-ramstream32-factorized-hybrid-sparse-v5.11-plan"
             << " n=" << n
             << " gpu_high_desc_mib=" << highdesc_mib
             << " gpu_mask_mib=" << mask_mib
@@ -289,6 +289,7 @@ int main(int argc, char** argv) {
             << " cpu_high_mode=" << cpu_high_mode
             << " cpu_high_overlap=" << int(cpu_high_overlap)
             << " cpu_high_policy=" << cpu_high_policy
+            << " cpu_high_persistent_workers=1"
             << " cpu_high_selection_hash=" << selection_hash
             << " cpu_high_max_mib=" << cpu_high_max_mib
             << " cpu_high_groups=" << selected_cpu_high_jobs.size()
@@ -330,7 +331,7 @@ int main(int argc, char** argv) {
     Direct2DCtx gpu; gpu.init(mod);
     CpuLowSparsePool cpu_low(cpu_workers);
     CpuHighPool cpu_high_scratch(cpu_high_workers);
-    CpuHighDirectPool cpu_high_direct(cpu_high_workers);
+    CpuHighDirectPersistentPool cpu_high_direct(cpu_high_workers);
     int gpu_threads=256;
 
     auto run_gpu_high = [&] {
@@ -386,7 +387,7 @@ int main(int argc, char** argv) {
         : double(cpu_high_scratch.peak_scratch_bytes())/double(1<<20);
 
     std::cout
-        << "backend=gridfp-ramstream32-factorized-hybrid-sparse-v5.8"
+        << "backend=gridfp-ramstream32-factorized-hybrid-sparse-v5.11"
         << " n="<<n<<" residue="<<answer<<" modulus="<<mod
         << " gpu_high_desc_mib="<<highdesc_mib<<" gpu_mask_mib="<<mask_mib
         << " cpu_sparse_nn_orbit_mib="<<sparse_nn_orbit_mib
@@ -407,6 +408,8 @@ int main(int argc, char** argv) {
         << " cpu_high_mode="<<cpu_high_mode
         << " cpu_high_overlap="<<int(cpu_high_overlap)
         << " cpu_high_policy="<<cpu_high_policy
+        << " cpu_high_persistent_workers=1"
+        << " cpu_high_worker_start_s="<<cpu_high_direct.worker_start_s
         << " cpu_high_selection_hash="<<selection_hash
         << " cpu_high_max_mib="<<cpu_high_max_mib
         << " cpu_high_peak_worker_scratch_mib="<<cpu_high_peak_scratch_mib
