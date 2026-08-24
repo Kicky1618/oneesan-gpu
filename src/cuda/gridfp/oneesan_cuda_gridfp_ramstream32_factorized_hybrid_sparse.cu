@@ -264,7 +264,7 @@ int main(int argc, char** argv) {
 
     if (plan_only) {
         std::cout
-            << "backend=gridfp-ramstream32-factorized-hybrid-sparse-v5.4-plan"
+            << "backend=gridfp-ramstream32-factorized-hybrid-sparse-v5.8-plan"
             << " n=" << n
             << " gpu_high_desc_mib=" << highdesc_mib
             << " gpu_mask_mib=" << mask_mib
@@ -386,7 +386,7 @@ int main(int argc, char** argv) {
         : double(cpu_high_scratch.peak_scratch_bytes())/double(1<<20);
 
     std::cout
-        << "backend=gridfp-ramstream32-factorized-hybrid-sparse-v5.4"
+        << "backend=gridfp-ramstream32-factorized-hybrid-sparse-v5.8"
         << " n="<<n<<" residue="<<answer<<" modulus="<<mod
         << " gpu_high_desc_mib="<<highdesc_mib<<" gpu_mask_mib="<<mask_mib
         << " cpu_sparse_nn_orbit_mib="<<sparse_nn_orbit_mib
