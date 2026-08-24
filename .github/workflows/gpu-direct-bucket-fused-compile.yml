@@ -1,0 +1,61 @@
+name: gpu direct bucket fused validation
+
+on:
+  push:
+    paths:
+      - 'src/cuda/gridfp/ramstream32_bucket_layout.hpp'
+      - 'src/cuda/gridfp/ramstream32_bucket_direct.hpp'
+      - 'src/cuda/gridfp/ramstream32_bucket_fused.cuh'
+      - 'src/cuda/gridfp/ramstream32_bucket_fused_v2.cuh'
+      - 'src/cuda/gridfp/probes/ramstream32_bucket_fused_selftest.cu'
+      - 'src/cuda/gridfp/probes/ramstream32_bucket_fused_plan.cu'
+      - '.github/workflows/gpu-direct-bucket-fused-compile.yml'
+  pull_request:
+    paths:
+      - 'src/cuda/gridfp/ramstream32_bucket_layout.hpp'
+      - 'src/cuda/gridfp/ramstream32_bucket_direct.hpp'
+      - 'src/cuda/gridfp/ramstream32_bucket_fused.cuh'
+      - 'src/cuda/gridfp/ramstream32_bucket_fused_v2.cuh'
+      - 'src/cuda/gridfp/probes/ramstream32_bucket_fused_selftest.cu'
+      - 'src/cuda/gridfp/probes/ramstream32_bucket_fused_plan.cu'
+      - '.github/workflows/gpu-direct-bucket-fused-compile.yml'
+  workflow_dispatch:
+
+jobs:
+  compile:
+    runs-on: ubuntu-latest
+    container: nvidia/cuda:12.8.1-devel-ubuntu22.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Compile W10 exhaustive bucket fused probe
+        shell: bash
+        run: |
+          mkdir -p build
+          nvcc -O3 -std=c++17 -lineinfo -arch=sm_80 \
+            -DTARGET_W=10 -DLOW_LUT_K=5 -DHIGH_LUT_K=4 \
+            src/cuda/gridfp/probes/ramstream32_bucket_fused_selftest.cu \
+            -o build/ramstream32_bucket_fused_selftest_w10
+      - name: Compile and run W22 bucket fused plan
+        shell: bash
+        run: |
+          nvcc -O3 -std=c++17 -lineinfo -arch=sm_80 \
+            -DTARGET_W=22 -DLOW_LUT_K=11 -DHIGH_LUT_K=10 \
+            src/cuda/gridfp/probes/ramstream32_bucket_fused_plan.cu \
+            -o build/ramstream32_bucket_fused_plan_w22
+          build/ramstream32_bucket_fused_plan_w22 | tee /tmp/bkf-w22.txt
+          grep -Fq 'backend=gridfp-bucket-fused-plan' /tmp/bkf-w22.txt
+          grep -Fq 'locator_bits=18' /tmp/bkf-w22.txt
+          grep -Fq 'closure_atomic=0' /tmp/bkf-w22.txt
+      - name: Compile and run W28 bucket fused plan
+        shell: bash
+        run: |
+          nvcc -O3 -std=c++17 -lineinfo -arch=sm_80 \
+            -DTARGET_W=28 -DLOW_LUT_K=14 -DHIGH_LUT_K=13 \
+            src/cuda/gridfp/probes/ramstream32_bucket_fused_plan.cu \
+            -o build/ramstream32_bucket_fused_plan_w28
+          build/ramstream32_bucket_fused_plan_w28 | tee /tmp/bkf-w28.txt
+          grep -Fq 'states=520735012027' /tmp/bkf-w28.txt
+          grep -Fq 'owner_high_max=19631' /tmp/bkf-w28.txt
+          grep -Fq 'owner_low_max=30114' /tmp/bkf-w28.txt
+          grep -Fq 'locator_bits=18' /tmp/bkf-w28.txt
+          grep -Fq 'closure_atomic=0' /tmp/bkf-w28.txt
