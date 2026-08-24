@@ -19,7 +19,8 @@ CPU_HIGH_MAX_MIB="${CPU_HIGH_MAX_MIB:-256}"
 CPU_HIGH_GROUPS_FILE="${CPU_HIGH_GROUPS_FILE:-}"
 CPU_HIGH_CPU_LIST="${CPU_HIGH_CPU_LIST:-}"
 CPU_LOW_CPU_LIST="${CPU_LOW_CPU_LIST:-}"
-REPEATS="${REPEATS:-6}"
+CPU_LOW_DOMAIN_SIZE="${CPU_LOW_DOMAIN_SIZE:-}"
+REPEATS="${REPEATS:-8}"
 BUILD="${BUILD:-1}"
 EXPECTED_RESIDUE="${EXPECTED_RESIDUE:-}"
 OUT_DIR="${OUT_DIR:-$ROOT/work/bench_ramstream32_cpu_low_schedule_compare}"
@@ -34,6 +35,10 @@ if [[ "$CPU_HIGH_MODE" != scratch && "$CPU_HIGH_MODE" != direct ]]; then
 fi
 if [[ "$CPU_HIGH_OVERLAP" != 0 && "$CPU_HIGH_OVERLAP" != 1 ]]; then
   echo "CPU_HIGH_OVERLAP must be 0 or 1" >&2
+  exit 2
+fi
+if [[ ! "$CPU_LOW_DOMAIN_SIZE" =~ ^[1-9][0-9]*$ ]] || (( CPU_LOW_DOMAIN_SIZE > CPU_WORKERS )); then
+  echo "CPU_LOW_DOMAIN_SIZE must be a positive integer <= CPU_WORKERS" >&2
   exit 2
 fi
 if [[ -n "$CPU_HIGH_GROUPS_FILE" && ! -f "$CPU_HIGH_GROUPS_FILE" ]]; then
@@ -87,9 +92,10 @@ cpu_high_max_mib=$CPU_HIGH_MAX_MIB
 cpu_high_groups_file=${CPU_HIGH_GROUPS_FILE:-none}
 cpu_high_cpu_list=${CPU_HIGH_CPU_LIST:-none}
 cpu_low_cpu_list=${CPU_LOW_CPU_LIST:-none}
+cpu_low_domain_size=$CPU_LOW_DOMAIN_SIZE
 repeats=$REPEATS
-schedules=dynamic,sticky,contiguous
-order_design=cyclic-latin-3
+schedules=dynamic,sticky,contiguous,domain
+order_design=cyclic-latin-4
 numa_sampling=disabled
 expected_residue=${EXPECTED_RESIDUE:-unknown}
 binary_sha256=$(file_sha256 "$bin")
@@ -98,11 +104,11 @@ if [[ -n "$CPU_HIGH_GROUPS_FILE" ]]; then
   echo "cpu_high_groups_file_sha256=$(file_sha256 "$CPU_HIGH_GROUPS_FILE")" >>"$meta"
 fi
 
-printf 'repeat\torder\tposition\tschedule\tresidue\twall_s\tcpu_low_wall_s\tcpu_low_kernel_sum_s\tcpu_low_schedule_build_s\tcpu_low_contiguous_optimal_cap\tcpu_low_worker_start_s\tcpu_high_wall_s\th2d_s\tgpu_kernel_s\td2h_s\traw\n' >"$out"
+printf 'repeat\torder\tposition\tschedule\tresidue\twall_s\tcpu_low_wall_s\tcpu_low_kernel_sum_s\tcpu_low_schedule_build_s\tcpu_low_contiguous_optimal_cap\tcpu_low_domain_size\tcpu_low_domain_normalized_cap\tcpu_low_domain_active_domains\tcpu_low_worker_start_s\tcpu_high_wall_s\th2d_s\tgpu_kernel_s\td2h_s\traw\n' >"$out"
 
 run_one() {
   local repeat="$1" order="$2" position="$3" schedule="$4"
-  local line residue got_schedule
+  local line residue got_schedule got_domain
   line="$(CPU_HIGH_MODE="$CPU_HIGH_MODE" \
     CPU_HIGH_OVERLAP="$CPU_HIGH_OVERLAP" \
     CPU_HIGH_MAX_MIB="$CPU_HIGH_MAX_MIB" \
@@ -111,6 +117,7 @@ run_one() {
     CPU_HIGH_CPU_LIST="$CPU_HIGH_CPU_LIST" \
     CPU_LOW_CPU_LIST="$CPU_LOW_CPU_LIST" \
     CPU_LOW_SCHEDULE="$schedule" \
+    CPU_LOW_DOMAIN_SIZE="$CPU_LOW_DOMAIN_SIZE" \
     RAMSTREAM_NUMA_SAMPLE_MIB=0 \
     "$bin" "$N" "$MODULUS" "$GPU_TARGET_MIB" "$CPU_WORKERS" | tail -n1)"
   residue="$(field "$line" residue)"
@@ -119,11 +126,18 @@ run_one() {
     echo "schedule provenance mismatch requested=$schedule got=$got_schedule" >&2
     exit 7
   fi
-  printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
+  got_domain="$(field "$line" cpu_low_domain_size)"
+  if [[ "$schedule" == domain && "$got_domain" != "$CPU_LOW_DOMAIN_SIZE" ]]; then
+    echo "domain provenance mismatch requested=$CPU_LOW_DOMAIN_SIZE got=$got_domain" >&2
+    exit 7
+  fi
+  printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
     "$repeat" "$order" "$position" "$schedule" "$residue" \
     "$(field "$line" wall_s)" "$(field "$line" cpu_low_wall_s)" \
     "$(field "$line" cpu_low_kernel_sum_s)" "$(field "$line" cpu_low_schedule_build_s)" \
     "$(field "$line" cpu_low_contiguous_optimal_cap)" \
+    "$got_domain" "$(field "$line" cpu_low_domain_normalized_cap)" \
+    "$(field "$line" cpu_low_domain_active_domains)" \
     "$(field "$line" cpu_low_worker_start_s)" "$(field "$line" cpu_high_wall_s)" \
     "$(field "$line" h2d_s)" "$(field "$line" gpu_kernel_s)" \
     "$(field "$line" d2h_s)" "$line" >>"$out"
@@ -132,12 +146,13 @@ run_one() {
 
 reference_residue=""
 for ((r=1; r<=REPEATS; ++r)); do
-  case $(((r - 1) % 3)) in
-    0) order=dynamic-sticky-contiguous; schedules=(dynamic sticky contiguous) ;;
-    1) order=sticky-contiguous-dynamic; schedules=(sticky contiguous dynamic) ;;
-    2) order=contiguous-dynamic-sticky; schedules=(contiguous dynamic sticky) ;;
+  case $(((r - 1) % 4)) in
+    0) order=dynamic-sticky-contiguous-domain; schedules=(dynamic sticky contiguous domain) ;;
+    1) order=sticky-contiguous-domain-dynamic; schedules=(sticky contiguous domain dynamic) ;;
+    2) order=contiguous-domain-dynamic-sticky; schedules=(contiguous domain dynamic sticky) ;;
+    3) order=domain-dynamic-sticky-contiguous; schedules=(domain dynamic sticky contiguous) ;;
   esac
-  echo "repeat $r/$REPEATS ($order)" >&2
+  echo "repeat $r/$REPEATS domain_size=$CPU_LOW_DOMAIN_SIZE ($order)" >&2
   position=0
   for schedule in "${schedules[@]}"; do
     ((position+=1))
@@ -160,22 +175,25 @@ awk -F '\t' '
   {
     s=$4; n[s]++;
     wall[s]+=$6; low[s]+=$7; kernel[s]+=$8; build[s]+=$9;
-    start[s]+=$11; high[s]+=$12;
+    start[s]+=$14; high[s]+=$15;
     pos[s,$3]++;
   }
   END {
-    modes[1]="dynamic"; modes[2]="sticky"; modes[3]="contiguous";
-    for (i=1;i<=3;i++) {
+    modes[1]="dynamic"; modes[2]="sticky"; modes[3]="contiguous"; modes[4]="domain";
+    for (i=1;i<=4;i++) {
       s=modes[i];
       if (!n[s]) continue;
-      printf("summary schedule=%s runs=%d mean_wall_s=%.9f mean_cpu_low_wall_s=%.9f mean_cpu_low_kernel_sum_s=%.9f mean_schedule_build_s=%.9f mean_worker_start_s=%.9f mean_cpu_high_wall_s=%.9f positions=%d/%d/%d\n",
-             s,n[s],wall[s]/n[s],low[s]/n[s],kernel[s]/n[s],build[s]/n[s],start[s]/n[s],high[s]/n[s],pos[s,1]+0,pos[s,2]+0,pos[s,3]+0);
+      printf("summary schedule=%s runs=%d mean_wall_s=%.9f mean_cpu_low_wall_s=%.9f mean_cpu_low_kernel_sum_s=%.9f mean_schedule_build_s=%.9f mean_worker_start_s=%.9f mean_cpu_high_wall_s=%.9f positions=%d/%d/%d/%d\n",
+             s,n[s],wall[s]/n[s],low[s]/n[s],kernel[s]/n[s],build[s]/n[s],start[s]/n[s],high[s]/n[s],pos[s,1]+0,pos[s,2]+0,pos[s,3]+0,pos[s,4]+0);
     }
-    if (n["dynamic"] && n["sticky"] && n["contiguous"]) {
-      dw=wall["dynamic"]/n["dynamic"]; sw=wall["sticky"]/n["sticky"]; cw=wall["contiguous"]/n["contiguous"];
-      dl=low["dynamic"]/n["dynamic"]; sl=low["sticky"]/n["sticky"]; cl=low["contiguous"]/n["contiguous"];
-      printf("comparison dynamic_wall_s=%.9f sticky_wall_s=%.9f contiguous_wall_s=%.9f sticky_vs_dynamic_wall=%.9fx contiguous_vs_dynamic_wall=%.9fx contiguous_vs_sticky_wall=%.9fx dynamic_low_s=%.9f sticky_low_s=%.9f contiguous_low_s=%.9f sticky_vs_dynamic_low=%.9fx contiguous_vs_dynamic_low=%.9fx contiguous_vs_sticky_low=%.9fx\n",
-             dw,sw,cw,dw/sw,dw/cw,sw/cw,dl,sl,cl,dl/sl,dl/cl,sl/cl);
+    if (n["dynamic"] && n["sticky"] && n["contiguous"] && n["domain"]) {
+      dw=wall["dynamic"]/n["dynamic"]; sw=wall["sticky"]/n["sticky"];
+      cw=wall["contiguous"]/n["contiguous"]; ow=wall["domain"]/n["domain"];
+      dl=low["dynamic"]/n["dynamic"]; sl=low["sticky"]/n["sticky"];
+      cl=low["contiguous"]/n["contiguous"]; ol=low["domain"]/n["domain"];
+      printf("comparison dynamic_wall_s=%.9f sticky_wall_s=%.9f contiguous_wall_s=%.9f domain_wall_s=%.9f sticky_vs_dynamic_wall=%.9fx contiguous_vs_dynamic_wall=%.9fx domain_vs_dynamic_wall=%.9fx domain_vs_sticky_wall=%.9fx domain_vs_contiguous_wall=%.9fx dynamic_low_s=%.9f sticky_low_s=%.9f contiguous_low_s=%.9f domain_low_s=%.9f sticky_vs_dynamic_low=%.9fx contiguous_vs_dynamic_low=%.9fx domain_vs_dynamic_low=%.9fx domain_vs_sticky_low=%.9fx domain_vs_contiguous_low=%.9fx\n",
+             dw,sw,cw,ow,dw/sw,dw/cw,dw/ow,sw/ow,cw/ow,
+             dl,sl,cl,ol,dl/sl,dl/cl,dl/ol,sl/ol,cl/ol);
     }
   }
 ' "$out"
