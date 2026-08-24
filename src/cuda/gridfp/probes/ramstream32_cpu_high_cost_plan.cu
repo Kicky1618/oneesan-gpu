@@ -1,5 +1,6 @@
 #include <cuda_runtime.h>
 
+#include <algorithm>
 #include <cstdint>
 #include <cstdlib>
 #include <iostream>
@@ -14,6 +15,22 @@ static uint32_t group_from_low_mask(uint32_t mask) {
     for (int pos = 0; pos < LOW_LUT_K; ++pos)
         if (mask & (1u << pos)) g |= 1u << (LOW_LUT_K - 1 - pos);
     return g;
+}
+
+static unsigned long long boundary_exposure_upper(
+    unsigned long long rows, uint32_t width, uint32_t col0,
+    uint32_t total_cols, unsigned long long page_bytes
+) {
+    if (!rows || !width) return 0;
+    unsigned boundaries = 0;
+    if (col0 != 0) ++boundaries;
+    if (uint64_t(col0) + width != total_cols) ++boundaries;
+    if (!boundaries) return 0;
+    unsigned long long interval_bytes =
+        static_cast<unsigned long long>(width) * sizeof(Count);
+    unsigned long long exposed_per_row = std::min(
+        interval_bytes, static_cast<unsigned long long>(boundaries) * page_bytes);
+    return rows * exposed_per_row;
 }
 
 int main(int argc, char** argv) {
@@ -32,6 +49,8 @@ int main(int argc, char** argv) {
     constexpr int L = LOW_LUT_K;
     constexpr int H = HIGH_LUT_K;
     constexpr int S = FactorTablesHost::STRIDE;
+    constexpr unsigned long long PAGE4K = 4096ull;
+    constexpr unsigned long long PAGE2M = 2ull << 20;
     const uint32_t nmasks = 1u << L;
 
     unsigned long long sum_main = 0;
@@ -39,12 +58,16 @@ int main(int argc, char** argv) {
 
     std::cout
         << "group\tmask\troundtrip_bytes\tmain_states\tblocked_states"
+        << "\tauthoritative_bytes\tpage4k_boundary_upper_bytes"
+        << "\tpage2m_boundary_upper_bytes"
         << "\tnn_cells\tnrnl_cells\tblock_closure_cells\tcross_closure_cells"
         << "\ttotal_cells\n";
 
     for (uint32_t mask = 0; mask < nmasks; ++mask) {
         unsigned long long main_states = 0;
         unsigned long long blocked_states = 0;
+        unsigned long long page4k_upper = 0;
+        unsigned long long page2m_upper = 0;
         unsigned long long nn_cells = 0;
         unsigned long long nrnl_cells = 0;
         unsigned long long block_cells = 0;
@@ -54,7 +77,12 @@ int main(int argc, char** argv) {
             const StorageBlock& sb = layout.main_blocks[bid];
             if (!sb.valid || !sb.rows) continue;
             uint32_t width = factor_count(G_FACTOR.low_mask_off, mask, sb.hs);
+            uint32_t col0 = storage.low_mask_begin[size_t(mask) * S + sb.hs];
             main_states += static_cast<unsigned long long>(sb.rows) * width;
+            page4k_upper += boundary_exposure_upper(
+                sb.rows, width, col0, sb.cols, PAGE4K);
+            page2m_upper += boundary_exposure_upper(
+                sb.rows, width, col0, sb.cols, PAGE2M);
 
             for (uint32_t pi = 0; pi < uint32_t(H); ++pi) {
                 auto [na, nb] = cpu_high_direct_range(
@@ -75,16 +103,24 @@ int main(int argc, char** argv) {
         for (const StorageBlock& sb : layout.block_blocks) {
             if (!sb.valid || !sb.rows) continue;
             uint32_t width = factor_count(G_FACTOR.low_mask_off, mask, sb.hs);
+            uint32_t col0 = storage.low_mask_begin[size_t(mask) * S + sb.hs];
             blocked_states += static_cast<unsigned long long>(sb.rows) * width;
+            page4k_upper += boundary_exposure_upper(
+                sb.rows, width, col0, sb.cols, PAGE4K);
+            page2m_upper += boundary_exposure_upper(
+                sb.rows, width, col0, sb.cols, PAGE2M);
         }
 
         unsigned long long total_cells = nn_cells + nrnl_cells + block_cells + cross_cells;
-        unsigned long long roundtrip_bytes =
-            2ull * (main_states + blocked_states) * sizeof(Count);
+        unsigned long long authoritative_bytes =
+            (main_states + blocked_states) * sizeof(Count);
+        unsigned long long roundtrip_bytes = 2ull * authoritative_bytes;
         uint32_t group = group_from_low_mask(mask);
 
         std::cout << group << '\t' << mask << '\t' << roundtrip_bytes
                   << '\t' << main_states << '\t' << blocked_states
+                  << '\t' << authoritative_bytes
+                  << '\t' << page4k_upper << '\t' << page2m_upper
                   << '\t' << nn_cells << '\t' << nrnl_cells
                   << '\t' << block_cells << '\t' << cross_cells
                   << '\t' << total_cells << '\n';
