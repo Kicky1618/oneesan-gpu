@@ -1,6 +1,7 @@
 #pragma once
 
 #include <algorithm>
+#include <array>
 #include <cstdint>
 #include <cstdlib>
 #include <iostream>
@@ -37,7 +38,7 @@ struct MaskShardLowGroupPackedConfig {
 
 __device__ __constant__ MaskShardLowGroupPackedConfig D_MS_LOW_GROUP_PACKED;
 
-static MaskShardLowGroupPackedConfig maskshard_build_low_group_packed_base(
+static MaskShardLowGroupPackedConfig maskshard_build_low_group_packed_base_uncached(
     std::uint32_t mask
 ) {
     MaskShardLowGroupPackedConfig cfg{};
@@ -76,6 +77,66 @@ static MaskShardLowGroupPackedConfig maskshard_build_low_group_packed_base(
     cfg.mask = mask;
     return cfg;
 }
+
+#ifdef MASKSHARD_LOW_GROUP_PACKED_CACHE
+static std::array<MaskShardLowGroupPackedConfig, (1u << HIGH_LUT_K)>
+    G_MS_LOW_GROUP_PACKED_BASE_CACHE{};
+static bool G_MS_LOW_GROUP_PACKED_BASE_CACHE_BUILT = false;
+
+static void maskshard_build_low_group_packed_base_cache() {
+    if (G_MS_LOW_GROUP_PACKED_BASE_CACHE_BUILT) return;
+    for (std::uint32_t mask = 0; mask < (1u << HIGH_LUT_K); ++mask)
+        G_MS_LOW_GROUP_PACKED_BASE_CACHE[size_t(mask)] =
+            maskshard_build_low_group_packed_base_uncached(mask);
+    G_MS_LOW_GROUP_PACKED_BASE_CACHE_BUILT = true;
+    std::cerr << "packed LOW group base cache masks="
+              << (1u << HIGH_LUT_K)
+              << " mib="
+              << double(sizeof(G_MS_LOW_GROUP_PACKED_BASE_CACHE))
+                    / double(1ULL << 20) << '\n';
+}
+
+static MaskShardLowGroupPackedConfig maskshard_build_low_group_packed_base(
+    std::uint32_t mask
+) {
+    if (!G_MS_LOW_GROUP_PACKED_BASE_CACHE_BUILT) {
+        std::cerr << "packed LOW group base cache used before setup\n";
+        std::exit(339);
+    }
+    if (mask >= G_MS_LOW_GROUP_PACKED_BASE_CACHE.size()) {
+        std::cerr << "packed LOW group base cache invalid mask=" << mask << '\n';
+        std::exit(340);
+    }
+    return G_MS_LOW_GROUP_PACKED_BASE_CACHE[size_t(mask)];
+}
+
+#ifdef report_high_mask_shard_layout
+static void maskshard_report_high_mask_shard_layout_lowgroup_packed_cache(
+    const MaskShardLayout& s
+) {
+    report_high_mask_shard_layout(s);
+    maskshard_build_low_group_packed_base_cache();
+}
+#undef report_high_mask_shard_layout
+#define report_high_mask_shard_layout \
+        maskshard_report_high_mask_shard_layout_lowgroup_packed_cache
+#else
+static void maskshard_report_high_mask_shard_layout_lowgroup_packed_cache(
+    const MaskShardLayout& s
+) {
+    report_high_mask_shard_layout(s);
+    maskshard_build_low_group_packed_base_cache();
+}
+#define report_high_mask_shard_layout \
+        maskshard_report_high_mask_shard_layout_lowgroup_packed_cache
+#endif
+#else
+static MaskShardLowGroupPackedConfig maskshard_build_low_group_packed_base(
+    std::uint32_t mask
+) {
+    return maskshard_build_low_group_packed_base_uncached(mask);
+}
+#endif
 
 __device__ __forceinline__ int maskshard_low_packed_main_nblocks() {
     return D_MS_LOW_GROUP_PACKED.main_nblocks;
