@@ -19,6 +19,7 @@ CPU_HIGH_MAX_MIB="${CPU_HIGH_MAX_MIB:-256}"
 CPU_HIGH_GROUPS_FILE="${CPU_HIGH_GROUPS_FILE:-}"
 CPU_HIGH_CPU_LIST="${CPU_HIGH_CPU_LIST:-}"
 CPU_LOW_CPU_LIST="${CPU_LOW_CPU_LIST:-}"
+CPU_LOW_SCHEDULE="${CPU_LOW_SCHEDULE:-dynamic}"
 NUMA_SAMPLE_MIB="${NUMA_SAMPLE_MIB:-64}"
 BUILD="${BUILD:-1}"
 OUT_DIR="${OUT_DIR:-$ROOT/work/bench_ramstream32_numa_sample}"
@@ -33,6 +34,10 @@ if [[ "$CPU_HIGH_MODE" != scratch && "$CPU_HIGH_MODE" != direct ]]; then
 fi
 if [[ "$CPU_HIGH_OVERLAP" != 0 && "$CPU_HIGH_OVERLAP" != 1 ]]; then
   echo "CPU_HIGH_OVERLAP must be 0 or 1" >&2
+  exit 2
+fi
+if [[ "$CPU_LOW_SCHEDULE" != dynamic && "$CPU_LOW_SCHEDULE" != sticky ]]; then
+  echo "CPU_LOW_SCHEDULE must be dynamic or sticky" >&2
   exit 2
 fi
 if [[ ! "$NUMA_SAMPLE_MIB" =~ ^([0-9]+([.][0-9]*)?|[.][0-9]+)$ ]] || [[ "$NUMA_SAMPLE_MIB" == 0 ]]; then
@@ -52,7 +57,7 @@ bin="$ROOT/build/oneesan_cuda_gridfp_ramstream32_factorized_hybrid_sparse_n${N}"
 
 mkdir -p "$OUT_DIR"
 ts="$(date -u +%Y%m%dT%H%M%SZ)"
-base="$OUT_DIR/numa-n${N}-${ts}"
+base="$OUT_DIR/numa-${CPU_LOW_SCHEDULE}-n${N}-${ts}"
 stdout_file="$base.stdout.txt"
 stderr_file="$base.stderr.txt"
 analysis_file="$base.analysis.txt"
@@ -80,6 +85,7 @@ cpu_high_max_mib=$CPU_HIGH_MAX_MIB
 cpu_high_groups_file=${CPU_HIGH_GROUPS_FILE:-none}
 cpu_high_cpu_list=${CPU_HIGH_CPU_LIST:-none}
 cpu_low_cpu_list=${CPU_LOW_CPU_LIST:-none}
+cpu_low_schedule=$CPU_LOW_SCHEDULE
 numa_sample_mib=$NUMA_SAMPLE_MIB
 binary_sha256=$(file_sha256 "$bin")
 EOF
@@ -94,6 +100,7 @@ CPU_HIGH_GROUPS_FILE="$CPU_HIGH_GROUPS_FILE" \
 CPU_HIGH_WORKERS="$CPU_HIGH_WORKERS" \
 CPU_HIGH_CPU_LIST="$CPU_HIGH_CPU_LIST" \
 CPU_LOW_CPU_LIST="$CPU_LOW_CPU_LIST" \
+CPU_LOW_SCHEDULE="$CPU_LOW_SCHEDULE" \
 RAMSTREAM_NUMA_SAMPLE_MIB="$NUMA_SAMPLE_MIB" \
   "$bin" "$N" "$MODULUS" "$GPU_TARGET_MIB" "$CPU_WORKERS" \
   >"$stdout_file" 2>"$stderr_file"
