@@ -5,17 +5,22 @@ on:
     paths:
       - 'src/cpp/probes/gpu_direct_bucket_plan.cpp'
       - 'src/cpp/probes/gpu_direct_bucket_layout_selftest.cpp'
+      - 'src/cuda/gridfp/ramstream32_bucket_layout.hpp'
+      - 'src/cuda/gridfp/probes/ramstream32_bucket_layout_selftest.cu'
       - '.github/workflows/gpu-direct-bucket-plan.yml'
   pull_request:
     paths:
       - 'src/cpp/probes/gpu_direct_bucket_plan.cpp'
       - 'src/cpp/probes/gpu_direct_bucket_layout_selftest.cpp'
+      - 'src/cuda/gridfp/ramstream32_bucket_layout.hpp'
+      - 'src/cuda/gridfp/probes/ramstream32_bucket_layout_selftest.cu'
       - '.github/workflows/gpu-direct-bucket-plan.yml'
   workflow_dispatch:
 
 jobs:
   plan:
     runs-on: ubuntu-latest
+    container: nvidia/cuda:12.8.1-devel-ubuntu22.04
     steps:
       - uses: actions/checkout@v4
       - name: Build and validate exact n27 bucket planner
@@ -31,7 +36,7 @@ jobs:
           grep -Fq 'max_owner_high_rows=19631' /tmp/bucket-plan.txt
           grep -Fq 'max_owner_low_cols=30114' /tmp/bucket-plan.txt
           grep -Fq 'owner_bits=3 local_rank_bits=15 locator_bits=18' /tmp/bucket-plan.txt
-      - name: Validate physical bucket address and raw transpose
+      - name: Validate independent physical bucket model
         shell: bash
         run: |
           g++ -O3 -std=c++17 src/cpp/probes/gpu_direct_bucket_layout_selftest.cpp \
@@ -39,3 +44,14 @@ jobs:
           build/gpu_direct_bucket_layout_selftest | tee /tmp/bucket-layout.txt
           grep -Fq 'gpu-direct-bucket-layout-selftest OK' /tmp/bucket-layout.txt
           grep -Fq 'pairs=28' /tmp/bucket-layout.txt
+      - name: Validate repo factorized bucket codec
+        shell: bash
+        run: |
+          nvcc -O3 -std=c++17 -lineinfo -arch=sm_80 \
+            -DTARGET_W=10 -DLOW_LUT_K=5 -DHIGH_LUT_K=4 \
+            src/cuda/gridfp/probes/ramstream32_bucket_layout_selftest.cu \
+            -o build/ramstream32_bucket_layout_selftest_w10
+          build/ramstream32_bucket_layout_selftest_w10 | tee /tmp/repo-bucket-layout.txt
+          grep -Fq 'ramstream32-bucket-layout-selftest OK W=10' /tmp/repo-bucket-layout.txt
+          grep -Fq 'pairs=28' /tmp/repo-bucket-layout.txt
+          grep -Fq 'locator_bits=18' /tmp/repo-bucket-layout.txt
