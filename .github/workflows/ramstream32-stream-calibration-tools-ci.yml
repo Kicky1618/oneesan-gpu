@@ -1,0 +1,88 @@
+name: ramstream32 stream calibration tools CI
+
+on:
+  push:
+    paths:
+      - 'scripts/tools/design_cpu_high_stream_calibration.py'
+      - 'scripts/tools/fit_cpu_high_stream_weights.py'
+      - 'scripts/bench/ramstream32-cpu-high-stream-calibration.sh'
+      - 'docs/ramstream32-cpu-high-stream-calibration.md'
+      - '.github/workflows/ramstream32-stream-calibration-tools-ci.yml'
+  pull_request:
+    paths:
+      - 'scripts/tools/design_cpu_high_stream_calibration.py'
+      - 'scripts/tools/fit_cpu_high_stream_weights.py'
+      - 'scripts/bench/ramstream32-cpu-high-stream-calibration.sh'
+      - 'docs/ramstream32-cpu-high-stream-calibration.md'
+      - '.github/workflows/ramstream32-stream-calibration-tools-ci.yml'
+  workflow_dispatch:
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Check syntax
+        shell: bash
+        run: |
+          bash -n scripts/bench/ramstream32-cpu-high-stream-calibration.sh
+          python3 -m py_compile scripts/tools/design_cpu_high_stream_calibration.py
+          python3 -m py_compile scripts/tools/fit_cpu_high_stream_weights.py
+      - name: Check calibration design
+        shell: bash
+        run: |
+          cat >/tmp/design-cost.tsv <<'EOF'
+          group	roundtrip_bytes	nn_cells	nrnl_cells	block_closure_cells	cross_closure_cells
+          0	134217728	9000000	1000000	1000000	1000000
+          1	134217728	1000000	9000000	1000000	1000000
+          2	134217728	1000000	1000000	9000000	1000000
+          3	134217728	1000000	1000000	1000000	9000000
+          4	134217728	4000000	4000000	4000000	4000000
+          5	268435456	6000000	2000000	3000000	5000000
+          6	268435456	2000000	6000000	5000000	3000000
+          7	268435456	5000000	3000000	2000000	6000000
+          EOF
+          rm -rf /tmp/stream-design
+          python3 scripts/tools/design_cpu_high_stream_calibration.py \
+            /tmp/design-cost.tsv --out-dir /tmp/stream-design --samples 5 \
+            --min-roundtrip-mib 64 --max-roundtrip-mib 512 \
+            > /tmp/design.log
+          test "$(wc -l </tmp/stream-design/manifest.tsv)" -eq 6
+          test "$(wc -l </tmp/stream-design/validation-all.groups)" -eq 5
+          grep -Fq 'designed samples=5' /tmp/design.log
+      - name: Check stream-weight fit
+        shell: bash
+        run: |
+          cat >/tmp/fit-cost.tsv <<'EOF'
+          group	nn_cells	nrnl_cells	block_closure_cells	cross_closure_cells
+          0	1000000	0	0	0
+          1	0	2000000	0	0
+          2	0	0	3000000	0
+          3	0	0	0	4000000
+          4	1000000	1000000	1000000	1000000
+          EOF
+          cat >/tmp/fit-runs.tsv <<'EOF'
+          role	sample	group	cpu_high_wall_s	cpu_high_groups
+          sample	1	0	0.011	10
+          sample	2	1	0.041	10
+          sample	3	2	0.091	10
+          sample	4	3	0.161	10
+          sample	5	4	0.101	10
+          validation	0	-1	0.401	50
+          EOF
+          python3 scripts/tools/fit_cpu_high_stream_weights.py \
+            /tmp/fit-cost.tsv /tmp/fit-runs.tsv \
+            --write-args /tmp/planner-weights.txt > /tmp/fit.log
+          grep -Fq 'fit samples=5' /tmp/fit.log
+          grep -Fq 'planner_args --cpu-gcell-s' /tmp/fit.log
+          grep -Fq 'validation groups=5' /tmp/fit.log
+          grep -Fq -- '--cross-weight' /tmp/planner-weights.txt
+      - name: Check docs
+        shell: bash
+        run: |
+          grep -Fq 'design_cpu_high_stream_calibration.py' \
+            docs/ramstream32-cpu-high-stream-calibration.md
+          grep -Fq 'ramstream32-cpu-high-stream-calibration.sh' \
+            docs/ramstream32-cpu-high-stream-calibration.md
+          grep -Fq 'fit_cpu_high_stream_weights.py' \
+            docs/ramstream32-cpu-high-stream-calibration.md
