@@ -21,6 +21,17 @@ jobs:
       - name: Check harness syntax
         shell: bash
         run: bash -n scripts/bench/ramstream32-cpu-high-policy-ab.sh
+      - name: Check LOW schedule propagation
+        shell: bash
+        run: |
+          grep -Fq 'CPU_LOW_SCHEDULE="${CPU_LOW_SCHEDULE:-dynamic}"' \
+            scripts/bench/ramstream32-cpu-high-policy-ab.sh
+          grep -Fq '"$CPU_LOW_SCHEDULE" != contiguous' \
+            scripts/bench/ramstream32-cpu-high-policy-ab.sh
+          grep -Fq 'CPU_LOW_SCHEDULE="$CPU_LOW_SCHEDULE"' \
+            scripts/bench/ramstream32-cpu-high-policy-ab.sh
+          grep -Fq 'cpu_low_schedule=$CPU_LOW_SCHEDULE' \
+            scripts/bench/ramstream32-cpu-high-policy-ab.sh
       - name: Check documented entry point
         shell: bash
         run: |
@@ -28,4 +39,5 @@ jobs:
             docs/ramstream32-cpu-high-policy-ab.md
           grep -Fq 'GROUPS_FILE=' docs/ramstream32-cpu-high-policy-ab.md
           grep -Fq 'THRESHOLD_MIB=' docs/ramstream32-cpu-high-policy-ab.md
+          grep -Fq 'CPU_LOW_SCHEDULE' docs/ramstream32-cpu-high-policy-ab.md
           grep -Fq 'policy_speedup' docs/ramstream32-cpu-high-policy-ab.md
