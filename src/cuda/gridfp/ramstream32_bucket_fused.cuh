@@ -8,16 +8,10 @@
 #include <iostream>
 #include <vector>
 
-// Bucket-local version of the zero-scratch fused direct executor.
-//
-// The physical state on one GPU is eight raw bucket slots.  During the LOW
-// window the GPU id is the fixed HIGH owner and slot selects the active LOW
-// owner: pair[fixed_h][slot_l].  During the HIGH window the GPU id is the fixed
-// LOW owner and slot selects the active HIGH owner: pair[slot_h][fixed_l].
-// Active-half source/partner/drop and closure ranks are 18-bit bucket locators
-// (3 owner bits + 15 owner-local rank bits).  CROSS repair preserves inactive
-// occupancy, therefore every generated inactive-half preimage stays on the
-// current GPU; no peer access occurs inside a window.
+// Bucket-local zero-scratch fused direct executor.
+// LOW: fixed HIGH owner, slot = active LOW owner, pair[fixed_h][slot_l].
+// HIGH: fixed LOW owner, slot = active HIGH owner, pair[slot_h][fixed_l].
+// All active-half locators are 3 owner bits + 15 owner-local rank bits.
 
 static constexpr uint32_t BKF_LOC_MASK=(1u<<BUCKET_LOCATOR_BITS)-1u;
 static constexpr int BKF_SRC_BLOCK_SHIFT=BUCKET_LOCATOR_BITS;
@@ -37,14 +31,31 @@ static inline uint32_t bkf_src_pack(uint32_t bid,uint32_t loc){
 }
 static inline uint32_t bkf_cross_pack(uint32_t bid,uint32_t loc,uint32_t depth){
     if(!depth||depth>BKF_CROSS_DEPTH_MASK){
-        std::cerr<<"bucket fused depth overflow depth="<<depth<<'\n';
-        std::exit(201);
+        std::cerr<<"bucket fused depth overflow depth="<<depth<<'\n';std::exit(201);
     }
     return bkf_src_pack(bid,loc)|(depth<<BKF_CROSS_DEPTH_SHIFT);
 }
-static inline uint32_t bkf_src_locator(uint32_t x){return x&BKF_LOC_MASK;}
-static inline uint32_t bkf_src_block(uint32_t x){return (x>>BKF_SRC_BLOCK_SHIFT)&BKF_SRC_BLOCK_MASK;}
-static inline uint32_t bkf_cross_depth(uint32_t x){return (x>>BKF_CROSS_DEPTH_SHIFT)&BKF_CROSS_DEPTH_MASK;}
+
+#if defined(__CUDACC__)
+#define BKF_HD __host__ __device__ __forceinline__
+#else
+#define BKF_HD inline
+#endif
+BKF_HD uint32_t bkf_src_locator(uint32_t x){return x&BKF_LOC_MASK;}
+BKF_HD uint32_t bkf_src_block(uint32_t x){return (x>>BKF_SRC_BLOCK_SHIFT)&BKF_SRC_BLOCK_MASK;}
+BKF_HD uint32_t bkf_cross_depth(uint32_t x){return (x>>BKF_CROSS_DEPTH_SHIFT)&BKF_CROSS_DEPTH_MASK;}
+BKF_HD uint32_t bkf_loc_owner(uint32_t x){return x>>BUCKET_OWNER_SHIFT;}
+BKF_HD uint32_t bkf_loc_rank(uint32_t x){return x&BUCKET_LOCAL_RANK_MASK;}
+BKF_HD uint32_t bkf_orbit_src(BucketOrbitOp x){return uint32_t(x&BUCKET_ORBIT_LOC_MASK);}
+BKF_HD uint32_t bkf_orbit_partner(BucketOrbitOp x){return uint32_t((x>>BUCKET_ORBIT_PARTNER_SHIFT)&BUCKET_ORBIT_LOC_MASK);}
+BKF_HD uint32_t bkf_orbit_drop(BucketOrbitOp x){return uint32_t((x>>BUCKET_ORBIT_DROP_SHIFT)&BUCKET_ORBIT_LOC_MASK);}
+#undef BKF_HD
+
+static inline uint32_t bkf_old_gather_block(uint32_t x){return x>>GPU_DIRECT_GATHER_SRC_BLOCK_SHIFT;}
+static inline uint32_t bkf_old_gather_rank(uint32_t x){return x&GPU_DIRECT_GATHER_RANK_MASK;}
+static inline uint32_t bkf_old_cross_rank(uint32_t x){return x&GPU_DIRECT_CROSS_OP_RANK_MASK;}
+static inline uint32_t bkf_old_cross_block(uint32_t x){return (x>>GPU_DIRECT_CROSS_OP_BLOCK_SHIFT)&GPU_DIRECT_CROSS_OP_BLOCK_MASK;}
+static inline uint32_t bkf_old_cross_depth(uint32_t x){return (x>>GPU_DIRECT_CROSS_OP_DEPTH_SHIFT)&GPU_DIRECT_CROSS_OP_DEPTH_MASK;}
 
 struct BucketFusedDst{
     uint32_t dst_locator=0;
@@ -58,29 +69,19 @@ struct BucketFusedHost{
     std::vector<BucketFusedDst> low_dst;
     std::vector<uint32_t> low_off;
     uint32_t low_pitch=GPU_DIRECT_MAX_MAIN_BLOCKS+1;
-    std::vector<uint32_t> low_local_src;
-    std::vector<uint32_t> low_cross_op;
-
+    std::vector<uint32_t> low_local_src,low_cross_op;
     std::vector<BucketFusedDst> high_dst;
     std::vector<uint32_t> high_off;
     uint32_t high_pitch=GPU_DIRECT_MAX_BLOCK_BLOCKS+1;
-    std::vector<uint32_t> high_local_src;
-    std::vector<uint32_t> high_cross_op;
-
-    // owner-major, then height-major, then owner-local rank.
-    std::vector<uint32_t> high_codes,low_codes;
-    std::vector<uint32_t> high_code_off,low_code_off;
+    std::vector<uint32_t> high_local_src,high_cross_op;
+    std::vector<uint32_t> high_codes,low_codes,high_code_off,low_code_off;
     uint32_t code_pitch=MAXW+2;
-
-    // ternary code -> (height << 18) | locator.
     std::vector<uint32_t> high_direct,low_direct;
-
     size_t bytes()const{
         return (low_dst.size()+high_dst.size())*sizeof(BucketFusedDst)
             +(low_off.size()+high_off.size()+low_local_src.size()+low_cross_op.size()
               +high_local_src.size()+high_cross_op.size()+high_codes.size()+low_codes.size()
-              +high_code_off.size()+low_code_off.size()+high_direct.size()+low_direct.size())
-                *sizeof(uint32_t);
+              +high_code_off.size()+low_code_off.size()+high_direct.size()+low_direct.size())*sizeof(uint32_t);
     }
 };
 
@@ -95,43 +96,38 @@ static BucketFusedHost build_bucket_fused(
 
     out.low_local_src.reserve(ordinary.low_src.size());
     for(uint32_t x:ordinary.low_src){
-        uint32_t bid=gpu_direct_gather_src_block(x),r=gpu_direct_gather_src_rank(x);
+        uint32_t bid=bkf_old_gather_block(x),r=bkf_old_gather_rank(x);
         const StorageBlock&b=layout.main_blocks[bid];
         out.low_local_src.push_back(bkf_src_pack(bid,bucket_low_locator(storage,owner,b.hs,r)));
     }
     out.high_local_src.reserve(ordinary.high_src.size());
     for(uint32_t x:ordinary.high_src){
-        uint32_t bid=gpu_direct_gather_src_block(x),r=gpu_direct_gather_src_rank(x);
+        uint32_t bid=bkf_old_gather_block(x),r=bkf_old_gather_rank(x);
         const StorageBlock&b=layout.main_blocks[bid];
         out.high_local_src.push_back(bkf_src_pack(bid,bucket_high_locator(storage,owner,b.he,r)));
     }
     out.low_cross_op.reserve(cross.low_op.size());
     for(uint32_t x:cross.low_op){
-        uint32_t bid=gdx_op_block(x),r=gdx_op_rank(x),d=gdx_op_depth(x);
+        uint32_t bid=bkf_old_cross_block(x),r=bkf_old_cross_rank(x),d=bkf_old_cross_depth(x);
         const StorageBlock&b=layout.main_blocks[bid];
         out.low_cross_op.push_back(bkf_cross_pack(bid,bucket_low_locator(storage,owner,b.hs,r),d));
     }
     out.high_cross_op.reserve(cross.high_op.size());
     for(uint32_t x:cross.high_op){
-        uint32_t bid=gdx_op_block(x),r=gdx_op_rank(x),d=gdx_op_depth(x);
+        uint32_t bid=bkf_old_cross_block(x),r=bkf_old_cross_rank(x),d=bkf_old_cross_depth(x);
         const StorageBlock&b=layout.main_blocks[bid];
         out.high_cross_op.push_back(bkf_cross_pack(bid,bucket_high_locator(storage,owner,b.he,r),d));
     }
 
     out.low_dst.reserve(fused.low_dst.size());
     for(int p=LOW_LUT_K;p>=1;--p){
-        uint32_t pi=uint32_t(LOW_LUT_K-p);
-        bool target_main=p==1;
+        uint32_t pi=uint32_t(LOW_LUT_K-p);bool target_main=p==1;
         uint32_t nt=target_main?uint32_t(layout.main_blocks.size()):uint32_t(layout.block_blocks.size());
         for(uint32_t bid=0;bid<nt;++bid){
             uint32_t a=fused.low_off[size_t(pi)*fused.low_pitch+bid];
             uint32_t b=fused.low_off[size_t(pi)*fused.low_pitch+bid+1];
             const StorageBlock&db=target_main?layout.main_blocks[bid]:layout.block_blocks[bid];
-            for(uint32_t q=a;q<b;++q){
-                const GpuDirectFusedDst&r=fused.low_dst[q];
-                out.low_dst.push_back({bucket_low_locator(storage,owner,db.hs,r.dst_rank),
-                    r.local_begin,r.cross_begin,r.counts});
-            }
+            for(uint32_t q=a;q<b;++q){const GpuDirectFusedDst&r=fused.low_dst[q];out.low_dst.push_back({bucket_low_locator(storage,owner,db.hs,r.dst_rank),r.local_begin,r.cross_begin,r.counts});}
         }
     }
     out.high_dst.reserve(fused.high_dst.size());
@@ -140,11 +136,7 @@ static BucketFusedHost build_bucket_fused(
             uint32_t a=fused.high_off[size_t(pi)*fused.high_pitch+bid];
             uint32_t b=fused.high_off[size_t(pi)*fused.high_pitch+bid+1];
             const StorageBlock&db=layout.block_blocks[bid];
-            for(uint32_t q=a;q<b;++q){
-                const GpuDirectFusedDst&r=fused.high_dst[q];
-                out.high_dst.push_back({bucket_high_locator(storage,owner,db.he,r.dst_rank),
-                    r.local_begin,r.cross_begin,r.counts});
-            }
+            for(uint32_t q=a;q<b;++q){const GpuDirectFusedDst&r=fused.high_dst[q];out.high_dst.push_back({bucket_high_locator(storage,owner,db.he,r.dst_rank),r.local_begin,r.cross_begin,r.counts});}
         }
     }
     if(out.low_dst.size()!=fused.low_dst.size()||out.high_dst.size()!=fused.high_dst.size()){
@@ -152,19 +144,11 @@ static BucketFusedHost build_bucket_fused(
     }
 
     const uint32_t P=uint32_t(MAXW+2);
-    out.high_code_off.assign(BUCKET_NGPU*P,0);
-    out.low_code_off.assign(BUCKET_NGPU*P,0);
+    out.high_code_off.assign(BUCKET_NGPU*P,0);out.low_code_off.assign(BUCKET_NGPU*P,0);
     uint32_t z=0;
-    for(uint32_t g=0;g<BUCKET_NGPU;++g)for(uint32_t h=0;h<P;++h){
-        out.high_code_off[size_t(g)*P+h]=z;
-        if(h<uint32_t(MAXW+1))z+=owner.high_count[g][h];
-    }
-    out.high_codes.assign(z,0xffffffffu);
-    z=0;
-    for(uint32_t g=0;g<BUCKET_NGPU;++g)for(uint32_t h=0;h<P;++h){
-        out.low_code_off[size_t(g)*P+h]=z;
-        if(h<uint32_t(MAXW+1))z+=owner.low_count[g][h];
-    }
+    for(uint32_t g=0;g<BUCKET_NGPU;++g)for(uint32_t h=0;h<P;++h){out.high_code_off[size_t(g)*P+h]=z;if(h<uint32_t(MAXW+1))z+=owner.high_count[g][h];}
+    out.high_codes.assign(z,0xffffffffu);z=0;
+    for(uint32_t g=0;g<BUCKET_NGPU;++g)for(uint32_t h=0;h<P;++h){out.low_code_off[size_t(g)*P+h]=z;if(h<uint32_t(MAXW+1))z+=owner.low_count[g][h];}
     out.low_codes.assign(z,0xffffffffu);
 
     out.high_direct.assign(gpu_direct_pow3(HIGH_LUT_K),BKF_DIRECT_INVALID);
@@ -192,12 +176,9 @@ static BucketFusedHost build_bucket_fused(
     for(uint32_t v:out.high_codes)if(v==0xffffffffu){std::cerr<<"bucket fused HIGH code hole\n";std::exit(205);}
     for(uint32_t v:out.low_codes)if(v==0xffffffffu){std::cerr<<"bucket fused LOW code hole\n";std::exit(206);}
 
-    std::cerr<<"bucket_fused low_dst="<<out.low_dst.size()
-             <<" high_dst="<<out.high_dst.size()
-             <<" low_src="<<out.low_local_src.size()
-             <<" high_src="<<out.high_local_src.size()
-             <<" low_cross="<<out.low_cross_op.size()
-             <<" high_cross="<<out.high_cross_op.size()
+    std::cerr<<"bucket_fused low_dst="<<out.low_dst.size()<<" high_dst="<<out.high_dst.size()
+             <<" low_src="<<out.low_local_src.size()<<" high_src="<<out.high_local_src.size()
+             <<" low_cross="<<out.low_cross_op.size()<<" high_cross="<<out.high_cross_op.size()
              <<" mib="<<double(out.bytes())/double(1<<20)<<'\n';
     return out;
 }
@@ -210,7 +191,6 @@ __constant__ BucketPhysicalBlock* D_BKF_HIGH_MAIN;
 __constant__ BucketPhysicalBlock* D_BKF_HIGH_BLOCK;
 __constant__ uint32_t D_BKF_MAIN_NBLOCKS;
 __constant__ uint32_t D_BKF_BLOCK_NBLOCKS;
-
 __constant__ BucketOrbitOp* D_BKF_LOW_NN;
 __constant__ BucketOrbitOp* D_BKF_LOW_NR;
 __constant__ BucketOrbitOp* D_BKF_LOW_NL;
@@ -223,7 +203,6 @@ __constant__ BucketOrbitOp* D_BKF_HIGH_NRNL;
 __constant__ uint32_t* D_BKF_HIGH_NN_OFF;
 __constant__ uint32_t* D_BKF_HIGH_NRNL_OFF;
 __constant__ uint32_t D_BKF_HIGH_PITCH;
-
 __constant__ BucketFusedDst* D_BKF_LOW_DST;
 __constant__ uint32_t* D_BKF_LOW_OFF;
 __constant__ uint32_t D_BKF_LOW_FUSED_PITCH;
@@ -242,18 +221,10 @@ __constant__ uint32_t D_BKF_CODE_PITCH;
 __constant__ uint32_t* D_BKF_HIGH_DIRECT;
 __constant__ uint32_t* D_BKF_LOW_DIRECT;
 
-__device__ __forceinline__ BucketPhysicalBlock bkf_low_main(uint32_t slot,uint32_t bid){
-    return D_BKF_LOW_MAIN[size_t(slot)*D_BKF_MAIN_NBLOCKS+bid];
-}
-__device__ __forceinline__ BucketPhysicalBlock bkf_low_block(uint32_t slot,uint32_t bid){
-    return D_BKF_LOW_BLOCK[size_t(slot)*D_BKF_BLOCK_NBLOCKS+bid];
-}
-__device__ __forceinline__ BucketPhysicalBlock bkf_high_main(uint32_t slot,uint32_t bid){
-    return D_BKF_HIGH_MAIN[size_t(slot)*D_BKF_MAIN_NBLOCKS+bid];
-}
-__device__ __forceinline__ BucketPhysicalBlock bkf_high_block(uint32_t slot,uint32_t bid){
-    return D_BKF_HIGH_BLOCK[size_t(slot)*D_BKF_BLOCK_NBLOCKS+bid];
-}
+__device__ __forceinline__ BucketPhysicalBlock bkf_low_main(uint32_t slot,uint32_t bid){return D_BKF_LOW_MAIN[size_t(slot)*D_BKF_MAIN_NBLOCKS+bid];}
+__device__ __forceinline__ BucketPhysicalBlock bkf_low_block(uint32_t slot,uint32_t bid){return D_BKF_LOW_BLOCK[size_t(slot)*D_BKF_BLOCK_NBLOCKS+bid];}
+__device__ __forceinline__ BucketPhysicalBlock bkf_high_main(uint32_t slot,uint32_t bid){return D_BKF_HIGH_MAIN[size_t(slot)*D_BKF_MAIN_NBLOCKS+bid];}
+__device__ __forceinline__ BucketPhysicalBlock bkf_high_block(uint32_t slot,uint32_t bid){return D_BKF_HIGH_BLOCK[size_t(slot)*D_BKF_BLOCK_NBLOCKS+bid];}
 __device__ __forceinline__ Count* bkf_ptr(uint32_t slot,Code off){return D_BKF_SLOT[slot]+off;}
 __device__ __forceinline__ uint32_t bkf_direct_height(uint32_t x){return (x>>BKF_DIRECT_HEIGHT_SHIFT)&BKF_DIRECT_HEIGHT_MASK;}
 __device__ __forceinline__ uint32_t bkf_direct_locator(uint32_t x){return x&BKF_LOC_MASK;}
@@ -261,8 +232,7 @@ __device__ __forceinline__ uint32_t bkf_direct_locator(uint32_t x){return x&BKF_
 __device__ __forceinline__ Count bkf_sum_high_preimages(
     uint32_t dest_code,uint32_t depth,uint32_t source_he,uint32_t source_bid,uint32_t source_low_loc
 ){
-    Count sum=0;int s=int(depth);uint32_t low_slot=bucket_locator_owner(source_low_loc);
-    uint32_t low_rank=bucket_locator_rank(source_low_loc);
+    Count sum=0;int s=int(depth);uint32_t low_slot=bkf_loc_owner(source_low_loc),low_rank=bkf_loc_rank(source_low_loc);
     BucketPhysicalBlock sb=bkf_low_main(low_slot,source_bid);
 #pragma unroll
     for(int pos=0;pos<HIGH_LUT_K;++pos){
@@ -274,10 +244,7 @@ __device__ __forceinline__ Count bkf_sum_high_preimages(
                 uint32_t x=D_BKF_HIGH_DIRECT[gdx_ternary_key<HIGH_LUT_K>(src_code)];
                 if(x!=BKF_DIRECT_INVALID&&bkf_direct_height(x)==source_he){
                     uint32_t hl=bkf_direct_locator(x);
-                    if(bucket_locator_owner(hl)==D_BKF_FIXED_OWNER){
-                        uint32_t hr=bucket_locator_rank(hl);
-                        sum=gpu_direct_add(sum,bkf_ptr(low_slot,sb.off+Code(hr)*sb.cols+low_rank)[0]);
-                    }
+                    if(bkf_loc_owner(hl)==D_BKF_FIXED_OWNER){uint32_t hr=bkf_loc_rank(hl);sum=gpu_direct_add(sum,bkf_ptr(low_slot,sb.off+Code(hr)*sb.cols+low_rank)[0]);}
                 }
             }
             ++s;
@@ -289,8 +256,7 @@ __device__ __forceinline__ Count bkf_sum_high_preimages(
 __device__ __forceinline__ Count bkf_sum_low_preimages(
     uint32_t dest_code,uint32_t depth,uint32_t source_hs,uint32_t source_bid,uint32_t source_high_loc
 ){
-    Count sum=0;int s=int(depth);uint32_t high_slot=bucket_locator_owner(source_high_loc);
-    uint32_t high_rank=bucket_locator_rank(source_high_loc);
+    Count sum=0;int s=int(depth);uint32_t high_slot=bkf_loc_owner(source_high_loc),high_rank=bkf_loc_rank(source_high_loc);
     BucketPhysicalBlock sb=bkf_high_main(high_slot,source_bid);
 #pragma unroll
     for(int pos=LOW_LUT_K-1;pos>=0;--pos){
@@ -302,10 +268,7 @@ __device__ __forceinline__ Count bkf_sum_low_preimages(
                 uint32_t x=D_BKF_LOW_DIRECT[gdx_ternary_key<LOW_LUT_K>(src_code)];
                 if(x!=BKF_DIRECT_INVALID&&bkf_direct_height(x)==source_hs){
                     uint32_t ll=bkf_direct_locator(x);
-                    if(bucket_locator_owner(ll)==D_BKF_FIXED_OWNER){
-                        uint32_t lr=bucket_locator_rank(ll);
-                        sum=gpu_direct_add(sum,bkf_ptr(high_slot,sb.off+Code(high_rank)*sb.cols+lr)[0]);
-                    }
+                    if(bkf_loc_owner(ll)==D_BKF_FIXED_OWNER){uint32_t lr=bkf_loc_rank(ll);sum=gpu_direct_add(sum,bkf_ptr(high_slot,sb.off+Code(high_rank)*sb.cols+lr)[0]);}
                 }
             }
             ++s;
@@ -326,17 +289,15 @@ __global__ void bucket_low_orbit_kernel(int p){
         if(k<n0){kind=CPU_ORBIT_NN;op=D_BKF_LOW_NN[na+k];}
         else if(k<n0+n1){kind=CPU_ORBIT_NR;op=D_BKF_LOW_NR[ra+k-n0];}
         else{kind=CPU_ORBIT_NL;op=D_BKF_LOW_NL[la+k-n0-n1];}
-        uint32_t sl=bucket_orbit_src(op),jl=bucket_orbit_partner(op),dl=bucket_orbit_drop(op);
-        uint32_t ss=bucket_locator_owner(sl),js=bucket_locator_owner(jl),ds=bucket_locator_owner(dl);
-        BucketPhysicalBlock xb=bkf_low_main(ss,bid);
-        if(!xb.valid||!xb.rows||!xb.cols)continue;
-        uint32_t jbid=(p==LOW_LUT_K&&kind!=CPU_ORBIT_NN)?3u*uint32_t(xb.he)+(kind==CPU_ORBIT_NR?uint32_t(R):uint32_t(::L)):bid;
+        uint32_t sl=bkf_orbit_src(op),jl=bkf_orbit_partner(op),dl=bkf_orbit_drop(op);
+        uint32_t ss=bkf_loc_owner(sl),js=bkf_loc_owner(jl),ds=bkf_loc_owner(dl);
+        BucketPhysicalBlock xb=bkf_low_main(ss,bid);if(!xb.valid||!xb.rows||!xb.cols)continue;
+        uint32_t jbid=bid;
+        if(p==LOW_LUT_K){uint32_t center=kind==CPU_ORBIT_NR?uint32_t(R):uint32_t(::L);jbid=3u*uint32_t(xb.he)+center;}
         BucketPhysicalBlock jb=bkf_low_main(js,jbid),db=bkf_low_block(ds,uint32_t(xb.he));
-        uint32_t sr=bucket_locator_rank(sl),jr=bucket_locator_rank(jl),dr=bucket_locator_rank(dl);
+        uint32_t sr=bkf_loc_rank(sl),jr=bkf_loc_rank(jl),dr=bkf_loc_rank(dl);
         for(uint32_t hr=blockIdx.y;hr<xb.rows;hr+=gridDim.y){
-            Count*ip=bkf_ptr(ss,xb.off+Code(hr)*xb.cols+sr);
-            Count*jp=bkf_ptr(js,jb.off+Code(hr)*jb.cols+jr);
-            Count*dp=bkf_ptr(ds,db.off+Code(hr)*db.cols+dr);
+            Count*ip=bkf_ptr(ss,xb.off+Code(hr)*xb.cols+sr);Count*jp=bkf_ptr(js,jb.off+Code(hr)*jb.cols+jr);Count*dp=bkf_ptr(ds,db.off+Code(hr)*db.cols+dr);
             Count c=*ip,old=*dp;
             if(kind==CPU_ORBIT_NN){*jp=gpu_direct_add(*jp,c);*ip=gpu_direct_add(c,old);*dp=0;}
             else{Count cc=*jp,all=gpu_direct_add(gpu_direct_add(c,cc),old);if(p==1){*ip=all;*jp=gpu_direct_add(c,cc);*dp=0;}else{*ip=all;*dp=c;}}
@@ -347,56 +308,48 @@ __global__ void bucket_low_orbit_kernel(int p){
 __global__ void bucket_high_orbit_kernel(int p){
     uint32_t bid=blockIdx.z;if(bid>=D_BKF_MAIN_NBLOCKS)return;
     uint32_t pi=uint32_t((TARGET_W-1)-p);size_t oi=size_t(pi)*D_BKF_HIGH_PITCH+bid;
-    uint32_t na=D_BKF_HIGH_NN_OFF[oi],nb=D_BKF_HIGH_NN_OFF[oi+1];
-    uint32_t ra=D_BKF_HIGH_NRNL_OFF[oi],rb=D_BKF_HIGH_NRNL_OFF[oi+1];
+    uint32_t na=D_BKF_HIGH_NN_OFF[oi],nb=D_BKF_HIGH_NN_OFF[oi+1];uint32_t ra=D_BKF_HIGH_NRNL_OFF[oi],rb=D_BKF_HIGH_NRNL_OFF[oi+1];
     uint32_t n0=nb-na,total=n0+(rb-ra);if(!total)return;
     for(uint32_t k=blockIdx.y;k<total;k+=gridDim.y){
         bool nn=k<n0;BucketOrbitOp op=nn?D_BKF_HIGH_NN[na+k]:D_BKF_HIGH_NRNL[ra+k-n0];
-        uint32_t sl=bucket_orbit_src(op),jl=bucket_orbit_partner(op),dl=bucket_orbit_drop(op);
-        uint32_t ss=bucket_locator_owner(sl),js=bucket_locator_owner(jl),ds=bucket_locator_owner(dl);
+        uint32_t sl=bkf_orbit_src(op),jl=bkf_orbit_partner(op),dl=bkf_orbit_drop(op);
+        uint32_t ss=bkf_loc_owner(sl),js=bkf_loc_owner(jl),ds=bkf_loc_owner(dl);
         BucketPhysicalBlock xb=bkf_high_main(ss,bid);if(!xb.valid||!xb.rows||!xb.cols)continue;
-        uint32_t jbid=bid;
-        if(p==LOW_LUT_K+1){uint32_t center=nn?uint32_t(R):uint32_t(N);int he=int(xb.hs)+(center==uint32_t(R)?1:0);jbid=uint32_t(3*he+int(center));}
+        uint32_t jbid=bid;if(p==LOW_LUT_K+1){uint32_t center=nn?uint32_t(R):uint32_t(N);int he=int(xb.hs)+(center==uint32_t(R)?1:0);jbid=uint32_t(3*he+int(center));}
         BucketPhysicalBlock jb=bkf_high_main(js,jbid),db=bkf_high_block(ds,uint32_t(xb.hs));
-        uint32_t sr=bucket_locator_rank(sl),jr=bucket_locator_rank(jl),dr=bucket_locator_rank(dl);
+        uint32_t sr=bkf_loc_rank(sl),jr=bkf_loc_rank(jl),dr=bkf_loc_rank(dl);
         for(uint32_t lr=uint32_t(blockIdx.x)*blockDim.x+threadIdx.x;lr<xb.cols;lr+=uint32_t(gridDim.x)*blockDim.x){
-            Count*ip=bkf_ptr(ss,xb.off+Code(sr)*xb.cols+lr);
-            Count*jp=bkf_ptr(js,jb.off+Code(jr)*jb.cols+lr);
-            Count*dp=bkf_ptr(ds,db.off+Code(dr)*db.cols+lr);
-            Count c=*ip,old=*dp;
-            if(nn){*jp=gpu_direct_add(*jp,c);*ip=gpu_direct_add(c,old);*dp=0;}
-            else{Count cc=*jp;*ip=gpu_direct_add(gpu_direct_add(c,cc),old);*dp=c;}
+            Count*ip=bkf_ptr(ss,xb.off+Code(sr)*xb.cols+lr);Count*jp=bkf_ptr(js,jb.off+Code(jr)*jb.cols+lr);Count*dp=bkf_ptr(ds,db.off+Code(dr)*db.cols+lr);
+            Count c=*ip,old=*dp;if(nn){*jp=gpu_direct_add(*jp,c);*ip=gpu_direct_add(c,old);*dp=0;}else{Count cc=*jp;*ip=gpu_direct_add(gpu_direct_add(c,cc),old);*dp=c;}
         }
     }
 }
 
 __global__ void bucket_low_fused_closure_kernel(int p){
     uint32_t dbid=blockIdx.z;bool target_main=p==1;uint32_t nt=target_main?D_BKF_MAIN_NBLOCKS:D_BKF_BLOCK_NBLOCKS;if(dbid>=nt)return;
-    uint32_t pi=uint32_t(LOW_LUT_K-p);size_t oi=size_t(pi)*D_BKF_LOW_FUSED_PITCH+dbid;
-    uint32_t a=D_BKF_LOW_OFF[oi],b=D_BKF_LOW_OFF[oi+1];
+    uint32_t pi=uint32_t(LOW_LUT_K-p);size_t oi=size_t(pi)*D_BKF_LOW_FUSED_PITCH+dbid;uint32_t a=D_BKF_LOW_OFF[oi],b=D_BKF_LOW_OFF[oi+1];
     for(uint32_t q=a+uint32_t(blockIdx.x)*blockDim.x+threadIdx.x;q<b;q+=uint32_t(gridDim.x)*blockDim.x){
-        BucketFusedDst rec=D_BKF_LOW_DST[q];uint32_t dslot=bucket_locator_owner(rec.dst_locator),dr=bucket_locator_rank(rec.dst_locator);
+        BucketFusedDst rec=D_BKF_LOW_DST[q];uint32_t dslot=bkf_loc_owner(rec.dst_locator),dr=bkf_loc_rank(rec.dst_locator);
         BucketPhysicalBlock db=target_main?bkf_low_main(dslot,dbid):bkf_low_block(dslot,dbid);if(!db.valid||!db.rows||!db.cols)continue;
         uint32_t lc=rec.counts&0xffffu,cc=rec.counts>>16;
         for(uint32_t hr=blockIdx.y;hr<db.rows;hr+=gridDim.y){
             Count*dp=bkf_ptr(dslot,db.off+Code(hr)*db.cols+dr);Count sum=*dp;
-            for(uint32_t e=rec.local_begin;e<rec.local_begin+lc;++e){uint32_t x=D_BKF_LOW_LOCAL_SRC[e],sl=bkf_src_locator(x),ss=bucket_locator_owner(sl);BucketPhysicalBlock sb=bkf_low_main(ss,bkf_src_block(x));sum=gpu_direct_add(sum,bkf_ptr(ss,sb.off+Code(hr)*sb.cols+bucket_locator_rank(sl))[0]);}
-            if(cc){uint32_t dest_code=D_BKF_HIGH_CODES[D_BKF_HIGH_CODE_OFF[size_t(D_BKF_FIXED_OWNER)*D_BKF_CODE_PITCH+db.he]+hr];for(uint32_t e=rec.cross_begin;e<rec.cross_begin+cc;++e){uint32_t x=D_BKF_LOW_CROSS_OP[e],sl=bkf_src_locator(x);BucketPhysicalBlock sb=bkf_low_main(bucket_locator_owner(sl),bkf_src_block(x));sum=gpu_direct_add(sum,bkf_sum_high_preimages(dest_code,bkf_cross_depth(x),sb.he,bkf_src_block(x),sl));}}
+            for(uint32_t e=rec.local_begin;e<rec.local_begin+lc;++e){uint32_t x=D_BKF_LOW_LOCAL_SRC[e],sl=bkf_src_locator(x),ss=bkf_loc_owner(sl);BucketPhysicalBlock sb=bkf_low_main(ss,bkf_src_block(x));sum=gpu_direct_add(sum,bkf_ptr(ss,sb.off+Code(hr)*sb.cols+bkf_loc_rank(sl))[0]);}
+            if(cc){uint32_t dest_code=D_BKF_HIGH_CODES[D_BKF_HIGH_CODE_OFF[size_t(D_BKF_FIXED_OWNER)*D_BKF_CODE_PITCH+db.he]+hr];for(uint32_t e=rec.cross_begin;e<rec.cross_begin+cc;++e){uint32_t x=D_BKF_LOW_CROSS_OP[e],sl=bkf_src_locator(x);BucketPhysicalBlock sb=bkf_low_main(bkf_loc_owner(sl),bkf_src_block(x));sum=gpu_direct_add(sum,bkf_sum_high_preimages(dest_code,bkf_cross_depth(x),sb.he,bkf_src_block(x),sl));}}
             *dp=sum;
         }
     }
 }
 
 __global__ void bucket_high_fused_closure_kernel(int p){
-    uint32_t dbid=blockIdx.z;if(dbid>=D_BKF_BLOCK_NBLOCKS)return;uint32_t pi=uint32_t((TARGET_W-1)-p);size_t oi=size_t(pi)*D_BKF_HIGH_FUSED_PITCH+dbid;
-    uint32_t a=D_BKF_HIGH_OFF[oi],b=D_BKF_HIGH_OFF[oi+1];
+    uint32_t dbid=blockIdx.z;if(dbid>=D_BKF_BLOCK_NBLOCKS)return;uint32_t pi=uint32_t((TARGET_W-1)-p);size_t oi=size_t(pi)*D_BKF_HIGH_FUSED_PITCH+dbid;uint32_t a=D_BKF_HIGH_OFF[oi],b=D_BKF_HIGH_OFF[oi+1];
     for(uint32_t q=a+blockIdx.y;q<b;q+=gridDim.y){
-        BucketFusedDst rec=D_BKF_HIGH_DST[q];uint32_t dslot=bucket_locator_owner(rec.dst_locator),dr=bucket_locator_rank(rec.dst_locator);BucketPhysicalBlock db=bkf_high_block(dslot,dbid);if(!db.valid||!db.rows||!db.cols)continue;
+        BucketFusedDst rec=D_BKF_HIGH_DST[q];uint32_t dslot=bkf_loc_owner(rec.dst_locator),dr=bkf_loc_rank(rec.dst_locator);BucketPhysicalBlock db=bkf_high_block(dslot,dbid);if(!db.valid||!db.rows||!db.cols)continue;
         uint32_t lc=rec.counts&0xffffu,cc=rec.counts>>16;
         for(uint32_t lr=uint32_t(blockIdx.x)*blockDim.x+threadIdx.x;lr<db.cols;lr+=uint32_t(gridDim.x)*blockDim.x){
             Count*dp=bkf_ptr(dslot,db.off+Code(dr)*db.cols+lr);Count sum=*dp;
-            for(uint32_t e=rec.local_begin;e<rec.local_begin+lc;++e){uint32_t x=D_BKF_HIGH_LOCAL_SRC[e],sl=bkf_src_locator(x),ss=bucket_locator_owner(sl);BucketPhysicalBlock sb=bkf_high_main(ss,bkf_src_block(x));sum=gpu_direct_add(sum,bkf_ptr(ss,sb.off+Code(bucket_locator_rank(sl))*sb.cols+lr)[0]);}
-            if(cc){uint32_t dest_code=D_BKF_LOW_CODES[D_BKF_LOW_CODE_OFF[size_t(D_BKF_FIXED_OWNER)*D_BKF_CODE_PITCH+db.hs]+lr];for(uint32_t e=rec.cross_begin;e<rec.cross_begin+cc;++e){uint32_t x=D_BKF_HIGH_CROSS_OP[e],sl=bkf_src_locator(x);BucketPhysicalBlock sb=bkf_high_main(bucket_locator_owner(sl),bkf_src_block(x));sum=gpu_direct_add(sum,bkf_sum_low_preimages(dest_code,bkf_cross_depth(x),sb.hs,bkf_src_block(x),sl));}}
+            for(uint32_t e=rec.local_begin;e<rec.local_begin+lc;++e){uint32_t x=D_BKF_HIGH_LOCAL_SRC[e],sl=bkf_src_locator(x),ss=bkf_loc_owner(sl);BucketPhysicalBlock sb=bkf_high_main(ss,bkf_src_block(x));sum=gpu_direct_add(sum,bkf_ptr(ss,sb.off+Code(bkf_loc_rank(sl))*sb.cols+lr)[0]);}
+            if(cc){uint32_t dest_code=D_BKF_LOW_CODES[D_BKF_LOW_CODE_OFF[size_t(D_BKF_FIXED_OWNER)*D_BKF_CODE_PITCH+db.hs]+lr];for(uint32_t e=rec.cross_begin;e<rec.cross_begin+cc;++e){uint32_t x=D_BKF_HIGH_CROSS_OP[e],sl=bkf_src_locator(x);BucketPhysicalBlock sb=bkf_high_main(bkf_loc_owner(sl),bkf_src_block(x));sum=gpu_direct_add(sum,bkf_sum_low_preimages(dest_code,bkf_cross_depth(x),sb.hs,bkf_src_block(x),sl));}}
             *dp=sum;
         }
     }
@@ -410,7 +363,6 @@ struct BucketFusedDeviceTables{
     uint32_t *low_local_src=nullptr,*low_cross_op=nullptr,*high_local_src=nullptr,*high_cross_op=nullptr;
     uint32_t *high_codes=nullptr,*low_codes=nullptr,*high_code_off=nullptr,*low_code_off=nullptr,*high_direct=nullptr,*low_direct=nullptr;
     uint32_t main_nblocks=0,block_nblocks=0;
-
     template<class T>static void cp(T*&d,const std::vector<T>&s,const char*w){if(s.empty())return;ck(cudaMalloc(&d,s.size()*sizeof(T)),w);ck(cudaMemcpy(d,s.data(),s.size()*sizeof(T),cudaMemcpyHostToDevice),w);}
 
     void install_metadata(const StorageLayout&layout,const BucketOrbitStreamsHost&o,const BucketFusedHost&f){
