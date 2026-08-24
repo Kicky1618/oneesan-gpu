@@ -34,12 +34,13 @@ CPU_HIGH_CPU_LIST='0-31' \
 CPU_LOW_CPU_LIST='32-95' \
 CPU_LOW_SCHEDULE=domain \
 CPU_LOW_DOMAIN_SIZE=32 \
+CPU_LOW_DOMAIN_REFINE=1 \
 CPU_WORKERS=64 \
 NUMA_SAMPLE_MIB=64 \
 bash scripts/bench/ramstream32-numa-sample.sh
 ```
 
-Backend v5.19 accepts four LOW schedules:
+The current LOW scheduler exposes four modes:
 
 ```text
 CPU_LOW_SCHEDULE=dynamic
@@ -50,17 +51,21 @@ CPU_LOW_SCHEDULE=domain
 
 `sticky` uses a one-time exact-cell LPT partition. `contiguous` keeps every worker on one ordered HIGH-mask interval. `domain` keeps only NUMA-domain ownership contiguous and restores exact-cell LPT inside each domain. `domain` additionally requires `CPU_LOW_DOMAIN_SIZE`, which must be positive and no larger than `CPU_WORKERS`.
 
+For domain scheduling, `CPU_LOW_DOMAIN_REFINE=1` is the default and enables the bounded domain-boundary LPT refinement. `CPU_LOW_DOMAIN_REFINE=0` keeps the initial outer-domain partition. Both are exact recurrence schedules; the difference is ownership geometry and resulting timing/locality.
+
 To isolate scheduling/locality effects, hold every other condition fixed:
 
 ```bash
 CPU_LOW_SCHEDULE=dynamic    bash scripts/bench/ramstream32-numa-sample.sh
 CPU_LOW_SCHEDULE=sticky     bash scripts/bench/ramstream32-numa-sample.sh
 CPU_LOW_SCHEDULE=contiguous bash scripts/bench/ramstream32-numa-sample.sh
-CPU_LOW_SCHEDULE=domain CPU_LOW_DOMAIN_SIZE=32 \
+CPU_LOW_SCHEDULE=domain CPU_LOW_DOMAIN_SIZE=32 CPU_LOW_DOMAIN_REFINE=1 \
+  bash scripts/bench/ramstream32-numa-sample.sh
+CPU_LOW_SCHEDULE=domain CPU_LOW_DOMAIN_SIZE=32 CPU_LOW_DOMAIN_REFINE=0 \
   bash scripts/bench/ramstream32-numa-sample.sh
 ```
 
-The runner propagates and records both `CPU_LOW_SCHEDULE` and `CPU_LOW_DOMAIN_SIZE`, and verifies the final solver provenance before analyzing samples.
+The runner propagates and records `CPU_LOW_SCHEDULE`, `CPU_LOW_DOMAIN_SIZE`, and `CPU_LOW_DOMAIN_REFINE`. For domain mode it also checks the scheduler stderr `refine=0|1` provenance before analyzing samples, so placement results cannot silently mix refined and unrefined ownership.
 
 For a cost-model HIGH policy, replace the threshold with:
 
@@ -77,7 +82,7 @@ For clean four-way LOW timing use:
 scripts/bench/ramstream32-cpu-low-schedule-compare.sh
 ```
 
-which rotates dynamic/sticky/contiguous/domain with a cyclic-latin-4 order and forces NUMA sampling off.
+which rotates dynamic/sticky/contiguous/domain with a cyclic-latin-4 order and forces NUMA sampling off. To isolate only the effect of domain boundary refinement, use `scripts/bench/ramstream32-cpu-low-domain-refine-ab.sh` instead.
 
 ## Static page-cut preflight
 
@@ -85,8 +90,11 @@ Before a multi-terabyte residue run, inspect the production static assignments w
 
 ```bash
 N=27 bash scripts/build/gridfp-ramstream32-cpu-low-schedule-plan.sh
-./build/ramstream32_cpu_low_schedule_plan_n27 27 64 --domain-size 32
+CPU_LOW_DOMAIN_REFINE=1 \
+  ./build/ramstream32_cpu_low_schedule_plan_n27 27 64 --domain-size 32
 ```
+
+Repeat with `CPU_LOW_DOMAIN_REFINE=0` to see how the boundary refiner changes exact-cell imbalance and page cuts before running the large state arrays.
 
 The probe constructs the production LPT, contiguous, and domain schedules and then measures boundary-page ownership. It reports exact-cell imbalance, cross-worker 4 KiB/2 MiB boundary-page counts, and cross-domain cuts under the supplied worker-to-domain model.
 
@@ -122,9 +130,10 @@ On the same host, compare at least:
 2. explicit HIGH/LOW affinity with dynamic scheduling;
 3. sticky with the same lists;
 4. contiguous with the same lists;
-5. domain with a hardware-matching `CPU_LOW_DOMAIN_SIZE`;
-6. same-socket and split-socket HIGH/LOW layouts;
-7. overlap 0 and overlap 1.
+5. refined domain with a hardware-matching `CPU_LOW_DOMAIN_SIZE`;
+6. unrefined domain with the same domain size;
+7. same-socket and split-socket HIGH/LOW layouts;
+8. overlap 0 and overlap 1.
 
 Compare node histograms together with `cpu_high_wall_s`, `cpu_low_wall_s`, H2D/D2H time, static page-cut exposure, and clean no-sampling wall time. Stable scheduling is useful only if locality gains outweigh static-load imbalance.
 
