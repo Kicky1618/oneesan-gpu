@@ -17,6 +17,7 @@ CPU_HIGH_MODE="${CPU_HIGH_MODE:-scratch}"
 CPU_HIGH_OVERLAP="${CPU_HIGH_OVERLAP:-0}"
 CPU_HIGH_CPU_LIST="${CPU_HIGH_CPU_LIST:-}"
 CPU_LOW_CPU_LIST="${CPU_LOW_CPU_LIST:-}"
+CPU_LOW_SCHEDULE="${CPU_LOW_SCHEDULE:-dynamic}"
 THRESHOLDS="${THRESHOLDS:-0 64 128 256 512 1024}"
 REPEATS="${REPEATS:-1}"
 BUILD="${BUILD:-1}"
@@ -39,6 +40,10 @@ if [[ "$CPU_HIGH_MODE" != scratch && "$CPU_HIGH_MODE" != direct ]]; then
 fi
 if [[ "$CPU_HIGH_OVERLAP" != 0 && "$CPU_HIGH_OVERLAP" != 1 ]]; then
   echo "CPU_HIGH_OVERLAP must be 0 or 1" >&2
+  exit 2
+fi
+if [[ "$CPU_LOW_SCHEDULE" != dynamic && "$CPU_LOW_SCHEDULE" != sticky ]]; then
+  echo "CPU_LOW_SCHEDULE must be dynamic or sticky" >&2
   exit 2
 fi
 if [[ "$ANALYZE" != 0 && "$ANALYZE" != 1 ]]; then
@@ -130,6 +135,7 @@ cpu_high_mode=$CPU_HIGH_MODE
 cpu_high_overlap=$CPU_HIGH_OVERLAP
 cpu_high_cpu_list=${CPU_HIGH_CPU_LIST:-none}
 cpu_low_cpu_list=${CPU_LOW_CPU_LIST:-none}
+cpu_low_schedule=$CPU_LOW_SCHEDULE
 thresholds=$THRESHOLDS
 repeats=$REPEATS
 analyze=$ANALYZE
@@ -150,6 +156,7 @@ run_one() {
   line="$(CPU_HIGH_MAX_MIB="$threshold" CPU_HIGH_WORKERS="$CPU_HIGH_WORKERS" \
     CPU_HIGH_MODE="$CPU_HIGH_MODE" CPU_HIGH_OVERLAP="$CPU_HIGH_OVERLAP" \
     CPU_HIGH_CPU_LIST="$CPU_HIGH_CPU_LIST" CPU_LOW_CPU_LIST="$CPU_LOW_CPU_LIST" \
+    CPU_LOW_SCHEDULE="$CPU_LOW_SCHEDULE" \
     "$bin" "$N" "$MODULUS" "$GPU_TARGET_MIB" "$CPU_WORKERS" | tail -n1)"
   residue="$(field "$line" residue)"
   printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
@@ -173,7 +180,7 @@ for ((r=1; r<=REPEATS; ++r)); do
     run_thresholds=()
     for ((i=${#thresholds[@]}-1; i>=0; --i)); do run_thresholds+=("${thresholds[i]}"); done
   fi
-  echo "repeat $r/$REPEATS mode=$CPU_HIGH_MODE overlap=$CPU_HIGH_OVERLAP ($order)" >&2
+  echo "repeat $r/$REPEATS mode=$CPU_HIGH_MODE overlap=$CPU_HIGH_OVERLAP low_schedule=$CPU_LOW_SCHEDULE ($order)" >&2
   for threshold in "${run_thresholds[@]}"; do
     echo "  CPU_HIGH_MAX_MIB=$threshold" >&2
     residue="$(run_one "$r" "$order" "$threshold")"
@@ -200,7 +207,7 @@ awk -F '\t' '
 ' "$out" | sort -t= -k2,2n
 
 best="$(awk -F '\t' 'NR>1 {s[$5]+=$7;n[$5]++} END {for(t in n){m=s[t]/n[t]; if(best==""||m<best){best=m;bt=t}} printf "%s %.9f",bt,best}' "$out")"
-echo "mode=$CPU_HIGH_MODE overlap=$CPU_HIGH_OVERLAP best_threshold_mib=${best%% *} mean_wall_s=${best#* }"
+echo "mode=$CPU_HIGH_MODE overlap=$CPU_HIGH_OVERLAP low_schedule=$CPU_LOW_SCHEDULE best_threshold_mib=${best%% *} mean_wall_s=${best#* }"
 
 if [[ "$ANALYZE" != 0 ]]; then
   analyze_args=(scripts/tools/analyze_cpu_high_sweep.py "$out")
