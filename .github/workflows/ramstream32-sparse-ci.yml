@@ -126,6 +126,7 @@ jobs:
           test "$(wc -l </tmp/cpu-high-cost.tsv)" -eq 33
           grep -Fq $'group\tmask\troundtrip_bytes' /tmp/cpu-high-cost.tsv
           grep -Fq $'gpu_state_steps' /tmp/cpu-high-cost.tsv
+          grep -Fq $'pcie_copy_calls' /tmp/cpu-high-cost.tsv
           grep -Fq 'cpu_high_cost_plan OK n=9 groups=32' /tmp/cpu-high-cost.log
       - name: Validate CPU LOW/HIGH executors against reference
         if: matrix.width == 22
