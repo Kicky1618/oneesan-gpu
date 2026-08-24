@@ -135,6 +135,30 @@ int main() {
     WindowPlan low_wp = make_direct2d_window(false);
     auto low_jobs = make_cpu_low_jobs(W, low_wp);
 
+    uint64_t refine_before = 0, refine_after = 0, refine_moves = 0;
+    int refine_boundaries = 0;
+    {
+        if (low_jobs.size() < 6) return 28;
+        std::vector<CpuLowJob> refine_jobs(low_jobs.begin(), low_jobs.begin() + 6);
+        const uint64_t weights[6] = {8, 8, 8, 1, 1, 1};
+        std::vector<CpuLowStaticJobCost> ordered;
+        for (size_t i = 0; i < 6; ++i)
+            ordered.push_back({i, uint32_t(i), weights[i]});
+        std::vector<std::pair<size_t,size_t>> segs = {{0, 3}, {3, 6}};
+        refine_before = std::max(
+            cpu_low_lpt_range_max_cells(ordered, 0, 3, 1, refine_jobs),
+            cpu_low_lpt_range_max_cells(ordered, 3, 6, 1, refine_jobs));
+        cpu_low_refine_domain_boundaries(
+            ordered, refine_jobs, 2, 1, segs,
+            refine_boundaries, refine_moves);
+        if (segs[0].second != segs[1].first) return 29;
+        refine_after = std::max(
+            cpu_low_lpt_range_max_cells(ordered, segs[0].first, segs[0].second, 1, refine_jobs),
+            cpu_low_lpt_range_max_cells(ordered, segs[1].first, segs[1].second, 1, refine_jobs));
+        if (refine_after > refine_before || refine_boundaries <= 0 || refine_moves == 0)
+            return 30;
+    }
+
     fill_factor(main_auth, block_auth, main_states, block_states, init_m, init_d, storage, layout);
     CpuLowPool out_pool(2);
     out_pool.run(low_jobs, main_auth, block_auth, storage, layout, lowdesc, mod);
@@ -237,8 +261,6 @@ int main() {
                         main_states, block_states, high2_rm, high2_rd,
                         storage, layout)) return 18;
 
-    // Simulate CPU/GPU overlap with two CPU direct pools touching disjoint LOW
-    // occupancy groups. Their concurrent result must equal the same HIGH window.
     std::vector<const CpuHighJob*> high_jobs_a, high_jobs_b;
     for (const CpuHighJob* job : high_job_ptrs) {
         ((job->mask & 1u) ? high_jobs_a : high_jobs_b).push_back(job);
@@ -266,6 +288,10 @@ int main() {
 
     std::cout << "cpu-low-selftest OK W=" << W
               << " main=" << main_states.size() << " block=" << block_states.size()
+              << " refine_before=" << refine_before
+              << " refine_after=" << refine_after
+              << " refine_boundaries=" << refine_boundaries
+              << " refine_moves=" << refine_moves
               << " out_groups=" << out_pool.groups() << " in_groups=" << in_pool.groups()
               << " direct_groups=" << direct_pool.groups() << " sparse_groups=" << sparse_pool.groups()
               << " sparse_persistent_groups=" << sparse_persistent_pool.groups()
@@ -280,6 +306,8 @@ int main() {
               << " sparse_domain_size=" << sparse_domain_pool.domain_size
               << " sparse_domain_normalized_cap=" << sparse_domain_pool.domain_normalized_cap
               << " sparse_domain_active_domains=" << sparse_domain_pool.domain_active_domains
+              << " sparse_domain_refined_boundaries=" << sparse_domain_pool.domain_refined_boundaries
+              << " sparse_domain_refined_job_moves=" << sparse_domain_pool.domain_refined_job_moves
               << " cpu_high_groups=" << high_pool.groups()
               << " cpu_high_direct_groups=" << high_direct_pool.groups()
               << " cpu_high_persistent_groups=" << high_persistent_pool.groups()
