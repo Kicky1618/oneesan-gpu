@@ -7,6 +7,7 @@
 #include "../ramstream32_bucket_layout.hpp"
 #include "../ramstream32_bucket_direct.hpp"
 #include "../ramstream32_bucket_fused.cuh"
+#include "../ramstream32_bucket_fused_v2.cuh"
 
 using BucketHostGrid=std::array<std::array<std::vector<Count>,BUCKET_NGPU>,BUCKET_NGPU>;
 
@@ -50,7 +51,7 @@ static void bkft_run_low(
     for(uint32_t fixed=0;fixed<BUCKET_NGPU;++fixed){
         std::array<Count*,BUCKET_NGPU>d{};bkft_alloc_slots(fixed,phy,d);
         for(uint32_t s=0;s<BUCKET_NGPU;++s){auto const&src=g[fixed][s];if(!src.empty())ck(cudaMemcpy(d[s],src.data(),src.size()*sizeof(Count),cudaMemcpyHostToDevice),"bkft low H2D");}
-        dt.bind_owner(fixed,phy,d);bucket_run_low_fused(layout,256,4,4);
+        dt.bind_owner(fixed,phy,d);bucket_run_low_fused_v2(layout,256,4,4);
         for(uint32_t s=0;s<BUCKET_NGPU;++s){auto&dst=g[fixed][s];if(!dst.empty())ck(cudaMemcpy(dst.data(),d[s],dst.size()*sizeof(Count),cudaMemcpyDeviceToHost),"bkft low D2H");}
         bkft_free_slots(d);
     }
