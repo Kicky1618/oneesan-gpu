@@ -1,0 +1,88 @@
+name: B300 LOW orbit warp-row u32 v0.37 research
+
+on:
+  push:
+    paths:
+      - 'src/cpp/probes/factor_loworbit_warprow.cpp'
+      - 'src/cpp/probes/factor_loworbit_warprow_u32.cpp'
+      - 'src/cuda/b300/maskshard_loworbit_warprow.cuh'
+      - 'src/cuda/b300/maskshard_low_group_sync.cuh'
+      - 'src/cuda/b300/oneesan_b300_maskshard_v036_loworbit_warprow.cu'
+      - 'src/cuda/b300/oneesan_b300_maskshard_v037_loworbit_warprow_u32.cu'
+      - 'scripts/bench/b300_maskshard_loworbit_warprow_u32_ab.py'
+      - '.github/workflows/b300-loworbit-warprow-u32-v37.yml'
+  pull_request:
+    paths:
+      - 'src/cpp/probes/factor_loworbit_warprow.cpp'
+      - 'src/cpp/probes/factor_loworbit_warprow_u32.cpp'
+      - 'src/cuda/b300/maskshard_loworbit_warprow.cuh'
+      - 'src/cuda/b300/maskshard_low_group_sync.cuh'
+      - 'src/cuda/b300/oneesan_b300_maskshard_v036_loworbit_warprow.cu'
+      - 'src/cuda/b300/oneesan_b300_maskshard_v037_loworbit_warprow_u32.cu'
+      - 'scripts/bench/b300_maskshard_loworbit_warprow_u32_ab.py'
+      - '.github/workflows/b300-loworbit-warprow-u32-v37.yml'
+  workflow_dispatch:
+
+jobs:
+  model:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build LOW orbit warp-row models
+        run: |
+          mkdir -p build
+          g++ -O3 -std=c++17 -Wall -Wextra -Werror \
+            src/cpp/probes/factor_loworbit_warprow.cpp \
+            -o build/factor_loworbit_warprow
+          g++ -O3 -std=c++17 -Wall -Wextra -Werror \
+            src/cpp/probes/factor_loworbit_warprow_u32.cpp \
+            -o build/factor_loworbit_warprow_u32
+      - name: Verify n=27 warp-row regressions
+        run: |
+          build/factor_loworbit_warprow 28 14 256
+          build/factor_loworbit_warprow_u32 28 14
+
+  cuda-compile:
+    runs-on: ubuntu-latest
+    container: nvidia/cuda:12.8.1-devel-ubuntu22.04
+    strategy:
+      matrix:
+        include:
+          - width: 22
+            low: 11
+            high: 10
+          - width: 28
+            low: 14
+            high: 13
+    steps:
+      - uses: actions/checkout@v4
+      - name: Compile v0.36 warp-row LOW orbit
+        shell: bash
+        run: |
+          mkdir -p build
+          nvcc -O3 -std=c++17 -lineinfo -arch=sm_80 \
+            -DTARGET_W=${{ matrix.width }} \
+            -DLOW_LUT_K=${{ matrix.low }} \
+            -DHIGH_LUT_K=${{ matrix.high }} \
+            src/cuda/b300/oneesan_b300_maskshard_v036_loworbit_warprow.cu \
+            -o build/b300_maskshard_v36_w${{ matrix.width }}
+      - name: Compile v0.37 u32 warp-row LOW orbit
+        shell: bash
+        run: |
+          nvcc -O3 -std=c++17 -lineinfo -arch=sm_80 \
+            -DTARGET_W=${{ matrix.width }} \
+            -DLOW_LUT_K=${{ matrix.low }} \
+            -DHIGH_LUT_K=${{ matrix.high }} \
+            src/cuda/b300/oneesan_b300_maskshard_v037_loworbit_warprow_u32.cu \
+            -o build/b300_maskshard_v37_w${{ matrix.width }}
+
+  ab-driver:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Syntax-check v0.36-v0.37 A/B
+        run: python3 -m py_compile scripts/bench/b300_maskshard_loworbit_warprow_u32_ab.py
+      - name: Dry-run v0.36-v0.37 comparison
+        run: |
+          python3 scripts/bench/b300_maskshard_loworbit_warprow_u32_ab.py \
+            --dry-run --n 27 --gpus 8 --threads 256 --modulus 4294967291
