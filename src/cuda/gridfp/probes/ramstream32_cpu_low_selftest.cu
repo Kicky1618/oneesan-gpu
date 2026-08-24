@@ -173,6 +173,15 @@ int main() {
     if (!compare_factor("sparse-sticky-2", main_auth, block_auth,
                         main_states, block_states, low2_rm, low2_rd, storage, layout)) return 23;
 
+    fill_factor(main_auth, block_auth, main_states, block_states, init_m, init_d, storage, layout);
+    CpuLowSparsePersistentPool sparse_contiguous_pool(2, CPU_LOW_SCHEDULE_CONTIGUOUS);
+    sparse_contiguous_pool.run(low_jobs, main_auth, block_auth, storage, layout, sparse, mod);
+    if (!compare_factor("sparse-contiguous-1", main_auth, block_auth,
+                        main_states, block_states, low_rm, low_rd, storage, layout)) return 24;
+    sparse_contiguous_pool.run(low_jobs, main_auth, block_auth, storage, layout, sparse, mod);
+    if (!compare_factor("sparse-contiguous-2", main_auth, block_auth,
+                        main_states, block_states, low2_rm, low2_rd, storage, layout)) return 25;
+
     size_t sparse_orbit_ops = sparse.orbit_count();
     if (!sparse_orbit_ops
         || sparse_orbit_ops != sparse.nn_orbit_ops.size() + sparse.nr_orbit_ops.size() + sparse.nl_orbit_ops.size()) {
@@ -254,6 +263,9 @@ int main() {
               << " sparse_persistent_start_s=" << sparse_persistent_pool.worker_start_s
               << " sparse_sticky_groups=" << sparse_sticky_pool.groups()
               << " sparse_sticky_build_s=" << sparse_sticky_pool.schedule_build_s
+              << " sparse_contiguous_groups=" << sparse_contiguous_pool.groups()
+              << " sparse_contiguous_build_s=" << sparse_contiguous_pool.schedule_build_s
+              << " sparse_contiguous_optimal_cap=" << sparse_contiguous_pool.contiguous_optimal_cap
               << " cpu_high_groups=" << high_pool.groups()
               << " cpu_high_direct_groups=" << high_direct_pool.groups()
               << " cpu_high_persistent_groups=" << high_persistent_pool.groups()
@@ -281,6 +293,7 @@ int main() {
 
     sparse_persistent_pool.shutdown();
     sparse_sticky_pool.shutdown();
+    sparse_contiguous_pool.shutdown();
     high_persistent_pool.shutdown();
     high_pool.release();
     in_pool.release(); out_pool.release();
