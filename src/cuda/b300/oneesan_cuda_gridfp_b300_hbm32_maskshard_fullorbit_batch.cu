@@ -331,7 +331,20 @@ static void process_fullorbit_batch_high_job(
         t = std::chrono::steady_clock::now();
 #ifdef MASKSHARD_HIGH_CLOSURE_ROWS
         const uint32_t pi = uint32_t((TARGET_W - 1) - p);
-        const Code closure_rows = job.closure_rows[size_t(pi)];
+        Code closure_rows = job.closure_rows[size_t(pi)];
+#ifdef MASKSHARD_HIGH_CLOSURE_ROW_DEPTH_COMPACT_LAUNCH
+        const int closure_cap = std::min(zero_based_row + 1, (TARGET_W + 1) / 2);
+        closure_rows = maskshard_highclosure_rowdepth_compact_launch_tasks(
+            job.low_mask, int(pi), closure_cap);
+        if (closure_cap == (TARGET_W + 1) / 2
+            && closure_rows != job.closure_rows[size_t(pi)]) {
+            std::cerr << "fullorbit-batch exact closure full-cap mismatch mask="
+                      << job.low_mask << " pi=" << pi
+                      << " got=" << closure_rows
+                      << " expected=" << job.closure_rows[size_t(pi)] << '\n';
+            std::exit(209);
+        }
+#endif
         const int bc = closure_rows
             ? int(std::min<Code>(65535,
                 (closure_rows + Code(warps_per_block) - 1) / Code(warps_per_block)))
