@@ -165,10 +165,12 @@ For each group it reports:
 
 - round-trip bytes removed from PCIe if that group moves to CPU;
 - main and blocked state counts;
+- authoritative bytes in the factorized state arrays;
 - NN cell iterations;
 - NR/NL cell iterations;
 - ordinary blocked-closure cell iterations;
-- CROSS cell iterations.
+- CROSS cell iterations;
+- 4 KiB and 2 MiB boundary-page exposure upper bounds for NUMA analysis.
 
 The probe also verifies that all LOW-occupancy groups partition the authoritative main and blocked state spaces exactly once.
 
@@ -203,6 +205,59 @@ CPU_HIGH_WORKERS=32 \
 
 `CPU_HIGH_GROUPS_FILE` overrides `CPU_HIGH_MAX_MIB`. The backend reports `cpu_high_policy=file` plus an FNV hash of the final selected-group bitset so a benchmark can identify the exact partition without embedding thousands of IDs in its output.
 
+## v5.5 explicit CPU affinity
+
+On a large multi-socket System-RAM machine, letting direct workers migrate between sockets makes both timing and page locality unstable. Direct mode now accepts an explicit Linux CPU list:
+
+```bash
+CPU_HIGH_CPU_LIST='0-31,64-95' \
+CPU_HIGH_MODE=direct \
+CPU_HIGH_GROUPS_FILE=cpu-high.groups \
+CPU_HIGH_WORKERS=32 \
+./build/oneesan_cuda_gridfp_ramstream32_factorized_hybrid_sparse_n27 \
+  27 4294967291 12288 32
+```
+
+Each direct worker is pinned round-robin to one CPU from the list using `pthread_setaffinity_np`. If the variable is unset, affinity behavior is unchanged from earlier versions. Invalid lists or binding failures abort instead of silently falling back, because silent fallback would make NUMA benchmark results hard to interpret.
+
+The benchmark harness records `cpu_high_cpu_list` in its metadata. The current implementation pins direct workers only; it does not yet impose an `mbind` memory policy on the authoritative arrays.
+
+## v5.6 exact-work HIGH scheduling
+
+`make_cpu_high_jobs()` historically sorts by transfer/scratch size. That is a reasonable proxy for scratch mode, but direct cost depends on the actual topology stream population.
+
+Direct mode now computes, once on the first row, the exact work for every selected group:
+
+```text
+sum over (HIGH position, source factor block):
+  LOW mask-local width *
+  (NN ops + NR/NL ops + BLOCK closure ops + CROSS closure ops)
+```
+
+The selected groups are sorted in descending exact cell work and cached for all later rows. Workers still consume an atomic dynamic queue, so this is a largest-work-first ordering rather than a static partition. It specifically reduces the risk that one large topology-heavy group is discovered at the end and becomes the row tail.
+
+The executor logs `cpu_high_direct_schedule` with group count, total/min/max cells, and one-time schedule-build time. The W=10 selftest path is wired to require that the schedule is actually built.
+
+## NUMA page-boundary analysis
+
+The authoritative arrays are anonymous `mmap` allocations with `MADV_HUGEPAGE`. A fixed LOW-occupancy group is contiguous only within each HIGH row: neighboring occupancy groups can therefore share the first/last VM page of those row slices.
+
+The exact cost plan now carries safe upper bounds for the authoritative bytes that can lie on group-boundary pages for both 4 KiB and 2 MiB page sizes. Summarize them for a threshold or exact policy with:
+
+```bash
+python3 scripts/tools/analyze_cpu_high_numa.py high-cost.tsv \
+  --groups-file cpu-high.groups
+```
+
+or:
+
+```bash
+python3 scripts/tools/analyze_cpu_high_numa.py high-cost.tsv \
+  --threshold-mib 128 --threshold-mib 256 --threshold-mib 512
+```
+
+The reported `page4k_boundary_upper_fraction` and `page2m_boundary_upper_fraction` are deliberately conservative upper bounds, not measured remote-NUMA traffic. If the 2 MiB upper fraction is high while the 4 KiB fraction is low, per-group `mbind` combined with transparent huge pages is structurally unattractive: splitting or disabling huge pages for CPU-owned slices should be investigated before adding a complicated memory policy.
+
 ## n=27 size-threshold reference points
 
 | threshold | CPU groups | PCIe removed | PCIe remaining |
@@ -217,12 +272,13 @@ These are transfer-volume reference points, not predicted wall-time improvements
 
 ## One-command threshold calibration
 
-For direct mode, the sweep now builds the exact cost plan automatically by default, calibrates the model, and emits a candidate group policy:
+For direct mode, the sweep builds the exact cost plan automatically by default, calibrates the model, and emits a candidate group policy:
 
 ```bash
 N=27 \
 CPU_HIGH_MODE=direct \
 CPU_HIGH_OVERLAP=0 \
+CPU_HIGH_CPU_LIST='0-31' \
 CPU_WORKERS=32 \
 CPU_HIGH_WORKERS=32 \
 THRESHOLDS='0 64 128 256 512 1024' \
@@ -236,15 +292,15 @@ Set `COST_PLAN=none` to disable automatic cost-plan generation or provide `COST_
 
 ## Validation
 
-`.github/workflows/ramstream32-sparse-ci.yml` covers W=22/W=28 compilation, normal plans, scratch/direct CPU HIGH plans, all four direct stream classes, the W=10 exhaustive reference comparison, concurrent disjoint HIGH execution, and the exact group-cost probe.
+`.github/workflows/ramstream32-sparse-ci.yml` covers W=22/W=28 compilation, normal plans, scratch/direct CPU HIGH plans, all four direct stream classes, explicit group-file selection, affinity parser behavior, exact-work schedule construction, the W=10 exhaustive reference comparison, concurrent disjoint HIGH execution, and the exact group-cost probe.
 
-`.github/workflows/ramstream32-bench-script-ci.yml` syntax-checks the sweep/build scripts, compiles the Python tools, validates sweep calibration on synthetic data, and checks that the planner can choose a profitable group while rejecting an intentionally expensive one.
+`.github/workflows/ramstream32-bench-script-ci.yml` syntax-checks the sweep/build scripts, compiles the Python tools, validates sweep calibration on synthetic data, checks profitable-group planning, and validates the 4 KiB/2 MiB NUMA page-exposure analyzer.
 
 ## Next experiments
 
-The remaining large opportunities are increasingly memory-topology and scheduling problems:
+The remaining large opportunities are increasingly memory-topology and critical-path problems:
 
-1. NUMA-pin CPU HIGH workers and authoritative occupancy slices so CPU offload does not bounce the roughly 1.9-TiB state space across sockets;
+1. use the page-exposure results to decide whether authoritative CPU-owned slices should stay under THP, use 4 KiB pages, or receive a coarse socket-level memory policy;
 2. estimate separate NN, NR/NL, BLOCK, and CROSS weights from hardware counters instead of using equal cell weights;
 3. allocate CPU workers dynamically between HIGH and LOW according to the measured critical path, especially when `CPU_HIGH_OVERLAP=1`;
 4. for multi-GPU B300 nodes, keep the largest HIGH occupancy groups resident across more than one local step when dependencies permit, while CPU handles the long tail of small groups.
