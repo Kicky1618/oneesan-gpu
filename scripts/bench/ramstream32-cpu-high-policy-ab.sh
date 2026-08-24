@@ -17,6 +17,7 @@ CPU_HIGH_OVERLAP="${CPU_HIGH_OVERLAP:-0}"
 CPU_HIGH_CPU_LIST="${CPU_HIGH_CPU_LIST:-}"
 CPU_LOW_CPU_LIST="${CPU_LOW_CPU_LIST:-}"
 CPU_LOW_SCHEDULE="${CPU_LOW_SCHEDULE:-dynamic}"
+CPU_LOW_DOMAIN_SIZE="${CPU_LOW_DOMAIN_SIZE:-}"
 THRESHOLD_MIB="${THRESHOLD_MIB:-256}"
 GROUPS_FILE="${GROUPS_FILE:-}"
 REPEATS="${REPEATS:-2}"
@@ -44,9 +45,15 @@ if [[ "$CPU_HIGH_OVERLAP" != 0 && "$CPU_HIGH_OVERLAP" != 1 ]]; then
   echo "CPU_HIGH_OVERLAP must be 0 or 1" >&2
   exit 2
 fi
-if [[ "$CPU_LOW_SCHEDULE" != dynamic && "$CPU_LOW_SCHEDULE" != sticky && "$CPU_LOW_SCHEDULE" != contiguous ]]; then
-  echo "CPU_LOW_SCHEDULE must be dynamic, sticky, or contiguous" >&2
+if [[ "$CPU_LOW_SCHEDULE" != dynamic && "$CPU_LOW_SCHEDULE" != sticky && "$CPU_LOW_SCHEDULE" != contiguous && "$CPU_LOW_SCHEDULE" != domain ]]; then
+  echo "CPU_LOW_SCHEDULE must be dynamic, sticky, contiguous, or domain" >&2
   exit 2
+fi
+if [[ "$CPU_LOW_SCHEDULE" == domain ]]; then
+  if [[ ! "$CPU_LOW_DOMAIN_SIZE" =~ ^[1-9][0-9]*$ ]] || (( CPU_LOW_DOMAIN_SIZE > CPU_WORKERS )); then
+    echo "CPU_LOW_DOMAIN_SIZE must be in 1..CPU_WORKERS for domain schedule" >&2
+    exit 2
+  fi
 fi
 if [[ -z "$EXPECTED_RESIDUE" && "$N:$MODULUS" == "21:4294967291" ]]; then
   EXPECTED_RESIDUE=998035516
@@ -93,6 +100,7 @@ cpu_high_overlap=$CPU_HIGH_OVERLAP
 cpu_high_cpu_list=${CPU_HIGH_CPU_LIST:-none}
 cpu_low_cpu_list=${CPU_LOW_CPU_LIST:-none}
 cpu_low_schedule=$CPU_LOW_SCHEDULE
+cpu_low_domain_size=${CPU_LOW_DOMAIN_SIZE:-none}
 threshold_mib=$THRESHOLD_MIB
 groups_file=$GROUPS_FILE
 groups_file_sha256=$(file_sha256 "$GROUPS_FILE")
@@ -112,14 +120,14 @@ run_one() {
       CPU_HIGH_GROUPS_FILE= CPU_HIGH_WORKERS="$CPU_HIGH_WORKERS" \
       CPU_HIGH_OVERLAP="$CPU_HIGH_OVERLAP" \
       CPU_HIGH_CPU_LIST="$CPU_HIGH_CPU_LIST" CPU_LOW_CPU_LIST="$CPU_LOW_CPU_LIST" \
-      CPU_LOW_SCHEDULE="$CPU_LOW_SCHEDULE" \
+      CPU_LOW_SCHEDULE="$CPU_LOW_SCHEDULE" CPU_LOW_DOMAIN_SIZE="$CPU_LOW_DOMAIN_SIZE" \
       "$bin" "$N" "$MODULUS" "$GPU_TARGET_MIB" "$CPU_WORKERS" | tail -n1)"
   else
     line="$(CPU_HIGH_MODE=direct CPU_HIGH_MAX_MIB=0 \
       CPU_HIGH_GROUPS_FILE="$GROUPS_FILE" CPU_HIGH_WORKERS="$CPU_HIGH_WORKERS" \
       CPU_HIGH_OVERLAP="$CPU_HIGH_OVERLAP" \
       CPU_HIGH_CPU_LIST="$CPU_HIGH_CPU_LIST" CPU_LOW_CPU_LIST="$CPU_LOW_CPU_LIST" \
-      CPU_LOW_SCHEDULE="$CPU_LOW_SCHEDULE" \
+      CPU_LOW_SCHEDULE="$CPU_LOW_SCHEDULE" CPU_LOW_DOMAIN_SIZE="$CPU_LOW_DOMAIN_SIZE" \
       "$bin" "$N" "$MODULUS" "$GPU_TARGET_MIB" "$CPU_WORKERS" | tail -n1)"
   fi
   residue="$(field "$line" residue)"
