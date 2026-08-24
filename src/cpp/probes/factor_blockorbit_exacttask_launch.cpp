@@ -122,16 +122,6 @@ int main(int argc, char** argv) {
             371900470ULL, 394572120ULL, 400309007ULL, 401266964ULL,
             401363918ULL, 401370925ULL
         };
-        if (dense_bd_sum != 401370925ULL
-            || tight_ctas != 146099016700ULL
-            || exact_ctas != 131341022215ULL
-            || low_entries != 1201917ULL
-            || high_entries != 787333ULL
-            || max_low_group != 1001ULL
-            || max_high_group != 149019ULL
-            || metadata_bytes != 134184?ULL) {
-            // metadata exact value is checked below without an unreadable literal.
-        }
         const U64 expected_metadata = 1201917ULL * 2ULL
             + 787333ULL * 4ULL
             + (1ULL << 14) * 16ULL * 15ULL * 2ULL
