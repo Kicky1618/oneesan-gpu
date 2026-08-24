@@ -182,7 +182,20 @@ accepted boundary moves / moved jobs
 domain schedule build time
 ```
 
-Its paired summary reports `imbalance_speedup`, `max_worker_cells_saved`, `cross_domain_4k_delta`, `cross_domain_2m_delta`, and `refine_extra_build_s`. A good refinement point lowers imbalance/max-worker work without materially worsening the relevant page cuts. If it improves modeled makespan but substantially increases cross-domain page exposure, the clean runtime A/B and NUMA diagnostic decide whether the trade is worthwhile.
+The runner enforces a structural no-regression contract: because every accepted boundary move lowers or preserves the two affected domains' LPT maximum and leaves all other domains unchanged, refined `max_worker_cells` must never exceed the unrefined value. A violation exits nonzero as `refinement max-worker regression`.
+
+Its paired summary reports `imbalance_speedup`, `max_worker_cells_saved`, `cross_domain_4k_delta`, `cross_domain_2m_delta`, and `refine_extra_build_s`, together with one classification:
+
+```text
+no_change                         no balance or page-cut change
+dominates                         balance improves and neither page-cut metric worsens
+balance_page_tradeoff             balance improves but at least one page-cut metric worsens
+page_only_improvement             balance ties and page cuts improve without regression
+page_regression_without_balance_gain
+                                  no balance gain and at least one page-cut metric worsens
+```
+
+`dominates` is the strongest static signal for refinement. `balance_page_tradeoff` should proceed to clean runtime A/B plus NUMA sampling rather than being accepted or rejected from the static model alone. `page_regression_without_balance_gain` is structurally unattractive unless another measured effect explains it.
 
 ## Topology sweep and Pareto analysis
 
