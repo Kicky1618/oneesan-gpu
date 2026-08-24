@@ -131,13 +131,14 @@ jobs:
         run: |
           grep -Fq 'scripts/bench/ramstream32-factorized-ab.sh' docs/ramstream32-factorized-ab.md
           d=docs/ramstream32-cpu-high.md
+          low=docs/ramstream32-cpu-low-scheduling.md
           grep -Fq 'scripts/bench/ramstream32-cpu-high-sweep.sh' "$d"
           grep -Fq 'CPU_HIGH_MODE=direct' "$d"
           grep -Fq 'CPU_HIGH_GROUPS_FILE' "$d"
           grep -Fq 'CPU_HIGH_CPU_LIST' "$d"
-          grep -Fq 'CPU_LOW_SCHEDULE=domain' "$d"
-          grep -Fq 'CPU_LOW_DOMAIN_SIZE' "$d"
-          grep -Fq 'CPU_LOW_DOMAIN_REFINE' "$d"
+          grep -Fq 'CPU_LOW_SCHEDULE=domain' "$low"
+          grep -Fq 'CPU_LOW_DOMAIN_SIZE' "$low"
+          grep -Fq 'CPU_LOW_DOMAIN_REFINE' "$low"
           grep -Fq 'analyze_cpu_high_numa.py' "$d"
           grep -Fq 'plan_cpu_high_groups.py' "$d"
           grep -Fq -- '--overlap' "$d"
