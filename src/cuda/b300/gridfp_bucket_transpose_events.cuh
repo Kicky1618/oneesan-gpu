@@ -10,15 +10,10 @@
 #include <vector>
 
 // Event-driven variant of BucketTransposeCtx.
-//
-// cudaStreamWaitEvent may wait on an event from another CUDA device.  Use that
-// property to encode the two safety dependencies of an in-place pair swap:
-//   commit A waits until B has finished reading A,
-//   commit B waits until A has finished reading B.
-// No host synchronization is needed per chunk.  A per-device round_done event
-// also orders each round against the previous round's writes on its new peer.
-// At the end, the default stream of every device waits on the transpose stream,
-// so the next bucket compute window can be launched immediately by the host.
+// cudaStreamWaitEvent may wait on an event from another CUDA device.  Encode
+// in-place swap safety entirely as GPU dependencies and avoid per-chunk host
+// synchronization.  Fetch events are unique per (round,chunk), so correctness
+// does not depend on event re-record semantics.
 
 struct BucketTransposeEventCtx {
     static constexpr int N=BUCKET_TRANSPOSE_MAX_GPU;
@@ -39,6 +34,8 @@ struct BucketTransposeEventCtx {
         if(e!=cudaSuccess){std::cerr<<what<<": "<<cudaGetErrorString(e)<<'\n';std::exit(220);}
     }
 
+    size_t fetch_index(size_t round,size_t chunk)const{return round*max_chunks+chunk;}
+
     void init(
         const BucketTransposePlan&plan,
         const std::array<Count*,N>&ptrs,
@@ -51,6 +48,7 @@ struct BucketTransposeEventCtx {
             if(a!=b)max_cap=std::max(max_cap,plan.slot[a][b].capacity_bytes);
         max_chunks=size_t((max_cap+chunk_bytes-1)/chunk_bytes);
         if(!max_chunks)max_chunks=1;
+        size_t event_count=rounds.size()*max_chunks;
 
         for(int g=0;g<ngpu;++g){
             base[g]=reinterpret_cast<uint8_t*>(ptrs[g]);
@@ -65,8 +63,8 @@ struct BucketTransposeEventCtx {
             cke(cudaMalloc(&staging[g],chunk_bytes),"bucket event transpose staging alloc");
             cke(cudaStreamCreateWithFlags(&stream[g],cudaStreamNonBlocking),"bucket event transpose stream");
             cke(cudaEventCreateWithFlags(&round_done[g],cudaEventDisableTiming),"bucket event transpose round event");
-            fetch_done[g].resize(max_chunks,nullptr);
-            for(size_t k=0;k<max_chunks;++k)
+            fetch_done[g].resize(event_count,nullptr);
+            for(size_t k=0;k<event_count;++k)
                 cke(cudaEventCreateWithFlags(&fetch_done[g][k],cudaEventDisableTiming),"bucket event transpose fetch event");
         }
     }
@@ -76,8 +74,8 @@ struct BucketTransposeEventCtx {
         for(size_t ri=0;ri<rounds.size();++ri){
             auto const&round=rounds[ri];
 
-            // Before this round reads from a new peer, wait for that peer to
-            // finish all writes from the preceding round.
+            // A new pair must not read a source slot while its peer still has
+            // writes pending from the preceding matching round.
             if(ri){
                 for(int i=0;i<ngpu/2;++i){
                     auto[a,b]=round[size_t(i)];
@@ -93,46 +91,42 @@ struct BucketTransposeEventCtx {
             size_t chunk_index=0;
             for(uint64_t off=0;off<max_cap;off+=chunk_bytes,++chunk_index){
                 if(chunk_index>=max_chunks)std::exit(224);
+                size_t ei=fetch_index(ri,chunk_index);
                 std::array<size_t,N> nbytes{};
 
-                // Fetch both directions and record device-local completion.
                 for(int i=0;i<ngpu/2;++i){
                     auto[a,b]=round[size_t(i)];uint64_t cap=plan.slot[a][b].capacity_bytes;
                     if(off>=cap)continue;
                     size_t n=size_t(std::min<uint64_t>(chunk_bytes,cap-off));nbytes[a]=nbytes[b]=n;
                     cke(cudaSetDevice(a),"bucket event transpose set A fetch");
                     cke(cudaMemcpyPeerAsync(staging[a],a,base[b]+plan.slot[b][a].off_bytes+off,b,n,stream[a]),"bucket event transpose fetch B to A");
-                    cke(cudaEventRecord(fetch_done[a][chunk_index],stream[a]),"bucket event transpose record A fetch");
+                    cke(cudaEventRecord(fetch_done[a][ei],stream[a]),"bucket event transpose record A fetch");
                     cke(cudaSetDevice(b),"bucket event transpose set B fetch");
                     cke(cudaMemcpyPeerAsync(staging[b],b,base[a]+plan.slot[a][b].off_bytes+off,a,n,stream[b]),"bucket event transpose fetch A to B");
-                    cke(cudaEventRecord(fetch_done[b][chunk_index],stream[b]),"bucket event transpose record B fetch");
+                    cke(cudaEventRecord(fetch_done[b][ei],stream[b]),"bucket event transpose record B fetch");
                     peer_gib+=double(2*n)/double(1ULL<<30);
                 }
 
-                // Local overwrite is safe only after the peer's read of this
-                // source chunk has completed. Own staging readiness is already
-                // ordered by the same local stream.
                 for(int i=0;i<ngpu/2;++i){
                     auto[a,b]=round[size_t(i)];size_t n=nbytes[a];if(!n)continue;
                     cke(cudaSetDevice(a),"bucket event transpose set A commit");
-                    cke(cudaStreamWaitEvent(stream[a],fetch_done[b][chunk_index],0),"bucket event transpose A waits B fetch");
+                    cke(cudaStreamWaitEvent(stream[a],fetch_done[b][ei],0),"bucket event transpose A waits B fetch");
                     cke(cudaMemcpyAsync(base[a]+plan.slot[a][b].off_bytes+off,staging[a],n,cudaMemcpyDeviceToDevice,stream[a]),"bucket event transpose commit A");
                     cke(cudaSetDevice(b),"bucket event transpose set B commit");
-                    cke(cudaStreamWaitEvent(stream[b],fetch_done[a][chunk_index],0),"bucket event transpose B waits A fetch");
+                    cke(cudaStreamWaitEvent(stream[b],fetch_done[a][ei],0),"bucket event transpose B waits A fetch");
                     cke(cudaMemcpyAsync(base[b]+plan.slot[b][a].off_bytes+off,staging[b],n,cudaMemcpyDeviceToDevice,stream[b]),"bucket event transpose commit B");
                     local_gib+=double(2*n)/double(1ULL<<30);
                 }
             }
 
-            // Mark all writes of this round. Every device participates in one
-            // pair per K8 matching, including zero-length logical buckets.
             for(int g=0;g<ngpu;++g){
                 cke(cudaSetDevice(g),"bucket event transpose set round record");
                 cke(cudaEventRecord(round_done[g],stream[g]),"bucket event transpose record round done");
             }
         }
 
-        // Make subsequent default-stream kernels wait without blocking host.
+        // The next compute window uses the default stream. Queue a device-side
+        // wait rather than blocking the host here.
         for(int g=0;g<ngpu;++g){
             cke(cudaSetDevice(g),"bucket event transpose set final wait");
             cke(cudaStreamWaitEvent(nullptr,round_done[g],0),"bucket event transpose default waits done");
@@ -145,7 +139,7 @@ struct BucketTransposeEventCtx {
     }
 
     void release(){
-        synchronize();
+        if(ngpu)synchronize();
         for(int g=0;g<ngpu;++g){
             cke(cudaSetDevice(g),"bucket event transpose set release");
             for(cudaEvent_t&e:fetch_done[g]){if(e)cudaEventDestroy(e);e=nullptr;}
