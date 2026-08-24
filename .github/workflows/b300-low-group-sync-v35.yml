@@ -1,0 +1,90 @@
+name: B300 LOW group sync v0.35 research
+
+on:
+  push:
+    paths:
+      - 'src/cpp/probes/factor_low_pair_sync.cpp'
+      - 'src/cpp/probes/factor_low_group_sync.cpp'
+      - 'src/cuda/b300/maskshard_low_pair_sync.cuh'
+      - 'src/cuda/b300/maskshard_low_group_sync.cuh'
+      - 'src/cuda/b300/maskshard_lowclosure_kernel.cuh'
+      - 'src/cuda/b300/oneesan_b300_maskshard_v034_low_pair_sync.cu'
+      - 'src/cuda/b300/oneesan_b300_maskshard_v035_low_group_sync.cu'
+      - 'scripts/bench/b300_maskshard_low_group_sync_ab.py'
+      - '.github/workflows/b300-low-group-sync-v35.yml'
+  pull_request:
+    paths:
+      - 'src/cpp/probes/factor_low_pair_sync.cpp'
+      - 'src/cpp/probes/factor_low_group_sync.cpp'
+      - 'src/cuda/b300/maskshard_low_pair_sync.cuh'
+      - 'src/cuda/b300/maskshard_low_group_sync.cuh'
+      - 'src/cuda/b300/maskshard_lowclosure_kernel.cuh'
+      - 'src/cuda/b300/oneesan_b300_maskshard_v034_low_pair_sync.cu'
+      - 'src/cuda/b300/oneesan_b300_maskshard_v035_low_group_sync.cu'
+      - 'scripts/bench/b300_maskshard_low_group_sync_ab.py'
+      - '.github/workflows/b300-low-group-sync-v35.yml'
+  workflow_dispatch:
+
+jobs:
+  model:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build LOW synchronization models
+        run: |
+          mkdir -p build
+          g++ -O3 -std=c++17 -Wall -Wextra -Werror \
+            src/cpp/probes/factor_low_pair_sync.cpp \
+            -o build/factor_low_pair_sync
+          g++ -O3 -std=c++17 -Wall -Wextra -Werror \
+            src/cpp/probes/factor_low_group_sync.cpp \
+            -o build/factor_low_group_sync
+      - name: Verify n=27 synchronization regressions
+        run: |
+          build/factor_low_pair_sync 28 14
+          build/factor_low_group_sync 28 14
+
+  cuda-compile:
+    runs-on: ubuntu-latest
+    container: nvidia/cuda:12.8.1-devel-ubuntu22.04
+    strategy:
+      matrix:
+        include:
+          - width: 22
+            low: 11
+            high: 10
+          - width: 28
+            low: 14
+            high: 13
+    steps:
+      - uses: actions/checkout@v4
+      - name: Compile v0.34 LOW pair sync
+        shell: bash
+        run: |
+          mkdir -p build
+          nvcc -O3 -std=c++17 -lineinfo -arch=sm_80 \
+            -DTARGET_W=${{ matrix.width }} \
+            -DLOW_LUT_K=${{ matrix.low }} \
+            -DHIGH_LUT_K=${{ matrix.high }} \
+            src/cuda/b300/oneesan_b300_maskshard_v034_low_pair_sync.cu \
+            -o build/b300_maskshard_v34_w${{ matrix.width }}
+      - name: Compile v0.35 LOW group sync
+        shell: bash
+        run: |
+          nvcc -O3 -std=c++17 -lineinfo -arch=sm_80 \
+            -DTARGET_W=${{ matrix.width }} \
+            -DLOW_LUT_K=${{ matrix.low }} \
+            -DHIGH_LUT_K=${{ matrix.high }} \
+            src/cuda/b300/oneesan_b300_maskshard_v035_low_group_sync.cu \
+            -o build/b300_maskshard_v35_w${{ matrix.width }}
+
+  ab-driver:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Syntax-check v0.34-v0.35 A/B
+        run: python3 -m py_compile scripts/bench/b300_maskshard_low_group_sync_ab.py
+      - name: Dry-run v0.34-v0.35 comparison
+        run: |
+          python3 scripts/bench/b300_maskshard_low_group_sync_ab.py \
+            --dry-run --n 27 --gpus 8 --threads 256 --modulus 4294967291
