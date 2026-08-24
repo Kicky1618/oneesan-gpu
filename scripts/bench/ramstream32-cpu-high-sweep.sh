@@ -88,6 +88,15 @@ field() {
   done
   return 1
 }
+analysis_field() {
+  local prefix="$1" name="$2"
+  awk -v o="$CPU_HIGH_OVERLAP" -v p="$prefix" -v n="$name" '
+    $1==p && $2=="mode=direct" && $3==("overlap=" o) {
+      for (i=4; i<=NF; ++i) if ($i ~ ("^" n "=")) {
+        sub("^" n "=", "", $i); print $i; exit
+      }
+    }' "$analysis_out"
+}
 
 if [[ "$CPU_HIGH_MODE" == direct && "$COST_PLAN" != none && -n "$COST_PLAN" ]]; then
   if [[ "$COST_PLAN" == auto ]]; then
@@ -196,18 +205,15 @@ if [[ "$ANALYZE" != 0 ]]; then
   python3 "${analyze_args[@]}" | tee "$analysis_out"
 
   if [[ "$CPU_HIGH_MODE" == direct && "$GENERATE_POLICY" != 0 && -n "$cost_plan_path" ]]; then
-    pcie_rate="$(awk -v o="$CPU_HIGH_OVERLAP" '
-      $1=="calibration" && $2=="mode=direct" && $3==("overlap=" o) && $4 ~ /^pcie_gib_s=/ {
-        sub(/^pcie_gib_s=/,"",$4); print $4; exit
-      }' "$analysis_out")"
-    cpu_rate="$(awk -v o="$CPU_HIGH_OVERLAP" '
-      $1=="calibration" && $2=="mode=direct" && $3==("overlap=" o) && $4 ~ /^cpu_gcell_s=/ {
-        sub(/^cpu_gcell_s=/,"",$4); print $4; exit
-      }' "$analysis_out")"
-    gpu_rate="$(awk -v o="$CPU_HIGH_OVERLAP" '
-      $1=="calibration" && $2=="mode=direct" && $3==("overlap=" o) && $4 ~ /^gpu_gstate_s=/ {
-        sub(/^gpu_gstate_s=/,"",$4); print $4; exit
-      }' "$analysis_out")"
+    pcie_rate="$(analysis_field calibration pcie_gib_s)"
+    cpu_rate="$(analysis_field affine_calibration cpu_gcell_s)"
+    cpu_group_overhead="$(analysis_field affine_calibration cpu_group_overhead_us)"
+    gpu_rate="$(analysis_field affine_calibration gpu_gstate_s)"
+    gpu_group_overhead="$(analysis_field affine_calibration gpu_group_overhead_us)"
+
+    [[ -n "$cpu_rate" ]] || cpu_rate="$(analysis_field calibration cpu_gcell_s)"
+    [[ -n "$gpu_rate" ]] || gpu_rate="$(analysis_field calibration gpu_gstate_s)"
+
     if [[ -n "$pcie_rate" && -n "$cpu_rate" ]]; then
       policy_out="$OUT_DIR/cpu-high-cost-policy-overlap${CPU_HIGH_OVERLAP}-n${N}-${ts}.groups"
       policy_log="$OUT_DIR/cpu-high-cost-policy-overlap${CPU_HIGH_OVERLAP}-n${N}-${ts}.log"
@@ -217,6 +223,12 @@ if [[ "$ANALYZE" != 0 ]]; then
         --gpu-target-mib "$GPU_TARGET_MIB"
       )
       if [[ -n "$gpu_rate" ]]; then planner_args+=(--gpu-gstate-s "$gpu_rate"); fi
+      if [[ -n "$cpu_group_overhead" ]]; then
+        planner_args+=(--group-overhead-us "$cpu_group_overhead")
+      fi
+      if [[ -n "$gpu_group_overhead" ]]; then
+        planner_args+=(--gpu-group-overhead-us "$gpu_group_overhead")
+      fi
       if [[ "$CPU_HIGH_OVERLAP" == 1 ]]; then planner_args+=(--overlap); fi
       python3 "${planner_args[@]}" >"$policy_out" 2>"$policy_log"
       numa_analysis_out="$OUT_DIR/cpu-high-cost-policy-overlap${CPU_HIGH_OVERLAP}-n${N}-${ts}.numa.txt"
