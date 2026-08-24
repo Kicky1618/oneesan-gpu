@@ -26,6 +26,28 @@ PRIMES = [
 
 RESULT_RE = re.compile(r"residue=(\d+).*?modulus=(\d+).*?wall_s=([0-9.eE+-]+)")
 
+# Strong planar-component upper bound for n=27.  Split the outer boundary into
+# the fixed s-t arcs P0=top+right and Q0=left+bottom.  If
+# boundary(F)=P XOR P0 for a valid simple path P, every connected component of
+# 1-faces must touch P0; otherwise that component contributes a closed boundary
+# cycle to P.  Complementing gives boundary(~F)=P XOR Q0, hence every connected
+# 0-component must touch Q0.  Interior checkerboard 2x2 patterns are also
+# forbidden because they create degree four at a path vertex.
+#
+# We partition the 27 face rows into independent strips and allow either color
+# to escape through artificial strip boundaries.  Dropping consistency between
+# strips enlarges the set, so the product is still a rigorous upper bound.
+# Exhaustive frontier-DP recomputation lives in
+# src/cpp/probes/pq_component_strip_bound.cpp.
+#
+# Re-optimizing the strip partition under this stronger condition gives
+# [12,3,12], improving the former [9,9,9] bound from log2 603.517874 to
+# log2 601.912248 while still requiring 19 near-32-bit CRT primes.
+_PQ27_TOP12 = 52999285085137477335762761439368203729124254768255645682708867086111555458359993
+_PQ27_MIDDLE3 = 5560340541250024201342
+_PQ27_BOTTOM12 = _PQ27_TOP12
+_PQ27_BOUND = _PQ27_TOP12 * _PQ27_MIDDLE3 * _PQ27_BOTTOM12
+
 
 def _strip_compatible(x: int, y: int, height: int) -> bool:
     """Whether two adjacent face-bit columns avoid a 2x2 checkerboard."""
@@ -70,11 +92,12 @@ def simple_path_upper_bound(n: int, max_strip_height: int = 9) -> tuple[int, lis
     have. Thus path count is at most the number of n x n face-bit matrices
     without checkerboard 2x2 blocks.
 
-    To keep the bound cheap to compute, partition the rows into independent
-    strips and ignore constraints across strip boundaries. This enlarges the
-    set and therefore remains a rigorous upper bound. Dynamic programming
-    chooses the strip-height partition (up to max_strip_height) with the
-    smallest exact product.
+    To keep the generic bound cheap to compute, partition the rows into
+    independent strips and ignore constraints across strip boundaries. For
+    n=27 and strip height >=9, also use the stronger precomputed P0/Q0
+    component bound documented above and take the smaller rigorous bound.
+    The n=27 component proof internally uses height-12 strips even though the
+    generic checkerboard helper's default max height remains 9.
     """
     if n < 1:
         return 1, []
@@ -92,7 +115,12 @@ def simple_path_upper_bound(n: int, max_strip_height: int = 9) -> tuple[int, lis
                 best[rows] = cand
                 parts[rows] = parts[rows - h] + [h]
     assert best[n] is not None and parts[n] is not None
-    return best[n], parts[n]
+
+    generic_bound = best[n]
+    generic_parts = parts[n]
+    if n == 27 and hmax >= 9 and _PQ27_BOUND < generic_bound:
+        return _PQ27_BOUND, [12, 3, 12]
+    return generic_bound, generic_parts
 
 
 def primes_for_bound(bound: int) -> list[int]:
@@ -205,6 +233,10 @@ def main() -> int:
         total_wall += wall
         print(f"  CRT bits={M.bit_length()} / bound_bits={required_bits}", file=sys.stderr, flush=True)
         if M > path_bound:
+            if x > path_bound:
+                raise SystemExit(
+                    f"CRT reconstruction exceeds rigorous path bound: exact={x} > bound={path_bound}"
+                )
             out = work / "exact.txt"
             out.write_text(
                 f"n={n}\n"

@@ -1,0 +1,184 @@
+name: B300 n27 HBM capacity
+
+on:
+  pull_request:
+    paths:
+      - 'src/cuda/b300/oneesan_cuda_gridfp_b300_hbm32_compact_resident.cu'
+      - 'src/cuda/b300/oneesan_cuda_gridfp_b300_hbm32_compact_resident_rowtile.cu'
+      - 'src/cuda/b300/oneesan_cuda_gridfp_b300_hbm32_compact_resident_sparse.cu'
+      - 'src/cuda/b300/oneesan_cuda_gridfp_b300_hbm32_factorized_direct_sparse.cu'
+      - 'src/cuda/b300/oneesan_cuda_gridfp_b300_hbm32_factorized_maskshard_sparse.cu'
+      - 'src/cuda/gridfp/probes/b300_n27_hbm_capacity_probe.cu'
+      - 'src/cuda/gridfp/probes/b300_compact_io_selftest.cu'
+      - 'src/cuda/gridfp/probes/b300_compact_kernel_compile.cu'
+      - 'src/cuda/gridfp/probes/b300_high_orbit_selftest.cu'
+      - 'src/cuda/gridfp/probes/b300_sparse_action_plan.cu'
+      - 'src/cuda/gridfp/probes/b300_sparse_actions_selftest.cu'
+      - 'src/cuda/gridfp/probes/b300_direct_storage_selftest.cu'
+      - 'src/cuda/gridfp/probes/b300_direct_storage_plan.cu'
+      - 'src/cuda/gridfp/probes/b300_direct_rowshard_plan.cu'
+      - 'src/cuda/gridfp/probes/b300_direct_maskshard_plan.cu'
+      - 'src/cuda/gridfp/probes/b300_high_warp_plan.cu'
+      - 'src/cuda/gridfp/ramstream32_high_orbit.cuh'
+      - 'src/cuda/gridfp/ramstream32_low_orbit_device.cuh'
+      - 'src/cuda/gridfp/ramstream32_b300_compact_io.cuh'
+      - 'src/cuda/gridfp/ramstream32_b300_rowkernels.cuh'
+      - 'src/cuda/gridfp/ramstream32_b300_high_warp.cuh'
+      - 'src/cuda/gridfp/ramstream32_b300_sparse_actions.cuh'
+      - 'src/cuda/gridfp/ramstream32_b300_sparse_highwarp.cuh'
+      - 'src/cuda/gridfp/ramstream32_b300_direct_rowshard.cuh'
+      - 'src/cuda/gridfp/ramstream32_b300_direct_maskshard.cuh'
+      - 'src/cuda/gridfp/ramstream32_b300_main_desc.cuh'
+      - 'src/cuda/gridfp/ramstream32_lowdesc.cuh'
+      - 'src/cuda/gridfp/ramstream32_highdesc.cuh'
+      - 'scripts/build/gridfp-b300-hbm32-factorized-direct-sparse.sh'
+      - 'scripts/build/gridfp-b300-hbm32-factorized-maskshard-sparse.sh'
+      - '.github/workflows/b300-n27-hbm-capacity.yml'
+  workflow_dispatch:
+
+jobs:
+  capacity:
+    runs-on: ubuntu-latest
+    container: nvidia/cuda:12.8.1-devel-ubuntu22.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Compile W28 capacity probe
+        shell: bash
+        run: |
+          mkdir -p build
+          nvcc -O3 -std=c++17 -arch=sm_80 \
+            -DTARGET_W=28 -DLOW_LUT_K=14 -DHIGH_LUT_K=13 \
+            src/cuda/gridfp/probes/b300_n27_hbm_capacity_probe.cu \
+            -o build/b300_capacity_w28
+      - name: Run W28 capacity probe
+        shell: bash
+        run: build/b300_capacity_w28
+      - name: Sparse action-stream plan W28
+        shell: bash
+        run: |
+          nvcc -O3 -std=c++17 -arch=sm_80 \
+            -DTARGET_W=28 -DLOW_LUT_K=14 -DHIGH_LUT_K=13 \
+            src/cuda/gridfp/probes/b300_sparse_action_plan.cu \
+            -o build/b300_sparse_action_plan
+          build/b300_sparse_action_plan
+      - name: Direct factorized storage plan W28
+        shell: bash
+        run: |
+          nvcc -O3 -std=c++17 -arch=sm_80 \
+            -DTARGET_W=28 -DLOW_LUT_K=14 -DHIGH_LUT_K=13 \
+            src/cuda/gridfp/probes/b300_direct_storage_plan.cu \
+            -o build/b300_direct_storage_plan
+          build/b300_direct_storage_plan
+      - name: Direct row-shard traffic plan W28
+        shell: bash
+        run: |
+          nvcc -O3 -std=c++17 -arch=sm_80 \
+            -DTARGET_W=28 -DLOW_LUT_K=14 -DHIGH_LUT_K=13 \
+            src/cuda/gridfp/probes/b300_direct_rowshard_plan.cu \
+            -o build/b300_direct_rowshard_plan
+          build/b300_direct_rowshard_plan
+      - name: Direct occupancy-mask shard plan W28
+        shell: bash
+        run: |
+          nvcc -O3 -std=c++17 -arch=sm_80 \
+            -DTARGET_W=28 -DLOW_LUT_K=14 -DHIGH_LUT_K=13 \
+            src/cuda/gridfp/probes/b300_direct_maskshard_plan.cu \
+            -o build/b300_direct_maskshard_plan
+          build/b300_direct_maskshard_plan
+      - name: HIGH warp-packing plan W28
+        shell: bash
+        run: |
+          nvcc -O3 -std=c++17 -arch=sm_80 \
+            -DTARGET_W=28 -DLOW_LUT_K=14 -DHIGH_LUT_K=13 \
+            src/cuda/gridfp/probes/b300_high_warp_plan.cu \
+            -o build/b300_high_warp_plan
+          build/b300_high_warp_plan
+      - name: Compile W28 compact resident kernels
+        shell: bash
+        run: |
+          nvcc -O3 -std=c++17 -arch=sm_80 \
+            -DTARGET_W=28 -DLOW_LUT_K=14 -DHIGH_LUT_K=13 \
+            src/cuda/gridfp/probes/b300_compact_kernel_compile.cu \
+            -o build/b300_compact_kernel_w28
+      - name: Exhaustive W10 compact canonical rank test
+        shell: bash
+        run: |
+          nvcc -O3 -std=c++17 -arch=sm_80 \
+            -DTARGET_W=10 -DLOW_LUT_K=5 -DHIGH_LUT_K=4 \
+            src/cuda/gridfp/probes/b300_compact_io_selftest.cu \
+            -o build/b300_compact_io_selftest
+          build/b300_compact_io_selftest
+      - name: Exhaustive W10 HIGH orbit test
+        shell: bash
+        run: |
+          nvcc -O3 -std=c++17 -arch=sm_80 \
+            -DTARGET_W=10 -DLOW_LUT_K=5 -DHIGH_LUT_K=4 \
+            src/cuda/gridfp/probes/b300_high_orbit_selftest.cu \
+            -o build/b300_high_orbit_selftest
+          build/b300_high_orbit_selftest
+      - name: Full-row W10 sparse action test
+        shell: bash
+        run: |
+          nvcc -O3 -std=c++17 -arch=sm_80 \
+            -DTARGET_W=10 -DLOW_LUT_K=5 -DHIGH_LUT_K=4 \
+            src/cuda/gridfp/probes/b300_sparse_actions_selftest.cu \
+            -o build/b300_sparse_actions_selftest
+          build/b300_sparse_actions_selftest
+      - name: Direct factorized W10 full-row test
+        shell: bash
+        run: |
+          nvcc -O3 -std=c++17 -arch=sm_80 \
+            -DTARGET_W=10 -DLOW_LUT_K=5 -DHIGH_LUT_K=4 \
+            src/cuda/gridfp/probes/b300_direct_storage_selftest.cu \
+            -o build/b300_direct_storage_selftest
+          build/b300_direct_storage_selftest
+      - name: Compile W28 compact resident backend
+        shell: bash
+        run: |
+          nvcc -O3 -std=c++17 -lineinfo -arch=sm_80 \
+            -DTARGET_W=28 -DLOW_LUT_K=14 -DHIGH_LUT_K=13 \
+            src/cuda/b300/oneesan_cuda_gridfp_b300_hbm32_compact_resident.cu \
+            -o build/b300_compact_resident_w28
+      - name: Plan n27 compact resident x8
+        shell: bash
+        run: build/b300_compact_resident_w28 27 4294967291 8 256 --plan-only
+      - name: Compile W28 compact row-tile resident backend
+        shell: bash
+        run: |
+          nvcc -O3 -std=c++17 -lineinfo -arch=sm_80 \
+            -DTARGET_W=28 -DLOW_LUT_K=14 -DHIGH_LUT_K=13 \
+            src/cuda/b300/oneesan_cuda_gridfp_b300_hbm32_compact_resident_rowtile.cu \
+            -o build/b300_compact_resident_rowtile_w28
+      - name: Plan n27 compact row-tile resident x8
+        shell: bash
+        run: build/b300_compact_resident_rowtile_w28 27 4294967291 8 256 --plan-only
+      - name: Compile W28 compact sparse resident backend
+        shell: bash
+        run: |
+          nvcc -O3 -std=c++17 -lineinfo -arch=sm_80 \
+            -DTARGET_W=28 -DLOW_LUT_K=14 -DHIGH_LUT_K=13 \
+            src/cuda/b300/oneesan_cuda_gridfp_b300_hbm32_compact_resident_sparse.cu \
+            -o build/b300_compact_resident_sparse_w28
+      - name: Plan n27 compact sparse resident x8
+        shell: bash
+        run: build/b300_compact_resident_sparse_w28 27 4294967291 8 256 --plan-only
+      - name: Compile W28 direct factorized resident backend
+        shell: bash
+        run: |
+          nvcc -O3 -std=c++17 -lineinfo -arch=sm_80 \
+            -DTARGET_W=28 -DLOW_LUT_K=14 -DHIGH_LUT_K=13 \
+            src/cuda/b300/oneesan_cuda_gridfp_b300_hbm32_factorized_direct_sparse.cu \
+            -o build/b300_factorized_direct_sparse_w28
+      - name: Plan n27 direct factorized resident x8
+        shell: bash
+        run: build/b300_factorized_direct_sparse_w28 27 4294967291 8 256 --plan-only
+      - name: Compile W28 mask-sharded direct resident backend
+        shell: bash
+        run: |
+          nvcc -O3 -std=c++17 -lineinfo -arch=sm_80 \
+            -DTARGET_W=28 -DLOW_LUT_K=14 -DHIGH_LUT_K=13 \
+            src/cuda/b300/oneesan_cuda_gridfp_b300_hbm32_factorized_maskshard_sparse.cu \
+            -o build/b300_factorized_maskshard_sparse_w28
+      - name: Plan n27 mask-sharded direct resident x8
+        shell: bash
+        run: build/b300_factorized_maskshard_sparse_w28 27 4294967291 8 256 --plan-only

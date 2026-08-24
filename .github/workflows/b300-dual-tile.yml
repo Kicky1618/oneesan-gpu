@@ -1,0 +1,122 @@
+name: B300 dual tile
+
+on:
+  pull_request:
+    paths:
+      - 'src/cuda/b300/oneesan_cuda_gridfp_b300_hbm32_dual_tile_sparse.cu'
+      - 'src/cuda/b300/oneesan_cuda_gridfp_b300_hbm32_dual_tile_sparse_batch.cu'
+      - 'src/cuda/gridfp/ramstream32_b300_dual_tile_layout.cuh'
+      - 'src/cuda/gridfp/ramstream32_b300_dual_tile_kernels.cuh'
+      - 'src/cuda/gridfp/ramstream32_b300_dual_tile_shuffle.cuh'
+      - 'src/cuda/gridfp/ramstream32_b300_dual_tile_peer_swap.cuh'
+      - 'src/cuda/gridfp/ramstream32_b300_dual_tile_reachability.cuh'
+      - 'src/cuda/gridfp/ramstream32_b300_dual_tile_pruned_peer.cuh'
+      - 'src/cuda/gridfp/ramstream32_b300_dual_tile_pruned_plan.cuh'
+      - 'src/cuda/gridfp/ramstream32_b300_dual_tile_opt.cuh'
+      - 'src/cuda/gridfp/ramstream32_b300_dual_tile_precomputed_w28.cuh'
+      - 'src/cuda/gridfp/probes/b300_dual_tile_selftest.cu'
+      - 'src/cuda/gridfp/probes/b300_dual_tile_pruned_selftest.cu'
+      - 'src/cuda/gridfp/probes/b300_dual_tile_pruned_plan_probe.cu'
+      - 'src/cuda/gridfp/probes/b300_dual_tile_opt_plan.cu'
+      - 'src/cuda/gridfp/probes/b300_dual_tile_precomputed_plan.cu'
+      - 'src/cuda/gridfp/probes/b300_dual_tile_block_reachability_plan.cu'
+      - 'src/cuda/gridfp/probes/b300_dual_tile_owner_reachability_plan.cu'
+      - 'src/cuda/gridfp/probes/b300_dual_tile_hybrid_screen_plan.cu'
+      - 'scripts/build/gridfp-b300-hbm32-dual-tile-sparse.sh'
+      - 'scripts/build/gridfp-b300-hbm32-dual-tile-sparse-batch.sh'
+      - '.github/workflows/b300-dual-tile.yml'
+  workflow_dispatch:
+
+jobs:
+  dual-tile:
+    runs-on: ubuntu-latest
+    container: nvidia/cuda:12.8.1-devel-ubuntu22.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: W10 dual-tile physical layout selftest
+        shell: bash
+        run: |
+          mkdir -p build
+          nvcc -O3 -std=c++17 -arch=sm_80 \
+            -DTARGET_W=10 -DLOW_LUT_K=5 -DHIGH_LUT_K=4 \
+            src/cuda/gridfp/probes/b300_dual_tile_selftest.cu \
+            -o build/b300_dual_tile_selftest
+          build/b300_dual_tile_selftest
+      - name: W10 reachability-pruned shuffle selftest
+        shell: bash
+        run: |
+          nvcc -O3 -std=c++17 -arch=sm_80 \
+            -DTARGET_W=10 -DLOW_LUT_K=5 -DHIGH_LUT_K=4 \
+            src/cuda/gridfp/probes/b300_dual_tile_pruned_selftest.cu \
+            -o build/b300_dual_tile_pruned_selftest
+          build/b300_dual_tile_pruned_selftest
+      - name: W28 optimized LOW-mask traffic plan
+        shell: bash
+        run: |
+          nvcc -O3 -std=c++17 -arch=sm_80 \
+            -DTARGET_W=28 -DLOW_LUT_K=14 -DHIGH_LUT_K=13 \
+            src/cuda/gridfp/probes/b300_dual_tile_opt_plan.cu \
+            -o build/b300_dual_tile_opt_plan
+          build/b300_dual_tile_opt_plan
+      - name: W28 precomputed traffic regression
+        shell: bash
+        run: |
+          nvcc -O3 -std=c++17 -arch=sm_80 \
+            -DTARGET_W=28 -DLOW_LUT_K=14 -DHIGH_LUT_K=13 \
+            src/cuda/gridfp/probes/b300_dual_tile_precomputed_plan.cu \
+            -o build/b300_dual_tile_precomputed_plan
+          build/b300_dual_tile_precomputed_plan
+      - name: W28 row-wise block reachability traffic probe
+        shell: bash
+        run: |
+          nvcc -O3 -std=c++17 -arch=sm_80 \
+            -DTARGET_W=28 -DLOW_LUT_K=14 -DHIGH_LUT_K=13 \
+            src/cuda/gridfp/probes/b300_dual_tile_block_reachability_plan.cu \
+            -o build/b300_dual_tile_block_reachability_plan
+          build/b300_dual_tile_block_reachability_plan
+      - name: W28 owner-tile reachability traffic probe
+        shell: bash
+        run: |
+          nvcc -O3 -std=c++17 -arch=sm_80 \
+            -DTARGET_W=28 -DLOW_LUT_K=14 -DHIGH_LUT_K=13 \
+            src/cuda/gridfp/probes/b300_dual_tile_owner_reachability_plan.cu \
+            -o build/b300_dual_tile_owner_reachability_plan
+          build/b300_dual_tile_owner_reachability_plan
+      - name: W28 pruned shuffle Pareto plan
+        shell: bash
+        run: |
+          nvcc -O3 -std=c++17 -arch=sm_80 \
+            -DTARGET_W=28 -DLOW_LUT_K=14 -DHIGH_LUT_K=13 \
+            src/cuda/gridfp/probes/b300_dual_tile_pruned_plan_probe.cu \
+            -o build/b300_dual_tile_pruned_plan_probe
+          build/b300_dual_tile_pruned_plan_probe
+      - name: W28 reversed split pruned screen
+        shell: bash
+        run: |
+          nvcc -O3 -std=c++17 -arch=sm_80 \
+            -DTARGET_W=28 -DLOW_LUT_K=13 -DHIGH_LUT_K=14 \
+            src/cuda/gridfp/probes/b300_dual_tile_pruned_plan_probe.cu \
+            -o build/b300_dual_tile_pruned_plan_probe_rev
+          build/b300_dual_tile_pruned_plan_probe_rev
+      - name: W28 mixed-orientation screening probe
+        shell: bash
+        run: |
+          nvcc -O3 -std=c++17 -arch=sm_80 \
+            -DTARGET_W=28 -DLOW_LUT_K=14 -DHIGH_LUT_K=13 \
+            src/cuda/gridfp/probes/b300_dual_tile_hybrid_screen_plan.cu \
+            -o build/b300_dual_tile_hybrid_screen_plan
+          build/b300_dual_tile_hybrid_screen_plan
+      - name: Compile W28 dual-tile backends
+        shell: bash
+        run: |
+          nvcc -O3 -std=c++17 -lineinfo -arch=sm_80 \
+            -DTARGET_W=28 -DLOW_LUT_K=14 -DHIGH_LUT_K=13 \
+            src/cuda/b300/oneesan_cuda_gridfp_b300_hbm32_dual_tile_sparse.cu \
+            -o build/b300_dual_tile_w28
+          nvcc -O3 -std=c++17 -lineinfo -arch=sm_80 \
+            -DTARGET_W=28 -DLOW_LUT_K=14 -DHIGH_LUT_K=13 \
+            src/cuda/b300/oneesan_cuda_gridfp_b300_hbm32_dual_tile_sparse_batch.cu \
+            -o build/b300_dual_tile_batch_w28
+      - name: Plan n27 dual-tile x8
+        shell: bash
+        run: build/b300_dual_tile_w28 27 4294967291 8 256 --plan-only 512
