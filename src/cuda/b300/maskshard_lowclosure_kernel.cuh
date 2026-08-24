@@ -133,3 +133,7 @@ __global__ void maskshard_main_lowdesc_closure_cols_inplace_kernel(
 #ifdef MASKSHARD_HIGH_CLOSURE_ROW_DEPTH_COMPACT
 #include "maskshard_highclosure_rowdepth_compact.cuh"
 #endif
+
+#ifdef MASKSHARD_HIGH_CLOSURE_ROW_DEPTH_COMPACT_LAUNCH
+#include "maskshard_highclosure_rowdepth_compact_launch.cuh"
+#endif
