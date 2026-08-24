@@ -1,0 +1,53 @@
+name: ramstream32 LOW schedule plan CI
+
+on:
+  push:
+    paths:
+      - 'src/cuda/gridfp/probes/ramstream32_cpu_low_schedule_plan.cu'
+      - 'src/cuda/gridfp/ramstream32_cpu_low_sparse_persistent.hpp'
+      - 'src/cuda/gridfp/ramstream32_cpu_low_sparse.hpp'
+      - 'scripts/build/gridfp-ramstream32-cpu-low-schedule-plan.sh'
+      - 'docs/ramstream32-cpu-low-scheduling.md'
+      - '.github/workflows/ramstream32-low-schedule-plan-ci.yml'
+  pull_request:
+    paths:
+      - 'src/cuda/gridfp/probes/ramstream32_cpu_low_schedule_plan.cu'
+      - 'src/cuda/gridfp/ramstream32_cpu_low_sparse_persistent.hpp'
+      - 'src/cuda/gridfp/ramstream32_cpu_low_sparse.hpp'
+      - 'scripts/build/gridfp-ramstream32-cpu-low-schedule-plan.sh'
+      - 'docs/ramstream32-cpu-low-scheduling.md'
+      - '.github/workflows/ramstream32-low-schedule-plan-ci.yml'
+  workflow_dispatch:
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    container: nvidia/cuda:12.8.1-devel-ubuntu22.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Check build script syntax
+        shell: bash
+        run: bash -n scripts/build/gridfp-ramstream32-cpu-low-schedule-plan.sh
+      - name: Compile small LOW schedule probe
+        shell: bash
+        run: |
+          mkdir -p build
+          nvcc -O3 -std=c++17 -arch=sm_80 \
+            -DTARGET_W=10 -DLOW_LUT_K=5 -DHIGH_LUT_K=4 \
+            src/cuda/gridfp/probes/ramstream32_cpu_low_schedule_plan.cu \
+            -o build/ramstream32_cpu_low_schedule_plan
+      - name: Validate exact LPT accounting
+        shell: bash
+        run: |
+          build/ramstream32_cpu_low_schedule_plan 9 2 --workers \
+            >/tmp/low-plan.tsv 2>/tmp/low-plan.log
+          head -n1 /tmp/low-plan.tsv | grep -Fq 'cpu_low_schedule_plan OK n=9 workers=2'
+          head -n1 /tmp/low-plan.tsv | grep -Fq 'imbalance='
+          grep -Fq $'worker\tjobs\tcells\tfraction' /tmp/low-plan.tsv
+          test "$(tail -n +3 /tmp/low-plan.tsv | wc -l)" -eq 2
+          grep -Fq 'cpu_low_sticky_schedule jobs=' /tmp/low-plan.log
+      - name: Check documentation
+        shell: bash
+        run: |
+          grep -Fq 'ramstream32_cpu_low_schedule_plan_n27' docs/ramstream32-cpu-low-scheduling.md
+          grep -Fq -- '--workers' docs/ramstream32-cpu-low-scheduling.md
