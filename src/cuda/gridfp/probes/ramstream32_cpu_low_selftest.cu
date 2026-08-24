@@ -12,7 +12,7 @@
 #define RAMSTREAM_BIDESC_COMPACT_NO_MAIN
 #include "../oneesan_cuda_gridfp_ramstream32_factorized_bidesc_compact.cu"
 #undef RAMSTREAM_BIDESC_COMPACT_NO_MAIN
-#include "../ramstream32_cpu_low_sparse.hpp"
+#include "../ramstream32_cpu_low_sparse_persistent.hpp"
 #include "../ramstream32_cpu_high.hpp"
 #include "../ramstream32_cpu_high_direct_persistent.hpp"
 
@@ -130,6 +130,8 @@ int main() {
 
     auto [low_rm, low_rd] = reference_window(
         W, LOW_LUT_K, 1, mod, main_states, block_states, mi, di, init_m, init_d);
+    auto [low2_rm, low2_rd] = reference_window(
+        W, LOW_LUT_K, 1, mod, main_states, block_states, mi, di, low_rm, low_rd);
     WindowPlan low_wp = make_direct2d_window(false);
     auto low_jobs = make_cpu_low_jobs(W, low_wp);
 
@@ -152,6 +154,15 @@ int main() {
     CpuLowSparsePool sparse_pool(2);
     sparse_pool.run(low_jobs, main_auth, block_auth, storage, layout, sparse, mod);
     if (!compare_factor("sparse-v4.7", main_auth, block_auth, main_states, block_states, low_rm, low_rd, storage, layout)) return 13;
+
+    fill_factor(main_auth, block_auth, main_states, block_states, init_m, init_d, storage, layout);
+    CpuLowSparsePersistentPool sparse_persistent_pool(2);
+    sparse_persistent_pool.run(low_jobs, main_auth, block_auth, storage, layout, sparse, mod);
+    if (!compare_factor("sparse-persistent-1", main_auth, block_auth,
+                        main_states, block_states, low_rm, low_rd, storage, layout)) return 20;
+    sparse_persistent_pool.run(low_jobs, main_auth, block_auth, storage, layout, sparse, mod);
+    if (!compare_factor("sparse-persistent-2", main_auth, block_auth,
+                        main_states, block_states, low2_rm, low2_rd, storage, layout)) return 21;
 
     size_t sparse_orbit_ops = sparse.orbit_count();
     if (!sparse_orbit_ops
@@ -230,6 +241,8 @@ int main() {
               << " main=" << main_states.size() << " block=" << block_states.size()
               << " out_groups=" << out_pool.groups() << " in_groups=" << in_pool.groups()
               << " direct_groups=" << direct_pool.groups() << " sparse_groups=" << sparse_pool.groups()
+              << " sparse_persistent_groups=" << sparse_persistent_pool.groups()
+              << " sparse_persistent_start_s=" << sparse_persistent_pool.worker_start_s
               << " cpu_high_groups=" << high_pool.groups()
               << " cpu_high_direct_groups=" << high_direct_pool.groups()
               << " cpu_high_persistent_groups=" << high_persistent_pool.groups()
@@ -255,6 +268,7 @@ int main() {
               << double(highdirect.closure_ops.size()*sizeof(CpuHighClosureOp))/(1<<20)
               << '\n';
 
+    sparse_persistent_pool.shutdown();
     high_persistent_pool.shutdown();
     high_pool.release();
     in_pool.release(); out_pool.release();
