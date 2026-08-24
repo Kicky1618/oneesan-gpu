@@ -1,0 +1,43 @@
+name: gpu direct compile validation
+
+on:
+  push:
+    paths:
+      - 'src/cuda/gridfp/ramstream32_gpu_direct.cuh'
+      - 'src/cuda/gridfp/probes/ramstream32_gpu_direct_selftest.cu'
+      - 'src/cuda/gridfp/probes/ramstream32_cpu_low_selftest.cu'
+      - 'src/cuda/gridfp/ramstream32_cpu_low_inplace.hpp'
+      - 'src/cuda/gridfp/ramstream32_cpu_low_sparse.hpp'
+      - 'src/cuda/gridfp/ramstream32_cpu_high.hpp'
+      - 'src/cuda/gridfp/ramstream32_cpu_high_direct.hpp'
+      - 'src/cuda/gridfp/ramstream32_lowdesc.cuh'
+      - 'src/cuda/gridfp/ramstream32_highdesc.cuh'
+      - '.github/workflows/gpu-direct-compile.yml'
+  pull_request:
+    paths:
+      - 'src/cuda/gridfp/ramstream32_gpu_direct.cuh'
+      - 'src/cuda/gridfp/probes/ramstream32_gpu_direct_selftest.cu'
+      - 'src/cuda/gridfp/probes/ramstream32_cpu_low_selftest.cu'
+      - 'src/cuda/gridfp/ramstream32_cpu_low_inplace.hpp'
+      - 'src/cuda/gridfp/ramstream32_cpu_low_sparse.hpp'
+      - 'src/cuda/gridfp/ramstream32_cpu_high.hpp'
+      - 'src/cuda/gridfp/ramstream32_cpu_high_direct.hpp'
+      - 'src/cuda/gridfp/ramstream32_lowdesc.cuh'
+      - 'src/cuda/gridfp/ramstream32_highdesc.cuh'
+      - '.github/workflows/gpu-direct-compile.yml'
+  workflow_dispatch:
+
+jobs:
+  compile:
+    runs-on: ubuntu-latest
+    container: nvidia/cuda:12.8.1-devel-ubuntu22.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Compile W10 GPU direct exhaustive probe
+        shell: bash
+        run: |
+          mkdir -p build
+          nvcc -O3 -std=c++17 -lineinfo -arch=sm_80 \
+            -DTARGET_W=10 -DLOW_LUT_K=5 -DHIGH_LUT_K=4 \
+            src/cuda/gridfp/probes/ramstream32_gpu_direct_selftest.cu \
+            -o build/ramstream32_gpu_direct_selftest_w10
