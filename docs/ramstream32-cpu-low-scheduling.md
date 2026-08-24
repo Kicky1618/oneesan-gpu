@@ -146,7 +146,7 @@ This gives a three-way structural comparison:
 ```text
 sticky/LPT:     best unconstrained worker balance; many possible domain cuts
 contiguous:     every worker owns one mask interval; minimum worker-order cuts
- domain-hybrid: each domain owns one mask interval; LPT restored inside domain
+domain-hybrid: each domain owns one mask interval; LPT restored inside domain
 ```
 
 The probe reports:
@@ -170,6 +170,52 @@ Sanity cases are `--domain-size 1`, where cross-domain equals cross-worker, and 
 These are static ownership exposures, not measured remote-memory bytes. First-touch placement, AutoNUMA, THP, caches, and GPU DMA still determine actual traffic.
 
 Use `--workers` to dump every worker's LPT, contiguous, and domain-hybrid exact-cell load. The probe constructs topology/descriptor metadata and LOW jobs only; it does not mmap the multi-terabyte authoritative state arrays.
+
+### Topology sweep and Pareto analysis
+
+To compare several worker/socket shapes without allocating authoritative state, use:
+
+```bash
+N=27 \
+CONFIGS='32:16 64:32 96:48 128:64' \
+bash scripts/bench/ramstream32-cpu-low-schedule-plan-sweep.sh
+```
+
+Each `CONFIGS` entry is `workers:domain-size`. The runner invokes the preflight probe for every configuration and records LPT, contiguous, and domain-hybrid worker imbalance plus cross-domain 4 KiB and 2 MiB page cuts in one TSV. It also records commit, binary SHA-256, architecture, and exact configuration list.
+
+By default the runner invokes:
+
+```text
+scripts/tools/analyze_cpu_low_schedule_plan_sweep.py
+```
+
+The analyzer expands each topology row into three candidate points and computes the Pareto frontier over:
+
+```text
+minimize worker imbalance
+minimize cross-domain 4 KiB boundary pages
+minimize cross-domain 2 MiB boundary pages
+```
+
+A point is omitted only when another point is no worse in all three objectives and strictly better in at least one. This avoids prematurely inventing a scalar weight between load balance and NUMA exposure.
+
+Use an explicit balance budget when desired:
+
+```bash
+MAX_IMBALANCE=1.05 \
+CONFIGS='32:16 64:32 96:48 128:64' \
+bash scripts/bench/ramstream32-cpu-low-schedule-plan-sweep.sh
+```
+
+or analyze an existing TSV directly:
+
+```bash
+python3 scripts/tools/analyze_cpu_low_schedule_plan_sweep.py \
+  low-schedule-plan-sweep-n27-....tsv \
+  --max-imbalance 1.05
+```
+
+The output labels `pareto`, `best_balance`, `best_4k`, `best_2m`, and the best-balance point inside each scheme. Domain-hybrid should be promoted to a production mode only if it occupies useful Pareto points on realistic worker/domain layouts; a structurally dominated design does not justify a full residue benchmark.
 
 ## Clean timing comparisons
 
