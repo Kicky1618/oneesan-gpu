@@ -264,7 +264,7 @@ int main(int argc, char** argv) {
 
     if (plan_only) {
         std::cout
-            << "backend=gridfp-ramstream32-factorized-hybrid-sparse-v5.11-plan"
+            << "backend=gridfp-ramstream32-factorized-hybrid-sparse-v5.12-plan"
             << " n=" << n
             << " gpu_high_desc_mib=" << highdesc_mib
             << " gpu_mask_mib=" << mask_mib
@@ -290,6 +290,7 @@ int main(int argc, char** argv) {
             << " cpu_high_overlap=" << int(cpu_high_overlap)
             << " cpu_high_policy=" << cpu_high_policy
             << " cpu_high_persistent_workers=1"
+            << " cpu_high_async_overlap=1"
             << " cpu_high_selection_hash=" << selection_hash
             << " cpu_high_max_mib=" << cpu_high_max_mib
             << " cpu_high_groups=" << selected_cpu_high_jobs.size()
@@ -357,9 +358,17 @@ int main(int argc, char** argv) {
     for(int row=0;row<W;++row){
         if (cpu_high_overlap && !selected_cpu_high_jobs.empty()
             && gpu_high_nonempty_groups) {
-            std::thread cpu_thread(run_cpu_high);
-            run_gpu_high();
-            cpu_thread.join();
+            if (cpu_high_direct_mode) {
+                bool started = cpu_high_direct.start_run(
+                    selected_cpu_high_jobs, main_auth, block_auth,
+                    storage, layout, cpu_high_direct_meta, cpu_high_cross, mod);
+                run_gpu_high();
+                if (started) cpu_high_direct.wait_run();
+            } else {
+                std::thread cpu_thread(run_cpu_high);
+                run_gpu_high();
+                cpu_thread.join();
+            }
         } else {
             run_gpu_high();
             run_cpu_high();
@@ -387,7 +396,7 @@ int main(int argc, char** argv) {
         : double(cpu_high_scratch.peak_scratch_bytes())/double(1<<20);
 
     std::cout
-        << "backend=gridfp-ramstream32-factorized-hybrid-sparse-v5.11"
+        << "backend=gridfp-ramstream32-factorized-hybrid-sparse-v5.12"
         << " n="<<n<<" residue="<<answer<<" modulus="<<mod
         << " gpu_high_desc_mib="<<highdesc_mib<<" gpu_mask_mib="<<mask_mib
         << " cpu_sparse_nn_orbit_mib="<<sparse_nn_orbit_mib
@@ -409,6 +418,7 @@ int main(int argc, char** argv) {
         << " cpu_high_overlap="<<int(cpu_high_overlap)
         << " cpu_high_policy="<<cpu_high_policy
         << " cpu_high_persistent_workers=1"
+        << " cpu_high_async_overlap=1"
         << " cpu_high_worker_start_s="<<cpu_high_direct.worker_start_s
         << " cpu_high_selection_hash="<<selection_hash
         << " cpu_high_max_mib="<<cpu_high_max_mib
