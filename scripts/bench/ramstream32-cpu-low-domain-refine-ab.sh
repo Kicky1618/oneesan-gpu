@@ -112,7 +112,7 @@ printf 'repeat\torder\trefine\tresidue\twall_s\tcpu_low_wall_s\tcpu_low_kernel_s
 run_one() {
   local repeat="$1" order="$2" refine="$3"
   local stderr_log="$log_dir/repeat${repeat}-${order}-refine${refine}.stderr.txt"
-  local line residue got_schedule got_domain boundaries moves
+  local line residue got_schedule got_domain got_refine boundaries moves
 
   line="$(CPU_HIGH_MODE="$CPU_HIGH_MODE" \
     CPU_HIGH_OVERLAP="$CPU_HIGH_OVERLAP" \
@@ -131,14 +131,18 @@ run_one() {
   residue="$(field "$line" residue)"
   got_schedule="$(field "$line" cpu_low_schedule)"
   got_domain="$(field "$line" cpu_low_domain_size)"
+  got_refine="$(field "$line" cpu_low_domain_refine)"
   [[ "$got_schedule" == domain ]] || {
     echo "schedule provenance mismatch got=$got_schedule" >&2; exit 7;
   }
   [[ "$got_domain" == "$CPU_LOW_DOMAIN_SIZE" ]] || {
     echo "domain provenance mismatch requested=$CPU_LOW_DOMAIN_SIZE got=$got_domain" >&2; exit 7;
   }
+  [[ "$got_refine" == "$refine" ]] || {
+    echo "refine stdout provenance mismatch requested=$refine got=$got_refine" >&2; exit 7;
+  }
   grep -Eq "cpu_low_domain_schedule .* refine=${refine}( |$)" "$stderr_log" || {
-    echo "refinement provenance mismatch refine=$refine log=$stderr_log" >&2
+    echo "refinement stderr provenance mismatch refine=$refine log=$stderr_log" >&2
     exit 7
   }
 
