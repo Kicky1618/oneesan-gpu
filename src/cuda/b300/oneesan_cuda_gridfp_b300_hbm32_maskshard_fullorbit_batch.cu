@@ -138,9 +138,6 @@ struct FullOrbitBatchHighJob {
 #ifdef MASKSHARD_BLOCK_ORBIT_ROW_CAP_LAUNCH
     std::array<Code, HIGH_LUT_K + 2> block_depth_end{};
 #endif
-#ifdef MASKSHARD_ROW_DEPTH_ORBIT_COMPACT
-    std::array<Code, TARGET_W / 2 + 1> block_exact_count{};
-#endif
 #ifdef MASKSHARD_HIGH_CLOSURE_ROWS
     std::array<uint32_t, HIGH_LUT_K> closure_rows{};
 #endif
@@ -190,17 +187,6 @@ static std::vector<FullOrbitBatchHighJob> build_fullorbit_batch_high_jobs(
             std::cerr << "fullorbit-batch row-cap BLOCKED final size mismatch mask="
                       << mask << '\n';
             std::exit(207);
-        }
-#endif
-#ifdef MASKSHARD_ROW_DEPTH_ORBIT_COMPACT
-        for (int cap = 1; cap <= TARGET_W / 2; ++cap)
-            job.block_exact_count[size_t(cap)] =
-                maskshard_row_depth_compact_block_count(mask, cap);
-        if (job.block_exact_count.back() != dn) {
-            std::cerr << "fullorbit-batch exact BLOCKED final size mismatch mask="
-                      << mask << " got=" << job.block_exact_count.back()
-                      << " expected=" << dn << '\n';
-            std::exit(208);
         }
 #endif
 #ifdef MASKSHARD_HIGH_CLOSURE_ROWS
@@ -278,7 +264,14 @@ static void process_fullorbit_batch_high_job(
     const int bd = int(std::min<Code>(65535, (job.block_n + threads - 1) / threads));
 #ifdef MASKSHARD_ROW_DEPTH_ORBIT_COMPACT
     const int orbit_cap = std::min(zero_based_row + 1, TARGET_W / 2);
-    const Code orbit_block_n = job.block_exact_count[size_t(orbit_cap)];
+    const Code orbit_block_n =
+        maskshard_configure_row_depth_compact_group(job.low_mask, orbit_cap);
+    if (orbit_cap == TARGET_W / 2 && orbit_block_n != job.block_n) {
+        std::cerr << "fullorbit-batch exact compact BLOCKED size mismatch mask="
+                  << job.low_mask << " got=" << orbit_block_n
+                  << " expected=" << job.block_n << '\n';
+        std::exit(208);
+    }
     const int bd_orbit = orbit_block_n
         ? int(std::min<Code>(65535, (orbit_block_n + threads - 1) / threads))
         : 0;
