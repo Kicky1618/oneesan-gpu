@@ -6,10 +6,8 @@
 #include <cstring>
 #include <iomanip>
 #include <iostream>
-#include <limits>
 #include <numeric>
 #include <unordered_set>
-#include <utility>
 #include <vector>
 
 #define RAMSTREAM_BIDESC_COMPACT_NO_MAIN
@@ -33,21 +31,6 @@ struct CpuLowPageMetrics {
     double cross_of_shared_2m = 0.0;
     double cross_auth_4k = 0.0;
     double cross_auth_2m = 0.0;
-};
-
-struct CpuLowOrderedEntry {
-    uint32_t mask = 0;
-    uint64_t cells = 0;
-};
-
-struct CpuLowContiguousPlan {
-    std::vector<int> owner;
-    std::vector<uint64_t> worker_cells;
-    uint64_t min_cells = 0;
-    uint64_t max_cells = 0;
-    double imbalance = 0.0;
-    uint64_t optimal_cap = 0;
-    size_t active_workers = 0;
 };
 
 static void cpu_low_add_boundary_page(
@@ -93,7 +76,8 @@ static CpuLowBoundaryPages cpu_low_boundary_pages(
                 std::exit(3);
             }
 
-            uint32_t row0 = storage.high_mask_begin[size_t(mask) * StorageFactorHost::S + sb.he];
+            uint32_t row0 = storage.high_mask_begin[
+                size_t(mask) * StorageFactorHost::S + sb.he];
             uint64_t begin_elem = uint64_t(sb.off) + uint64_t(row0) * sb.cols;
             uint64_t begin_byte = begin_elem * sizeof(Count);
             uint64_t end_byte = begin_byte + uint64_t(rows) * sb.cols * sizeof(Count);
@@ -148,6 +132,25 @@ static CpuLowPageMetrics cpu_low_page_metrics(
     return m;
 }
 
+static std::vector<int> cpu_low_owner_from_pool(
+    const CpuLowSparsePersistentPool& pool,
+    const std::vector<CpuLowJob>& jobs
+) {
+    std::vector<int> owner(size_t(1) << HIGH_LUT_K, -1);
+    for (int w = 0; w < pool.workers; ++w) {
+        for (size_t q : pool.sticky_worker_jobs[size_t(w)]) {
+            uint32_t mask = jobs[q].mask;
+            if (owner[mask] >= 0) {
+                std::cerr << "cpu LOW duplicate mask owner mask=" << mask
+                          << " old=" << owner[mask] << " new=" << w << '\n';
+                std::exit(5);
+            }
+            owner[mask] = w;
+        }
+    }
+    return owner;
+}
+
 static std::vector<int> cpu_low_domain_owner(
     const std::vector<int>& worker_owner, int domain_size
 ) {
@@ -159,133 +162,21 @@ static std::vector<int> cpu_low_domain_owner(
     return out;
 }
 
-static size_t cpu_low_ordered_segments_needed(
-    const std::vector<CpuLowOrderedEntry>& entries, uint64_t cap
-) {
-    if (entries.empty()) return 0;
-    size_t segments = 1;
-    uint64_t acc = 0;
-    for (const auto& e : entries) {
-        if (e.cells > cap) return std::numeric_limits<size_t>::max();
-        if (acc && acc > cap - e.cells) {
-            ++segments;
-            acc = 0;
-        }
-        acc += e.cells;
-    }
-    return segments;
+static uint64_t cpu_low_min_cells(const std::vector<uint64_t>& cells) {
+    if (cells.empty()) return 0;
+    return *std::min_element(cells.begin(), cells.end());
 }
 
-static uint64_t cpu_low_segment_cells(
-    const std::vector<CpuLowOrderedEntry>& entries,
-    const std::pair<size_t,size_t>& seg
+static uint64_t cpu_low_max_cells(const std::vector<uint64_t>& cells) {
+    return cells.empty() ? 0 : *std::max_element(cells.begin(), cells.end());
+}
+
+static size_t cpu_low_assigned_jobs(
+    const std::vector<std::vector<size_t>>& worker_jobs
 ) {
-    uint64_t z = 0;
-    for (size_t i = seg.first; i < seg.second; ++i) z += entries[i].cells;
+    size_t z = 0;
+    for (const auto& x : worker_jobs) z += x.size();
     return z;
-}
-
-static CpuLowContiguousPlan cpu_low_build_optimal_contiguous_plan(
-    const std::vector<CpuLowOrderedEntry>& entries, int workers,
-    uint64_t exact_total
-) {
-    CpuLowContiguousPlan out;
-    out.owner.assign(size_t(1) << HIGH_LUT_K, -1);
-    out.worker_cells.assign(size_t(workers), 0);
-    if (entries.empty()) return out;
-
-    size_t target_segments = std::min<size_t>(size_t(workers), entries.size());
-    uint64_t lo = 0;
-    for (const auto& e : entries) lo = std::max(lo, e.cells);
-    uint64_t hi = exact_total;
-    while (lo < hi) {
-        uint64_t mid = lo + (hi - lo) / 2;
-        if (cpu_low_ordered_segments_needed(entries, mid) <= target_segments)
-            hi = mid;
-        else
-            lo = mid + 1;
-    }
-    out.optimal_cap = lo;
-
-    std::vector<std::pair<size_t,size_t>> segs;
-    size_t begin = 0;
-    uint64_t acc = 0;
-    for (size_t i = 0; i < entries.size(); ++i) {
-        uint64_t w = entries[i].cells;
-        if (acc && acc > out.optimal_cap - w) {
-            segs.push_back({begin, i});
-            begin = i;
-            acc = 0;
-        }
-        acc += w;
-    }
-    segs.push_back({begin, entries.size()});
-
-    // The optimal cap may need fewer than target_segments. Split existing
-    // segments until every available worker owns one contiguous run. Splitting
-    // cannot increase the max load, so the min-max optimum is preserved.
-    while (segs.size() < target_segments) {
-        size_t best_seg = size_t(-1);
-        uint64_t best_cells = 0;
-        for (size_t s = 0; s < segs.size(); ++s) {
-            if (segs[s].second - segs[s].first <= 1) continue;
-            uint64_t cells = cpu_low_segment_cells(entries, segs[s]);
-            if (best_seg == size_t(-1) || cells > best_cells) {
-                best_seg = s;
-                best_cells = cells;
-            }
-        }
-        if (best_seg == size_t(-1)) {
-            std::cerr << "cpu LOW contiguous split reconstruction failed\n";
-            std::exit(6);
-        }
-
-        auto seg = segs[best_seg];
-        uint64_t prefix = 0;
-        uint64_t best_delta = std::numeric_limits<uint64_t>::max();
-        size_t split = seg.first + 1;
-        for (size_t i = seg.first; i + 1 < seg.second; ++i) {
-            prefix += entries[i].cells;
-            uint64_t right = best_cells - prefix;
-            uint64_t delta = prefix > right ? prefix - right : right - prefix;
-            if (delta < best_delta) {
-                best_delta = delta;
-                split = i + 1;
-            }
-        }
-        segs[best_seg] = {seg.first, split};
-        segs.insert(segs.begin() + best_seg + 1, {split, seg.second});
-    }
-
-    out.active_workers = segs.size();
-    for (size_t w = 0; w < segs.size(); ++w) {
-        uint64_t cells = 0;
-        for (size_t i = segs[w].first; i < segs[w].second; ++i) {
-            uint32_t mask = entries[i].mask;
-            if (out.owner[mask] >= 0) {
-                std::cerr << "cpu LOW contiguous duplicate owner mask=" << mask << '\n';
-                std::exit(7);
-            }
-            out.owner[mask] = int(w);
-            cells += entries[i].cells;
-        }
-        out.worker_cells[w] = cells;
-        if (cells > out.optimal_cap) {
-            std::cerr << "cpu LOW contiguous cap violation worker=" << w
-                      << " cells=" << cells << " cap=" << out.optimal_cap << '\n';
-            std::exit(8);
-        }
-    }
-
-    out.min_cells = out.worker_cells.empty() ? 0 : out.worker_cells[0];
-    out.max_cells = 0;
-    for (uint64_t x : out.worker_cells) {
-        out.min_cells = std::min(out.min_cells, x);
-        out.max_cells = std::max(out.max_cells, x);
-    }
-    double avg = workers ? double(exact_total) / workers : 0.0;
-    out.imbalance = avg > 0.0 ? double(out.max_cells) / avg : 0.0;
-    return out;
 }
 
 int main(int argc, char** argv) {
@@ -326,61 +217,53 @@ int main(int argc, char** argv) {
 
     WindowPlan low_wp = make_direct2d_window(false);
     auto jobs = make_cpu_low_jobs(W, low_wp);
-    CpuLowSparsePersistentPool pool(workers, CPU_LOW_SCHEDULE_STICKY);
-    pool.prepare_sticky_schedule(jobs, sparse);
+
+    CpuLowSparsePersistentPool lpt_pool(workers, CPU_LOW_SCHEDULE_STICKY);
+    CpuLowSparsePersistentPool contiguous_pool(workers, CPU_LOW_SCHEDULE_CONTIGUOUS);
+    lpt_pool.prepare_static_schedule(jobs, sparse);
+    contiguous_pool.prepare_static_schedule(jobs, sparse);
 
     size_t nonempty_jobs = 0;
     uint64_t exact_total = 0;
-    std::vector<CpuLowOrderedEntry> ordered;
-    ordered.reserve(jobs.size());
     for (const auto& job : jobs) {
         if (!job.main_size && !job.block_size) continue;
-        uint64_t cells = cpu_low_sparse_job_cells(job, sparse);
         ++nonempty_jobs;
-        exact_total += cells;
-        ordered.push_back({job.mask, cells});
+        exact_total += cpu_low_sparse_job_cells(job, sparse);
     }
-    std::sort(ordered.begin(), ordered.end(), [](const auto& a, const auto& b) {
-        return a.mask < b.mask;
-    });
 
-    uint64_t assigned_total = std::accumulate(
-        pool.sticky_worker_cells.begin(), pool.sticky_worker_cells.end(), uint64_t(0));
-    size_t assigned_jobs = 0;
-    for (const auto& v : pool.sticky_worker_jobs) assigned_jobs += v.size();
-    if (assigned_total != exact_total || assigned_jobs != nonempty_jobs) {
-        std::cerr << "cpu LOW sticky plan accounting mismatch jobs="
-                  << assigned_jobs << '/' << nonempty_jobs
-                  << " cells=" << assigned_total << '/' << exact_total << '\n';
+    uint64_t lpt_total = std::accumulate(
+        lpt_pool.sticky_worker_cells.begin(), lpt_pool.sticky_worker_cells.end(), uint64_t(0));
+    uint64_t contiguous_total = std::accumulate(
+        contiguous_pool.sticky_worker_cells.begin(),
+        contiguous_pool.sticky_worker_cells.end(), uint64_t(0));
+    size_t lpt_jobs = cpu_low_assigned_jobs(lpt_pool.sticky_worker_jobs);
+    size_t contiguous_jobs = cpu_low_assigned_jobs(contiguous_pool.sticky_worker_jobs);
+    if (lpt_total != exact_total || contiguous_total != exact_total
+        || lpt_jobs != nonempty_jobs || contiguous_jobs != nonempty_jobs) {
+        std::cerr << "cpu LOW static plan accounting mismatch"
+                  << " expected_jobs=" << nonempty_jobs
+                  << " lpt_jobs=" << lpt_jobs
+                  << " contiguous_jobs=" << contiguous_jobs
+                  << " expected_cells=" << exact_total
+                  << " lpt_cells=" << lpt_total
+                  << " contiguous_cells=" << contiguous_total << '\n';
         return 2;
     }
 
-    uint64_t min_cells = pool.sticky_worker_cells.empty() ? 0 : pool.sticky_worker_cells[0];
-    uint64_t max_cells = 0;
-    for (uint64_t x : pool.sticky_worker_cells) {
-        min_cells = std::min(min_cells, x);
-        max_cells = std::max(max_cells, x);
-    }
+    uint64_t min_cells = cpu_low_min_cells(lpt_pool.sticky_worker_cells);
+    uint64_t max_cells = cpu_low_max_cells(lpt_pool.sticky_worker_cells);
+    uint64_t contiguous_min_cells = cpu_low_min_cells(contiguous_pool.sticky_worker_cells);
+    uint64_t contiguous_max_cells = cpu_low_max_cells(contiguous_pool.sticky_worker_cells);
     double avg = workers ? double(exact_total) / workers : 0.0;
     double imbalance = avg > 0.0 ? double(max_cells) / avg : 0.0;
+    double contiguous_imbalance = avg > 0.0
+        ? double(contiguous_max_cells) / avg : 0.0;
 
-    std::vector<int> owner(size_t(1) << HIGH_LUT_K, -1);
-    for (int w = 0; w < workers; ++w) {
-        for (size_t q : pool.sticky_worker_jobs[size_t(w)]) {
-            uint32_t mask = jobs[q].mask;
-            if (owner[mask] >= 0) {
-                std::cerr << "cpu LOW sticky duplicate mask owner mask=" << mask << '\n';
-                return 5;
-            }
-            owner[mask] = w;
-        }
-    }
-
-    CpuLowPageMetrics lpt_pages = cpu_low_page_metrics(layout, storage, owner);
-    CpuLowContiguousPlan contiguous = cpu_low_build_optimal_contiguous_plan(
-        ordered, workers, exact_total);
+    std::vector<int> lpt_owner = cpu_low_owner_from_pool(lpt_pool, jobs);
+    std::vector<int> contiguous_owner = cpu_low_owner_from_pool(contiguous_pool, jobs);
+    CpuLowPageMetrics lpt_pages = cpu_low_page_metrics(layout, storage, lpt_owner);
     CpuLowPageMetrics contiguous_pages = cpu_low_page_metrics(
-        layout, storage, contiguous.owner);
+        layout, storage, contiguous_owner);
 
     CpuLowPageMetrics lpt_domain_pages;
     CpuLowPageMetrics contiguous_domain_pages;
@@ -388,10 +271,14 @@ int main(int argc, char** argv) {
     if (domain_size > 0) {
         domains = (workers + domain_size - 1) / domain_size;
         lpt_domain_pages = cpu_low_page_metrics(
-            layout, storage, cpu_low_domain_owner(owner, domain_size));
+            layout, storage, cpu_low_domain_owner(lpt_owner, domain_size));
         contiguous_domain_pages = cpu_low_page_metrics(
-            layout, storage, cpu_low_domain_owner(contiguous.owner, domain_size));
+            layout, storage, cpu_low_domain_owner(contiguous_owner, domain_size));
     }
+
+    size_t contiguous_active_workers = 0;
+    for (uint64_t x : contiguous_pool.sticky_worker_cells)
+        if (x) ++contiguous_active_workers;
 
     std::cout << std::setprecision(12)
               << "cpu_low_schedule_plan OK"
@@ -411,11 +298,11 @@ int main(int argc, char** argv) {
               << " cross_worker_pages_2m=" << lpt_pages.cross_2m
               << " cross_worker_of_shared_2m=" << lpt_pages.cross_of_shared_2m
               << " cross_worker_auth_page_fraction_2m=" << lpt_pages.cross_auth_2m
-              << " contiguous_active_workers=" << contiguous.active_workers
-              << " contiguous_optimal_cap=" << contiguous.optimal_cap
-              << " contiguous_min_worker_cells=" << contiguous.min_cells
-              << " contiguous_max_worker_cells=" << contiguous.max_cells
-              << " contiguous_imbalance=" << contiguous.imbalance
+              << " contiguous_active_workers=" << contiguous_active_workers
+              << " contiguous_optimal_cap=" << contiguous_pool.contiguous_optimal_cap
+              << " contiguous_min_worker_cells=" << contiguous_min_cells
+              << " contiguous_max_worker_cells=" << contiguous_max_cells
+              << " contiguous_imbalance=" << contiguous_imbalance
               << " contiguous_cross_worker_pages_4k=" << contiguous_pages.cross_4k
               << " contiguous_cross_worker_of_shared_4k=" << contiguous_pages.cross_of_shared_4k
               << " contiguous_cross_worker_auth_page_fraction_4k=" << contiguous_pages.cross_auth_4k
@@ -432,20 +319,22 @@ int main(int argc, char** argv) {
               << " contiguous_cross_domain_auth_page_fraction_4k=" << contiguous_domain_pages.cross_auth_4k
               << " contiguous_cross_domain_pages_2m=" << contiguous_domain_pages.cross_2m
               << " contiguous_cross_domain_auth_page_fraction_2m=" << contiguous_domain_pages.cross_auth_2m
-              << " build_s=" << pool.schedule_build_s
+              << " build_s=" << lpt_pool.schedule_build_s
+              << " contiguous_build_s=" << contiguous_pool.schedule_build_s
               << '\n';
 
     if (dump_workers) {
-        std::cout << "worker\tjobs\tcells\tfraction\tcontiguous_cells\tcontiguous_fraction\tdomain\n";
+        std::cout << "worker\tjobs\tcells\tfraction\tcontiguous_jobs\tcontiguous_cells\tcontiguous_fraction\tdomain\n";
         for (int w = 0; w < workers; ++w) {
-            uint64_t cells = pool.sticky_worker_cells[size_t(w)];
-            uint64_t ccells = contiguous.worker_cells[size_t(w)];
+            uint64_t cells = lpt_pool.sticky_worker_cells[size_t(w)];
+            uint64_t ccells = contiguous_pool.sticky_worker_cells[size_t(w)];
             double fraction = exact_total ? double(cells) / double(exact_total) : 0.0;
             double cfraction = exact_total ? double(ccells) / double(exact_total) : 0.0;
             int domain = domain_size > 0 ? w / domain_size : -1;
             std::cout << w << '\t'
-                      << pool.sticky_worker_jobs[size_t(w)].size() << '\t'
+                      << lpt_pool.sticky_worker_jobs[size_t(w)].size() << '\t'
                       << cells << '\t' << fraction << '\t'
+                      << contiguous_pool.sticky_worker_jobs[size_t(w)].size() << '\t'
                       << ccells << '\t' << cfraction << '\t'
                       << domain << '\n';
         }
