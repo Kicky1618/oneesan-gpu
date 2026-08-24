@@ -12,19 +12,25 @@
 #ifndef MASKSHARD_BLOCK_ORBIT_TIGHT_LAUNCH
 #error "compact row-depth orbit requires BLOCKED-domain launch geometry"
 #endif
+static_assert(HIGH_LUT_K <= LOW_LUT_K,
+              "compact BLOCKED task metadata assumes HIGH<=LOW");
 
 // v0.19: exact active BLOCKED tasks are a Cartesian product inside each
 // boundary-height FBlock:
 //
 //   {HIGH ranks with peak <= cap} x {LOW mask-ranks with peak <= cap}.
 //
-// Build one peak-sorted rank permutation per factor group during setup.  The
-// per-cap cumulative counts then let the kernel enumerate only exact active
-// tasks.  No per-state depth predicate is needed in the compact kernel.
+// Build one peak-sorted rank permutation per factor group during setup. The
+// per-cap cumulative counts select exact active prefixes. A tiny per-job plan
+// (task prefix + LOW active count, ~150 B at W=28) is copied to constant memory
+// once before launching the 13 HIGH-position kernels, avoiding per-CTA prefix
+// construction.
 __device__ __constant__ std::uint16_t* D_MS_ROW_DEPTH_LOW_COMPACT_RANK;
 __device__ __constant__ std::uint32_t* D_MS_ROW_DEPTH_HIGH_COMPACT_RANK;
 __device__ __constant__ std::uint16_t* D_MS_ROW_DEPTH_LOW_ACTIVE_COUNT;
 __device__ __constant__ std::uint32_t* D_MS_ROW_DEPTH_HIGH_ACTIVE_COUNT;
+__device__ __constant__ Code D_MS_ROW_DEPTH_COMPACT_TASK_PREFIX[HIGH_LUT_K + 3];
+__device__ __constant__ std::uint16_t D_MS_ROW_DEPTH_COMPACT_JOB_LOW_COUNT[HIGH_LUT_K + 2];
 
 struct MaskShardRowDepthOrbitCompactCache {
     static constexpr int FULL_CAP = TARGET_W / 2;
@@ -132,17 +138,24 @@ struct MaskShardRowDepthOrbitCompactCache {
                   << " mib=" << double(bytes) / double(1ULL << 20) << '\n';
     }
 
-    Code block_active_count(std::uint32_t mask, int cap) {
+    Code make_job_plan(
+        std::uint32_t mask,
+        int cap,
+        std::array<Code, HIGH_LUT_K + 3>& prefix,
+        std::array<std::uint16_t, HIGH_LUT_K + 2>& job_low_count
+    ) {
         build();
         constexpr int H = HIGH_LUT_K;
         cap = std::max(0, std::min(cap, FULL_CAP));
-        Code total = 0;
+        prefix.fill(0);
+        job_low_count.fill(0);
         for (int h = 0; h <= H + 1; ++h) {
             const std::uint32_t hc = high_count[high_count_index(h, cap)];
             const std::uint16_t lc = low_count[low_count_index(mask, h, cap)];
-            total += Code(hc) * Code(lc);
+            job_low_count[size_t(h)] = lc;
+            prefix[size_t(h + 1)] = prefix[size_t(h)] + Code(hc) * Code(lc);
         }
-        return total;
+        return prefix[size_t(H + 2)];
     }
 
     void install_current_device() {
@@ -209,10 +222,20 @@ static MaskShardRowDepthOrbitCompactCache& maskshard_row_depth_orbit_compact_cac
     return cache;
 }
 
-static Code maskshard_row_depth_compact_block_count(
+static Code maskshard_configure_row_depth_compact_group(
     std::uint32_t mask, int cap
 ) {
-    return maskshard_row_depth_orbit_compact_cache().block_active_count(mask, cap);
+    std::array<Code, HIGH_LUT_K + 3> prefix{};
+    std::array<std::uint16_t, HIGH_LUT_K + 2> low_count{};
+    const Code total = maskshard_row_depth_orbit_compact_cache().make_job_plan(
+        mask, cap, prefix, low_count);
+    ck(cudaMemcpyToSymbol(D_MS_ROW_DEPTH_COMPACT_TASK_PREFIX,
+                          prefix.data(), sizeof(prefix)),
+       "row-depth compact task prefix");
+    ck(cudaMemcpyToSymbol(D_MS_ROW_DEPTH_COMPACT_JOB_LOW_COUNT,
+                          low_count.data(), sizeof(low_count)),
+       "row-depth compact job LOW counts");
+    return total;
 }
 
 // The v0.15 header already redirects report_high_mask_shard_layout() to a setup
@@ -237,45 +260,12 @@ static void maskshard_report_high_mask_shard_layout_orbit_compact(
 #define report_high_mask_shard_layout \
         maskshard_report_high_mask_shard_layout_orbit_compact
 
-__device__ __forceinline__ std::uint16_t maskshard_compact_low_count(
-    std::uint32_t mask, int h, int cap
-) {
-    constexpr int L = LOW_LUT_K;
-    constexpr int CS = TARGET_W / 2 + 1;
-    return D_MS_ROW_DEPTH_LOW_ACTIVE_COUNT[
-        (std::size_t(mask) * (L + 2) + std::size_t(h)) * CS + std::size_t(cap)];
-}
-
-__device__ __forceinline__ std::uint32_t maskshard_compact_high_count(
-    int h, int cap
-) {
-    constexpr int CS = TARGET_W / 2 + 1;
-    return D_MS_ROW_DEPTH_HIGH_ACTIVE_COUNT[
-        std::size_t(h) * CS + std::size_t(cap)];
-}
-
 __global__ void maskshard_main_block_highorbit_rowdepth_compact_kernel(
     Count* mainv, Count* blockv, Code n, int p
 ) {
     constexpr int S = MAXW + 2;
-    constexpr int FULL_CAP = TARGET_W / 2;
-    __shared__ Code prefix[HIGH_LUT_K + 3];
-
-    const int cap = min(D_MS_ROW_DEPTH_INDEX + 1, FULL_CAP);
     const int nb = D_F_BLOCK_NBLOCKS;
-    if (threadIdx.x == 0) {
-        prefix[0] = 0;
-        for (int b = 0; b < nb; ++b) {
-            const FBlock x = D_F_BLOCK_BLOCKS[b];
-            const int h = int(x.he);
-            const std::uint32_t hc = maskshard_compact_high_count(h, cap);
-            const std::uint16_t lc = maskshard_compact_low_count(D_F_MASK, h, cap);
-            prefix[b + 1] = prefix[b] + Code(hc) * Code(lc);
-        }
-    }
-    __syncthreads();
-
-    const Code total = prefix[nb];
+    const Code total = D_MS_ROW_DEPTH_COMPACT_TASK_PREFIX[nb];
     Code task = Code(blockIdx.x) * blockDim.x + threadIdx.x;
     const Code step = Code(gridDim.x) * blockDim.x;
     const std::uint32_t pi = std::uint32_t((TARGET_W - 1) - p);
@@ -285,18 +275,19 @@ __global__ void maskshard_main_block_highorbit_rowdepth_compact_kernel(
         int lo = 0, hi = nb + 1;
         while (lo < hi) {
             const int mid = (lo + hi) >> 1;
-            if (prefix[mid] <= task) lo = mid + 1;
+            if (D_MS_ROW_DEPTH_COMPACT_TASK_PREFIX[mid] <= task) lo = mid + 1;
             else hi = mid;
         }
         const int dbid = lo - 1;
         const FBlock dx = D_F_BLOCK_BLOCKS[dbid];
         const int h = int(dx.he);
-        const Code local = task - prefix[dbid];
-        const std::uint16_t lc = maskshard_compact_low_count(D_F_MASK, h, cap);
+        const Code local = task - D_MS_ROW_DEPTH_COMPACT_TASK_PREFIX[dbid];
+        const std::uint16_t lc = D_MS_ROW_DEPTH_COMPACT_JOB_LOW_COUNT[dbid];
         if (!lc) continue;
 
         const std::uint32_t compact_hr = std::uint32_t(local / Code(lc));
-        const std::uint32_t compact_lr = std::uint32_t(local - Code(compact_hr) * lc);
+        const std::uint32_t compact_lr =
+            std::uint32_t(local - Code(compact_hr) * Code(lc));
         const std::uint32_t hi_base = D_F_HIGH_ALL_OFF[h];
         const std::uint32_t lo_base = D_F_LOW_MASK_OFF[
             std::size_t(D_F_MASK) * S + h];
