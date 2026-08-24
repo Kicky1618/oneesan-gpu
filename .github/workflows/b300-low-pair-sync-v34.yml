@@ -1,0 +1,81 @@
+name: B300 LOW pair sync v0.34 research
+
+on:
+  push:
+    paths:
+      - 'src/cpp/probes/factor_low_pair_sync.cpp'
+      - 'src/cuda/b300/maskshard_low_pair_sync.cuh'
+      - 'src/cuda/b300/maskshard_lowclosure_kernel.cuh'
+      - 'src/cuda/b300/oneesan_b300_maskshard_v033_loworbit_warpdecode_fullcap.cu'
+      - 'src/cuda/b300/oneesan_b300_maskshard_v034_low_pair_sync.cu'
+      - 'scripts/bench/b300_maskshard_low_pair_sync_ab.py'
+      - '.github/workflows/b300-low-pair-sync-v34.yml'
+  pull_request:
+    paths:
+      - 'src/cpp/probes/factor_low_pair_sync.cpp'
+      - 'src/cuda/b300/maskshard_low_pair_sync.cuh'
+      - 'src/cuda/b300/maskshard_lowclosure_kernel.cuh'
+      - 'src/cuda/b300/oneesan_b300_maskshard_v033_loworbit_warpdecode_fullcap.cu'
+      - 'src/cuda/b300/oneesan_b300_maskshard_v034_low_pair_sync.cu'
+      - 'scripts/bench/b300_maskshard_low_pair_sync_ab.py'
+      - '.github/workflows/b300-low-pair-sync-v34.yml'
+  workflow_dispatch:
+
+jobs:
+  model:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build LOW pair sync model
+        run: |
+          mkdir -p build
+          g++ -O3 -std=c++17 -Wall -Wextra -Werror \
+            src/cpp/probes/factor_low_pair_sync.cpp \
+            -o build/factor_low_pair_sync
+      - name: Verify n=27 sync-count regression
+        run: build/factor_low_pair_sync 28 14
+
+  cuda-compile:
+    runs-on: ubuntu-latest
+    container: nvidia/cuda:12.8.1-devel-ubuntu22.04
+    strategy:
+      matrix:
+        include:
+          - width: 22
+            low: 11
+            high: 10
+          - width: 28
+            low: 14
+            high: 13
+    steps:
+      - uses: actions/checkout@v4
+      - name: Compile v0.33 full-cap warp LOW orbit decode
+        shell: bash
+        run: |
+          mkdir -p build
+          nvcc -O3 -std=c++17 -lineinfo -arch=sm_80 \
+            -DTARGET_W=${{ matrix.width }} \
+            -DLOW_LUT_K=${{ matrix.low }} \
+            -DHIGH_LUT_K=${{ matrix.high }} \
+            src/cuda/b300/oneesan_b300_maskshard_v033_loworbit_warpdecode_fullcap.cu \
+            -o build/b300_maskshard_v33_w${{ matrix.width }}
+      - name: Compile v0.34 LOW pair sync
+        shell: bash
+        run: |
+          nvcc -O3 -std=c++17 -lineinfo -arch=sm_80 \
+            -DTARGET_W=${{ matrix.width }} \
+            -DLOW_LUT_K=${{ matrix.low }} \
+            -DHIGH_LUT_K=${{ matrix.high }} \
+            src/cuda/b300/oneesan_b300_maskshard_v034_low_pair_sync.cu \
+            -o build/b300_maskshard_v34_w${{ matrix.width }}
+
+  ab-driver:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Syntax-check v0.33-v0.34 A/B
+        run: python3 -m py_compile scripts/bench/b300_maskshard_low_pair_sync_ab.py
+      - name: Dry-run v0.33-v0.34 comparison
+        run: |
+          python3 scripts/bench/b300_maskshard_low_pair_sync_ab.py \
+            --dry-run --n 27 --gpus 8 --threads 256 --modulus 4294967291
