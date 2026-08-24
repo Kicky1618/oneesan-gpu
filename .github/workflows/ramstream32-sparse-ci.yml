@@ -72,26 +72,40 @@ jobs:
           build/ramstream32_hybrid_sparse_w${{ matrix.width }} \
             ${{ matrix.n }} 4294967291 12288 4 --plan-only \
             | tee /tmp/hybrid-plan.txt
-          grep -Fq 'backend=gridfp-ramstream32-factorized-hybrid-sparse-v5.16-plan' \
+          grep -Fq 'backend=gridfp-ramstream32-factorized-hybrid-sparse-v5.17-plan' \
             /tmp/hybrid-plan.txt
           grep -Fq 'cpu_high_persistent_workers=1' /tmp/hybrid-plan.txt
           grep -Fq 'cpu_high_async_overlap=1' /tmp/hybrid-plan.txt
           grep -Fq 'cpu_low_persistent_workers=1' /tmp/hybrid-plan.txt
           grep -Fq 'cpu_low_pointer_workspace=stack' /tmp/hybrid-plan.txt
+          grep -Fq 'cpu_low_schedule=dynamic' /tmp/hybrid-plan.txt
           grep -Fq 'cpu_high_affinity=default' /tmp/hybrid-plan.txt
           grep -Fq 'cpu_low_affinity=default' /tmp/hybrid-plan.txt
           grep -Fq 'numa_sample_mib=0' /tmp/hybrid-plan.txt
-      - name: Validate explicit affinity and NUMA sampling provenance
+      - name: Validate sticky affinity and NUMA sampling provenance
         if: matrix.width == 22
         shell: bash
         run: |
-          CPU_HIGH_CPU_LIST=0 CPU_LOW_CPU_LIST=1 RAMSTREAM_NUMA_SAMPLE_MIB=64 \
+          CPU_HIGH_CPU_LIST=0 CPU_LOW_CPU_LIST=1 CPU_LOW_SCHEDULE=sticky \
+          RAMSTREAM_NUMA_SAMPLE_MIB=64 \
             build/ramstream32_hybrid_sparse_w22 \
             21 4294967291 12288 4 --plan-only \
             | tee /tmp/hybrid-affinity-plan.txt
           grep -Fq 'cpu_high_affinity=explicit' /tmp/hybrid-affinity-plan.txt
           grep -Fq 'cpu_low_affinity=explicit' /tmp/hybrid-affinity-plan.txt
+          grep -Fq 'cpu_low_schedule=sticky' /tmp/hybrid-affinity-plan.txt
           grep -Fq 'numa_sample_mib=64' /tmp/hybrid-affinity-plan.txt
+      - name: Reject invalid LOW schedule
+        if: matrix.width == 22
+        shell: bash
+        run: |
+          if CPU_LOW_SCHEDULE=not-a-mode \
+            build/ramstream32_hybrid_sparse_w22 \
+            21 4294967291 12288 4 --plan-only >/tmp/bad-low-schedule.txt 2>&1; then
+            echo 'invalid CPU_LOW_SCHEDULE unexpectedly succeeded' >&2
+            exit 1
+          fi
+          grep -Fq 'CPU_LOW_SCHEDULE must be dynamic or sticky' /tmp/bad-low-schedule.txt
       - name: Validate n27 CPU HIGH scratch partition plan
         if: matrix.width == 28
         shell: bash
@@ -109,7 +123,7 @@ jobs:
           CPU_HIGH_MAX_MIB=256 CPU_HIGH_MODE=direct \
             build/ramstream32_hybrid_sparse_w28 \
             27 4294967291 12288 4 --plan-only 2>&1 | tee /tmp/high-offload-direct.txt
-          grep -Fq 'backend=gridfp-ramstream32-factorized-hybrid-sparse-v5.16-plan' \
+          grep -Fq 'backend=gridfp-ramstream32-factorized-hybrid-sparse-v5.17-plan' \
             /tmp/high-offload-direct.txt
           grep -Fq 'cpu_high_groups=12911' /tmp/high-offload-direct.txt
           grep -Fq 'cpu_high_mode=direct' /tmp/high-offload-direct.txt
@@ -118,6 +132,7 @@ jobs:
           grep -Fq 'cpu_high_async_overlap=1' /tmp/high-offload-direct.txt
           grep -Fq 'cpu_low_persistent_workers=1' /tmp/high-offload-direct.txt
           grep -Fq 'cpu_low_pointer_workspace=stack' /tmp/high-offload-direct.txt
+          grep -Fq 'cpu_low_schedule=dynamic' /tmp/high-offload-direct.txt
           grep -Fq 'nn_orbit_ops=' /tmp/high-offload-direct.txt
           grep -Fq 'nrnl_orbit_ops=' /tmp/high-offload-direct.txt
           grep -Fq 'block_closure_ops=' /tmp/high-offload-direct.txt
@@ -167,7 +182,9 @@ jobs:
             -o build/ramstream32_cpu_low_selftest
           build/ramstream32_cpu_low_selftest 2>&1 | tee /tmp/cpu-low-selftest.txt
           grep -Fq 'cpu_low_sparse_persistent workers=' /tmp/cpu-low-selftest.txt
+          grep -Fq 'cpu_low_sticky_schedule jobs=' /tmp/cpu-low-selftest.txt
           grep -Fq 'sparse_persistent_groups=' /tmp/cpu-low-selftest.txt
+          grep -Fq 'sparse_sticky_groups=' /tmp/cpu-low-selftest.txt
           grep -Fq 'cpu_high_direct_schedule jobs=' /tmp/cpu-low-selftest.txt
           grep -Fq 'persistent=1' /tmp/cpu-low-selftest.txt
           grep -Fq 'cpu_high_persistent_groups=' /tmp/cpu-low-selftest.txt
