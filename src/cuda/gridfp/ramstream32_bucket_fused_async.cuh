@@ -14,13 +14,6 @@ static void bucket_launch_low_fused(
     }
 }
 
-// Temporary source-compatibility alias for the first B300 driver revision.
-static void bucket_launch_low_fused_v2(
-    const StorageLayout&layout,int threads=256,int grid_x=16,int grid_y=8
-){
-    bucket_launch_low_fused(layout,threads,grid_x,grid_y);
-}
-
 static void bucket_launch_high_fused(
     const StorageLayout&layout,int threads=256,int grid_x=16,int grid_y=8
 ){
