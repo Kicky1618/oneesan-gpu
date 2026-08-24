@@ -152,4 +152,5 @@ __global__ void maskshard_main_lowdesc_closure_cols_inplace_kernel(
 
 #ifdef MASKSHARD_LOW_ORBIT_ROW_DEPTH_COMPACT
 #include "maskshard_loworbit_rowdepth_compact.cuh"
+#include "maskshard_loworbit_rowdepth_compact_host.cuh"
 #endif
