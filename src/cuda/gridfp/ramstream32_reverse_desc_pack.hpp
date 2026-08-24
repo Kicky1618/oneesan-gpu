@@ -15,46 +15,32 @@
 // Hence target storage for CROSS is recoverable from p and no extra descriptor
 // bit is needed. We can reuse the existing 32-bit LOW/HIGH encodings.
 
-static void validate_reverse_desc_cross_targets(
-    const ReverseLowDescHost&low,const ReverseHighDescHost&high
-){
+static void validate_reverse_low_cross_targets(const ReverseLowDescHost&low){
     if(low.cross_main){
         std::cerr<<"reverse LOW unexpectedly has CROSS_MAIN count="<<low.cross_main<<'\n';
         std::exit(260);
     }
-    for(int p=1;p<=LOW_LUT_K;++p){
-        uint32_t pi=uint32_t(p-1);
-        for(uint32_t bid=0;bid<uint32_t(low.main_base.size());++bid){
-            uint32_t width=0;
-            if(bid+1<low.main_base.size())width=low.main_base[bid+1]-low.main_base[bid];
-            else if(low.main_total>=low.main_base[bid])width=low.main_total-low.main_base[bid];
-            for(uint32_t r=0;r<width;++r){
-                const ReverseDesc&x=low.main_desc[size_t(pi)*low.main_total+low.main_base[bid]+r];
-                if(x.kind==REVDESC_CROSS_MAIN)std::exit(261);
-            }
-        }
-    }
+    for(const ReverseDesc&x:low.main_desc)if(x.kind==REVDESC_CROSS_MAIN)std::exit(261);
+}
+
+static void validate_reverse_high_cross_targets(const ReverseHighDescHost&high){
     for(int p=LOW_LUT_K+1;p<TARGET_W;++p){
         uint32_t pi=uint32_t(p-(LOW_LUT_K+1));
-        for(uint32_t bid=0;bid<uint32_t(high.main_base.size());++bid){
-            uint32_t width=0;
-            if(bid+1<high.main_base.size())width=high.main_base[bid+1]-high.main_base[bid];
-            else if(high.main_total>=high.main_base[bid])width=high.main_total-high.main_base[bid];
-            for(uint32_t r=0;r<width;++r){
-                const ReverseDesc&x=high.main_desc[size_t(pi)*high.main_total+high.main_base[bid]+r];
-                if(x.kind==REVDESC_CROSS_MAIN&&p!=TARGET_W-1){
-                    std::cerr<<"reverse HIGH CROSS_MAIN away from boundary p="<<p<<'\n';std::exit(262);
-                }
-                if(x.kind==REVDESC_CROSS_BLOCK&&p==TARGET_W-1){
-                    std::cerr<<"reverse HIGH CROSS_BLOCK at main-return boundary\n";std::exit(263);
-                }
+        size_t a=size_t(pi)*high.main_total,b=a+high.main_total;
+        for(size_t i=a;i<b;++i){
+            const ReverseDesc&x=high.main_desc[i];
+            if(x.kind==REVDESC_CROSS_MAIN&&p!=TARGET_W-1){
+                std::cerr<<"reverse HIGH CROSS_MAIN away from boundary p="<<p<<'\n';std::exit(262);
+            }
+            if(x.kind==REVDESC_CROSS_BLOCK&&p==TARGET_W-1){
+                std::cerr<<"reverse HIGH CROSS_BLOCK at main-return boundary\n";std::exit(263);
             }
         }
     }
 }
 
 static LowDescHost pack_reverse_low_descriptors(const ReverseLowDescHost&r){
-    validate_reverse_desc_cross_targets(r,ReverseHighDescHost{});
+    validate_reverse_low_cross_targets(r);
     LowDescHost out;
     out.main_base=r.main_base;out.block_base=r.block_base;
     out.main_total=r.main_total;out.block_total=r.block_total;
@@ -76,24 +62,12 @@ static LowDescHost pack_reverse_low_descriptors(const ReverseLowDescHost&r){
 }
 
 static HighDescHost pack_reverse_high_descriptors(const ReverseHighDescHost&r){
+    validate_reverse_high_cross_targets(r);
     HighDescHost out;
     out.main_base=r.main_base;out.block_base=r.block_base;
     out.main_total=r.main_total;out.block_total=r.block_total;
     out.main_observations=r.observations;out.main_cross=r.cross_main+r.cross_block;out.main_invalid=r.invalid;
     out.main_desc.resize(r.main_desc.size());out.block_desc.resize(r.block_desc.size());
-    for(int p=LOW_LUT_K+1;p<TARGET_W;++p){
-        uint32_t pi=uint32_t(p-(LOW_LUT_K+1));
-        for(uint32_t bid=0;bid<uint32_t(r.main_base.size());++bid){
-            uint32_t width=0;
-            if(bid+1<r.main_base.size())width=r.main_base[bid+1]-r.main_base[bid];
-            else if(r.main_total>=r.main_base[bid])width=r.main_total-r.main_base[bid];
-            for(uint32_t a=0;a<width;++a){
-                const ReverseDesc&x=r.main_desc[size_t(pi)*r.main_total+r.main_base[bid]+a];
-                if(x.kind==REVDESC_CROSS_MAIN&&p!=TARGET_W-1)std::exit(265);
-                if(x.kind==REVDESC_CROSS_BLOCK&&p==TARGET_W-1)std::exit(266);
-            }
-        }
-    }
     auto pack=[](const ReverseDesc&x)->uint32_t{
         switch(x.kind){
         case REVDESC_INVALID:return highdesc_pack(HIGHDESC_INVALID,0,0);
