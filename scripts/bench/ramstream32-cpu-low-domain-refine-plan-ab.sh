@@ -129,8 +129,33 @@ for key in sorted(rows):
     c40, c41 = int(a['cross_domain_4k']), int(b['cross_domain_4k'])
     c20, c21 = int(a['cross_domain_2m']), int(b['cross_domain_2m'])
     b0, b1 = float(a['domain_build_s']), float(b['domain_build_s'])
+
+    if m1 > m0:
+        raise SystemExit(
+            f'refinement max-worker regression workers={key[0]} '
+            f'domain_size={key[1]} refine0={m0} refine1={m1}'
+        )
+
+    balance_better = m1 < m0
+    pages4_better = c41 < c40
+    pages2_better = c21 < c20
+    pages_worse = c41 > c40 or c21 > c20
+    pages_equal = c41 == c40 and c21 == c20
+
+    if not balance_better and pages_equal:
+        classification = 'no_change'
+    elif balance_better and not pages_worse:
+        classification = 'dominates'
+    elif balance_better and pages_worse:
+        classification = 'balance_page_tradeoff'
+    elif not balance_better and (pages4_better or pages2_better) and not pages_worse:
+        classification = 'page_only_improvement'
+    else:
+        classification = 'page_regression_without_balance_gain'
+
     print(
         f'comparison workers={key[0]} domain_size={key[1]} '
+        f'classification={classification} '
         f'refine0_imbalance={i0:.9f} refine1_imbalance={i1:.9f} '
         f'imbalance_speedup={(i0/i1 if i1 else 0.0):.9f}x '
         f'max_worker_cells_saved={m0-m1} '
