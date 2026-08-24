@@ -49,14 +49,42 @@ jobs:
           head -n1 /tmp/low-plan.tsv | grep -Fq 'contiguous_imbalance='
           head -n1 /tmp/low-plan.tsv | grep -Fq 'contiguous_cross_worker_pages_4k='
           head -n1 /tmp/low-plan.tsv | grep -Fq 'contiguous_cross_worker_pages_2m='
-          grep -Fq $'worker\tjobs\tcells\tfraction\tcontiguous_cells\tcontiguous_fraction' \
+          grep -Fq $'worker\tjobs\tcells\tfraction\tcontiguous_cells\tcontiguous_fraction\tdomain' \
             /tmp/low-plan.tsv
           test "$(tail -n +3 /tmp/low-plan.tsv | wc -l)" -eq 2
           grep -Fq 'cpu_low_sticky_schedule jobs=' /tmp/low-plan.log
+      - name: Validate domain-cut model
+        shell: bash
+        run: |
+          build/ramstream32_cpu_low_schedule_plan 9 2 --domain-size 1 \
+            >/tmp/low-domain1.txt 2>/tmp/low-domain1.log
+          python3 - <<'PY'
+          fields = {}
+          for token in open('/tmp/low-domain1.txt').readline().split():
+              if '=' in token:
+                  k, v = token.split('=', 1)
+                  fields[k] = v
+          assert fields['domain_size'] == '1'
+          assert fields['domains'] == '2'
+          assert fields['cross_domain_pages_4k'] == fields['cross_worker_pages_4k']
+          assert fields['cross_domain_pages_2m'] == fields['cross_worker_pages_2m']
+          assert fields['contiguous_cross_domain_pages_4k'] == fields['contiguous_cross_worker_pages_4k']
+          assert fields['contiguous_cross_domain_pages_2m'] == fields['contiguous_cross_worker_pages_2m']
+          PY
+
+          build/ramstream32_cpu_low_schedule_plan 9 2 --domain-size 2 \
+            >/tmp/low-domain2.txt 2>/tmp/low-domain2.log
+          grep -Fq 'domain_size=2 domains=1' /tmp/low-domain2.txt
+          grep -Fq 'cross_domain_pages_4k=0' /tmp/low-domain2.txt
+          grep -Fq 'cross_domain_pages_2m=0' /tmp/low-domain2.txt
+          grep -Fq 'contiguous_cross_domain_pages_4k=0' /tmp/low-domain2.txt
+          grep -Fq 'contiguous_cross_domain_pages_2m=0' /tmp/low-domain2.txt
       - name: Check documentation
         shell: bash
         run: |
           grep -Fq 'ramstream32_cpu_low_schedule_plan_n27' docs/ramstream32-cpu-low-scheduling.md
           grep -Fq -- '--workers' docs/ramstream32-cpu-low-scheduling.md
+          grep -Fq -- '--domain-size' docs/ramstream32-cpu-low-scheduling.md
           grep -Fq 'cross_worker_pages_4k' docs/ramstream32-cpu-low-scheduling.md
+          grep -Fq 'cross_domain_pages_4k' docs/ramstream32-cpu-low-scheduling.md
           grep -Fq 'contiguous_imbalance' docs/ramstream32-cpu-low-scheduling.md
