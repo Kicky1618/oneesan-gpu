@@ -8,7 +8,7 @@ on:
       - 'src/cuda/b300/maskshard_lowclosure_rowdepth_compact.cuh'
       - 'src/cuda/b300/maskshard_lowclosure_kernel.cuh'
       - 'src/cuda/b300/oneesan_cuda_gridfp_b300_hbm32_maskshard_fullorbit_batch.cu'
-      - 'src/cuda/b300/oneesan_cuda_gridfp_b300_hbm32_maskshard_blockorbit_compactaux_fullclosure_highrowpack29_lazyblockinit_rowdepthexact_tightlaunch_rowdepthorbit_rowcaplaunch_exacttasks_highclosurerowdepth_tasklaunch_exactclosuretasks_exactclosurelaunch_lowclosurerowdepth_exacttasks_batch_guarded.cu'
+      - 'src/cuda/b300/oneesan_b300_maskshard_v026_lowclosure_exacttasks.cu'
       - 'src/cuda/b300/oneesan_b300_maskshard_v027_lowclosure_exactlaunch.cu'
       - 'scripts/bench/b300_maskshard_lowclosure_exactlaunch_ab.py'
       - '.github/workflows/b300-lowclosure-exactlaunch-v27.yml'
@@ -19,7 +19,7 @@ on:
       - 'src/cuda/b300/maskshard_lowclosure_rowdepth_compact.cuh'
       - 'src/cuda/b300/maskshard_lowclosure_kernel.cuh'
       - 'src/cuda/b300/oneesan_cuda_gridfp_b300_hbm32_maskshard_fullorbit_batch.cu'
-      - 'src/cuda/b300/oneesan_cuda_gridfp_b300_hbm32_maskshard_blockorbit_compactaux_fullclosure_highrowpack29_lazyblockinit_rowdepthexact_tightlaunch_rowdepthorbit_rowcaplaunch_exacttasks_highclosurerowdepth_tasklaunch_exactclosuretasks_exactclosurelaunch_lowclosurerowdepth_exacttasks_batch_guarded.cu'
+      - 'src/cuda/b300/oneesan_b300_maskshard_v026_lowclosure_exacttasks.cu'
       - 'src/cuda/b300/oneesan_b300_maskshard_v027_lowclosure_exactlaunch.cu'
       - 'scripts/bench/b300_maskshard_lowclosure_exactlaunch_ab.py'
       - '.github/workflows/b300-lowclosure-exactlaunch-v27.yml'
@@ -61,7 +61,7 @@ jobs:
             -DTARGET_W=${{ matrix.width }} \
             -DLOW_LUT_K=${{ matrix.low }} \
             -DHIGH_LUT_K=${{ matrix.high }} \
-            src/cuda/b300/oneesan_cuda_gridfp_b300_hbm32_maskshard_blockorbit_compactaux_fullclosure_highrowpack29_lazyblockinit_rowdepthexact_tightlaunch_rowdepthorbit_rowcaplaunch_exacttasks_highclosurerowdepth_tasklaunch_exactclosuretasks_exactclosurelaunch_lowclosurerowdepth_exacttasks_batch_guarded.cu \
+            src/cuda/b300/oneesan_b300_maskshard_v026_lowclosure_exacttasks.cu \
             -o build/b300_maskshard_v26_w${{ matrix.width }}
       - name: Compile v0.27 exact LOW launch
         shell: bash
