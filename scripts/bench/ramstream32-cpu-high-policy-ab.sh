@@ -16,6 +16,7 @@ CPU_HIGH_WORKERS="${CPU_HIGH_WORKERS:-$CPU_WORKERS}"
 CPU_HIGH_OVERLAP="${CPU_HIGH_OVERLAP:-0}"
 CPU_HIGH_CPU_LIST="${CPU_HIGH_CPU_LIST:-}"
 CPU_LOW_CPU_LIST="${CPU_LOW_CPU_LIST:-}"
+CPU_LOW_SCHEDULE="${CPU_LOW_SCHEDULE:-dynamic}"
 THRESHOLD_MIB="${THRESHOLD_MIB:-256}"
 GROUPS_FILE="${GROUPS_FILE:-}"
 REPEATS="${REPEATS:-2}"
@@ -41,6 +42,10 @@ if (( N < 2 || N > 27 || GPU_TARGET_MIB <= 0 || CPU_WORKERS <= 0 || CPU_HIGH_WOR
 fi
 if [[ "$CPU_HIGH_OVERLAP" != 0 && "$CPU_HIGH_OVERLAP" != 1 ]]; then
   echo "CPU_HIGH_OVERLAP must be 0 or 1" >&2
+  exit 2
+fi
+if [[ "$CPU_LOW_SCHEDULE" != dynamic && "$CPU_LOW_SCHEDULE" != sticky ]]; then
+  echo "CPU_LOW_SCHEDULE must be dynamic or sticky" >&2
   exit 2
 fi
 if [[ -z "$EXPECTED_RESIDUE" && "$N:$MODULUS" == "21:4294967291" ]]; then
@@ -87,6 +92,7 @@ cpu_high_workers=$CPU_HIGH_WORKERS
 cpu_high_overlap=$CPU_HIGH_OVERLAP
 cpu_high_cpu_list=${CPU_HIGH_CPU_LIST:-none}
 cpu_low_cpu_list=${CPU_LOW_CPU_LIST:-none}
+cpu_low_schedule=$CPU_LOW_SCHEDULE
 threshold_mib=$THRESHOLD_MIB
 groups_file=$GROUPS_FILE
 groups_file_sha256=$(file_sha256 "$GROUPS_FILE")
@@ -106,12 +112,14 @@ run_one() {
       CPU_HIGH_GROUPS_FILE= CPU_HIGH_WORKERS="$CPU_HIGH_WORKERS" \
       CPU_HIGH_OVERLAP="$CPU_HIGH_OVERLAP" \
       CPU_HIGH_CPU_LIST="$CPU_HIGH_CPU_LIST" CPU_LOW_CPU_LIST="$CPU_LOW_CPU_LIST" \
+      CPU_LOW_SCHEDULE="$CPU_LOW_SCHEDULE" \
       "$bin" "$N" "$MODULUS" "$GPU_TARGET_MIB" "$CPU_WORKERS" | tail -n1)"
   else
     line="$(CPU_HIGH_MODE=direct CPU_HIGH_MAX_MIB=0 \
       CPU_HIGH_GROUPS_FILE="$GROUPS_FILE" CPU_HIGH_WORKERS="$CPU_HIGH_WORKERS" \
       CPU_HIGH_OVERLAP="$CPU_HIGH_OVERLAP" \
       CPU_HIGH_CPU_LIST="$CPU_HIGH_CPU_LIST" CPU_LOW_CPU_LIST="$CPU_LOW_CPU_LIST" \
+      CPU_LOW_SCHEDULE="$CPU_LOW_SCHEDULE" \
       "$bin" "$N" "$MODULUS" "$GPU_TARGET_MIB" "$CPU_WORKERS" | tail -n1)"
   fi
   residue="$(field "$line" residue)"
@@ -135,7 +143,7 @@ for ((r=1; r<=REPEATS; ++r)); do
     order=policy-first
     variants=(policy threshold)
   fi
-  echo "repeat $r/$REPEATS ($order)" >&2
+  echo "repeat $r/$REPEATS low_schedule=$CPU_LOW_SCHEDULE ($order)" >&2
   for variant in "${variants[@]}"; do
     echo "  $variant" >&2
     residue="$(run_one "$r" "$order" "$variant")"
