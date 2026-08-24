@@ -27,11 +27,15 @@ Run the samples on the actual machine:
 N=27 \
 MANIFEST=work/high-stream-design/manifest.tsv \
 CPU_HIGH_CPU_LIST='0-31' \
+CPU_LOW_CPU_LIST='32-63' \
+CPU_LOW_SCHEDULE=contiguous \
 CPU_HIGH_WORKERS=32 \
 CPU_HIGH_OVERLAP=0 \
 REPEATS=2 \
 bash scripts/bench/ramstream32-cpu-high-stream-calibration.sh
 ```
+
+`CPU_LOW_SCHEDULE` accepts `dynamic`, `sticky`, or `contiguous` and defaults to `dynamic`. The harness explicitly propagates and records it. Keep the LOW schedule and LOW affinity fixed across all calibration samples: even when `CPU_HIGH_OVERLAP=0`, the LOW pass shares the same authoritative RAM and contributes to whole-run thermal/cache/NUMA state; under overlap or repeated runs those effects can change the apparent CPU HIGH coefficients.
 
 Odd repeats execute samples in manifest order and even repeats reverse the order. Every run must produce the same residue. The optional `validation-all.groups` policy is run once after the calibration samples.
 
@@ -69,4 +73,4 @@ The geometric mean of positive stream coefficients is used as the common referen
 
 `validation-all.groups` is a useful holdout. Single-group calibration identifies stream ratios well, but its fixed-cost term also absorbs per-row wake/synchronization cost. The multi-group validation row exposes whether that fixed cost scales per group as assumed. Large holdout error means the model needs a separate per-row term or a different calibration design before the weights should be fed back into the production planner.
 
-For `CPU_HIGH_OVERLAP=1`, repeat the calibration under overlap rather than reusing non-overlap weights: System-RAM contention can change relative stream costs, especially CROSS gathers.
+For `CPU_HIGH_OVERLAP=1`, repeat the calibration under overlap rather than reusing non-overlap weights: System-RAM contention can change relative stream costs, especially CROSS gathers. LOW schedule, affinity, CPU frequency policy, and NUMA conditions are part of that calibrated contention regime and should be kept with the resulting coefficients.
