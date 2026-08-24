@@ -140,6 +140,8 @@ int main(int argc, char** argv) {
     bool cpu_high_file_policy = cpu_high_groups_file && *cpu_high_groups_file;
     bool cpu_high_explicit_affinity = env_nonempty("CPU_HIGH_CPU_LIST");
     bool cpu_low_explicit_affinity = env_nonempty("CPU_LOW_CPU_LIST");
+    CpuLowScheduleMode cpu_low_schedule_mode = cpu_low_schedule_mode_from_env();
+    const char* cpu_low_schedule = cpu_low_schedule_name(cpu_low_schedule_mode);
     const char* cpu_high_mode_env = std::getenv("CPU_HIGH_MODE");
     bool cpu_high_direct_mode = cpu_high_mode_env
         && std::strcmp(cpu_high_mode_env, "direct") == 0;
@@ -273,7 +275,7 @@ int main(int argc, char** argv) {
 
     if (plan_only) {
         std::cout
-            << "backend=gridfp-ramstream32-factorized-hybrid-sparse-v5.16-plan"
+            << "backend=gridfp-ramstream32-factorized-hybrid-sparse-v5.17-plan"
             << " n=" << n
             << " gpu_high_desc_mib=" << highdesc_mib
             << " gpu_mask_mib=" << mask_mib
@@ -302,6 +304,7 @@ int main(int argc, char** argv) {
             << " cpu_high_async_overlap=1"
             << " cpu_low_persistent_workers=1"
             << " cpu_low_pointer_workspace=stack"
+            << " cpu_low_schedule=" << cpu_low_schedule
             << " cpu_high_affinity=" << (cpu_high_explicit_affinity ? "explicit" : "default")
             << " cpu_low_affinity=" << (cpu_low_explicit_affinity ? "explicit" : "default")
             << " numa_sample_mib=" << numa_sample_mib
@@ -344,7 +347,7 @@ int main(int argc, char** argv) {
     main_auth.ptr[init_rank]=1;
 
     Direct2DCtx gpu; gpu.init(mod);
-    CpuLowSparsePersistentPool cpu_low(cpu_workers);
+    CpuLowSparsePersistentPool cpu_low(cpu_workers, cpu_low_schedule_mode);
     CpuHighPool cpu_high_scratch(cpu_high_workers);
     CpuHighDirectPersistentPool cpu_high_direct(cpu_high_workers);
     int gpu_threads=256;
@@ -422,7 +425,7 @@ int main(int argc, char** argv) {
         : double(cpu_high_scratch.peak_scratch_bytes())/double(1<<20);
 
     std::cout
-        << "backend=gridfp-ramstream32-factorized-hybrid-sparse-v5.16"
+        << "backend=gridfp-ramstream32-factorized-hybrid-sparse-v5.17"
         << " n="<<n<<" residue="<<answer<<" modulus="<<mod
         << " gpu_high_desc_mib="<<highdesc_mib<<" gpu_mask_mib="<<mask_mib
         << " cpu_sparse_nn_orbit_mib="<<sparse_nn_orbit_mib
@@ -447,11 +450,13 @@ int main(int argc, char** argv) {
         << " cpu_high_async_overlap=1"
         << " cpu_low_persistent_workers=1"
         << " cpu_low_pointer_workspace=stack"
+        << " cpu_low_schedule=" << cpu_low_schedule
         << " cpu_high_affinity=" << (cpu_high_explicit_affinity ? "explicit" : "default")
         << " cpu_low_affinity=" << (cpu_low_explicit_affinity ? "explicit" : "default")
         << " numa_sample_mib=" << numa_sample_mib
         << " cpu_high_worker_start_s="<<cpu_high_direct.worker_start_s
         << " cpu_low_worker_start_s="<<cpu_low.worker_start_s
+        << " cpu_low_schedule_build_s="<<cpu_low.schedule_build_s
         << " cpu_high_selection_hash="<<selection_hash
         << " cpu_high_max_mib="<<cpu_high_max_mib
         << " cpu_high_peak_worker_scratch_mib="<<cpu_high_peak_scratch_mib
