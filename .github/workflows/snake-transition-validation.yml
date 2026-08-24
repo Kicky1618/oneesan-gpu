@@ -1,0 +1,34 @@
+name: gridfp snake transition validation
+
+on:
+  push:
+    paths:
+      - 'src/common/gridfp_transition.hpp'
+      - 'src/common/gridfp_transition_reverse.hpp'
+      - 'src/cpp/probes/gridfp_snake_equivalence.cpp'
+      - '.github/workflows/snake-transition-validation.yml'
+  pull_request:
+    paths:
+      - 'src/common/gridfp_transition.hpp'
+      - 'src/common/gridfp_transition_reverse.hpp'
+      - 'src/cpp/probes/gridfp_snake_equivalence.cpp'
+      - '.github/workflows/snake-transition-validation.yml'
+  workflow_dispatch:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build snake equivalence probe
+        shell: bash
+        run: |
+          mkdir -p build
+          g++ -O3 -std=c++17 src/cpp/probes/gridfp_snake_equivalence.cpp \
+            -o build/gridfp_snake_equivalence
+      - name: Compare forward and snake rows through n=10
+        shell: bash
+        run: |
+          build/gridfp_snake_equivalence 10 | tee /tmp/snake.txt
+          grep -Fq 'gridfp-snake-equivalence OK max_n=10' /tmp/snake.txt
+          grep -Fq 'snake-row-equivalence n=7 residue=3381038999' /tmp/snake.txt
