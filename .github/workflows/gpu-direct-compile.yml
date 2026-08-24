@@ -44,12 +44,12 @@ jobs:
       - name: Validate direct work model
         shell: bash
         run: |
+          mkdir -p build
           g++ -O3 -std=c++17 src/cpp/probes/gpu_direct_work_model.cpp \
             -o build/gpu_direct_work_model
           build/gpu_direct_work_model 10 11 | tee /tmp/direct-work-n21.txt
           grep -Fq 'main_states=728997192 blocked_states=258215664' /tmp/direct-work-n21.txt
-          grep -Fq 'direct=9886412088' /tmp/direct-work-n21.txt || \
-            grep -Fq 'direct_cells=9886412088' /tmp/direct-work-n21.txt
+          grep -Fq 'direct_cells=9886412088' /tmp/direct-work-n21.txt
           grep -Fq 'direct_iteration_fraction=0.476879454252' /tmp/direct-work-n21.txt
           build/gpu_direct_work_model 13 14 | tee /tmp/direct-work-n27.txt
           grep -Fq 'main_states=385719506620 blocked_states=135015505407' /tmp/direct-work-n27.txt
@@ -58,7 +58,6 @@ jobs:
       - name: Compile W10 GPU direct exhaustive probe
         shell: bash
         run: |
-          mkdir -p build
           nvcc -O3 -std=c++17 -lineinfo -arch=sm_80 \
             -DTARGET_W=10 -DLOW_LUT_K=5 -DHIGH_LUT_K=4 \
             src/cuda/gridfp/probes/ramstream32_gpu_direct_selftest.cu \
