@@ -74,14 +74,65 @@ removable heavy bodies   = 11.2278514457%
 
 This count multiplies the depth-capped W=27 BLOCKED state count by all 13 HIGH
 positions. v0.17 still launches v0.16's full `bd` grid; the saving is in
-FBlock/rank-dependent descriptor, aux, state-memory and arithmetic work after the
-depth predicate.
+descriptor, aux, state-memory and arithmetic work after the depth predicate.
 
 Local semantic validation passed for W=6,8,10,12 with `-Werror`.
 
+## v0.18: cap the BLOCKED launch range by row height
+
+BLOCKED factor blocks are constructed in strictly increasing shared boundary
+height `h=0,1,...,HIGH+1`, and their `[off,end)` ranges are contiguous. Since a
+state whose boundary height exceeds row cap `r` necessarily has full frontier
+depth above `r`, those trailing blocks are unreachable before the kernel runs.
+
+v0.18 adds `MASKSHARD_BLOCK_ORBIT_ROW_CAP_LAUNCH`. During HIGH-job construction
+the host stores the cumulative BLOCKED end after each boundary height and
+asserts the FBlock ordering/contiguity. For zero-based DP row `row`, the orbit
+launch uses only the prefix through height `row+1`:
+
+```text
+orbit_block_n = block_depth_end[min(row+1, HIGH+1)]
+bd_row        = min(65535, ceil(orbit_block_n / threads))
+```
+
+The v0.17 exact per-state predicate remains active inside this prefix, so paths
+that temporarily rise above the row cap and return to a small boundary height
+are still rejected exactly. v0.18 changes launch geometry only; it adds no HBM
+metadata beyond v0.15.
+
+`factor_blockorbit_rowcap_launch.cpp` pins the W=28/LOW14/256-thread model:
+
+```text
+v0.16/v0.17 CTAs = 146,099,016,700 / residue
+v0.18 CTAs        = 139,099,313,353 / residue
+ratio             = 0.952089319250
+reduction          = 4.7910680750%
+```
+
+The summed per-job BLOCKED grid for the first rows is:
+
+```text
+row 1  126,073,708   jobs reduced 16,354 / 16,384
+row 2  247,591,104   jobs reduced 16,172
+row 3  333,369,706   jobs reduced 15,444
+row 4  369,538,839   jobs reduced 13,442
+row 5  394,328,461   jobs reduced 11,440
+row 6  399,112,240   jobs reduced  8,437
+row 7  401,183,738   jobs reduced  5,005
+row 8  401,330,885   jobs reduced  2,002
+row 9  401,370,925   jobs reduced      0
+```
+
+After row 9, the 65,535-CTA launch cap hides the remaining prefix-size
+reduction, so v0.18 no longer changes the grid even though exact row-depth body
+pruning remains useful through later rows.
+
+The model probe passed locally with
+`g++ -O3 -std=c++17 -Wall -Wextra -Werror` and reproduces the pinned totals.
+
 ## A/B commands
 
-v0.15 -> v0.16 isolates launch geometry:
+v0.15 -> v0.16 isolates the BLOCKED-domain launch correction:
 
 ```bash
 python3 scripts/bench/b300_maskshard_tightlaunch_ab.py \
@@ -89,7 +140,7 @@ python3 scripts/bench/b300_maskshard_tightlaunch_ab.py \
   --modulus 4294967291 --vram-reserve-mib 1024
 ```
 
-v0.16 -> v0.17 isolates orbit-body row-depth pruning:
+v0.16 -> v0.17 isolates exact orbit-body row-depth pruning:
 
 ```bash
 python3 scripts/bench/b300_maskshard_rowdepth_orbit_ab.py \
@@ -97,17 +148,24 @@ python3 scripts/bench/b300_maskshard_rowdepth_orbit_ab.py \
   --modulus 4294967291 --vram-reserve-mib 1024
 ```
 
-For both comparisons residues must match exactly. The attribution metric is
+v0.17 -> v0.18 isolates host-side row-capped launch geometry:
+
+```bash
+python3 scripts/bench/b300_maskshard_rowcaplaunch_ab.py \
+  --n 27 --gpus 8 --threads 256 \
+  --modulus 4294967291 --vram-reserve-mib 1024
+```
+
+For all comparisons residues must match exactly. The attribution metric is
 `high_orbit_sum_s`; total `wall_s` decides retention.
 
 ## Next candidate
 
-The BLOCKED FBlocks are ordered by their shared HIGH/LOW boundary height. For
-early rows, blocks whose boundary height already exceeds the row cap form a
-suffix. A future candidate can precompute the per-job prefix end and reduce the
-actual `bd` launch range row-by-row before applying v0.17's exact per-state peak
-filter. This can remove about 6% of dense BLOCKED coordinate traversal in the
-n=27 aggregate model, while exact row-depth pruning still removes about 11.2%
-of the expensive task bodies.
+v0.18 can remove only a contiguous suffix of FBlocks. The remaining gap to the
+v0.17 exact active-body count comes from high-depth paths interleaved inside
+otherwise eligible boundary-height blocks. A stronger launch compaction would
+need row-specific compact BLOCKED task lists or a two-level `(HIGH row, LOW
+column)` active-task representation. That is a larger metadata/indexing change
+and should be modeled against its extra reads before implementation.
 
 Fresh nvcc and real B300x8 full-P2P validation remain required before promotion.
