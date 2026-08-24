@@ -99,7 +99,7 @@ CPU_HIGH_WORKERS=32 \
 
 ## v5.0 CPU/GPU HIGH overlap
 
-CPU and GPU HIGH subsets touch disjoint LOW-occupancy groups, so they can execute concurrently. `CPU_HIGH_OVERLAP=1` runs CPU HIGH on a host thread while the main thread drives the GPU HIGH groups. The LOW pass begins only after both subsets have completed.
+CPU and GPU HIGH subsets touch disjoint LOW-occupancy groups, so they can execute concurrently. `CPU_HIGH_OVERLAP=1` runs CPU HIGH while the main thread drives the GPU HIGH groups. The LOW pass begins only after both subsets have completed.
 
 ```bash
 CPU_HIGH_MAX_MIB=256 \
@@ -203,7 +203,7 @@ CPU_HIGH_WORKERS=32 \
 
 Each direct worker is pinned round-robin to one CPU from the list with `pthread_setaffinity_np`. If the variable is unset, affinity behavior is unchanged. Invalid lists or binding failures abort instead of silently falling back.
 
-The benchmark harness records `cpu_high_cpu_list` in its metadata. The current implementation pins direct workers only; it does not yet impose an `mbind` memory policy on the authoritative arrays.
+The benchmark harness records `cpu_high_cpu_list` in its metadata. The current implementation pins direct HIGH workers only; it does not yet impose an `mbind` memory policy on the authoritative arrays.
 
 ## v5.6 exact-work HIGH scheduling
 
@@ -341,7 +341,66 @@ python3 scripts/tools/plan_cpu_high_groups.py high-cost.tsv \
 
 Empty zero-byte occupancy groups are excluded from affine fitting and planning because the production backend never executes them.
 
-The per-stream CPU weights still default to one. Separate NN, NR/NL, BLOCK, and CROSS weights remain a later hardware-counter fitting experiment.
+## v5.11 persistent CPU HIGH workers
+
+The direct HIGH executor originally created and joined `CPU_HIGH_WORKERS` host threads once per grid row. v5.11 moves the unchanged direct recurrence behind `CpuHighDirectPersistentPool`: workers are created lazily on the first direct HIGH run, optionally bind `CPU_HIGH_CPU_LIST` once, then sleep on a generation condition variable between rows.
+
+The backend reports `cpu_high_persistent_workers=1` and `cpu_high_worker_start_s`. Worker startup is intentionally separate from `cpu_high_wall_s`; the latter measures dispatched HIGH generations rather than repeated thread lifecycle cost.
+
+The W=10 selftest runs the same persistent pool for two consecutive HIGH generations and compares the second result against the exact reference recurrence with the HIGH window applied twice.
+
+## v5.12 direct asynchronous HIGH dispatch
+
+The first overlap implementation still created one coordinator `std::thread` per row to call the CPU HIGH pool while the main thread drove CUDA. The persistent pool now exposes `start_run()` and `wait_run()` directly:
+
+```text
+start persistent CPU HIGH workers
+run GPU HIGH on the main thread
+wait for CPU HIGH generation
+run LOW window
+```
+
+This removes the last per-row coordinator thread from direct overlap. The final worker records CPU HIGH completion time before notifying the main thread, so `cpu_high_wall_s` does not accidentally include time spent waiting for a slower GPU branch. The backend reports `cpu_high_async_overlap=1`.
+
+Scratch HIGH mode retains its older coordinator-thread overlap path because it is a correctness baseline rather than the intended high-performance CPU route.
+
+## v5.13 persistent sparse LOW workers
+
+The sparse LOW executor had the same per-row host-thread lifecycle as the old HIGH executor. `CpuLowSparsePersistentPool` now reuses `CPU_WORKERS` across all rows while leaving `process_cpu_low_group_sparse()` unchanged. Jobs still use the same atomic dynamic queue; only thread construction/destruction is removed.
+
+The backend reports
+
+```text
+cpu_low_persistent_workers=1
+cpu_low_worker_start_s=...
+```
+
+and the W=10 selftest runs the same LOW pool for two consecutive generations, comparing against the exact LOW recurrence applied twice. This separately validates generation wake/sleep reuse instead of relying only on a one-shot result.
+
+After v5.11/v5.13, fitted `cpu_group_overhead_us` should be interpreted as residual per-group scheduling/pointer-setup/topology cost, not repeated host-thread creation. Hardware calibration should therefore be regenerated after these versions rather than reusing coefficients measured on v5.10 or earlier.
+
+## Policy A/B and stream-weight calibration
+
+The generated non-monotone group policy can be compared directly with the best size threshold using alternating order:
+
+```bash
+POLICY_FILE=/path/to/cpu-high.groups \
+THRESHOLD_MIB=256 \
+CPU_HIGH_MODE=direct \
+CPU_HIGH_OVERLAP=1 \
+REPEATS=4 \
+bash scripts/bench/ramstream32-cpu-high-policy-ab.sh
+```
+
+For separate NN/NRNL/BLOCK/CROSS CPU weights, the repository also contains:
+
+```text
+scripts/tools/design_cpu_high_stream_calibration.py
+scripts/bench/ramstream32-cpu-high-stream-calibration.sh
+scripts/tools/fit_cpu_high_stream_weights.py
+```
+
+The design tool chooses topology-diverse groups by greedily maximizing the log determinant of the normalized five-feature Gram matrix (four stream counts plus fixed overhead). The implementation uses a Cholesky log-determinant because the ridge-regularized Gram matrix is symmetric positive definite. The fit tool then performs a non-negative stream-cost fit and emits planner-compatible relative weights plus a holdout prediction error.
 
 ## NUMA page-boundary analysis
 
@@ -397,15 +456,15 @@ Set `COST_PLAN=none` to disable automatic cost-plan generation or provide `COST_
 
 ## Validation
 
-`.github/workflows/ramstream32-sparse-ci.yml` covers W=22/W=28 compilation, normal plans, scratch/direct CPU HIGH plans, all four direct stream classes, explicit group-file selection, affinity parser behavior, exact-work schedule construction, the W=10 exhaustive reference comparison, concurrent disjoint HIGH execution, and the exact group-cost probe including `gpu_state_steps` and `pcie_copy_calls`.
+`.github/workflows/ramstream32-sparse-ci.yml` covers W=22/W=28 compilation, v5.13 plan provenance, scratch/direct CPU HIGH plans, all four direct stream classes, explicit group-file selection, affinity parser behavior, the W=10 exhaustive reference comparison, two-generation persistent LOW and HIGH checks, concurrent disjoint HIGH execution, and the exact group-cost probe including `gpu_state_steps` and `pcie_copy_calls`.
 
 `.github/workflows/ramstream32-bench-script-ci.yml` syntax-checks the sweep/build scripts, compiles the Python tools, validates affine PCIe/CPU/GPU calibration on synthetic data with known throughput/overhead coefficients, checks sequential and overlap-critical-path group planning, and validates the 4 KiB/2 MiB NUMA page-exposure analyzer.
 
 ## Next experiments
 
-The remaining large opportunities are increasingly memory-topology and model-fitting problems:
+The remaining large opportunities are increasingly allocator, memory-topology, and model-fitting problems:
 
-1. use page-exposure results to choose THP, 4 KiB pages, or a coarse socket-level memory policy for CPU-owned slices;
-2. estimate separate NN, NR/NL, BLOCK, and CROSS CPU weights from hardware counters or targeted calibration policies;
-3. compare the generated non-monotone cost policy directly against the best size-threshold policy with alternating A/B runs;
+1. eliminate the per-LOW-group `std::vector<Count*>` pointer-table allocations in `process_cpu_low_group_sparse()`; at n=27 the factor layout has only 45 main and 15 blocked blocks, so fixed/per-worker pointer workspaces can remove hundreds of thousands of small allocations across 28 rows;
+2. add explicit LOW-worker CPU affinity and use page-exposure measurements to decide THP, 4 KiB pages, or a coarse socket-level memory policy;
+3. regenerate targeted NN/NRNL/BLOCK/CROSS weights on the persistent-worker backend and compare the resulting non-monotone policy against the best threshold with the alternating A/B harness;
 4. for multi-GPU B300 nodes, keep the largest HIGH occupancy groups resident across more than one local step when dependencies permit, while CPU handles the long tail of small groups.
