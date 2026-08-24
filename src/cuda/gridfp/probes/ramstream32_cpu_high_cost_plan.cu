@@ -58,7 +58,7 @@ int main(int argc, char** argv) {
 
     std::cout
         << "group\tmask\troundtrip_bytes\tmain_states\tblocked_states"
-        << "\tauthoritative_bytes\tgpu_state_steps"
+        << "\tauthoritative_bytes\tgpu_state_steps\tpcie_copy_calls"
         << "\tpage4k_boundary_upper_bytes\tpage2m_boundary_upper_bytes"
         << "\tnn_cells\tnrnl_cells\tblock_closure_cells\tcross_closure_cells"
         << "\ttotal_cells\n";
@@ -66,6 +66,7 @@ int main(int argc, char** argv) {
     for (uint32_t mask = 0; mask < nmasks; ++mask) {
         unsigned long long main_states = 0;
         unsigned long long blocked_states = 0;
+        unsigned long long pcie_copy_calls = 0;
         unsigned long long page4k_upper = 0;
         unsigned long long page2m_upper = 0;
         unsigned long long nn_cells = 0;
@@ -78,6 +79,7 @@ int main(int argc, char** argv) {
             if (!sb.valid || !sb.rows) continue;
             uint32_t width = factor_count(G_FACTOR.low_mask_off, mask, sb.hs);
             uint32_t col0 = storage.low_mask_begin[size_t(mask) * S + sb.hs];
+            if (width) pcie_copy_calls += 2; // H2D + D2H for this main slice.
             main_states += static_cast<unsigned long long>(sb.rows) * width;
             page4k_upper += boundary_exposure_upper(
                 sb.rows, width, col0, sb.cols, PAGE4K);
@@ -104,6 +106,7 @@ int main(int argc, char** argv) {
             if (!sb.valid || !sb.rows) continue;
             uint32_t width = factor_count(G_FACTOR.low_mask_off, mask, sb.hs);
             uint32_t col0 = storage.low_mask_begin[size_t(mask) * S + sb.hs];
+            if (width) pcie_copy_calls += 2; // H2D + D2H for this blocked slice.
             blocked_states += static_cast<unsigned long long>(sb.rows) * width;
             page4k_upper += boundary_exposure_upper(
                 sb.rows, width, col0, sb.cols, PAGE4K);
@@ -122,6 +125,7 @@ int main(int argc, char** argv) {
         std::cout << group << '\t' << mask << '\t' << roundtrip_bytes
                   << '\t' << main_states << '\t' << blocked_states
                   << '\t' << authoritative_bytes << '\t' << gpu_state_steps
+                  << '\t' << pcie_copy_calls
                   << '\t' << page4k_upper << '\t' << page2m_upper
                   << '\t' << nn_cells << '\t' << nrnl_cells
                   << '\t' << block_cells << '\t' << cross_cells
