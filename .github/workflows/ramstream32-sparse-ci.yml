@@ -77,6 +77,8 @@ jobs:
           grep -Fq 'cpu_high_mode=direct' /tmp/high-offload-direct.txt
           grep -Fq 'nn_orbit_ops=' /tmp/high-offload-direct.txt
           grep -Fq 'nrnl_orbit_ops=' /tmp/high-offload-direct.txt
+          grep -Fq 'block_closure_ops=' /tmp/high-offload-direct.txt
+          grep -Fq 'cross_closure_ops=' /tmp/high-offload-direct.txt
       - name: Validate CPU LOW/HIGH executors against reference
         if: matrix.width == 22
         shell: bash
