@@ -18,6 +18,7 @@ CPU_HIGH_CPU_LIST="${CPU_HIGH_CPU_LIST:-}"
 CPU_LOW_CPU_LIST="${CPU_LOW_CPU_LIST:-}"
 CPU_LOW_SCHEDULE="${CPU_LOW_SCHEDULE:-dynamic}"
 CPU_LOW_DOMAIN_SIZE="${CPU_LOW_DOMAIN_SIZE:-}"
+CPU_LOW_DOMAIN_REFINE="${CPU_LOW_DOMAIN_REFINE:-1}"
 MANIFEST="${MANIFEST:-}"
 REPEATS="${REPEATS:-2}"
 BUILD="${BUILD:-1}"
@@ -35,6 +36,10 @@ if (( N < 2 || N > 27 || GPU_TARGET_MIB <= 0 || CPU_WORKERS <= 0 || CPU_HIGH_WOR
 fi
 if [[ "$CPU_HIGH_OVERLAP" != 0 && "$CPU_HIGH_OVERLAP" != 1 ]]; then
   echo "CPU_HIGH_OVERLAP must be 0 or 1" >&2
+  exit 2
+fi
+if [[ "$CPU_LOW_DOMAIN_REFINE" != 0 && "$CPU_LOW_DOMAIN_REFINE" != 1 ]]; then
+  echo "CPU_LOW_DOMAIN_REFINE must be 0 or 1" >&2
   exit 2
 fi
 case "$CPU_LOW_SCHEDULE" in
@@ -98,6 +103,7 @@ cpu_high_cpu_list=${CPU_HIGH_CPU_LIST:-none}
 cpu_low_cpu_list=${CPU_LOW_CPU_LIST:-none}
 cpu_low_schedule=$CPU_LOW_SCHEDULE
 cpu_low_domain_size=${CPU_LOW_DOMAIN_SIZE:-none}
+cpu_low_domain_refine=$CPU_LOW_DOMAIN_REFINE
 manifest=$MANIFEST
 manifest_sha256=$(file_sha256 "$MANIFEST")
 repeats=$REPEATS
@@ -126,6 +132,7 @@ run_policy() {
     CPU_HIGH_OVERLAP="$CPU_HIGH_OVERLAP" \
     CPU_HIGH_CPU_LIST="$CPU_HIGH_CPU_LIST" CPU_LOW_CPU_LIST="$CPU_LOW_CPU_LIST" \
     CPU_LOW_SCHEDULE="$CPU_LOW_SCHEDULE" CPU_LOW_DOMAIN_SIZE="$CPU_LOW_DOMAIN_SIZE" \
+    CPU_LOW_DOMAIN_REFINE="$CPU_LOW_DOMAIN_REFINE" \
     "$bin" "$N" "$MODULUS" "$GPU_TARGET_MIB" "$CPU_WORKERS" | tail -n1)"
   residue="$(field "$line" residue)"
   got_schedule="$(field "$line" cpu_low_schedule)"
@@ -161,7 +168,7 @@ for ((r=1; r<=REPEATS; ++r)); do
     indices=()
     for ((i=${#sample_rows[@]}-1; i>=0; --i)); do indices+=("$i"); done
   fi
-  echo "repeat $r/$REPEATS low_schedule=$CPU_LOW_SCHEDULE low_domain_size=${CPU_LOW_DOMAIN_SIZE:-none} ($order)" >&2
+  echo "repeat $r/$REPEATS low_schedule=$CPU_LOW_SCHEDULE low_domain_size=${CPU_LOW_DOMAIN_SIZE:-none} low_domain_refine=$CPU_LOW_DOMAIN_REFINE ($order)" >&2
   for i in "${indices[@]}"; do
     IFS=$'\t' read -r sample groups_file group <<<"${sample_rows[i]}"
     echo "  sample=$sample group=$group" >&2
