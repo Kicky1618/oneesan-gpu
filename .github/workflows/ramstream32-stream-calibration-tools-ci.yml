@@ -28,6 +28,17 @@ jobs:
           bash -n scripts/bench/ramstream32-cpu-high-stream-calibration.sh
           python3 -m py_compile scripts/tools/design_cpu_high_stream_calibration.py
           python3 -m py_compile scripts/tools/fit_cpu_high_stream_weights.py
+      - name: Check LOW schedule propagation
+        shell: bash
+        run: |
+          grep -Fq 'CPU_LOW_SCHEDULE="${CPU_LOW_SCHEDULE:-dynamic}"' \
+            scripts/bench/ramstream32-cpu-high-stream-calibration.sh
+          grep -Fq '"$CPU_LOW_SCHEDULE" != contiguous' \
+            scripts/bench/ramstream32-cpu-high-stream-calibration.sh
+          grep -Fq 'CPU_LOW_SCHEDULE="$CPU_LOW_SCHEDULE"' \
+            scripts/bench/ramstream32-cpu-high-stream-calibration.sh
+          grep -Fq 'cpu_low_schedule=$CPU_LOW_SCHEDULE' \
+            scripts/bench/ramstream32-cpu-high-stream-calibration.sh
       - name: Check calibration design
         shell: bash
         run: |
@@ -83,6 +94,8 @@ jobs:
           grep -Fq 'design_cpu_high_stream_calibration.py' \
             docs/ramstream32-cpu-high-stream-calibration.md
           grep -Fq 'ramstream32-cpu-high-stream-calibration.sh' \
+            docs/ramstream32-cpu-high-stream-calibration.md
+          grep -Fq 'CPU_LOW_SCHEDULE' \
             docs/ramstream32-cpu-high-stream-calibration.md
           grep -Fq 'fit_cpu_high_stream_weights.py' \
             docs/ramstream32-cpu-high-stream-calibration.md
