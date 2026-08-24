@@ -126,7 +126,7 @@ run_policy() {
   [[ "$path" = /* ]] || path="$manifest_dir/$path"
   [[ -f "$path" ]] || { echo "missing groups file: $path" >&2; exit 3; }
 
-  local line residue got_schedule got_domain
+  local line residue got_schedule got_domain got_refine
   line="$(CPU_HIGH_MODE=direct CPU_HIGH_MAX_MIB=0 \
     CPU_HIGH_GROUPS_FILE="$path" CPU_HIGH_WORKERS="$CPU_HIGH_WORKERS" \
     CPU_HIGH_OVERLAP="$CPU_HIGH_OVERLAP" \
@@ -146,6 +146,11 @@ run_policy() {
       echo "LOW domain provenance mismatch requested=$CPU_LOW_DOMAIN_SIZE got=$got_domain" >&2
       exit 7
     fi
+  fi
+  got_refine="$(field "$line" cpu_low_domain_refine)"
+  if [[ "$got_refine" != "$CPU_LOW_DOMAIN_REFINE" ]]; then
+    echo "LOW refine provenance mismatch requested=$CPU_LOW_DOMAIN_REFINE got=$got_refine" >&2
+    exit 7
   fi
   printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
     "$repeat" "$order" "$role" "$sample" "$group" "$groups_file" "$residue" \
