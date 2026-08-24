@@ -1,5 +1,6 @@
 #include <cuda_runtime.h>
 
+#include <algorithm>
 #include <array>
 #include <chrono>
 #include <cstdint>
@@ -48,13 +49,14 @@ int main(int argc,char**argv){
     size_t forward_meta=borbit.bytes()+bfused.bytes()+view_bytes,reverse_meta=reverse.bytes();size_t metadata_bytes=forward_meta+reverse_meta;size_t chunk_bytes=chunk_mib<<20;
     uint64_t max_gpu=0,min_gpu=~uint64_t(0),peer_per_transpose=0,max_need=0;
     for(int g=0;g<NG;++g){max_gpu=std::max(max_gpu,tplan.gpu_bytes[g]);min_gpu=std::min(min_gpu,tplan.gpu_bytes[g]);max_need=std::max<uint64_t>(max_need,tplan.gpu_bytes[g]+metadata_bytes+chunk_bytes);for(int s=g+1;s<NG;++s)peer_per_transpose+=2ull*tplan.slot[g][s].capacity_bytes;}
+    long double snake_peer_tib=static_cast<long double>(peer_per_transpose)*static_cast<long double>(W)/static_cast<long double>(1ULL<<40);
     std::cout<<std::setprecision(15)<<"backend=gridfp-b300-bucket-snake-atomic-v0.1-plan n="<<n
              <<" states="<<(layout.main_size+layout.block_size)<<" authoritative_tib="<<double((layout.main_size+layout.block_size)*sizeof(Count))/double(1ULL<<40)
              <<" max_gpu_authoritative_gib="<<double(max_gpu)/double(1ULL<<30)<<" gpu_spread_mib="<<double(max_gpu-min_gpu)/double(1<<20)
              <<" forward_metadata_mib="<<double(forward_meta)/double(1<<20)<<" reverse_metadata_mib="<<double(reverse_meta)/double(1<<20)
              <<" metadata_mib_per_gpu="<<double(metadata_bytes)/double(1<<20)<<" transpose_chunk_mib="<<chunk_mib<<" max_device_need_gib="<<double(max_need)/double(1ULL<<30)
              <<" transposes_per_residue="<<W<<" standard_transposes="<<(2*W-1)<<" peer_gib_per_transpose="<<double(peer_per_transpose)/double(1ULL<<30)
-             <<" snake_peer_tib_per_residue="<<double(long double(peer_per_transpose)*W/long double(1ULL<<40))
+             <<" snake_peer_tib_per_residue="<<double(snake_peer_tib)
              <<" reverse_closure_atomic=1 forward_closure_atomic=0 prepare_s="<<prepare_s<<'\n';
     if(plan_only)return 0;
 
