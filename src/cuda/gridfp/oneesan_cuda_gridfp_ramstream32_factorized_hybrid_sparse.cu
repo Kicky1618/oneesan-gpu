@@ -1,10 +1,13 @@
 #include <cuda_runtime.h>
 
 #include <algorithm>
+#include <cctype>
 #include <chrono>
 #include <cstdlib>
 #include <cstring>
+#include <fstream>
 #include <iostream>
+#include <string>
 #include <thread>
 #include <vector>
 
@@ -64,6 +67,59 @@ static bool env_bool(const char* name, bool fallback) {
     std::exit(2);
 }
 
+static std::vector<uint8_t> load_cpu_high_group_file(
+    const char* path, size_t group_count, size_t& requested
+) {
+    requested = 0;
+    std::vector<uint8_t> selected(group_count, 0);
+    std::ifstream in(path);
+    if (!in) {
+        std::cerr << "cannot open CPU_HIGH_GROUPS_FILE: " << path << '\n';
+        std::exit(2);
+    }
+
+    std::string line;
+    size_t lineno = 0;
+    while (std::getline(in, line)) {
+        ++lineno;
+        size_t hash = line.find('#');
+        if (hash != std::string::npos) line.resize(hash);
+        const char* s = line.c_str();
+        while (*s && std::isspace(static_cast<unsigned char>(*s))) ++s;
+        if (!*s) continue;
+
+        char* end = nullptr;
+        unsigned long g = std::strtoul(s, &end, 10);
+        if (end == s) {
+            std::cerr << "invalid CPU HIGH group at " << path << ':' << lineno << '\n';
+            std::exit(2);
+        }
+        while (*end && std::isspace(static_cast<unsigned char>(*end))) ++end;
+        if (*end || g >= group_count) {
+            std::cerr << "invalid CPU HIGH group at " << path << ':' << lineno
+                      << " value=" << g << " group_count=" << group_count << '\n';
+            std::exit(2);
+        }
+        if (!selected[size_t(g)]) {
+            selected[size_t(g)] = 1;
+            ++requested;
+        }
+    }
+
+    std::cerr << "cpu_high_group_file path=" << path
+              << " requested_groups=" << requested << '\n';
+    return selected;
+}
+
+static uint64_t cpu_high_selection_hash(const std::vector<uint8_t>& selected) {
+    uint64_t h = 1469598103934665603ull;
+    for (uint8_t x : selected) {
+        h ^= uint64_t(x);
+        h *= 1099511628211ull;
+    }
+    return h;
+}
+
 int main(int argc, char** argv) {
     int n = argc > 1 ? std::atoi(argv[1]) : TARGET_W - 1;
     Count mod = argc > 2 ? Count(std::strtoul(argv[2], nullptr, 10)) : 4294967291u;
@@ -73,6 +129,8 @@ int main(int argc, char** argv) {
     double cpu_high_max_mib = env_nonnegative_double("CPU_HIGH_MAX_MIB", 0.0);
     int cpu_high_workers = env_positive_int("CPU_HIGH_WORKERS", cpu_workers);
     bool cpu_high_overlap = env_bool("CPU_HIGH_OVERLAP", false);
+    const char* cpu_high_groups_file = std::getenv("CPU_HIGH_GROUPS_FILE");
+    bool cpu_high_file_policy = cpu_high_groups_file && *cpu_high_groups_file;
     const char* cpu_high_mode_env = std::getenv("CPU_HIGH_MODE");
     bool cpu_high_direct_mode = cpu_high_mode_env
         && std::strcmp(cpu_high_mode_env, "direct") == 0;
@@ -83,6 +141,7 @@ int main(int argc, char** argv) {
         return 2;
     }
     const char* cpu_high_mode = cpu_high_direct_mode ? "direct" : "scratch";
+    const char* cpu_high_policy = cpu_high_file_policy ? "file" : "threshold";
 
     int W = n + 1;
     if (W != TARGET_W || n < 2 || W > MAXW) return 1;
@@ -108,6 +167,12 @@ int main(int argc, char** argv) {
     auto cpu_low_jobs = make_cpu_low_jobs(W, low_wp);
 
     size_t high_group_count = size_t(1) << high_wp.fixed_pos.size();
+    std::vector<uint8_t> file_selected;
+    size_t cpu_high_policy_requested = 0;
+    if (cpu_high_file_policy)
+        file_selected = load_cpu_high_group_file(
+            cpu_high_groups_file, high_group_count, cpu_high_policy_requested);
+
     std::vector<uint8_t> cpu_high_selected(high_group_count, 0);
     std::vector<const CpuHighJob*> selected_cpu_high_jobs;
     selected_cpu_high_jobs.reserve(all_cpu_high_jobs.size());
@@ -119,7 +184,9 @@ int main(int argc, char** argv) {
 
     for (const auto& job : all_cpu_high_jobs) {
         if (!job.main_size && !job.block_size) continue;
-        bool use_cpu = cpu_high_limit_bytes && job.scratch_bytes <= cpu_high_limit_bytes;
+        bool use_cpu = cpu_high_file_policy
+            ? bool(file_selected[size_t(job.g)])
+            : (cpu_high_limit_bytes && job.scratch_bytes <= cpu_high_limit_bytes);
         if (use_cpu) {
             cpu_high_selected[size_t(job.g)] = 1;
             selected_cpu_high_jobs.push_back(&job);
@@ -130,11 +197,19 @@ int main(int argc, char** argv) {
         }
     }
 
+    uint64_t selection_hash = cpu_high_selection_hash(cpu_high_selected);
+    if (cpu_high_file_policy && selected_cpu_high_jobs.size() != cpu_high_policy_requested) {
+        std::cerr << "cpu_high_group_file includes "
+                  << (cpu_high_policy_requested - selected_cpu_high_jobs.size())
+                  << " empty HIGH groups\n";
+    }
+
     size_t gpu_target = size_t(gpu_target_mib) << 20;
     if (gpu_high_max_bytes > gpu_target) {
         std::cerr << "hybrid-sparse remaining GPU HIGH group does not fit: high_gib="
                   << double(gpu_high_max_bytes) / double(1ULL << 30)
                   << " target_gib=" << double(gpu_target) / double(1ULL << 30)
+                  << " cpu_high_policy=" << cpu_high_policy
                   << " cpu_high_max_mib=" << cpu_high_max_mib << '\n';
         return 4;
     }
@@ -189,7 +264,7 @@ int main(int argc, char** argv) {
 
     if (plan_only) {
         std::cout
-            << "backend=gridfp-ramstream32-factorized-hybrid-sparse-v5.0-plan"
+            << "backend=gridfp-ramstream32-factorized-hybrid-sparse-v5.4-plan"
             << " n=" << n
             << " gpu_high_desc_mib=" << highdesc_mib
             << " gpu_mask_mib=" << mask_mib
@@ -213,6 +288,8 @@ int main(int argc, char** argv) {
             << " cpu_high_workers=" << cpu_high_workers
             << " cpu_high_mode=" << cpu_high_mode
             << " cpu_high_overlap=" << int(cpu_high_overlap)
+            << " cpu_high_policy=" << cpu_high_policy
+            << " cpu_high_selection_hash=" << selection_hash
             << " cpu_high_max_mib=" << cpu_high_max_mib
             << " cpu_high_groups=" << selected_cpu_high_jobs.size()
             << " gpu_high_groups=" << gpu_high_nonempty_groups
@@ -309,7 +386,7 @@ int main(int argc, char** argv) {
         : double(cpu_high_scratch.peak_scratch_bytes())/double(1<<20);
 
     std::cout
-        << "backend=gridfp-ramstream32-factorized-hybrid-sparse-v5.0"
+        << "backend=gridfp-ramstream32-factorized-hybrid-sparse-v5.4"
         << " n="<<n<<" residue="<<answer<<" modulus="<<mod
         << " gpu_high_desc_mib="<<highdesc_mib<<" gpu_mask_mib="<<mask_mib
         << " cpu_sparse_nn_orbit_mib="<<sparse_nn_orbit_mib
@@ -329,6 +406,8 @@ int main(int argc, char** argv) {
         << " cpu_high_workers="<<cpu_high_workers
         << " cpu_high_mode="<<cpu_high_mode
         << " cpu_high_overlap="<<int(cpu_high_overlap)
+        << " cpu_high_policy="<<cpu_high_policy
+        << " cpu_high_selection_hash="<<selection_hash
         << " cpu_high_max_mib="<<cpu_high_max_mib
         << " cpu_high_peak_worker_scratch_mib="<<cpu_high_peak_scratch_mib
         << " h2d_s="<<gpu.h2d_s<<" gpu_kernel_s="<<gpu.kernel_s<<" d2h_s="<<gpu.d2h_s
