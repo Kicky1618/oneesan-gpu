@@ -87,7 +87,20 @@ jobs:
             --pcie-gib-s 10 --cpu-gcell-s 1 \
             > /tmp/groups.txt 2> /tmp/planner.log
           test "$(cat /tmp/groups.txt)" = 0
+          grep -Fq 'mode=sequential' /tmp/planner.log
           grep -Fq 'selected=1' /tmp/planner.log
+
+          cat >/tmp/overlap-cost.tsv <<'EOF'
+          group	mask	roundtrip_bytes	main_states	blocked_states	nn_cells	nrnl_cells	block_closure_cells	cross_closure_cells	total_cells
+          0	0	9663676416	1	1	25000000000	25000000000	25000000000	25000000000	100000000000
+          1	1	1073741824	1	1	300000000	300000000	300000000	300000000	1200000000
+          EOF
+          python3 scripts/tools/plan_cpu_high_groups.py /tmp/overlap-cost.tsv \
+            --pcie-gib-s 1 --cpu-gcell-s 1 --overlap \
+            > /tmp/overlap.groups 2> /tmp/overlap.log
+          test "$(cat /tmp/overlap.groups)" = 1
+          grep -Fq 'planner mode=overlap' /tmp/overlap.log
+          grep -Fq 'critical_s=9.000000' /tmp/overlap.log
       - name: Check CPU HIGH NUMA page analysis
         shell: bash
         run: |
@@ -115,5 +128,7 @@ jobs:
           grep -Fq 'CPU_HIGH_GROUPS_FILE' docs/ramstream32-cpu-high.md
           grep -Fq 'CPU_HIGH_CPU_LIST' docs/ramstream32-cpu-high.md
           grep -Fq 'analyze_cpu_high_numa.py' docs/ramstream32-cpu-high.md
+          grep -Fq 'plan_cpu_high_groups.py' docs/ramstream32-cpu-high.md
+          grep -Fq -- '--overlap' docs/ramstream32-cpu-high.md
           grep -Fq 'c8de8d73af1c44f075aee937bc8f37e8b7b79d27' \
             docs/ramstream32-hybrid-sparse.md
