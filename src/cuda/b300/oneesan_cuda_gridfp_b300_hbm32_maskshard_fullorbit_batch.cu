@@ -243,8 +243,13 @@ static void process_fullorbit_batch_high_job(
 
     for (int p = TARGET_W - 1; p >= LOW_LUT_K + 1; --p) {
         t = std::chrono::steady_clock::now();
+#ifdef MASKSHARD_BLOCK_ORBIT
+        if (job.block_n)
+            maskshard_main_block_highorbit_kernel<<<bd, threads>>>(w.a, w.d, job.main_n, p);
+#else
         if (job.main_n)
             maskshard_main_block_highorbit_kernel<<<bm, threads>>>(w.a, w.d, job.main_n, p);
+#endif
         ck(cudaGetLastError(), "fullorbit-batch high orbit");
         ck(cudaDeviceSynchronize(), "fullorbit-batch high orbit sync");
         w.high_orbit_s += ram_seconds_since(t);
