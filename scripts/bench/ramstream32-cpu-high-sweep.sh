@@ -18,6 +18,7 @@ CPU_HIGH_OVERLAP="${CPU_HIGH_OVERLAP:-0}"
 THRESHOLDS="${THRESHOLDS:-0 64 128 256 512 1024}"
 REPEATS="${REPEATS:-1}"
 BUILD="${BUILD:-1}"
+ANALYZE="${ANALYZE:-1}"
 EXPECTED_RESIDUE="${EXPECTED_RESIDUE:-}"
 OUT_DIR="${OUT_DIR:-$ROOT/work/bench_ramstream32_cpu_high_sweep}"
 
@@ -34,6 +35,10 @@ if [[ "$CPU_HIGH_MODE" != scratch && "$CPU_HIGH_MODE" != direct ]]; then
 fi
 if [[ "$CPU_HIGH_OVERLAP" != 0 && "$CPU_HIGH_OVERLAP" != 1 ]]; then
   echo "CPU_HIGH_OVERLAP must be 0 or 1" >&2
+  exit 2
+fi
+if [[ "$ANALYZE" != 0 && "$ANALYZE" != 1 ]]; then
+  echo "ANALYZE must be 0 or 1" >&2
   exit 2
 fi
 
@@ -58,6 +63,7 @@ mkdir -p "$OUT_DIR"
 ts="$(date -u +%Y%m%dT%H%M%SZ)"
 out="$OUT_DIR/cpu-high-${CPU_HIGH_MODE}-overlap${CPU_HIGH_OVERLAP}-n${N}-${ts}.tsv"
 meta="$OUT_DIR/cpu-high-${CPU_HIGH_MODE}-overlap${CPU_HIGH_OVERLAP}-n${N}-${ts}.meta"
+analysis_out="$OUT_DIR/cpu-high-${CPU_HIGH_MODE}-overlap${CPU_HIGH_OVERLAP}-n${N}-${ts}.analysis.txt"
 
 file_sha256() {
   if command -v sha256sum >/dev/null 2>&1; then sha256sum "$1" | awk '{print $1}'
@@ -86,6 +92,7 @@ cpu_high_mode=$CPU_HIGH_MODE
 cpu_high_overlap=$CPU_HIGH_OVERLAP
 thresholds=$THRESHOLDS
 repeats=$REPEATS
+analyze=$ANALYZE
 expected_residue=${EXPECTED_RESIDUE:-unknown}
 binary_sha256=$(file_sha256 "$bin")
 EOF
@@ -148,5 +155,13 @@ awk -F '\t' '
 
 best="$(awk -F '\t' 'NR>1 {s[$5]+=$7;n[$5]++} END {for(t in n){m=s[t]/n[t]; if(best==""||m<best){best=m;bt=t}} printf "%s %.9f",bt,best}' "$out")"
 echo "mode=$CPU_HIGH_MODE overlap=$CPU_HIGH_OVERLAP best_threshold_mib=${best%% *} mean_wall_s=${best#* }"
+
+if [[ "$ANALYZE" != 0 ]]; then
+  python3 scripts/tools/analyze_cpu_high_sweep.py "$out" | tee "$analysis_out"
+fi
+
 echo "results=$out"
 echo "metadata=$meta"
+if [[ "$ANALYZE" != 0 ]]; then
+  echo "analysis=$analysis_out"
+fi
