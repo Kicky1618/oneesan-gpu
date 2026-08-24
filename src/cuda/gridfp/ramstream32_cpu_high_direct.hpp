@@ -17,11 +17,11 @@
 // the p==1 special case. Closure states are processed after the complete orbit
 // pass for each p. Fixed LOW occupancy makes different jobs disjoint.
 //
-// v5.1 stores each orbit in 64 bits: three 20-bit HIGH ranks plus a two-bit
-// kind. Destination block IDs are topology invariants and are reconstructed at
-// runtime. Away from the HIGH/center boundary the partner remains in the source
-// main block. At p=LOW_LUT_K+1 the partner block is determined by source.hs and
-// kind. Dropping the leading N always lands in blocked block source.hs.
+// v5.1 stores each orbit in 64 bits: three 20-bit HIGH ranks. Destination block
+// IDs are topology invariants and are reconstructed at runtime. v5.2 splits the
+// orbit stream into NN and NR/NL classes. Stream identity replaces the remaining
+// per-operation kind decode/branch and lets partner/drop block reconstruction be
+// hoisted outside the inner operation loop.
 
 enum CpuHighOrbitKind : uint8_t {
     CPU_HIGH_ORBIT_NN = 1,
@@ -34,26 +34,20 @@ static_assert(sizeof(CpuHighOrbitOp) == 8);
 static constexpr uint64_t CPU_HIGH_ORBIT_RANK_MASK = (1ull << 20) - 1ull;
 static constexpr int CPU_HIGH_ORBIT_PARTNER_SHIFT = 20;
 static constexpr int CPU_HIGH_ORBIT_DROP_SHIFT = 40;
-static constexpr int CPU_HIGH_ORBIT_KIND_SHIFT = 60;
 
 static inline CpuHighOrbitOp cpu_high_orbit_pack(
-    uint32_t src_hr, uint32_t partner_hr, uint32_t drop_hr,
-    CpuHighOrbitKind kind
+    uint32_t src_hr, uint32_t partner_hr, uint32_t drop_hr
 ) {
     if (src_hr > CPU_HIGH_ORBIT_RANK_MASK
         || partner_hr > CPU_HIGH_ORBIT_RANK_MASK
-        || drop_hr > CPU_HIGH_ORBIT_RANK_MASK
-        || kind < CPU_HIGH_ORBIT_NN || kind > CPU_HIGH_ORBIT_NL) {
+        || drop_hr > CPU_HIGH_ORBIT_RANK_MASK) {
         std::cerr << "cpu high orbit encoding overflow src=" << src_hr
-                  << " partner=" << partner_hr << " drop=" << drop_hr
-                  << " kind=" << unsigned(kind) << '\n';
+                  << " partner=" << partner_hr << " drop=" << drop_hr << '\n';
         std::exit(119);
     }
-    uint64_t kind2 = uint64_t(kind - CPU_HIGH_ORBIT_NN);
     return uint64_t(src_hr)
         | (uint64_t(partner_hr) << CPU_HIGH_ORBIT_PARTNER_SHIFT)
-        | (uint64_t(drop_hr) << CPU_HIGH_ORBIT_DROP_SHIFT)
-        | (kind2 << CPU_HIGH_ORBIT_KIND_SHIFT);
+        | (uint64_t(drop_hr) << CPU_HIGH_ORBIT_DROP_SHIFT);
 }
 static inline uint32_t cpu_high_orbit_src(CpuHighOrbitOp op) {
     return uint32_t(op & CPU_HIGH_ORBIT_RANK_MASK);
@@ -64,21 +58,16 @@ static inline uint32_t cpu_high_orbit_partner(CpuHighOrbitOp op) {
 static inline uint32_t cpu_high_orbit_drop(CpuHighOrbitOp op) {
     return uint32_t((op >> CPU_HIGH_ORBIT_DROP_SHIFT) & CPU_HIGH_ORBIT_RANK_MASK);
 }
-static inline CpuHighOrbitKind cpu_high_orbit_kind(CpuHighOrbitOp op) {
-    return CpuHighOrbitKind(
-        ((op >> CPU_HIGH_ORBIT_KIND_SHIFT) & 3u) + CPU_HIGH_ORBIT_NN);
-}
 
 static inline uint32_t cpu_high_orbit_partner_block(
-    uint32_t source_bid, const FBlock& source, int p,
-    CpuHighOrbitKind kind
+    uint32_t source_bid, const FBlock& source, int p, bool nn_stream
 ) {
     if (p != LOW_LUT_K + 1) return source_bid;
 
     // At the boundary the second symbol is the center. NN -> LR leaves center
     // R; NR/NL -> RN/LN leaves center N. The LOW start height source.hs is
     // unchanged, so recover the new HIGH end height from that center value.
-    uint32_t center = kind == CPU_HIGH_ORBIT_NN ? uint32_t(R) : uint32_t(N);
+    uint32_t center = nn_stream ? uint32_t(R) : uint32_t(N);
     int he = int(source.hs) + (center == uint32_t(R) ? 1 : 0);
     return uint32_t(3 * he + int(center));
 }
@@ -92,11 +81,26 @@ struct CpuHighClosureOp {
 };
 static_assert(sizeof(CpuHighClosureOp) == 8);
 
+struct CpuHighOrbitStreams {
+    std::vector<CpuHighOrbitOp> nn;
+    std::vector<CpuHighOrbitOp> nrnl;
+    size_t size() const { return nn.size() + nrnl.size(); }
+};
+
+struct CpuHighOrbitOffsets {
+    std::vector<uint32_t> nn;
+    std::vector<uint32_t> nrnl;
+    size_t size() const { return nn.size() + nrnl.size(); }
+};
+
 struct CpuHighDirectHost {
-    std::vector<CpuHighOrbitOp> orbit_ops;
+    // Compatibility wrappers intentionally preserve orbit_ops.size() and
+    // orbit_off.size() for production metrics and existing selftests while the
+    // executor gets branch-free per-class streams.
+    CpuHighOrbitStreams orbit_ops;
     std::vector<CpuHighClosureOp> closure_ops;
     // flattened [pi * (nblocks+1) + bid]
-    std::vector<uint32_t> orbit_off;
+    CpuHighOrbitOffsets orbit_off;
     std::vector<uint32_t> closure_off;
     uint32_t nblocks = 0;
 };
@@ -113,7 +117,8 @@ static CpuHighDirectHost build_cpu_high_direct(
     CpuHighDirectHost out;
     out.nblocks = uint32_t(layout.main_blocks.size());
     size_t pitch = size_t(out.nblocks) + 1;
-    out.orbit_off.resize(size_t(H) * pitch);
+    out.orbit_off.nn.resize(size_t(H) * pitch);
+    out.orbit_off.nrnl.resize(size_t(H) * pitch);
     out.closure_off.resize(size_t(H) * pitch);
 
     auto representative_low = [&](int hs) -> uint32_t {
@@ -126,7 +131,8 @@ static CpuHighDirectHost build_cpu_high_direct(
         uint32_t pi = uint32_t((TARGET_W - 1) - p);
         for (uint32_t bid = 0; bid < out.nblocks; ++bid) {
             size_t oi = size_t(pi) * pitch + bid;
-            out.orbit_off[oi] = uint32_t(out.orbit_ops.size());
+            out.orbit_off.nn[oi] = uint32_t(out.orbit_ops.nn.size());
+            out.orbit_off.nrnl[oi] = uint32_t(out.orbit_ops.nrnl.size());
             out.closure_off[oi] = uint32_t(out.closure_ops.size());
 
             const StorageBlock& sb = layout.main_blocks[bid];
@@ -203,8 +209,9 @@ static CpuHighDirectHost build_cpu_high_direct(
                     source_fb.he = sb.he;
                     source_fb.hs = sb.hs;
                     source_fb.c = sb.c;
+                    bool nn_stream = okind == CPU_HIGH_ORBIT_NN;
                     uint32_t derived_jbid = cpu_high_orbit_partner_block(
-                        bid, source_fb, p, okind);
+                        bid, source_fb, p, nn_stream);
                     uint32_t derived_dbid = cpu_high_orbit_drop_block(source_fb);
                     if (derived_jbid != jbid || derived_dbid != dbid) {
                         std::cerr << "cpu high orbit derived block mismatch p=" << p
@@ -215,8 +222,9 @@ static CpuHighDirectHost build_cpu_high_direct(
                         std::exit(129);
                     }
 
-                    out.orbit_ops.push_back(
-                        cpu_high_orbit_pack(hr, jhr, dhr, okind));
+                    CpuHighOrbitOp op = cpu_high_orbit_pack(hr, jhr, dhr);
+                    if (nn_stream) out.orbit_ops.nn.push_back(op);
+                    else out.orbit_ops.nrnl.push_back(op);
                     continue;
                 }
 
@@ -239,11 +247,14 @@ static CpuHighDirectHost build_cpu_high_direct(
             }
         }
         size_t end = size_t(pi) * pitch + out.nblocks;
-        out.orbit_off[end] = uint32_t(out.orbit_ops.size());
+        out.orbit_off.nn[end] = uint32_t(out.orbit_ops.nn.size());
+        out.orbit_off.nrnl[end] = uint32_t(out.orbit_ops.nrnl.size());
         out.closure_off[end] = uint32_t(out.closure_ops.size());
     }
 
-    std::cerr << "cpu_high_direct orbit_ops=" << out.orbit_ops.size()
+    std::cerr << "cpu_high_direct nn_orbit_ops=" << out.orbit_ops.nn.size()
+              << " nrnl_orbit_ops=" << out.orbit_ops.nrnl.size()
+              << " orbit_ops=" << out.orbit_ops.size()
               << " closure_ops=" << out.closure_ops.size()
               << " orbit_mib="
               << double(out.orbit_ops.size() * sizeof(CpuHighOrbitOp))/(1<<20)
@@ -289,41 +300,55 @@ static void process_cpu_high_group_direct(
     for (int p = TARGET_W - 1; p >= LOW_LUT_K + 1; --p) {
         uint32_t pi = uint32_t((TARGET_W - 1) - p);
 
-        // Orbit pass. Every blocked state belongs to exactly one N* orbit.
+        // Orbit pass. Every blocked state belongs to exactly one N* orbit. NN
+        // and NR/NL are disjoint orbit families: inserting the dropped N into a
+        // blocked state uniquely reconstructs the lower symbol and thus its
+        // family. Reordering the two streams cannot couple distinct orbits.
         for (uint32_t bid = 0; bid < direct.nblocks; ++bid) {
             const FBlock& x = job.main_blocks[bid];
             if (!x.stride) continue;
-            auto [oa, ob] = cpu_high_direct_range(
-                direct.orbit_off, direct.nblocks, pi, bid);
-            for (uint32_t q = oa; q < ob; ++q) {
-                CpuHighOrbitOp op = direct.orbit_ops[q];
-                CpuHighOrbitKind kind = cpu_high_orbit_kind(op);
+
+            auto [na, nb] = cpu_high_direct_range(
+                direct.orbit_off.nn, direct.nblocks, pi, bid);
+            auto [ra, rb] = cpu_high_direct_range(
+                direct.orbit_off.nrnl, direct.nblocks, pi, bid);
+            if (na == nb && ra == rb) continue;
+
+            uint32_t drop_block = cpu_high_orbit_drop_block(x);
+            if (drop_block >= job.block_blocks.size()) {
+                std::cerr << "cpu high direct drop block out of range\n";
+                std::exit(130);
+            }
+            const FBlock& dy = job.block_blocks[drop_block];
+            if (dy.stride != x.stride) {
+                std::cerr << "cpu high direct drop LOW-width mismatch\n";
+                std::exit(127);
+            }
+
+            if (na != nb) {
                 uint32_t partner_block = cpu_high_orbit_partner_block(
-                    bid, x, p, kind);
-                uint32_t drop_block = cpu_high_orbit_drop_block(x);
-                if (partner_block >= job.main_blocks.size()
-                    || drop_block >= job.block_blocks.size()) {
-                    std::cerr << "cpu high direct derived block out of range\n";
+                    bid, x, p, true);
+                if (partner_block >= job.main_blocks.size()) {
+                    std::cerr << "cpu high direct NN partner block out of range\n";
                     std::exit(130);
                 }
                 const FBlock& jy = job.main_blocks[partner_block];
-                const FBlock& dy = job.block_blocks[drop_block];
-                if (jy.stride != x.stride || dy.stride != x.stride) {
-                    std::cerr << "cpu high direct orbit LOW-width mismatch\n";
+                if (jy.stride != x.stride) {
+                    std::cerr << "cpu high direct NN LOW-width mismatch\n";
                     std::exit(127);
                 }
-                Count* ip = cpu_high_direct_row_ptr(
-                    main_auth, layout.main_blocks[bid], x,
-                    job.mask, storage, cpu_high_orbit_src(op));
-                Count* jp = cpu_high_direct_row_ptr(
-                    main_auth, layout.main_blocks[partner_block], jy,
-                    job.mask, storage, cpu_high_orbit_partner(op));
-                Count* dp = cpu_high_direct_row_ptr(
-                    block_auth, layout.block_blocks[drop_block], dy,
-                    job.mask, storage, cpu_high_orbit_drop(op));
-                if (!ip || !jp || !dp) continue;
-
-                if (kind == CPU_HIGH_ORBIT_NN) {
+                for (uint32_t q = na; q < nb; ++q) {
+                    CpuHighOrbitOp op = direct.orbit_ops.nn[q];
+                    Count* ip = cpu_high_direct_row_ptr(
+                        main_auth, layout.main_blocks[bid], x,
+                        job.mask, storage, cpu_high_orbit_src(op));
+                    Count* jp = cpu_high_direct_row_ptr(
+                        main_auth, layout.main_blocks[partner_block], jy,
+                        job.mask, storage, cpu_high_orbit_partner(op));
+                    Count* dp = cpu_high_direct_row_ptr(
+                        block_auth, layout.block_blocks[drop_block], dy,
+                        job.mask, storage, cpu_high_orbit_drop(op));
+                    if (!ip || !jp || !dp) continue;
                     for (uint32_t lr = 0; lr < x.stride; ++lr) {
                         Count c = ip[lr];
                         Count d = dp[lr];
@@ -331,7 +356,33 @@ static void process_cpu_high_group_direct(
                         ip[lr] = cpu_high_add(c, d, mod);
                         dp[lr] = 0;
                     }
-                } else {
+                }
+            }
+
+            if (ra != rb) {
+                uint32_t partner_block = cpu_high_orbit_partner_block(
+                    bid, x, p, false);
+                if (partner_block >= job.main_blocks.size()) {
+                    std::cerr << "cpu high direct NRNL partner block out of range\n";
+                    std::exit(130);
+                }
+                const FBlock& jy = job.main_blocks[partner_block];
+                if (jy.stride != x.stride) {
+                    std::cerr << "cpu high direct NRNL LOW-width mismatch\n";
+                    std::exit(127);
+                }
+                for (uint32_t q = ra; q < rb; ++q) {
+                    CpuHighOrbitOp op = direct.orbit_ops.nrnl[q];
+                    Count* ip = cpu_high_direct_row_ptr(
+                        main_auth, layout.main_blocks[bid], x,
+                        job.mask, storage, cpu_high_orbit_src(op));
+                    Count* jp = cpu_high_direct_row_ptr(
+                        main_auth, layout.main_blocks[partner_block], jy,
+                        job.mask, storage, cpu_high_orbit_partner(op));
+                    Count* dp = cpu_high_direct_row_ptr(
+                        block_auth, layout.block_blocks[drop_block], dy,
+                        job.mask, storage, cpu_high_orbit_drop(op));
+                    if (!ip || !jp || !dp) continue;
                     for (uint32_t lr = 0; lr < x.stride; ++lr) {
                         Count c = ip[lr];
                         Count cc = jp[lr];
