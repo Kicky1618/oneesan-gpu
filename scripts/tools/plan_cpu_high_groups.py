@@ -172,6 +172,8 @@ def main() -> None:
     ap.add_argument("--cross-weight", type=float, default=1.0)
     ap.add_argument("--group-overhead-us", type=float, default=0.0,
                     help="per-group CPU scheduling/fixed overhead")
+    ap.add_argument("--gpu-group-overhead-us", type=float, default=0.0,
+                    help="per-group GPU HIGH launch/fixed overhead")
     ap.add_argument("--min-margin-us", type=float, default=None,
                     help=(
                         "optional per-group sequential margin filter. Default is 0 us "
@@ -194,8 +196,8 @@ def main() -> None:
             raise SystemExit(f"--{name.replace('_', '-')} must be positive")
     if args.gpu_gstate_s is not None and args.gpu_gstate_s <= 0:
         raise SystemExit("--gpu-gstate-s must be positive")
-    if args.group_overhead_us < 0:
-        raise SystemExit("--group-overhead-us must be non-negative")
+    if args.group_overhead_us < 0 or args.gpu_group_overhead_us < 0:
+        raise SystemExit("group overheads must be non-negative")
     if args.min_margin_us is not None and args.min_margin_us < 0:
         raise SystemExit("--min-margin-us must be non-negative")
     if args.gpu_target_mib is not None and args.gpu_target_mib <= 0:
@@ -208,6 +210,7 @@ def main() -> None:
     pcie_rate = args.pcie_gib_s * GIB
     gpu_state_rate = None if args.gpu_gstate_s is None else args.gpu_gstate_s * 1e9
     fixed_cpu_s = args.group_overhead_us * 1e-6
+    fixed_gpu_s = args.gpu_group_overhead_us * 1e-6
     min_margin_s = None if args.min_margin_us is None else args.min_margin_us * 1e-6
     gpu_target_bytes = None if args.gpu_target_mib is None else args.gpu_target_mib * MIB
 
@@ -216,14 +219,21 @@ def main() -> None:
 
     candidates: list[Candidate] = []
     for g in costs:
+        if g.roundtrip_bytes <= 0:
+            continue
         cells = g.weighted_cells(
             args.nn_weight, args.nrnl_weight, args.block_weight, args.cross_weight
         )
         cpu_s = cells / cpu_cell_rate + fixed_cpu_s
         dma_s = g.roundtrip_bytes / pcie_rate
-        gpu_kernel_s = 0.0 if gpu_state_rate is None else g.gpu_state_steps / gpu_state_rate
+        gpu_kernel_s = fixed_gpu_s
+        if gpu_state_rate is not None:
+            gpu_kernel_s += g.gpu_state_steps / gpu_state_rate
         forced = gpu_target_bytes is not None and g.roundtrip_bytes > gpu_target_bytes
         candidates.append(Candidate(g, forced, cpu_s, dma_s, gpu_kernel_s, cells))
+
+    if not candidates:
+        return
 
     forced_rows = [x for x in candidates if x.forced]
     total_gpu_s = sum(x.gpu_saved_s for x in candidates)
@@ -245,16 +255,13 @@ def main() -> None:
     for group in selected_ids:
         print(group)
 
-    total_bytes = sum(g.roundtrip_bytes for g in costs)
-    selected_bytes = sum(g.roundtrip_bytes for g in costs if g.group in selected_set)
-    selected_cells = sum(
-        g.weighted_cells(args.nn_weight, args.nrnl_weight, args.block_weight, args.cross_weight)
-        for g in costs if g.group in selected_set
-    )
-    selected_gpu_steps = sum(g.gpu_state_steps for g in costs if g.group in selected_set)
-    est_cpu_s = selected_cells / cpu_cell_rate + len(selected_ids) * fixed_cpu_s
-    est_dma_saved_s = selected_bytes / pcie_rate
-    est_kernel_saved_s = 0.0 if gpu_state_rate is None else selected_gpu_steps / gpu_state_rate
+    total_bytes = sum(x.group.roundtrip_bytes for x in candidates)
+    selected_bytes = sum(x.group.roundtrip_bytes for x in selected)
+    selected_cells = sum(x.cells for x in selected)
+    selected_gpu_steps = sum(x.group.gpu_state_steps for x in selected)
+    est_cpu_s = sum(x.cpu_s for x in selected)
+    est_dma_saved_s = sum(x.dma_s for x in selected)
+    est_kernel_saved_s = sum(x.gpu_kernel_s for x in selected)
     est_gpu_saved_s = est_dma_saved_s + est_kernel_saved_s
     est_margin_s = est_gpu_saved_s - est_cpu_s
     est_remaining_gpu_s = max(0.0, total_gpu_s - est_gpu_saved_s)
@@ -262,11 +269,13 @@ def main() -> None:
     print(
         "planner "
         f"mode={'overlap' if args.overlap else 'sequential'} "
-        f"groups={len(costs)} selected={len(selected_ids)} forced={len(forced_rows)} "
+        f"groups={len(candidates)} selected={len(selected_ids)} forced={len(forced_rows)} "
         f"removed_gib={selected_bytes / GIB:.6f} "
         f"removed_fraction={selected_bytes / total_bytes:.9f} "
         f"weighted_gcells={selected_cells / 1e9:.6f} "
         f"gpu_gstate_steps={selected_gpu_steps / 1e9:.6f} "
+        f"cpu_group_overhead_us={args.group_overhead_us:.6f} "
+        f"gpu_group_overhead_us={args.gpu_group_overhead_us:.6f} "
         f"est_cpu_s={est_cpu_s:.6f} est_dma_saved_s={est_dma_saved_s:.6f} "
         f"est_gpu_kernel_saved_s={est_kernel_saved_s:.6f} "
         f"est_gpu_saved_s={est_gpu_saved_s:.6f} "
