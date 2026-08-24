@@ -17,7 +17,10 @@ on:
       - 'src/cuda/b300/probes/bucket_transpose_ab.cu'
       - 'src/cuda/b300/oneesan_cuda_gridfp_b300_bucket_fused.cu'
       - 'src/cuda/b300/oneesan_cuda_gridfp_b300_bucket_fused_events.cu'
+      - 'src/cuda/b300/oneesan_cuda_gridfp_b300_bucket_fused_batch.cu'
+      - 'src/cuda/b300/oneesan_cuda_gridfp_b300_bucket_fused_batch_events.cu'
       - 'scripts/build/b300-bucket-fused.sh'
+      - 'scripts/build/b300-bucket-fused-batch.sh'
       - '.github/workflows/gpu-direct-bucket-fused-compile.yml'
   pull_request:
     paths:
@@ -35,7 +38,10 @@ on:
       - 'src/cuda/b300/probes/bucket_transpose_ab.cu'
       - 'src/cuda/b300/oneesan_cuda_gridfp_b300_bucket_fused.cu'
       - 'src/cuda/b300/oneesan_cuda_gridfp_b300_bucket_fused_events.cu'
+      - 'src/cuda/b300/oneesan_cuda_gridfp_b300_bucket_fused_batch.cu'
+      - 'src/cuda/b300/oneesan_cuda_gridfp_b300_bucket_fused_batch_events.cu'
       - 'scripts/build/b300-bucket-fused.sh'
+      - 'scripts/build/b300-bucket-fused-batch.sh'
       - '.github/workflows/gpu-direct-bucket-fused-compile.yml'
   workflow_dispatch:
 
@@ -135,6 +141,20 @@ jobs:
           grep -Fq 'backend=gridfp-b300-bucket-fused-v0.1-plan' /tmp/bkb-events-w28.txt
           grep -Fq 'transposes_per_residue=55' /tmp/bkb-events-w28.txt
           grep -Fq 'closure_atomic=0' /tmp/bkb-events-w28.txt
+      - name: Compile W22 reusable sync batch driver
+        shell: bash
+        run: |
+          nvcc -O3 -std=c++17 -lineinfo -arch=sm_80 \
+            -DTARGET_W=22 -DLOW_LUT_K=11 -DHIGH_LUT_K=10 \
+            src/cuda/b300/oneesan_cuda_gridfp_b300_bucket_fused_batch.cu \
+            -o build/oneesan_cuda_gridfp_b300_bucket_fused_batch_n21
+      - name: Compile W28 reusable event batch driver
+        shell: bash
+        run: |
+          nvcc -O3 -std=c++17 -lineinfo -arch=sm_80 \
+            -DTARGET_W=28 -DLOW_LUT_K=14 -DHIGH_LUT_K=13 \
+            src/cuda/b300/oneesan_cuda_gridfp_b300_bucket_fused_batch_events.cu \
+            -o build/oneesan_cuda_gridfp_b300_bucket_fused_batch_events_n27
       - name: Compile transpose A/B microbenchmark
         shell: bash
         run: |
