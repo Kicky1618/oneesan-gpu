@@ -105,8 +105,7 @@ static CpuLowBoundaryPages cpu_low_boundary_pages(
                               << " previous_end=" << prev_end_byte << '\n';
                     std::exit(4);
                 }
-                cpu_low_add_boundary_page(
-                    out, begin_byte, prev_owner, owner[mask]);
+                cpu_low_add_boundary_page(out, begin_byte, prev_owner, owner[mask]);
             }
             have_prev = true;
             prev_end_byte = end_byte;
@@ -147,6 +146,17 @@ static CpuLowPageMetrics cpu_low_page_metrics(
     m.cross_auth_4k = total_pages_4k ? double(m.cross_4k) / total_pages_4k : 0.0;
     m.cross_auth_2m = total_pages_2m ? double(m.cross_2m) / total_pages_2m : 0.0;
     return m;
+}
+
+static std::vector<int> cpu_low_domain_owner(
+    const std::vector<int>& worker_owner, int domain_size
+) {
+    std::vector<int> out(worker_owner.size(), -1);
+    if (domain_size <= 0) return out;
+    for (size_t i = 0; i < worker_owner.size(); ++i) {
+        if (worker_owner[i] >= 0) out[i] = worker_owner[i] / domain_size;
+    }
+    return out;
 }
 
 static size_t cpu_low_ordered_segments_needed(
@@ -281,7 +291,27 @@ static CpuLowContiguousPlan cpu_low_build_optimal_contiguous_plan(
 int main(int argc, char** argv) {
     int n = argc > 1 ? std::atoi(argv[1]) : TARGET_W - 1;
     int workers = argc > 2 ? std::max(1, std::atoi(argv[2])) : 32;
-    bool dump_workers = argc > 3 && std::strcmp(argv[3], "--workers") == 0;
+    bool dump_workers = false;
+    int domain_size = 0;
+    for (int i = 3; i < argc; ++i) {
+        if (std::strcmp(argv[i], "--workers") == 0) {
+            dump_workers = true;
+        } else if (std::strcmp(argv[i], "--domain-size") == 0) {
+            if (++i >= argc) {
+                std::cerr << "--domain-size requires a positive integer\n";
+                return 1;
+            }
+            domain_size = std::atoi(argv[i]);
+            if (domain_size <= 0) {
+                std::cerr << "--domain-size requires a positive integer\n";
+                return 1;
+            }
+        } else {
+            std::cerr << "unknown argument: " << argv[i] << '\n';
+            return 1;
+        }
+    }
+
     int W = n + 1;
     if (W != TARGET_W || n < 2 || W > MAXW || workers <= 0) return 1;
     if constexpr (LOW_LUT_K + HIGH_LUT_K != TARGET_W - 1) return 1;
@@ -352,6 +382,17 @@ int main(int argc, char** argv) {
     CpuLowPageMetrics contiguous_pages = cpu_low_page_metrics(
         layout, storage, contiguous.owner);
 
+    CpuLowPageMetrics lpt_domain_pages;
+    CpuLowPageMetrics contiguous_domain_pages;
+    int domains = 0;
+    if (domain_size > 0) {
+        domains = (workers + domain_size - 1) / domain_size;
+        lpt_domain_pages = cpu_low_page_metrics(
+            layout, storage, cpu_low_domain_owner(owner, domain_size));
+        contiguous_domain_pages = cpu_low_page_metrics(
+            layout, storage, cpu_low_domain_owner(contiguous.owner, domain_size));
+    }
+
     std::cout << std::setprecision(12)
               << "cpu_low_schedule_plan OK"
               << " n=" << n
@@ -381,20 +422,32 @@ int main(int argc, char** argv) {
               << " contiguous_cross_worker_pages_2m=" << contiguous_pages.cross_2m
               << " contiguous_cross_worker_of_shared_2m=" << contiguous_pages.cross_of_shared_2m
               << " contiguous_cross_worker_auth_page_fraction_2m=" << contiguous_pages.cross_auth_2m
+              << " domain_size=" << domain_size
+              << " domains=" << domains
+              << " cross_domain_pages_4k=" << lpt_domain_pages.cross_4k
+              << " cross_domain_auth_page_fraction_4k=" << lpt_domain_pages.cross_auth_4k
+              << " cross_domain_pages_2m=" << lpt_domain_pages.cross_2m
+              << " cross_domain_auth_page_fraction_2m=" << lpt_domain_pages.cross_auth_2m
+              << " contiguous_cross_domain_pages_4k=" << contiguous_domain_pages.cross_4k
+              << " contiguous_cross_domain_auth_page_fraction_4k=" << contiguous_domain_pages.cross_auth_4k
+              << " contiguous_cross_domain_pages_2m=" << contiguous_domain_pages.cross_2m
+              << " contiguous_cross_domain_auth_page_fraction_2m=" << contiguous_domain_pages.cross_auth_2m
               << " build_s=" << pool.schedule_build_s
               << '\n';
 
     if (dump_workers) {
-        std::cout << "worker\tjobs\tcells\tfraction\tcontiguous_cells\tcontiguous_fraction\n";
+        std::cout << "worker\tjobs\tcells\tfraction\tcontiguous_cells\tcontiguous_fraction\tdomain\n";
         for (int w = 0; w < workers; ++w) {
             uint64_t cells = pool.sticky_worker_cells[size_t(w)];
             uint64_t ccells = contiguous.worker_cells[size_t(w)];
             double fraction = exact_total ? double(cells) / double(exact_total) : 0.0;
             double cfraction = exact_total ? double(ccells) / double(exact_total) : 0.0;
+            int domain = domain_size > 0 ? w / domain_size : -1;
             std::cout << w << '\t'
                       << pool.sticky_worker_jobs[size_t(w)].size() << '\t'
                       << cells << '\t' << fraction << '\t'
-                      << ccells << '\t' << cfraction << '\n';
+                      << ccells << '\t' << cfraction << '\t'
+                      << domain << '\n';
         }
     }
     return 0;
