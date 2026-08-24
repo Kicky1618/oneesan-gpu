@@ -24,15 +24,15 @@
 // D_F_FIX_LOW, so do not refresh those legacy symbols for LOW execution.
 // HIGH execution remains unchanged and continues using the legacy D_F_* set.
 struct MaskShardLowGroupPackedConfig {
-    FBlock main_blocks[64]{};
-    FBlock block_blocks[32]{};
-    int main_nblocks = 0;
-    int block_nblocks = 0;
-    std::uint32_t mask = 0;
-    std::uint32_t reserved = 0;
-    std::uint32_t warp_prefix[HIGH_LUT_K + 3]{};
-    std::uint32_t low_count[HIGH_LUT_K + 2]{};
-    std::uint32_t low_chunks[HIGH_LUT_K + 2]{};
+    FBlock main_blocks[64];
+    FBlock block_blocks[32];
+    int main_nblocks;
+    int block_nblocks;
+    std::uint32_t mask;
+    std::uint32_t reserved;
+    std::uint32_t warp_prefix[HIGH_LUT_K + 3];
+    std::uint32_t low_count[HIGH_LUT_K + 2];
+    std::uint32_t low_chunks[HIGH_LUT_K + 2];
 };
 
 __device__ __constant__ MaskShardLowGroupPackedConfig D_MS_LOW_GROUP_PACKED;
