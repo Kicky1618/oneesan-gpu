@@ -114,7 +114,7 @@ printf 'repeat\torder\tvariant\tresidue\twall_s\th2d_s\tgpu_kernel_s\td2h_s\tcpu
 
 run_one() {
   local repeat="$1" order="$2" variant="$3"
-  local line residue
+  local line residue got_schedule got_domain
   if [[ "$variant" == threshold ]]; then
     line="$(CPU_HIGH_MODE=direct CPU_HIGH_MAX_MIB="$THRESHOLD_MIB" \
       CPU_HIGH_GROUPS_FILE= CPU_HIGH_WORKERS="$CPU_HIGH_WORKERS" \
@@ -131,6 +131,18 @@ run_one() {
       "$bin" "$N" "$MODULUS" "$GPU_TARGET_MIB" "$CPU_WORKERS" | tail -n1)"
   fi
   residue="$(field "$line" residue)"
+  got_schedule="$(field "$line" cpu_low_schedule)"
+  if [[ "$got_schedule" != "$CPU_LOW_SCHEDULE" ]]; then
+    echo "LOW schedule provenance mismatch requested=$CPU_LOW_SCHEDULE got=$got_schedule" >&2
+    exit 7
+  fi
+  if [[ "$CPU_LOW_SCHEDULE" == domain ]]; then
+    got_domain="$(field "$line" cpu_low_domain_size)"
+    if [[ "$got_domain" != "$CPU_LOW_DOMAIN_SIZE" ]]; then
+      echo "LOW domain provenance mismatch requested=$CPU_LOW_DOMAIN_SIZE got=$got_domain" >&2
+      exit 7
+    fi
+  fi
   printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
     "$repeat" "$order" "$variant" "$residue" \
     "$(field "$line" wall_s)" "$(field "$line" h2d_s)" \
@@ -151,7 +163,7 @@ for ((r=1; r<=REPEATS; ++r)); do
     order=policy-first
     variants=(policy threshold)
   fi
-  echo "repeat $r/$REPEATS low_schedule=$CPU_LOW_SCHEDULE ($order)" >&2
+  echo "repeat $r/$REPEATS low_schedule=$CPU_LOW_SCHEDULE low_domain_size=${CPU_LOW_DOMAIN_SIZE:-none} ($order)" >&2
   for variant in "${variants[@]}"; do
     echo "  $variant" >&2
     residue="$(run_one "$r" "$order" "$variant")"
