@@ -129,22 +129,25 @@ int main(int argc,char**argv){
     BucketTransposePlan tplan=build_bucket_transpose_plan(phy,NG);double prepare_s=bsn_since(prep0);
 
     size_t view_bytes=2ull*NG*(layout.main_blocks.size()+layout.block_blocks.size())*sizeof(BucketPhysicalBlock);
-    size_t forward_meta=borbit.bytes()+bfused.bytes()+view_bytes,reverse_meta=reverse.bytes();size_t metadata_bytes=forward_meta+reverse_meta;size_t chunk_bytes=chunk_mib<<20;
+    size_t forward_meta=borbit.bytes()+bfused.bytes()+view_bytes,reverse_meta=reverse.bytes();size_t metadata_bytes=forward_meta+reverse_meta;
+    size_t chunk_bytes=chunk_mib<<20,staging_bytes=chunk_bytes*size_t(BUCKET_TRANSPOSE_STAGING_MULTIPLIER);
     uint64_t max_gpu=0,min_gpu=~uint64_t(0),peer_per_transpose=0,max_need=0;
-    for(int g=0;g<NG;++g){max_gpu=std::max(max_gpu,tplan.gpu_bytes[g]);min_gpu=std::min(min_gpu,tplan.gpu_bytes[g]);max_need=std::max<uint64_t>(max_need,tplan.gpu_bytes[g]+metadata_bytes+chunk_bytes);for(int s=g+1;s<NG;++s)peer_per_transpose+=2ull*tplan.slot[g][s].capacity_bytes;}
+    for(int g=0;g<NG;++g){max_gpu=std::max(max_gpu,tplan.gpu_bytes[g]);min_gpu=std::min(min_gpu,tplan.gpu_bytes[g]);max_need=std::max<uint64_t>(max_need,tplan.gpu_bytes[g]+metadata_bytes+staging_bytes);for(int s=g+1;s<NG;++s)peer_per_transpose+=2ull*tplan.slot[g][s].capacity_bytes;}
     long double snake_peer_tib=static_cast<long double>(peer_per_transpose)*static_cast<long double>(W)/static_cast<long double>(1ULL<<40);
     std::cout<<std::setprecision(15)<<"backend="<<BSN_BACKEND_PLAN<<" n="<<n
              <<" states="<<(layout.main_size+layout.block_size)<<" authoritative_tib="<<double((layout.main_size+layout.block_size)*sizeof(Count))/double(1ULL<<40)
              <<" max_gpu_authoritative_gib="<<double(max_gpu)/double(1ULL<<30)<<" gpu_spread_mib="<<double(max_gpu-min_gpu)/double(1<<20)
              <<" forward_metadata_mib="<<double(forward_meta)/double(1<<20)<<" reverse_metadata_mib="<<double(reverse_meta)/double(1<<20)
-             <<" metadata_mib_per_gpu="<<double(metadata_bytes)/double(1<<20)<<" transpose_chunk_mib="<<chunk_mib<<" max_device_need_gib="<<double(max_need)/double(1ULL<<30)
+             <<" metadata_mib_per_gpu="<<double(metadata_bytes)/double(1<<20)<<" transpose_chunk_mib="<<chunk_mib
+             <<" transpose_staging_multiplier="<<BUCKET_TRANSPOSE_STAGING_MULTIPLIER<<" transpose_staging_mib="<<double(staging_bytes)/double(1<<20)
+             <<" max_device_need_gib="<<double(max_need)/double(1ULL<<30)
              <<" transposes_per_residue="<<W<<" standard_transposes="<<(2*W-1)<<" peer_gib_per_transpose="<<double(peer_per_transpose)/double(1ULL<<30)
              <<" snake_peer_tib_per_residue="<<double(snake_peer_tib)
              <<" reverse_closure_atomic="<<BSN_REVERSE_CLOSURE_ATOMIC<<" forward_closure_atomic=0 pm_accum="<<GPU_DIRECT_PM_ACCUM<<" prepare_s="<<prepare_s<<'\n';
     if(plan_only)return 0;
 
     int visible=0;ck(cudaGetDeviceCount(&visible),"snake device count");if(visible<NG){std::cerr<<"need 8 GPUs visible="<<visible<<'\n';return 3;}size_t reserve=bsn_env_mib("BUCKET_RESERVE_MIB",8192)<<20;
-    for(int g=0;g<NG;++g){ck(cudaSetDevice(g),"snake mem set");size_t freeb=0,totalb=0;ck(cudaMemGetInfo(&freeb,&totalb),"snake mem info");uint64_t need=tplan.gpu_bytes[g]+metadata_bytes+chunk_bytes+reserve;std::cerr<<"gpu"<<g<<" free_gib="<<double(freeb)/double(1ULL<<30)<<" need_with_reserve_gib="<<double(need)/double(1ULL<<30)<<'\n';if(need>freeb)return 4;}
+    for(int g=0;g<NG;++g){ck(cudaSetDevice(g),"snake mem set");size_t freeb=0,totalb=0;ck(cudaMemGetInfo(&freeb,&totalb),"snake mem info");uint64_t need=tplan.gpu_bytes[g]+metadata_bytes+staging_bytes+reserve;std::cerr<<"gpu"<<g<<" free_gib="<<double(freeb)/double(1ULL<<30)<<" need_with_reserve_gib="<<double(need)/double(1ULL<<30)<<'\n';if(need>freeb)return 4;}
 
     std::array<Count*,NG>base{};std::array<std::array<Count*,NG>,NG>slots{};std::array<BucketFusedDeviceTables,NG>ft;std::array<SnakeReverseDeviceTables,NG>rt;
     for(int g=0;g<NG;++g){ck(cudaSetDevice(g),"snake alloc set");ck(cudaMalloc(&base[g],size_t(tplan.gpu_bytes[g])),"snake auth alloc");ck(cudaMemset(base[g],0,size_t(tplan.gpu_bytes[g])),"snake auth zero");uint8_t*bb=reinterpret_cast<uint8_t*>(base[g]);for(int s=0;s<NG;++s)slots[g][s]=reinterpret_cast<Count*>(bb+tplan.slot[g][s].off_bytes);ck(cudaMemcpyToSymbol(D_MOD,&mod,sizeof(mod)),"snake modulus");ft[g].install_metadata(layout,borbit,bfused);rt[g].install(reverse);ft[g].bind_owner(uint32_t(g),phy,slots[g]);}
