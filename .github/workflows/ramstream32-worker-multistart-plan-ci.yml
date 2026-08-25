@@ -1,0 +1,105 @@
+name: ramstream32 LOW worker multistart CI
+
+on:
+  push:
+    paths:
+      - 'src/cuda/gridfp/ramstream32_cpu_low_domain_worker_locality.hpp'
+      - 'src/cuda/gridfp/ramstream32_cpu_low_domain_worker_coalesce.hpp'
+      - 'src/cuda/gridfp/ramstream32_cpu_low_domain_worker_unique_coalesce.hpp'
+      - 'src/cuda/gridfp/ramstream32_cpu_low_domain_worker_multistart.hpp'
+      - 'src/cuda/gridfp/probes/ramstream32_cpu_low_domain_worker_locality_selftest.cu'
+      - 'src/cuda/gridfp/probes/ramstream32_cpu_low_domain_worker_multistart_selftest.cu'
+      - 'src/cuda/gridfp/probes/ramstream32_cpu_low_domain_worker_multistart_plan.cu'
+      - 'scripts/build/gridfp-ramstream32-cpu-low-domain-worker-multistart-plan.sh'
+      - 'scripts/bench/ramstream32-cpu-low-domain-worker-multistart-plan-sweep.sh'
+      - 'docs/ramstream32-cpu-low-worker-multistart.md'
+      - '.github/workflows/ramstream32-worker-multistart-plan-ci.yml'
+  pull_request:
+    paths:
+      - 'src/cuda/gridfp/ramstream32_cpu_low_domain_worker_locality.hpp'
+      - 'src/cuda/gridfp/ramstream32_cpu_low_domain_worker_coalesce.hpp'
+      - 'src/cuda/gridfp/ramstream32_cpu_low_domain_worker_unique_coalesce.hpp'
+      - 'src/cuda/gridfp/ramstream32_cpu_low_domain_worker_multistart.hpp'
+      - 'src/cuda/gridfp/probes/ramstream32_cpu_low_domain_worker_locality_selftest.cu'
+      - 'src/cuda/gridfp/probes/ramstream32_cpu_low_domain_worker_multistart_selftest.cu'
+      - 'src/cuda/gridfp/probes/ramstream32_cpu_low_domain_worker_multistart_plan.cu'
+      - 'scripts/build/gridfp-ramstream32-cpu-low-domain-worker-multistart-plan.sh'
+      - 'scripts/bench/ramstream32-cpu-low-domain-worker-multistart-plan-sweep.sh'
+      - 'docs/ramstream32-cpu-low-worker-multistart.md'
+      - '.github/workflows/ramstream32-worker-multistart-plan-ci.yml'
+  workflow_dispatch:
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    container: nvidia/cuda:12.8.1-devel-ubuntu22.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Check scripts
+        shell: bash
+        run: |
+          bash -n scripts/build/gridfp-ramstream32-cpu-low-domain-worker-multistart-plan.sh
+          bash -n scripts/bench/ramstream32-cpu-low-domain-worker-multistart-plan-sweep.sh
+          grep -Fq 'multistart-global-unique-worker-v5.28-plan' scripts/bench/ramstream32-cpu-low-domain-worker-multistart-plan-sweep.sh
+          grep -Fq 'selected branch failed dominance contract' scripts/bench/ramstream32-cpu-low-domain-worker-multistart-plan-sweep.sh
+          grep -Fq 'hybrid_wins' scripts/bench/ramstream32-cpu-low-domain-worker-multistart-plan-sweep.sh
+      - name: Compile W10 multistart probes
+        shell: bash
+        run: |
+          mkdir -p build
+          common=(-O3 -std=c++17 -arch=sm_80 -DTARGET_W=10 -DLOW_LUT_K=5 -DHIGH_LUT_K=4)
+          nvcc "${common[@]}" \
+            src/cuda/gridfp/probes/ramstream32_cpu_low_domain_worker_multistart_selftest.cu \
+            -o build/ramstream32_cpu_low_domain_worker_multistart_selftest
+          nvcc "${common[@]}" \
+            src/cuda/gridfp/probes/ramstream32_cpu_low_domain_worker_multistart_plan.cu \
+            -o build/ramstream32_cpu_low_domain_worker_multistart_plan
+      - name: Validate selected exact recurrence
+        shell: bash
+        run: |
+          build/ramstream32_cpu_low_domain_worker_multistart_selftest \
+            > /tmp/worker-multistart-selftest.txt 2> /tmp/worker-multistart-selftest.log
+          grep -Fq 'cpu-low-domain-worker-multistart-selftest OK' /tmp/worker-multistart-selftest.txt
+          grep -Fq 'selected_source=' /tmp/worker-multistart-selftest.txt
+          grep -Fq 'exact_generations=2' /tmp/worker-multistart-selftest.txt
+          grep -Fq 'cpu_low_domain_worker_unique_coalesce objective=global-unique-neighbor-coalesce-v5.27-plan' /tmp/worker-multistart-selftest.log
+          grep -Fq 'cpu_low_domain_worker_coalesce objective=neighbor-page-coalesce-under-domain-cap-v5.26-plan' /tmp/worker-multistart-selftest.log
+      - name: Validate multistart structural plan
+        shell: bash
+        run: |
+          build/ramstream32_cpu_low_domain_worker_multistart_plan 9 4 2 \
+            > /tmp/worker-multistart-plan.txt 2> /tmp/worker-multistart-plan.log
+          grep -Fq 'cpu_low_domain_worker_multistart_plan OK' /tmp/worker-multistart-plan.txt
+          grep -Fq 'objective=multistart-global-unique-worker-v5.28-plan' /tmp/worker-multistart-plan.txt
+          grep -Fq 'selected_source=' /tmp/worker-multistart-plan.txt
+          grep -Fq 'parent_pages_2m=' /tmp/worker-multistart-plan.txt
+          grep -Fq 'raw_v526_pages_2m=' /tmp/worker-multistart-plan.txt
+          grep -Fq 'hybrid_pages_2m=' /tmp/worker-multistart-plan.txt
+          grep -Fq 'selected_pages_2m=' /tmp/worker-multistart-plan.txt
+          python3 - <<'PY'
+          fields = {}
+          for token in open('/tmp/worker-multistart-plan.txt').readline().split():
+              if '=' in token:
+                  k, v = token.split('=', 1)
+                  fields[k] = v
+          p=(int(fields['parent_pages_2m']),int(fields['parent_pages_4k']),int(fields['parent_transitions']))
+          d=(int(fields['direct_pages_2m']),int(fields['direct_pages_4k']),int(fields['direct_transitions']))
+          r=(int(fields['raw_v526_pages_2m']),int(fields['raw_v526_pages_4k']),int(fields['raw_v526_transitions']))
+          h=(int(fields['hybrid_pages_2m']),int(fields['hybrid_pages_4k']),int(fields['hybrid_transitions']))
+          s=(int(fields['selected_pages_2m']),int(fields['selected_pages_4k']),int(fields['selected_transitions']))
+          assert s <= p and s <= d and s <= r and s <= h
+          parent_max=int(fields['parent_max_worker_cells'])
+          assert int(fields['direct_max_worker_cells']) <= parent_max
+          assert int(fields['hybrid_raw_v526_max_worker_cells']) <= parent_max
+          assert int(fields['hybrid_max_worker_cells']) <= int(fields['hybrid_raw_v526_max_worker_cells'])
+          assert int(fields['selected_max_worker_cells']) <= parent_max
+          assert fields['selected_source'] in ('direct','hybrid')
+          PY
+      - name: Check documentation
+        shell: bash
+        run: |
+          d=docs/ramstream32-cpu-low-worker-multistart.md
+          grep -Fq 'v5.28' "$d"
+          grep -Fq 'hybrid_wins' "$d"
+          grep -Fq 'v5.26_better_basin' "$d"
+          grep -Fq 'selected exact tuple' "$d"
