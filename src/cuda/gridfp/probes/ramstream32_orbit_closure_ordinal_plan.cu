@@ -25,6 +25,7 @@ int main(){
     // One all-ones code point is reserved for NONE. Thus b bits can encode at
     // most 2^b-1 real destination-local ordinals.
     bool forward_fits10=mf<=1023,reverse_fits2=mr<=3;
-    std::cout<<"orbit-closure-ordinal-plan OK W="<<TARGET_W<<" max_forward_low="<<st.max_forward_low<<" max_forward_high="<<st.max_forward_high<<" max_reverse_low="<<st.max_reverse_low<<" max_reverse_high="<<st.max_reverse_high<<" forward_ordinal_bits="<<ordinal_bits(mf?mf-1:0)<<" reverse_ordinal_bits="<<ordinal_bits(mr?mr-1:0)<<" forward_spare_bits=10 reverse_spare_bits=2 forward_fits_spare="<<forward_fits10<<" reverse_fits_spare="<<reverse_fits2<<"\n";
+    bool forward_fits16=mf<=65535,reverse_fits16=mr<=65535;
+    std::cout<<"orbit-closure-ordinal-plan OK W="<<TARGET_W<<" max_forward_low="<<st.max_forward_low<<" max_forward_high="<<st.max_forward_high<<" max_reverse_low="<<st.max_reverse_low<<" max_reverse_high="<<st.max_reverse_high<<" forward_ordinal_bits="<<ordinal_bits(mf?mf-1:0)<<" reverse_ordinal_bits="<<ordinal_bits(mr?mr-1:0)<<" forward_spare_bits=10 reverse_spare_bits=2 forward_fits_spare="<<forward_fits10<<" reverse_fits_spare="<<reverse_fits2<<" forward_fits_u16="<<forward_fits16<<" reverse_fits_u16="<<reverse_fits16<<"\n";
     return 0;
 }
