@@ -3,6 +3,10 @@
 // Non-synchronizing launchers for the multi-GPU bucket driver. Call one on
 // every GPU first, then synchronize all GPUs once at the window boundary.
 
+#ifndef GPU_DIRECT_PM_ACCUM
+#define GPU_DIRECT_PM_ACCUM 0
+#endif
+
 #if GPU_DIRECT_PM_ACCUM
 #include "ramstream32_bucket_fused_pm.cuh"
 
