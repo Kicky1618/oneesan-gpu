@@ -17,6 +17,18 @@
 #error "packed LOW group config currently requires uint32 warp-row ordinals"
 #endif
 
+// Static portion shared by every row/cap for one HIGH occupancy mask.  Keep it
+// separate from the mutable config so later closure metadata does not inflate
+// the v0.39 base cache.
+struct MaskShardLowGroupPackedBase {
+    FBlock main_blocks[64];
+    FBlock block_blocks[32];
+    int main_nblocks;
+    int block_nblocks;
+    std::uint32_t mask;
+    std::uint32_t reserved;
+};
+
 // Mutable per-LOW-group metadata consumed by the active packed kernels.  HIGH
 // execution remains unchanged and continues using the legacy D_F_* constants.
 struct MaskShardLowGroupPackedConfig {
@@ -30,12 +42,9 @@ struct MaskShardLowGroupPackedConfig {
     std::uint32_t low_count[HIGH_LUT_K + 2];
     std::uint32_t low_chunks[HIGH_LUT_K + 2];
 #ifdef MASKSHARD_LOW_CLOSURE_PACKED_PREFIX
-    // v0.41: exact LOW closure warp-task prefixes.  n=27: 3640 bytes.
     std::uint32_t closure_prefix[LOW_LUT_K][65];
 #endif
 #ifdef MASKSHARD_LOW_CLOSURE_PACKED_META
-    // v0.42: row-resolved warp-uniform closure metadata.  These values used to
-    // come from global pointer tables inside every closure warp iteration.
     std::uint32_t closure_begin[LOW_LUT_K][65];
     std::uint32_t closure_selected[LOW_LUT_K][65];
     std::uint32_t high_mask_off[HIGH_LUT_K + 2];
@@ -48,10 +57,6 @@ __device__ __constant__ MaskShardLowGroupPackedConfig D_MS_LOW_GROUP_PACKED;
 #ifndef MASKSHARD_LOW_CLOSURE_ROW_DEPTH_COMPACT
 #error "packed LOW closure prefix requires compact row-depth closure metadata"
 #endif
-
-// Capture only host arrays needed to construct exact closure plans.  The normal
-// device tables are still built/installed by the shared solver; this copy is
-// host-only and consumes no GPU HBM.
 struct MaskShardLowClosurePrefixHostCapture {
     std::vector<std::uint32_t> block_off;
     std::vector<std::uint32_t> compact_active_count;
@@ -76,10 +81,10 @@ static MaskShardLowClosureColsHost maskshard_build_low_closure_cols_capture(
 #define build_maskshard_low_closure_cols maskshard_build_low_closure_cols_capture
 #endif
 
-static MaskShardLowGroupPackedConfig maskshard_build_low_group_packed_base_uncached(
+static MaskShardLowGroupPackedBase maskshard_build_low_group_packed_static_uncached(
     std::uint32_t mask
 ) {
-    MaskShardLowGroupPackedConfig cfg{};
+    MaskShardLowGroupPackedBase base{};
     const std::vector<FBlock> mb = make_factor_main_blocks(false, mask);
     const std::vector<FBlock> db = make_factor_block_blocks(false, mask);
     if (mb.empty() || db.empty() || mb.size() > 64 || db.size() > 32) {
@@ -96,7 +101,7 @@ static MaskShardLowGroupPackedConfig maskshard_build_low_group_packed_base_uncac
                       << mask << " bid=" << i << '\n';
             std::exit(334);
         }
-        cfg.main_blocks[i] = b;
+        base.main_blocks[i] = b;
         prev = b.end;
     }
     prev = 0;
@@ -107,17 +112,38 @@ static MaskShardLowGroupPackedConfig maskshard_build_low_group_packed_base_uncac
                       << mask << " bid=" << i << '\n';
             std::exit(335);
         }
-        cfg.block_blocks[i] = b;
+        base.block_blocks[i] = b;
         prev = b.end;
     }
-    cfg.main_nblocks = int(mb.size());
-    cfg.block_nblocks = int(db.size());
-    cfg.mask = mask;
+    base.main_nblocks = int(mb.size());
+    base.block_nblocks = int(db.size());
+    base.mask = mask;
+    return base;
+}
+
+static void maskshard_apply_low_group_packed_base(
+    MaskShardLowGroupPackedConfig& cfg,
+    const MaskShardLowGroupPackedBase& base
+) {
+    for (int i = 0; i < 64; ++i) cfg.main_blocks[i] = base.main_blocks[i];
+    for (int i = 0; i < 32; ++i) cfg.block_blocks[i] = base.block_blocks[i];
+    cfg.main_nblocks = base.main_nblocks;
+    cfg.block_nblocks = base.block_nblocks;
+    cfg.mask = base.mask;
+    cfg.reserved = 0;
+}
+
+static MaskShardLowGroupPackedConfig maskshard_build_low_group_packed_base_uncached(
+    std::uint32_t mask
+) {
+    MaskShardLowGroupPackedConfig cfg{};
+    maskshard_apply_low_group_packed_base(
+        cfg, maskshard_build_low_group_packed_static_uncached(mask));
     return cfg;
 }
 
 #ifdef MASKSHARD_LOW_GROUP_PACKED_CACHE
-static std::array<MaskShardLowGroupPackedConfig, (1u << HIGH_LUT_K)>
+static std::array<MaskShardLowGroupPackedBase, (1u << HIGH_LUT_K)>
     G_MS_LOW_GROUP_PACKED_BASE_CACHE{};
 static bool G_MS_LOW_GROUP_PACKED_BASE_CACHE_BUILT = false;
 
@@ -125,10 +151,12 @@ static void maskshard_build_low_group_packed_base_cache() {
     if (G_MS_LOW_GROUP_PACKED_BASE_CACHE_BUILT) return;
     for (std::uint32_t mask = 0; mask < (1u << HIGH_LUT_K); ++mask)
         G_MS_LOW_GROUP_PACKED_BASE_CACHE[size_t(mask)] =
-            maskshard_build_low_group_packed_base_uncached(mask);
+            maskshard_build_low_group_packed_static_uncached(mask);
     G_MS_LOW_GROUP_PACKED_BASE_CACHE_BUILT = true;
-    std::cerr << "packed LOW group base cache masks="
+    std::cerr << "packed LOW group static base cache masks="
               << (1u << HIGH_LUT_K)
+              << " base_bytes=" << sizeof(MaskShardLowGroupPackedBase)
+              << " config_bytes=" << sizeof(MaskShardLowGroupPackedConfig)
               << " mib="
               << double(sizeof(G_MS_LOW_GROUP_PACKED_BASE_CACHE))
                     / double(1ULL << 20) << '\n';
@@ -145,7 +173,10 @@ static MaskShardLowGroupPackedConfig maskshard_build_low_group_packed_base(
         std::cerr << "packed LOW group base cache invalid mask=" << mask << '\n';
         std::exit(340);
     }
-    return G_MS_LOW_GROUP_PACKED_BASE_CACHE[size_t(mask)];
+    MaskShardLowGroupPackedConfig cfg{};
+    maskshard_apply_low_group_packed_base(
+        cfg, G_MS_LOW_GROUP_PACKED_BASE_CACHE[size_t(mask)]);
+    return cfg;
 }
 
 #ifdef report_high_mask_shard_layout
