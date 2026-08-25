@@ -60,6 +60,31 @@ struct MaskShardLowMaskBatchExecutor {
     std::array<std::array<Count*, ROW_CAPS + 1>, 8> graph_block{};
 #endif
 
+#ifdef MASKSHARD_LOW_MASKBATCH_RUNTIME_TUNING
+    void configure_runtime_tuning() {
+        if (const char* raw = std::getenv("ONEESAN_LOW_TARGET_TASKS_PER_CTA")) {
+            char* end = nullptr;
+            const unsigned long long v = std::strtoull(raw, &end, 10);
+            if (!raw[0] || !end || *end != '\0' || v == 0) {
+                std::cerr << "invalid ONEESAN_LOW_TARGET_TASKS_PER_CTA="
+                          << raw << '\n';
+                std::exit(358);
+            }
+            target_tasks_per_cta = std::uint64_t(v);
+        }
+        if (const char* raw = std::getenv("ONEESAN_LOW_MAX_REPLICAS")) {
+            char* end = nullptr;
+            const unsigned long long v = std::strtoull(raw, &end, 10);
+            if (!raw[0] || !end || *end != '\0' || v < 1 || v > 65535) {
+                std::cerr << "invalid ONEESAN_LOW_MAX_REPLICAS="
+                          << raw << '\n';
+                std::exit(359);
+            }
+            max_replicas = int(v);
+        }
+    }
+#endif
+
     void build_resident_rows(const MaskShardLayout& shard) {
         for (int cap = 1; cap <= ROW_CAPS; ++cap) {
             const MaskShardLowMaskBatchRangeRowPlan row =
@@ -134,6 +159,9 @@ struct MaskShardLowMaskBatchExecutor {
 
     void install(const MaskShardLayout& shard) {
         ngpu = shard.ngpu;
+#ifdef MASKSHARD_LOW_MASKBATCH_RUNTIME_TUNING
+        configure_runtime_tuning();
+#endif
         tasks = maskshard_build_low_maskbatch_tables();
         for (int d = 0; d < ngpu; ++d) {
             ck(cudaSetDevice(d), "LOW range install device");
@@ -155,6 +183,11 @@ struct MaskShardLowMaskBatchExecutor {
                   << " cuda_graph=1"
 #else
                   << " cuda_graph=0"
+#endif
+#ifdef MASKSHARD_LOW_MASKBATCH_RUNTIME_TUNING
+                  << " runtime_tuning=1"
+#else
+                  << " runtime_tuning=0"
 #endif
                   << '\n';
     }
@@ -256,12 +289,14 @@ struct MaskShardLowMaskBatchExecutor {
 #ifdef MASKSHARD_LOW_MASKBATCH_CUDA_GRAPH
             for (int cap = 1; cap <= ROW_CAPS; ++cap) {
                 if (graph_exec[d][cap]) {
-                    cudaGraphExecDestroy(graph_exec[d][cap]);
+                    ck(cudaGraphExecDestroy(graph_exec[d][cap]),
+                       "LOW range graph exec destroy");
                     graph_exec[d][cap] = nullptr;
                 }
             }
             if (graph_stream[d]) {
-                cudaStreamDestroy(graph_stream[d]);
+                ck(cudaStreamDestroy(graph_stream[d]),
+                   "LOW range graph stream destroy");
                 graph_stream[d] = nullptr;
             }
 #endif
