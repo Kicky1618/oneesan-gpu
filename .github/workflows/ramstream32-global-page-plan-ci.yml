@@ -6,6 +6,7 @@ on:
       - 'src/cuda/gridfp/ramstream32_cpu_low_domain_page.hpp'
       - 'src/cuda/gridfp/ramstream32_cpu_low_domain_page_global.hpp'
       - 'src/cuda/gridfp/probes/ramstream32_cpu_low_global_page_plan.cu'
+      - 'src/cuda/gridfp/probes/ramstream32_cpu_low_global_page_selftest.cu'
       - 'scripts/build/gridfp-ramstream32-cpu-low-global-page-plan.sh'
       - 'scripts/bench/ramstream32-cpu-low-global-page-plan-sweep.sh'
       - 'docs/ramstream32-cpu-low-scheduling.md'
@@ -16,6 +17,7 @@ on:
       - 'src/cuda/gridfp/ramstream32_cpu_low_domain_page.hpp'
       - 'src/cuda/gridfp/ramstream32_cpu_low_domain_page_global.hpp'
       - 'src/cuda/gridfp/probes/ramstream32_cpu_low_global_page_plan.cu'
+      - 'src/cuda/gridfp/probes/ramstream32_cpu_low_global_page_selftest.cu'
       - 'scripts/build/gridfp-ramstream32-cpu-low-global-page-plan.sh'
       - 'scripts/bench/ramstream32-cpu-low-global-page-plan-sweep.sh'
       - 'docs/ramstream32-cpu-low-scheduling.md'
@@ -37,14 +39,25 @@ jobs:
           grep -Fq 'global-unique-max-guard-page-sum-v5.24-plan' scripts/bench/ramstream32-cpu-low-global-page-plan-sweep.sh
           grep -Fq 'global unique page regression' scripts/bench/ramstream32-cpu-low-global-page-plan-sweep.sh
           grep -Fq 'classification=global_beats_local' scripts/bench/ramstream32-cpu-low-global-page-plan-sweep.sh
-      - name: Compile W10 global page probe
+      - name: Compile W10 global page probes
         shell: bash
         run: |
           mkdir -p build
-          nvcc -O3 -std=c++17 -arch=sm_80 \
-            -DTARGET_W=10 -DLOW_LUT_K=5 -DHIGH_LUT_K=4 \
+          common=(-O3 -std=c++17 -arch=sm_80 -DTARGET_W=10 -DLOW_LUT_K=5 -DHIGH_LUT_K=4)
+          nvcc "${common[@]}" \
             src/cuda/gridfp/probes/ramstream32_cpu_low_global_page_plan.cu \
             -o build/ramstream32_cpu_low_global_page_plan
+          nvcc "${common[@]}" \
+            src/cuda/gridfp/probes/ramstream32_cpu_low_global_page_selftest.cu \
+            -o build/ramstream32_cpu_low_global_page_selftest
+      - name: Validate synthetic global unique semantics
+        shell: bash
+        run: |
+          build/ramstream32_cpu_low_global_page_selftest | tee /tmp/global-page-selftest.txt
+          grep -Fq 'cpu-low-global-page-selftest OK' /tmp/global-page-selftest.txt
+          grep -Fq 'local_sum_example=4' /tmp/global-page-selftest.txt
+          grep -Fq 'global_unique_example=3' /tmp/global-page-selftest.txt
+          grep -Fq 'global_improved_example=2' /tmp/global-page-selftest.txt
       - name: Validate four-domain global unique plan
         shell: bash
         run: |
