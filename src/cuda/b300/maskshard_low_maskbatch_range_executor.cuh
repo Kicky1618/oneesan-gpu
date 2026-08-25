@@ -52,6 +52,14 @@ struct MaskShardLowMaskBatchExecutor {
         std::array<MaskShardLowMaskBatchRangeResidentCapPlan, ROW_CAPS + 1>, 8>
         resident{};
 
+#ifdef MASKSHARD_LOW_MASKBATCH_CUDA_GRAPH
+    std::array<cudaStream_t, 8> graph_stream{};
+    std::array<std::array<cudaGraphExec_t, ROW_CAPS + 1>, 8> graph_exec{};
+    std::array<std::array<int, ROW_CAPS + 1>, 8> graph_threads{};
+    std::array<std::array<Count*, ROW_CAPS + 1>, 8> graph_main{};
+    std::array<std::array<Count*, ROW_CAPS + 1>, 8> graph_block{};
+#endif
+
     void build_resident_rows(const MaskShardLayout& shard) {
         for (int cap = 1; cap <= ROW_CAPS; ++cap) {
             const MaskShardLowMaskBatchRangeRowPlan row =
@@ -132,13 +140,68 @@ struct MaskShardLowMaskBatchExecutor {
             cfg[d].install(d, shard, tasks);
         }
         build_resident_rows(shard);
+#ifdef MASKSHARD_LOW_MASKBATCH_CUDA_GRAPH
+        for (int d = 0; d < ngpu; ++d) {
+            ck(cudaSetDevice(d), "LOW range graph stream device");
+            ck(cudaStreamCreateWithFlags(&graph_stream[d], cudaStreamNonBlocking),
+               "LOW range graph stream create");
+        }
+#endif
         std::cerr << "LOW mask-batch compact-range executor installed target_tasks_per_cta="
                   << target_tasks_per_cta
                   << " max_replicas=" << max_replicas
-                  << " descriptor_mode=range-prefix\n";
+                  << " descriptor_mode=range-prefix"
+#ifdef MASKSHARD_LOW_MASKBATCH_CUDA_GRAPH
+                  << " cuda_graph=1"
+#else
+                  << " cuda_graph=0"
+#endif
+                  << '\n';
     }
 
     void prepare_row(const MaskShardLayout&, int) {}
+
+    bool cap_has_work(int d, int cap) const {
+        const auto& rp = resident[d][cap];
+        if (rp.orbit_ctas) return true;
+        for (int pi = 0; pi < LOW_LUT_K; ++pi)
+            if (rp.closure_ctas[pi]) return true;
+        return false;
+    }
+
+    void enqueue_device_cap(
+        int d,
+        Count* authoritative_main,
+        Count* authoritative_block,
+        int cap,
+        int threads,
+        cudaStream_t stream
+    ) {
+        const MaskShardLowMaskBatchRangeResidentCapPlan& rp = resident[d][cap];
+        const MaskShardLowBatchRangeDeviceDesc* orbit_groups =
+            d_orbit[d] ? d_orbit[d] + rp.orbit_group_off : nullptr;
+
+        for (int p = LOW_LUT_K; p >= 1; --p) {
+            if (rp.orbit_ctas) {
+                maskshard_low_maskbatch_range_orbit_kernel<<<
+                    rp.orbit_ctas, threads, 0, stream>>>(
+                    authoritative_main, authoritative_block,
+                    orbit_groups, int(rp.orbit_group_count), cfg[d].d_static,
+                    std::min(cap, TARGET_W / 2), p);
+            }
+
+            const int pi = LOW_LUT_K - p;
+            const std::uint32_t ga = rp.closure_group_off[pi];
+            const std::uint32_t gz = rp.closure_group_off[pi + 1];
+            if (rp.closure_ctas[pi]) {
+                maskshard_low_maskbatch_range_closure_kernel<<<
+                    rp.closure_ctas[pi], threads, 0, stream>>>(
+                    authoritative_main, authoritative_block,
+                    d_closure[d] + ga, int(gz - ga), cfg[d].d_static,
+                    cap, p);
+            }
+        }
+    }
 
     void run_device_row(
         int d,
@@ -150,37 +213,58 @@ struct MaskShardLowMaskBatchExecutor {
         if (d < 0 || d >= ngpu) return;
         ck(cudaSetDevice(d), "LOW range run device");
         const int cap = std::min(zero_based_row + 1, ROW_CAPS);
-        const MaskShardLowMaskBatchRangeResidentCapPlan& rp = resident[d][cap];
-        const MaskShardLowBatchRangeDeviceDesc* orbit_groups =
-            d_orbit[d] ? d_orbit[d] + rp.orbit_group_off : nullptr;
+        if (!cap_has_work(d, cap)) return;
 
-        for (int p = LOW_LUT_K; p >= 1; --p) {
-            if (rp.orbit_ctas) {
-                maskshard_low_maskbatch_range_orbit_kernel<<<rp.orbit_ctas, threads>>>(
-                    authoritative_main, authoritative_block,
-                    orbit_groups, int(rp.orbit_group_count), cfg[d].d_static,
-                    std::min(cap, TARGET_W / 2), p);
-                ck(cudaGetLastError(), "LOW range orbit launch");
-            }
-
-            const int pi = LOW_LUT_K - p;
-            const std::uint32_t ga = rp.closure_group_off[pi];
-            const std::uint32_t gz = rp.closure_group_off[pi + 1];
-            if (rp.closure_ctas[pi]) {
-                maskshard_low_maskbatch_range_closure_kernel<<<
-                    rp.closure_ctas[pi], threads>>>(
-                    authoritative_main, authoritative_block,
-                    d_closure[d] + ga, int(gz - ga), cfg[d].d_static,
-                    cap, p);
-                ck(cudaGetLastError(), "LOW range closure launch");
-            }
+#ifdef MASKSHARD_LOW_MASKBATCH_CUDA_GRAPH
+        cudaGraphExec_t& exec = graph_exec[d][cap];
+        if (!exec) {
+            cudaGraph_t graph = nullptr;
+            ck(cudaStreamBeginCapture(
+                   graph_stream[d], cudaStreamCaptureModeThreadLocal),
+               "LOW range graph begin capture");
+            enqueue_device_cap(
+                d, authoritative_main, authoritative_block,
+                cap, threads, graph_stream[d]);
+            ck(cudaStreamEndCapture(graph_stream[d], &graph),
+               "LOW range graph end capture");
+            ck(cudaGraphInstantiate(&exec, graph, nullptr, nullptr, 0),
+               "LOW range graph instantiate");
+            ck(cudaGraphDestroy(graph), "LOW range graph destroy source");
+            graph_threads[d][cap] = threads;
+            graph_main[d][cap] = authoritative_main;
+            graph_block[d][cap] = authoritative_block;
+        } else if (graph_threads[d][cap] != threads
+                   || graph_main[d][cap] != authoritative_main
+                   || graph_block[d][cap] != authoritative_block) {
+            std::cerr << "LOW range graph replay signature changed dev=" << d
+                      << " cap=" << cap << '\n';
+            std::exit(357);
         }
+        ck(cudaGraphLaunch(exec, graph_stream[d]), "LOW range graph launch");
+        ck(cudaStreamSynchronize(graph_stream[d]), "LOW range graph sync");
+#else
+        enqueue_device_cap(
+            d, authoritative_main, authoritative_block, cap, threads, 0);
+        ck(cudaGetLastError(), "LOW range launch sequence");
         ck(cudaDeviceSynchronize(), "LOW range row sync");
+#endif
     }
 
     void release() {
         for (int d = 0; d < ngpu; ++d) {
             ck(cudaSetDevice(d), "LOW range release device");
+#ifdef MASKSHARD_LOW_MASKBATCH_CUDA_GRAPH
+            for (int cap = 1; cap <= ROW_CAPS; ++cap) {
+                if (graph_exec[d][cap]) {
+                    cudaGraphExecDestroy(graph_exec[d][cap]);
+                    graph_exec[d][cap] = nullptr;
+                }
+            }
+            if (graph_stream[d]) {
+                cudaStreamDestroy(graph_stream[d]);
+                graph_stream[d] = nullptr;
+            }
+#endif
             if (d_orbit[d]) cudaFree(d_orbit[d]);
             if (d_closure[d]) cudaFree(d_closure[d]);
             d_orbit[d] = d_closure[d] = nullptr;
