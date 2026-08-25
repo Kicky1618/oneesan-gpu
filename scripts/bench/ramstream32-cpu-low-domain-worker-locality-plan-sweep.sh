@@ -44,20 +44,24 @@ host=$(hostname 2>/dev/null || echo unknown)
 n=$N
 arch=$ARCH
 configs=$CONFIGS
-objective=neighbor-page-coalesce-under-domain-cap-v5.26-plan
+objective=global-unique-neighbor-coalesce-v5.27-plan
+local_objective=neighbor-page-coalesce-under-domain-cap-v5.26-plan
 parent_objective=contiguous-under-lpt-cap-v5.25-plan
 baseline=refined-domain-plus-v5.23-page
 binary_sha256=$(file_sha256 "$bin")
 EOF
 
-printf 'workers\tdomain_size\tdomains\tconverted_domains\tfallback_domains\tcoalesce_noncontiguous_domains\tcoalesce_improved_domains\tcoalesce_accepted_moves\tcoalesce_cap_rejections\tbaseline_max_worker_cells\tlocality_max_worker_cells\tcoalesced_max_worker_cells\tbaseline_cross_worker_2m\tlocality_cross_worker_2m\tcoalesced_cross_worker_2m\tbaseline_cross_worker_4k\tlocality_cross_worker_4k\tcoalesced_cross_worker_4k\tbaseline_owner_transitions\tlocality_owner_transitions\tcoalesced_owner_transitions\tcross_domain_2m\tcross_domain_4k\tworker_locality_build_s\tworker_coalesce_build_s\traw\n' >"$out"
+printf 'workers\tdomain_size\tdomains\tconverted_domains\tfallback_domains\tlocal_noncontiguous_domains\tlocal_accepted_moves\tunique_noncontiguous_domains\tunique_improved_domains\tunique_accepted_moves\tunique_cap_rejections\tbaseline_max_worker_cells\tlocality_max_worker_cells\tcoalesced_max_worker_cells\tunique_max_worker_cells\tbaseline_cross_worker_2m\tlocality_cross_worker_2m\tcoalesced_cross_worker_2m\tunique_cross_worker_2m\tbaseline_cross_worker_4k\tlocality_cross_worker_4k\tcoalesced_cross_worker_4k\tunique_cross_worker_4k\tbaseline_owner_transitions\tlocality_owner_transitions\tcoalesced_owner_transitions\tunique_owner_transitions\tcross_domain_2m\tcross_domain_4k\tworker_locality_build_s\tworker_coalesce_build_s\tworker_unique_coalesce_build_s\traw\n' >"$out"
 
 for cfg in "${configs[@]}"; do
   workers="${cfg%%:*}"; domain="${cfg#*:}"
-  echo "worker-coalesce-plan n=$N workers=$workers domain_size=$domain" >&2
+  echo "worker-unique-plan n=$N workers=$workers domain_size=$domain" >&2
   line="$($bin "$N" "$workers" "$domain" 2> >(tee /dev/stderr) | tail -n1)"
-  [[ "$(field "$line" objective)" == neighbor-page-coalesce-under-domain-cap-v5.26-plan ]] || {
+  [[ "$(field "$line" objective)" == global-unique-neighbor-coalesce-v5.27-plan ]] || {
     echo "objective provenance mismatch cfg=$cfg" >&2; exit 4;
+  }
+  [[ "$(field "$line" local_objective)" == neighbor-page-coalesce-under-domain-cap-v5.26-plan ]] || {
+    echo "local objective provenance mismatch cfg=$cfg" >&2; exit 4;
   }
   [[ "$(field "$line" parent_objective)" == contiguous-under-lpt-cap-v5.25-plan ]] || {
     echo "parent objective provenance mismatch cfg=$cfg" >&2; exit 4;
@@ -69,44 +73,52 @@ for cfg in "${configs[@]}"; do
     "$(field "$line" baseline_max_worker_cells)" \
     "$(field "$line" locality_max_worker_cells)" \
     "$(field "$line" coalesced_max_worker_cells)" \
-    "$(field "$line" coalesce_penalty_2m_before)" \
-    "$(field "$line" coalesce_penalty_2m_after)" \
-    "$(field "$line" coalesce_penalty_4k_before)" \
-    "$(field "$line" coalesce_penalty_4k_after)" \
-    "$(field "$line" coalesce_owner_transitions_before)" \
-    "$(field "$line" coalesce_owner_transitions_after)" <<'PY'
+    "$(field "$line" unique_max_worker_cells)" \
+    "$(field "$line" locality_cross_worker_pages_2m)" \
+    "$(field "$line" locality_cross_worker_pages_4k)" \
+    "$(field "$line" locality_worker_owner_transitions)" \
+    "$(field "$line" unique_cross_worker_pages_2m)" \
+    "$(field "$line" unique_cross_worker_pages_4k)" \
+    "$(field "$line" unique_worker_owner_transitions)" <<'PY'
 import sys
-base,loc,coal,p20,p21,p40,p41,t0,t1=map(int,sys.argv[1:])
-if loc > base or coal > loc:
-    raise SystemExit('worker-coalesce max-worker regression')
-if (p21,p41,t1) > (p20,p40,t0):
-    raise SystemExit('worker-coalesce internal objective regression')
+base,loc,coal,uniq,l2,l4,lt,u2,u4,ut=map(int,sys.argv[1:])
+if loc > base or coal > loc or uniq > loc:
+    raise SystemExit('worker coalescing max-worker regression')
+if (u2,u4,ut) > (l2,l4,lt):
+    raise SystemExit('v5.27 exact unique objective regression')
 PY
 
-  printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
+  printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
     "$workers" "$domain" "$(field "$line" domains)" \
     "$(field "$line" converted_domains)" \
     "$(field "$line" fallback_domains)" \
     "$(field "$line" coalesce_noncontiguous_domains_before)" \
-    "$(field "$line" coalesce_improved_domains)" \
     "$(field "$line" coalesce_accepted_moves)" \
-    "$(field "$line" coalesce_cap_rejections)" \
+    "$(field "$line" unique_noncontiguous_domains_before)" \
+    "$(field "$line" unique_improved_domains)" \
+    "$(field "$line" unique_accepted_moves)" \
+    "$(field "$line" unique_cap_rejections)" \
     "$(field "$line" baseline_max_worker_cells)" \
     "$(field "$line" locality_max_worker_cells)" \
     "$(field "$line" coalesced_max_worker_cells)" \
+    "$(field "$line" unique_max_worker_cells)" \
     "$(field "$line" baseline_cross_worker_pages_2m)" \
     "$(field "$line" locality_cross_worker_pages_2m)" \
     "$(field "$line" coalesced_cross_worker_pages_2m)" \
+    "$(field "$line" unique_cross_worker_pages_2m)" \
     "$(field "$line" baseline_cross_worker_pages_4k)" \
     "$(field "$line" locality_cross_worker_pages_4k)" \
     "$(field "$line" coalesced_cross_worker_pages_4k)" \
+    "$(field "$line" unique_cross_worker_pages_4k)" \
     "$(field "$line" baseline_worker_owner_transitions)" \
     "$(field "$line" locality_worker_owner_transitions)" \
     "$(field "$line" coalesced_worker_owner_transitions)" \
+    "$(field "$line" unique_worker_owner_transitions)" \
     "$(field "$line" cross_domain_pages_2m)" \
     "$(field "$line" cross_domain_pages_4k)" \
     "$(field "$line" worker_locality_build_s)" \
     "$(field "$line" worker_coalesce_build_s)" \
+    "$(field "$line" worker_unique_coalesce_build_s)" \
     "$line" >>"$out"
 done
 
@@ -117,29 +129,36 @@ with open(sys.argv[1], newline='') as f:
         b=(int(r['baseline_cross_worker_2m']),int(r['baseline_cross_worker_4k']))
         l=(int(r['locality_cross_worker_2m']),int(r['locality_cross_worker_4k']))
         c=(int(r['coalesced_cross_worker_2m']),int(r['coalesced_cross_worker_4k']))
+        u=(int(r['unique_cross_worker_2m']),int(r['unique_cross_worker_4k']))
         bt=int(r['baseline_owner_transitions'])
         lt=int(r['locality_owner_transitions'])
         ct=int(r['coalesced_owner_transitions'])
-        if c < l: cls='v5.26_unique_page_improvement'
-        elif c == l and ct < lt: cls='v5.26_transition_only_improvement'
-        elif c == l and ct == lt: cls='v5.26_no_change'
-        else: cls='v5.26_unique_page_tradeoff'
+        ut=int(r['unique_owner_transitions'])
+        if u < l: exact='v5.27_unique_page_improvement'
+        elif u == l and ut < lt: exact='v5.27_transition_only_improvement'
+        else: exact='v5.27_no_change'
+        local=(c[0],c[1],ct)
+        exact_tuple=(u[0],u[1],ut)
+        if exact_tuple < local: winner='v5.27_better_than_v5.26'
+        elif exact_tuple > local: winner='v5.26_better_basin'
+        else: winner='v5.26_v5.27_tie'
         if l < b: parent='v5.25_page_improvement'
         elif l == b and lt < bt: parent='v5.25_transition_only_improvement'
         elif l == b and lt == bt: parent='v5.25_no_change'
         else: parent='v5.25_page_tradeoff'
         print(
             f"comparison workers={r['workers']} domain_size={r['domain_size']} "
-            f"parent_classification={parent} classification={cls} "
+            f"parent_classification={parent} classification={exact} local_vs_exact={winner} "
             f"converted_domains={r['converted_domains']} fallback_domains={r['fallback_domains']} "
-            f"coalesce_noncontiguous_domains={r['coalesce_noncontiguous_domains']} "
-            f"coalesce_improved_domains={r['coalesce_improved_domains']} "
-            f"coalesce_accepted_moves={r['coalesce_accepted_moves']} "
-            f"v5.26_cross_worker_2m_delta={c[0]-l[0]} "
-            f"v5.26_cross_worker_4k_delta={c[1]-l[1]} "
-            f"v5.26_owner_transition_delta={ct-lt} "
-            f"v5.26_max_worker_cells_saved={int(r['locality_max_worker_cells'])-int(r['coalesced_max_worker_cells'])} "
-            f"worker_coalesce_build_s={float(r['worker_coalesce_build_s']):.9f}"
+            f"unique_noncontiguous_domains={r['unique_noncontiguous_domains']} "
+            f"unique_improved_domains={r['unique_improved_domains']} "
+            f"unique_accepted_moves={r['unique_accepted_moves']} "
+            f"v5.27_cross_worker_2m_delta={u[0]-l[0]} "
+            f"v5.27_cross_worker_4k_delta={u[1]-l[1]} "
+            f"v5.27_owner_transition_delta={ut-lt} "
+            f"v5.26_vs_v5.27_2m_delta={c[0]-u[0]} "
+            f"v5.26_vs_v5.27_4k_delta={c[1]-u[1]} "
+            f"worker_unique_coalesce_build_s={float(r['worker_unique_coalesce_build_s']):.9f}"
         )
 PY
 
