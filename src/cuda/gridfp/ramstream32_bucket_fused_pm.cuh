@@ -13,7 +13,7 @@ __device__ __forceinline__ uint64_t bkf_sum_high_preimages_u64(
 ){
     uint64_t sum=0;int s=int(depth);
     uint32_t low_slot=bkf_loc_owner(source_low_loc),low_rank=bkf_loc_rank(source_low_loc);
-    BucketPhysicalBlock sb=bkf_high_main(low_slot,source_bid);
+    BucketPhysicalBlock sb=bkf_low_main(low_slot,source_bid);
 #pragma unroll
     for(int pos=0;pos<HIGH_LUT_K;++pos){
         uint32_t v=(dest_code>>(2*pos))&3u;
