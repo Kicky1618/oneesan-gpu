@@ -6,6 +6,7 @@ on:
       - 'src/cuda/gridfp/oneesan_cuda_gridfp_ramstream32_factorized_hybrid_sparse.cu'
       - 'src/cuda/gridfp/ramstream32_cpu_low_sparse.hpp'
       - 'src/cuda/gridfp/ramstream32_cpu_low_sparse_persistent.hpp'
+      - 'src/cuda/gridfp/ramstream32_cpu_low_domain_page.hpp'
       - 'src/cuda/gridfp/ramstream32_cpu_low_direct.hpp'
       - 'src/cuda/gridfp/ramstream32_cpu_low_inplace.hpp'
       - 'src/cuda/gridfp/ramstream32_cpu_high.hpp'
@@ -24,6 +25,7 @@ on:
       - 'src/cuda/gridfp/oneesan_cuda_gridfp_ramstream32_factorized_hybrid_sparse.cu'
       - 'src/cuda/gridfp/ramstream32_cpu_low_sparse.hpp'
       - 'src/cuda/gridfp/ramstream32_cpu_low_sparse_persistent.hpp'
+      - 'src/cuda/gridfp/ramstream32_cpu_low_domain_page.hpp'
       - 'src/cuda/gridfp/ramstream32_cpu_low_direct.hpp'
       - 'src/cuda/gridfp/ramstream32_cpu_low_inplace.hpp'
       - 'src/cuda/gridfp/ramstream32_cpu_high.hpp'
@@ -72,7 +74,7 @@ jobs:
           build/ramstream32_hybrid_sparse_w${{ matrix.width }} \
             ${{ matrix.n }} 4294967291 12288 4 --plan-only \
             | tee /tmp/hybrid-plan.txt
-          grep -Fq 'backend=gridfp-ramstream32-factorized-hybrid-sparse-v5.21-plan' /tmp/hybrid-plan.txt
+          grep -Fq 'backend=gridfp-ramstream32-factorized-hybrid-sparse-v5.22-plan' /tmp/hybrid-plan.txt
           grep -Fq 'cpu_high_persistent_workers=1' /tmp/hybrid-plan.txt
           grep -Fq 'cpu_high_async_overlap=1' /tmp/hybrid-plan.txt
           grep -Fq 'cpu_low_persistent_workers=1' /tmp/hybrid-plan.txt
@@ -80,10 +82,11 @@ jobs:
           grep -Fq 'cpu_low_schedule=dynamic' /tmp/hybrid-plan.txt
           grep -Fq 'cpu_low_domain_size=0' /tmp/hybrid-plan.txt
           grep -Fq 'cpu_low_domain_refine=1' /tmp/hybrid-plan.txt
+          grep -Fq 'cpu_low_domain_page_tiebreak=0' /tmp/hybrid-plan.txt
           grep -Fq 'cpu_high_affinity=default' /tmp/hybrid-plan.txt
           grep -Fq 'cpu_low_affinity=default' /tmp/hybrid-plan.txt
           grep -Fq 'numa_sample_mib=0' /tmp/hybrid-plan.txt
-      - name: Validate static LOW schedule provenance and refinement toggle
+      - name: Validate static LOW schedule provenance and refinement toggles
         if: matrix.width == 22
         shell: bash
         run: |
@@ -95,6 +98,7 @@ jobs:
           grep -Fq 'cpu_low_affinity=explicit' /tmp/hybrid-sticky-plan.txt
           grep -Fq 'cpu_low_schedule=sticky' /tmp/hybrid-sticky-plan.txt
           grep -Fq 'cpu_low_domain_refine=1' /tmp/hybrid-sticky-plan.txt
+          grep -Fq 'cpu_low_domain_page_tiebreak=0' /tmp/hybrid-sticky-plan.txt
           grep -Fq 'cpu_low_schedule_build_s=' /tmp/hybrid-sticky-plan.txt
           grep -Fq 'numa_sample_mib=64' /tmp/hybrid-sticky-plan.txt
 
@@ -110,6 +114,7 @@ jobs:
           grep -Fq 'cpu_low_schedule=domain' /tmp/hybrid-domain-plan.txt
           grep -Fq 'cpu_low_domain_size=2' /tmp/hybrid-domain-plan.txt
           grep -Fq 'cpu_low_domain_refine=1' /tmp/hybrid-domain-plan.txt
+          grep -Fq 'cpu_low_domain_page_tiebreak=0' /tmp/hybrid-domain-plan.txt
           grep -Fq 'cpu_low_domain_schedule ' /tmp/hybrid-domain-plan.txt
           grep -Fq ' refine=1 ' /tmp/hybrid-domain-plan.txt
           grep -Fq 'cpu_low_domain_outer_normalized_cap=' /tmp/hybrid-domain-plan.txt
@@ -120,11 +125,23 @@ jobs:
             build/ramstream32_hybrid_sparse_w22 \
             21 4294967291 12288 4 --plan-only 2>&1 | tee /tmp/hybrid-domain-unrefined.txt
           grep -Fq 'cpu_low_domain_refine=0' /tmp/hybrid-domain-unrefined.txt
+          grep -Fq 'cpu_low_domain_page_tiebreak=0' /tmp/hybrid-domain-unrefined.txt
           grep -Fq 'cpu_low_domain_schedule ' /tmp/hybrid-domain-unrefined.txt
           grep -Fq ' refine=0 ' /tmp/hybrid-domain-unrefined.txt
           grep -Fq 'cpu_low_domain_refined_boundaries=0' /tmp/hybrid-domain-unrefined.txt
           grep -Fq 'cpu_low_domain_refined_job_moves=0' /tmp/hybrid-domain-unrefined.txt
-      - name: Reject invalid LOW schedule, domain size, and refine toggle
+
+          CPU_LOW_SCHEDULE=domain CPU_LOW_DOMAIN_SIZE=2 CPU_LOW_DOMAIN_PAGE_TIEBREAK=1 \
+            build/ramstream32_hybrid_sparse_w22 \
+            21 4294967291 12288 4 --plan-only 2>&1 | tee /tmp/hybrid-domain-page.txt
+          grep -Fq 'cpu_low_domain_page_tiebreak=1' /tmp/hybrid-domain-page.txt
+          grep -Fq 'cpu_low_domain_page_boundary_moves=' /tmp/hybrid-domain-page.txt
+          grep -Fq 'cpu_low_domain_page_penalty_2m_before=' /tmp/hybrid-domain-page.txt
+          grep -Fq 'cpu_low_domain_page_penalty_2m_after=' /tmp/hybrid-domain-page.txt
+          grep -Fq 'cpu_low_domain_page_penalty_4k_before=' /tmp/hybrid-domain-page.txt
+          grep -Fq 'cpu_low_domain_page_penalty_4k_after=' /tmp/hybrid-domain-page.txt
+          grep -Fq 'cpu_low_domain_page_tiebreak ' /tmp/hybrid-domain-page.txt
+      - name: Reject invalid LOW schedule, domain size, and refinement toggles
         if: matrix.width == 22
         shell: bash
         run: |
@@ -145,6 +162,16 @@ jobs:
             echo 'invalid CPU_LOW_DOMAIN_REFINE unexpectedly succeeded' >&2; exit 1
           fi
           grep -Fq 'CPU_LOW_DOMAIN_REFINE must be 0/1, false/true, no/yes, or off/on' /tmp/bad-refine.txt
+          if CPU_LOW_DOMAIN_PAGE_TIEBREAK=maybe \
+            build/ramstream32_hybrid_sparse_w22 21 4294967291 12288 4 --plan-only >/tmp/bad-page.txt 2>&1; then
+            echo 'invalid CPU_LOW_DOMAIN_PAGE_TIEBREAK unexpectedly succeeded' >&2; exit 1
+          fi
+          grep -Fq 'CPU_LOW_DOMAIN_PAGE_TIEBREAK must be 0/1, false/true, no/yes, or off/on' /tmp/bad-page.txt
+          if CPU_LOW_SCHEDULE=domain CPU_LOW_DOMAIN_SIZE=2 CPU_LOW_DOMAIN_REFINE=0 CPU_LOW_DOMAIN_PAGE_TIEBREAK=1 \
+            build/ramstream32_hybrid_sparse_w22 21 4294967291 12288 4 --plan-only >/tmp/page-without-refine.txt 2>&1; then
+            echo 'page tie-break without refine unexpectedly succeeded' >&2; exit 1
+          fi
+          grep -Fq 'CPU_LOW_DOMAIN_PAGE_TIEBREAK requires CPU_LOW_SCHEDULE=domain and CPU_LOW_DOMAIN_REFINE=1' /tmp/page-without-refine.txt
       - name: Validate n27 CPU HIGH scratch partition plan
         if: matrix.width == 28
         shell: bash
@@ -158,12 +185,13 @@ jobs:
         shell: bash
         run: |
           CPU_HIGH_MAX_MIB=256 CPU_HIGH_MODE=direct build/ramstream32_hybrid_sparse_w28 27 4294967291 12288 4 --plan-only 2>&1 | tee /tmp/high-offload-direct.txt
-          grep -Fq 'backend=gridfp-ramstream32-factorized-hybrid-sparse-v5.21-plan' /tmp/high-offload-direct.txt
+          grep -Fq 'backend=gridfp-ramstream32-factorized-hybrid-sparse-v5.22-plan' /tmp/high-offload-direct.txt
           grep -Fq 'cpu_high_groups=12911' /tmp/high-offload-direct.txt
           grep -Fq 'cpu_high_mode=direct' /tmp/high-offload-direct.txt
           grep -Fq 'cpu_high_policy=threshold' /tmp/high-offload-direct.txt
           grep -Fq 'cpu_low_schedule=dynamic' /tmp/high-offload-direct.txt
           grep -Fq 'cpu_low_domain_refine=1' /tmp/high-offload-direct.txt
+          grep -Fq 'cpu_low_domain_page_tiebreak=0' /tmp/high-offload-direct.txt
           grep -Fq 'nn_orbit_ops=' /tmp/high-offload-direct.txt
           grep -Fq 'nrnl_orbit_ops=' /tmp/high-offload-direct.txt
           grep -Fq 'block_closure_ops=' /tmp/high-offload-direct.txt
@@ -206,6 +234,13 @@ jobs:
           grep -Fq 'cpu_low_contiguous_schedule jobs=' /tmp/cpu-low-selftest.txt
           grep -Fq 'cpu_low_domain_schedule jobs=' /tmp/cpu-low-selftest.txt
           grep -Fq 'sparse_domain_refine=1' /tmp/cpu-low-selftest.txt
+          grep -Fq 'sparse_domain_page_groups=' /tmp/cpu-low-selftest.txt
+          grep -Fq 'sparse_domain_page_penalty_2m_before=' /tmp/cpu-low-selftest.txt
+          grep -Fq 'sparse_domain_page_penalty_2m_after=' /tmp/cpu-low-selftest.txt
+          grep -Fq 'sparse_domain_page_penalty_4k_before=' /tmp/cpu-low-selftest.txt
+          grep -Fq 'sparse_domain_page_penalty_4k_after=' /tmp/cpu-low-selftest.txt
+          grep -Fq 'sparse_domain_page_max_before=' /tmp/cpu-low-selftest.txt
+          grep -Fq 'sparse_domain_page_max_after=' /tmp/cpu-low-selftest.txt
           grep -Fq 'sparse_domain_unrefined_refine=0' /tmp/cpu-low-selftest.txt
           grep -Fq 'sparse_domain_unrefined_boundaries=0' /tmp/cpu-low-selftest.txt
           grep -Fq 'sparse_domain_unrefined_moves=0' /tmp/cpu-low-selftest.txt
