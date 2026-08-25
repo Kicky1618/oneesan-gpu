@@ -13,6 +13,7 @@
 #undef RAMSTREAM_BIDESC_COMPACT_NO_MAIN
 #include "../ramstream32_cpu_low_domain_page.hpp"
 #include "../ramstream32_cpu_low_domain_worker_locality.hpp"
+#include "../ramstream32_cpu_low_domain_worker_coalesce.hpp"
 
 static void enum_states_rec(int pos, int h, MateID m, std::vector<MateID>& out) {
     if (pos < 0) { if (h == 0) out.push_back(m); return; }
@@ -137,6 +138,17 @@ int main() {
     if (cpu_low_domain_contiguous_segments_under_cap(
             synthetic, 0, synthetic.size(), 2, 4, segs)) return 23;
 
+    // Pure owner-pattern checks cover the v5.26 target condition.  Reappearing
+    // owner 0 in 0,1,0 is non-contiguous; 0,0,1,1 is already coalesced.
+    if (cpu_low_worker_domain_is_contiguous(
+            std::vector<int>{0,1,0}, 0, 3, 0, 2)) return 24;
+    if (!cpu_low_worker_domain_is_contiguous(
+            std::vector<int>{0,0,1,1}, 0, 4, 0, 2)) return 25;
+    CpuLowDomainWorkerCoalesceScore score_a{1, 5, 2};
+    CpuLowDomainWorkerCoalesceScore score_b{1, 5, 1};
+    if (!cpu_low_worker_coalesce_score_less(score_b, score_a)) return 26;
+    if (cpu_low_worker_coalesce_score_less(score_a, score_b)) return 27;
+
     build_full_dp();
     G_FACTOR = build_factor_tables();
     StorageFactorHost storage = build_storage_factor_tables(G_FACTOR);
@@ -184,19 +196,28 @@ int main() {
         cpu_low_apply_domain_worker_locality(pool, jobs, sparse);
     if (locality_stats.max_worker_cells_after
         > locality_stats.max_worker_cells_before) return 5;
+    CpuLowDomainWorkerCoalesceStats coalesce_stats =
+        cpu_low_apply_domain_worker_coalesce(
+            pool, jobs, sparse, storage, layout);
+    if (coalesce_stats.max_worker_cells_after
+        > coalesce_stats.max_worker_cells_before) return 8;
+    if (coalesce_stats.penalty_2m_after > coalesce_stats.penalty_2m_before
+        || (coalesce_stats.penalty_2m_after == coalesce_stats.penalty_2m_before
+            && coalesce_stats.penalty_4k_after > coalesce_stats.penalty_4k_before))
+        return 9;
 
     fill_factor(
         main_auth, block_auth, main_states, block_states,
         init_main, init_block, storage, layout);
     pool.run(jobs, main_auth, block_auth, storage, layout, sparse, mod);
     if (!compare_factor(
-            "domain-worker-locality-1", main_auth, block_auth,
+            "domain-worker-locality-coalesce-1", main_auth, block_auth,
             main_states, block_states, one.first, one.second,
             storage, layout)) return 6;
 
     pool.run(jobs, main_auth, block_auth, storage, layout, sparse, mod);
     if (!compare_factor(
-            "domain-worker-locality-2", main_auth, block_auth,
+            "domain-worker-locality-coalesce-2", main_auth, block_auth,
             main_states, block_states, two.first, two.second,
             storage, layout)) return 7;
 
@@ -205,9 +226,17 @@ int main() {
               << " domains=" << locality_stats.domains
               << " converted_domains=" << locality_stats.converted_domains
               << " fallback_domains=" << locality_stats.fallback_domains
+              << " coalesce_noncontiguous_domains="
+              << coalesce_stats.noncontiguous_domains_before
+              << " coalesce_accepted_moves=" << coalesce_stats.accepted_moves
+              << " coalesce_transitions_before="
+              << coalesce_stats.owner_transitions_before
+              << " coalesce_transitions_after="
+              << coalesce_stats.owner_transitions_after
               << " max_before=" << locality_stats.max_worker_cells_before
-              << " max_after=" << locality_stats.max_worker_cells_after
-              << " synthetic_feasible=1 synthetic_fallback=1\n";
+              << " max_after=" << coalesce_stats.max_worker_cells_after
+              << " synthetic_feasible=1 synthetic_fallback=1"
+              << " synthetic_noncontiguous=1\n";
 
     pool.shutdown();
     main_auth.release();
