@@ -9,6 +9,7 @@ TARGET_MIB="${TARGET_MIB:-16384}"
 MAX_WINDOW="${MAX_WINDOW:-14}"
 TRANSPOSE_MODE="${TRANSPOSE_MODE:-events}"
 ORBIT_CLOSURE_FUSE="${ORBIT_CLOSURE_FUSE:-0}"
+WINDOW_MODE="${WINDOW_MODE:-direct}"
 PM_ACCUM="${PM_ACCUM:-0}"
 BUCKET_TRANSPOSE_CHUNK_MIB="${BUCKET_TRANSPOSE_CHUNK_MIB:-1024}"
 BUCKET_RESERVE_MIB="${BUCKET_RESERVE_MIB:-8192}"
@@ -16,11 +17,24 @@ if [[ "$ORBIT_CLOSURE_FUSE" != 0 && "$ORBIT_CLOSURE_FUSE" != 1 ]]; then
   echo "ORBIT_CLOSURE_FUSE must be 0 or 1" >&2
   exit 2
 fi
+if [[ "$WINDOW_MODE" != direct && "$WINDOW_MODE" != graph ]]; then
+  echo "WINDOW_MODE must be direct or graph" >&2
+  exit 2
+fi
 if [[ "$ORBIT_CLOSURE_FUSE" == 1 ]]; then
   SUFFIX="_${TRANSPOSE_MODE}"
-  STEM="oneesan_cuda_gridfp_b300_bucket_snake_onepass_batch"
-  WORK_TAG="onepass_${TRANSPOSE_MODE}"
+  if [[ "$WINDOW_MODE" == graph ]]; then
+    STEM="oneesan_cuda_gridfp_b300_bucket_snake_onepass_graph_batch"
+    WORK_TAG="onepass_graph_${TRANSPOSE_MODE}"
+  else
+    STEM="oneesan_cuda_gridfp_b300_bucket_snake_onepass_batch"
+    WORK_TAG="onepass_${TRANSPOSE_MODE}"
+  fi
 else
+  if [[ "$WINDOW_MODE" != direct ]]; then
+    echo "WINDOW_MODE=graph requires ORBIT_CLOSURE_FUSE=1" >&2
+    exit 2
+  fi
   SUFFIX="_${TRANSPOSE_MODE}"
   STEM="oneesan_cuda_gridfp_b300_bucket_snake_fused_batch"
   WORK_TAG="fused_${TRANSPOSE_MODE}"
@@ -44,8 +58,8 @@ if (( visible < NGPU )); then
 fi
 
 if [[ ! -x "$BIN" ]]; then
-  echo "$BIN not found; building snake batch binary for n=$N transpose=$TRANSPOSE_MODE onepass=$ORBIT_CLOSURE_FUSE pm=$PM_ACCUM" >&2
-  N="$N" OUT="$BIN" TRANSPOSE_MODE="$TRANSPOSE_MODE" ORBIT_CLOSURE_FUSE="$ORBIT_CLOSURE_FUSE" PM_ACCUM="$PM_ACCUM" \
+  echo "$BIN not found; building snake batch binary for n=$N transpose=$TRANSPOSE_MODE onepass=$ORBIT_CLOSURE_FUSE window=$WINDOW_MODE pm=$PM_ACCUM" >&2
+  N="$N" OUT="$BIN" TRANSPOSE_MODE="$TRANSPOSE_MODE" ORBIT_CLOSURE_FUSE="$ORBIT_CLOSURE_FUSE" WINDOW_MODE="$WINDOW_MODE" PM_ACCUM="$PM_ACCUM" \
     bash "$ONEESAN_ROOT/scripts/build/b300-bucket-snake-batch.sh"
 fi
 
