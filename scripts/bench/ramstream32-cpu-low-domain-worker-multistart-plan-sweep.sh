@@ -45,12 +45,13 @@ n=$N
 arch=$ARCH
 configs=$CONFIGS
 objective=multistart-global-unique-worker-v5.28-plan
+exact_implementation=flat-page-delta-v5.29
 direct=v5.25-to-v5.27
 hybrid=v5.25-to-v5.26-to-v5.27
 binary_sha256=$(file_sha256 "$bin")
 EOF
 
-printf 'workers\tdomain_size\tdomains\tselected_source\tparent_max_worker_cells\tdirect_max_worker_cells\traw_v526_max_worker_cells\thybrid_max_worker_cells\tselected_max_worker_cells\tparent_pages_2m\tparent_pages_4k\tparent_transitions\tdirect_pages_2m\tdirect_pages_4k\tdirect_transitions\traw_v526_pages_2m\traw_v526_pages_4k\traw_v526_transitions\thybrid_pages_2m\thybrid_pages_4k\thybrid_transitions\tselected_pages_2m\tselected_pages_4k\tselected_transitions\tdirect_accepted_moves\thybrid_v526_accepted_moves\thybrid_v527_accepted_moves\tdirect_build_s\thybrid_v526_build_s\thybrid_v527_build_s\traw\n' >"$out"
+printf 'workers\tdomain_size\tdomains\tselected_source\tparent_max_worker_cells\tdirect_max_worker_cells\traw_v526_max_worker_cells\thybrid_max_worker_cells\tselected_max_worker_cells\tparent_pages_2m\tparent_pages_4k\tparent_transitions\tdirect_pages_2m\tdirect_pages_4k\tdirect_transitions\traw_v526_pages_2m\traw_v526_pages_4k\traw_v526_transitions\thybrid_pages_2m\thybrid_pages_4k\thybrid_transitions\tselected_pages_2m\tselected_pages_4k\tselected_transitions\tdirect_accepted_moves\thybrid_v526_accepted_moves\thybrid_v527_accepted_moves\tdirect_candidate_evaluations\thybrid_candidate_evaluations\tdirect_flat_delta_normalizations\thybrid_flat_delta_normalizations\tdirect_flat_delta_peak_entries\thybrid_flat_delta_peak_entries\tdirect_mask_index_build_s\thybrid_mask_index_build_s\tdirect_build_s\thybrid_v526_build_s\thybrid_v527_build_s\traw\n' >"$out"
 
 for cfg in "${configs[@]}"; do
   workers="${cfg%%:*}"; domain="${cfg#*:}"
@@ -58,6 +59,9 @@ for cfg in "${configs[@]}"; do
   line="$($bin "$N" "$workers" "$domain" 2> >(tee /dev/stderr) | tail -n1)"
   [[ "$(field "$line" objective)" == multistart-global-unique-worker-v5.28-plan ]] || {
     echo "objective provenance mismatch cfg=$cfg" >&2; exit 4;
+  }
+  [[ "$(field "$line" exact_implementation)" == flat-page-delta-v5.29 ]] || {
+    echo "exact implementation provenance mismatch cfg=$cfg" >&2; exit 4;
   }
   [[ "$(field "$line" workers)" == "$workers" ]] || { echo "worker provenance mismatch cfg=$cfg" >&2; exit 4; }
   [[ "$(field "$line" domain_size)" == "$domain" ]] || { echo "domain provenance mismatch cfg=$cfg" >&2; exit 4; }
@@ -89,7 +93,7 @@ if s > d or s > h or s > r or s > p:
     raise SystemExit('selected branch failed dominance contract')
 PY
 
-  printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
+  printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
     "$workers" "$domain" "$(field "$line" domains)" "$src" \
     "$(field "$line" parent_max_worker_cells)" \
     "$(field "$line" direct_max_worker_cells)" \
@@ -104,6 +108,14 @@ PY
     "$(field "$line" direct_accepted_moves)" \
     "$(field "$line" hybrid_v526_accepted_moves)" \
     "$(field "$line" hybrid_v527_accepted_moves)" \
+    "$(field "$line" direct_candidate_evaluations)" \
+    "$(field "$line" hybrid_candidate_evaluations)" \
+    "$(field "$line" direct_flat_delta_normalizations)" \
+    "$(field "$line" hybrid_flat_delta_normalizations)" \
+    "$(field "$line" direct_flat_delta_peak_entries)" \
+    "$(field "$line" hybrid_flat_delta_peak_entries)" \
+    "$(field "$line" direct_mask_index_build_s)" \
+    "$(field "$line" hybrid_mask_index_build_s)" \
     "$(field "$line" direct_build_s)" \
     "$(field "$line" hybrid_v526_build_s)" \
     "$(field "$line" hybrid_v527_build_s)" \
@@ -124,6 +136,10 @@ with open(sys.argv[1], newline='') as f:
         if h < d: basin='hybrid_wins'
         elif d < h: basin='direct_wins'
         else: basin='exact_tie'
+        de=int(r['direct_candidate_evaluations'])
+        he=int(r['hybrid_candidate_evaluations'])
+        dn=int(r['direct_flat_delta_normalizations'])
+        hn=int(r['hybrid_flat_delta_normalizations'])
         print(
             f"comparison workers={r['workers']} domain_size={r['domain_size']} "
             f"classification={cls} basin={basin} selected_source={r['selected_source']} "
@@ -131,6 +147,11 @@ with open(sys.argv[1], newline='') as f:
             f"selected_transition_delta={s[2]-p[2]} "
             f"hybrid_cleanup_vs_raw_v526_2m_delta={h[0]-raw[0]} "
             f"hybrid_cleanup_vs_raw_v526_4k_delta={h[1]-raw[1]} "
+            f"direct_candidate_evaluations={de} hybrid_candidate_evaluations={he} "
+            f"direct_normalizations_per_candidate={(dn/de if de else 0.0):.6f} "
+            f"hybrid_normalizations_per_candidate={(hn/he if he else 0.0):.6f} "
+            f"direct_flat_delta_peak_entries={r['direct_flat_delta_peak_entries']} "
+            f"hybrid_flat_delta_peak_entries={r['hybrid_flat_delta_peak_entries']} "
             f"direct_build_s={float(r['direct_build_s']):.9f} "
             f"hybrid_total_build_s={float(r['hybrid_v526_build_s'])+float(r['hybrid_v527_build_s']):.9f}"
         )
