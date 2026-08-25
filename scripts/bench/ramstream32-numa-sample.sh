@@ -2,9 +2,7 @@
 set -euo pipefail
 
 ROOT="$(git rev-parse --show-toplevel 2>/dev/null || true)"
-if [[ -z "$ROOT" ]]; then
-  ROOT="$(cd "$(dirname -- "${BASH_SOURCE[0]}")/../.." && pwd)"
-fi
+if [[ -z "$ROOT" ]]; then ROOT="$(cd "$(dirname -- "${BASH_SOURCE[0]}")/../.." && pwd)"; fi
 cd "$ROOT"
 
 N="${N:-27}"
@@ -22,70 +20,38 @@ CPU_LOW_CPU_LIST="${CPU_LOW_CPU_LIST:-}"
 CPU_LOW_SCHEDULE="${CPU_LOW_SCHEDULE:-dynamic}"
 CPU_LOW_DOMAIN_SIZE="${CPU_LOW_DOMAIN_SIZE:-}"
 CPU_LOW_DOMAIN_REFINE="${CPU_LOW_DOMAIN_REFINE:-1}"
+CPU_LOW_DOMAIN_PAGE_TIEBREAK="${CPU_LOW_DOMAIN_PAGE_TIEBREAK:-0}"
 NUMA_SAMPLE_MIB="${NUMA_SAMPLE_MIB:-64}"
 BUILD="${BUILD:-1}"
 OUT_DIR="${OUT_DIR:-$ROOT/work/bench_ramstream32_numa_sample}"
 
-if (( N < 2 || N > 27 || GPU_TARGET_MIB <= 0 || CPU_WORKERS <= 0 || CPU_HIGH_WORKERS <= 0 )); then
-  echo "invalid benchmark parameters" >&2
-  exit 2
-fi
-if [[ "$CPU_HIGH_MODE" != scratch && "$CPU_HIGH_MODE" != direct ]]; then
-  echo "CPU_HIGH_MODE must be scratch or direct" >&2
-  exit 2
-fi
-if [[ "$CPU_HIGH_OVERLAP" != 0 && "$CPU_HIGH_OVERLAP" != 1 ]]; then
-  echo "CPU_HIGH_OVERLAP must be 0 or 1" >&2
-  exit 2
-fi
-if [[ "$CPU_LOW_DOMAIN_REFINE" != 0 && "$CPU_LOW_DOMAIN_REFINE" != 1 ]]; then
-  echo "CPU_LOW_DOMAIN_REFINE must be 0 or 1" >&2
-  exit 2
-fi
+if (( N < 2 || N > 27 || GPU_TARGET_MIB <= 0 || CPU_WORKERS <= 0 || CPU_HIGH_WORKERS <= 0 )); then echo "invalid benchmark parameters" >&2; exit 2; fi
+if [[ "$CPU_HIGH_MODE" != scratch && "$CPU_HIGH_MODE" != direct ]]; then echo "CPU_HIGH_MODE must be scratch or direct" >&2; exit 2; fi
+if [[ "$CPU_HIGH_OVERLAP" != 0 && "$CPU_HIGH_OVERLAP" != 1 ]]; then echo "CPU_HIGH_OVERLAP must be 0 or 1" >&2; exit 2; fi
+if [[ "$CPU_LOW_DOMAIN_REFINE" != 0 && "$CPU_LOW_DOMAIN_REFINE" != 1 ]]; then echo "CPU_LOW_DOMAIN_REFINE must be 0 or 1" >&2; exit 2; fi
+if [[ "$CPU_LOW_DOMAIN_PAGE_TIEBREAK" != 0 && "$CPU_LOW_DOMAIN_PAGE_TIEBREAK" != 1 ]]; then echo "CPU_LOW_DOMAIN_PAGE_TIEBREAK must be 0 or 1" >&2; exit 2; fi
 case "$CPU_LOW_SCHEDULE" in
   dynamic|sticky|contiguous) ;;
   domain)
-    if [[ ! "$CPU_LOW_DOMAIN_SIZE" =~ ^[1-9][0-9]*$ ]] || (( CPU_LOW_DOMAIN_SIZE > CPU_WORKERS )); then
-      echo "CPU_LOW_DOMAIN_SIZE must be a positive integer <= CPU_WORKERS for domain schedule" >&2
-      exit 2
-    fi
+    if [[ ! "$CPU_LOW_DOMAIN_SIZE" =~ ^[1-9][0-9]*$ ]] || (( CPU_LOW_DOMAIN_SIZE > CPU_WORKERS )); then echo "CPU_LOW_DOMAIN_SIZE must be a positive integer <= CPU_WORKERS for domain schedule" >&2; exit 2; fi
     ;;
   *) echo "CPU_LOW_SCHEDULE must be dynamic, sticky, contiguous, or domain" >&2; exit 2 ;;
 esac
-if [[ ! "$NUMA_SAMPLE_MIB" =~ ^([0-9]+([.][0-9]*)?|[.][0-9]+)$ ]] || [[ "$NUMA_SAMPLE_MIB" == 0 ]]; then
-  echo "NUMA_SAMPLE_MIB must be positive" >&2
-  exit 2
-fi
-if [[ -n "$CPU_HIGH_GROUPS_FILE" && ! -f "$CPU_HIGH_GROUPS_FILE" ]]; then
-  echo "missing CPU_HIGH_GROUPS_FILE: $CPU_HIGH_GROUPS_FILE" >&2
-  exit 2
-fi
+if [[ "$CPU_LOW_DOMAIN_PAGE_TIEBREAK" == 1 && ( "$CPU_LOW_SCHEDULE" != domain || "$CPU_LOW_DOMAIN_REFINE" != 1 ) ]]; then echo "CPU_LOW_DOMAIN_PAGE_TIEBREAK=1 requires domain schedule with refinement" >&2; exit 2; fi
+if [[ ! "$NUMA_SAMPLE_MIB" =~ ^([0-9]+([.][0-9]*)?|[.][0-9]+)$ ]] || [[ "$NUMA_SAMPLE_MIB" == 0 ]]; then echo "NUMA_SAMPLE_MIB must be positive" >&2; exit 2; fi
+if [[ -n "$CPU_HIGH_GROUPS_FILE" && ! -f "$CPU_HIGH_GROUPS_FILE" ]]; then echo "missing CPU_HIGH_GROUPS_FILE: $CPU_HIGH_GROUPS_FILE" >&2; exit 2; fi
 
-if [[ "$BUILD" != 0 ]]; then
-  N="$N" ARCH="$ARCH" bash scripts/build/gridfp-ramstream32-factorized-hybrid-sparse.sh
-fi
+if [[ "$BUILD" != 0 ]]; then N="$N" ARCH="$ARCH" bash scripts/build/gridfp-ramstream32-factorized-hybrid-sparse.sh; fi
 bin="$ROOT/build/oneesan_cuda_gridfp_ramstream32_factorized_hybrid_sparse_n${N}"
 [[ -x "$bin" ]] || { echo "missing executable: $bin" >&2; exit 3; }
 
 mkdir -p "$OUT_DIR"
 ts="$(date -u +%Y%m%dT%H%M%SZ)"
-base="$OUT_DIR/numa-${CPU_LOW_SCHEDULE}-n${N}-${ts}"
-stdout_file="$base.stdout.txt"
-stderr_file="$base.stderr.txt"
-analysis_file="$base.analysis.txt"
-meta_file="$base.meta"
+base="$OUT_DIR/numa-${CPU_LOW_SCHEDULE}-page${CPU_LOW_DOMAIN_PAGE_TIEBREAK}-n${N}-${ts}"
+stdout_file="$base.stdout.txt"; stderr_file="$base.stderr.txt"; analysis_file="$base.analysis.txt"; meta_file="$base.meta"
 
-file_sha256() {
-  if command -v sha256sum >/dev/null 2>&1; then sha256sum "$1" | awk '{print $1}'
-  else shasum -a 256 "$1" | awk '{print $1}'; fi
-}
-field() {
-  local line="$1" key="$2" token
-  for token in $line; do
-    if [[ "$token" == "$key="* ]]; then printf '%s\n' "${token#*=}"; return 0; fi
-  done
-  return 1
-}
+file_sha256() { if command -v sha256sum >/dev/null 2>&1; then sha256sum "$1" | awk '{print $1}'; else shasum -a 256 "$1" | awk '{print $1}'; fi; }
+field() { local line="$1" key="$2" token; for token in $line; do if [[ "$token" == "$key="* ]]; then printf '%s\n' "${token#*=}"; return 0; fi; done; return 1; }
 
 cat >"$meta_file" <<EOF
 commit=$(git rev-parse HEAD 2>/dev/null || echo unknown)
@@ -107,12 +73,11 @@ cpu_low_cpu_list=${CPU_LOW_CPU_LIST:-none}
 cpu_low_schedule=$CPU_LOW_SCHEDULE
 cpu_low_domain_size=${CPU_LOW_DOMAIN_SIZE:-none}
 cpu_low_domain_refine=$CPU_LOW_DOMAIN_REFINE
+cpu_low_domain_page_tiebreak=$CPU_LOW_DOMAIN_PAGE_TIEBREAK
 numa_sample_mib=$NUMA_SAMPLE_MIB
 binary_sha256=$(file_sha256 "$bin")
 EOF
-if [[ -n "$CPU_HIGH_GROUPS_FILE" ]]; then
-  echo "cpu_high_groups_file_sha256=$(file_sha256 "$CPU_HIGH_GROUPS_FILE")" >>"$meta_file"
-fi
+if [[ -n "$CPU_HIGH_GROUPS_FILE" ]]; then echo "cpu_high_groups_file_sha256=$(file_sha256 "$CPU_HIGH_GROUPS_FILE")" >>"$meta_file"; fi
 
 CPU_HIGH_MODE="$CPU_HIGH_MODE" \
 CPU_HIGH_OVERLAP="$CPU_HIGH_OVERLAP" \
@@ -124,32 +89,23 @@ CPU_LOW_CPU_LIST="$CPU_LOW_CPU_LIST" \
 CPU_LOW_SCHEDULE="$CPU_LOW_SCHEDULE" \
 CPU_LOW_DOMAIN_SIZE="$CPU_LOW_DOMAIN_SIZE" \
 CPU_LOW_DOMAIN_REFINE="$CPU_LOW_DOMAIN_REFINE" \
+CPU_LOW_DOMAIN_PAGE_TIEBREAK="$CPU_LOW_DOMAIN_PAGE_TIEBREAK" \
 RAMSTREAM_NUMA_SAMPLE_MIB="$NUMA_SAMPLE_MIB" \
-  "$bin" "$N" "$MODULUS" "$GPU_TARGET_MIB" "$CPU_WORKERS" \
-  >"$stdout_file" 2>"$stderr_file"
+  "$bin" "$N" "$MODULUS" "$GPU_TARGET_MIB" "$CPU_WORKERS" >"$stdout_file" 2>"$stderr_file"
 
 result_line="$(tail -n1 "$stdout_file")"
-if [[ "$(field "$result_line" cpu_low_schedule)" != "$CPU_LOW_SCHEDULE" ]]; then
-  echo "LOW schedule provenance mismatch in solver output" >&2
-  exit 7
-fi
-if [[ "$(field "$result_line" cpu_low_domain_refine)" != "$CPU_LOW_DOMAIN_REFINE" ]]; then
-  echo "LOW refine provenance mismatch in solver output" >&2
-  exit 7
-fi
+[[ "$(field "$result_line" cpu_low_schedule)" == "$CPU_LOW_SCHEDULE" ]] || { echo "LOW schedule provenance mismatch in solver output" >&2; exit 7; }
+[[ "$(field "$result_line" cpu_low_domain_refine)" == "$CPU_LOW_DOMAIN_REFINE" ]] || { echo "LOW refine provenance mismatch in solver output" >&2; exit 7; }
+[[ "$(field "$result_line" cpu_low_domain_page_tiebreak)" == "$CPU_LOW_DOMAIN_PAGE_TIEBREAK" ]] || { echo "LOW page provenance mismatch in solver output" >&2; exit 7; }
 if [[ "$CPU_LOW_SCHEDULE" == domain ]]; then
-  if [[ "$(field "$result_line" cpu_low_domain_size)" != "$CPU_LOW_DOMAIN_SIZE" ]]; then
-    echo "LOW domain provenance mismatch in solver output" >&2
-    exit 7
+  [[ "$(field "$result_line" cpu_low_domain_size)" == "$CPU_LOW_DOMAIN_SIZE" ]] || { echo "LOW domain provenance mismatch in solver output" >&2; exit 7; }
+  grep -Eq "cpu_low_domain_schedule .* refine=${CPU_LOW_DOMAIN_REFINE}( |$)" "$stderr_file" || { echo "LOW domain refinement provenance mismatch in solver stderr" >&2; exit 7; }
+  if [[ "$CPU_LOW_DOMAIN_PAGE_TIEBREAK" == 1 ]]; then
+    grep -Fq 'cpu_low_domain_page_tiebreak ' "$stderr_file" || { echo "LOW domain page provenance mismatch in solver stderr" >&2; exit 7; }
   fi
-  grep -Eq "cpu_low_domain_schedule .* refine=${CPU_LOW_DOMAIN_REFINE}( |$)" "$stderr_file" || {
-    echo "LOW domain refinement provenance mismatch in solver stderr" >&2
-    exit 7
-  }
 fi
 
-python3 scripts/tools/analyze_ramstream_numa_samples.py "$stderr_file" \
-  | tee "$analysis_file"
+python3 scripts/tools/analyze_ramstream_numa_samples.py "$stderr_file" | tee "$analysis_file"
 
 echo "result=$result_line"
 echo "stdout=$stdout_file"
