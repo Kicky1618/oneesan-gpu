@@ -23,8 +23,13 @@ struct MaskShardLowBatchDynamicConfig {
     std::uint32_t low_count[HIGH_LUT_K + 2];
     std::uint32_t low_chunks[HIGH_LUT_K + 2];
     std::uint32_t closure_prefix[LOW_LUT_K][65];
+#ifndef MASKSHARD_LOW_MASKBATCH_COMPACT_DYNAMIC
+    // v0.43-v0.46 duplicate these mask-independent arrays for every mask/cap.
+    // v0.47 CTA-cached kernels stage them directly from the canonical LOW
+    // closure device tables instead, removing 2*LOW_LUT_K*65 uint32 words.
     std::uint32_t closure_begin[LOW_LUT_K][65];
     std::uint32_t closure_selected[LOW_LUT_K][65];
+#endif
     std::uint32_t high_mask_off[HIGH_LUT_K + 2];
 };
 
@@ -52,8 +57,10 @@ static MaskShardLowBatchDynamicConfig maskshard_extract_low_batch_dynamic(
     for (int pi = 0; pi < LOW_LUT_K; ++pi)
         for (int b = 0; b < 65; ++b) {
             d.closure_prefix[pi][b] = cfg.closure_prefix[pi][b];
+#ifndef MASKSHARD_LOW_MASKBATCH_COMPACT_DYNAMIC
             d.closure_begin[pi][b] = cfg.closure_begin[pi][b];
             d.closure_selected[pi][b] = cfg.closure_selected[pi][b];
+#endif
         }
     return d;
 }
@@ -140,8 +147,15 @@ struct MaskShardLowMaskBatchDeviceTables {
                   << " masks=" << mask_of_local.size()
                   << " static_mib="
                   << double(hs.size() * sizeof(hs[0])) / double(1ULL << 20)
+                  << " dynamic_bytes_per_mask_cap="
+                  << sizeof(MaskShardLowBatchDynamicConfig)
                   << " dynamic_mib="
                   << double(hd.size() * sizeof(hd[0])) / double(1ULL << 20)
+#ifdef MASKSHARD_LOW_MASKBATCH_COMPACT_DYNAMIC
+                  << " compact_dynamic=1"
+#else
+                  << " compact_dynamic=0"
+#endif
                   << '\n';
     }
 
