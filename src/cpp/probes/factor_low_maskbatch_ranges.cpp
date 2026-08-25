@@ -50,7 +50,8 @@ int main(int argc, char** argv) {
             return 3;
         }
 
-        for (std::uint32_t cta = 0; cta < ends.size() ? ends.back() : 0u; ++cta) {
+        const std::uint32_t ctas = ends.empty() ? 0u : ends.back();
+        for (std::uint32_t cta = 0; cta < ctas; ++cta) {
             const auto it = std::upper_bound(ends.begin(), ends.end(), cta);
             if (it == ends.end()) return 4;
             const std::size_t g = std::size_t(it - ends.begin());
