@@ -15,7 +15,7 @@
 #include "oneesan_cuda_gridfp_ramstream32_factorized_bidesc_compact.cu"
 #undef RAMSTREAM_BIDESC_COMPACT_NO_MAIN
 
-#include "ramstream32_cpu_low_sparse_persistent.hpp"
+#include "ramstream32_cpu_low_domain_page.hpp"
 #include "ramstream32_cpu_high.hpp"
 #include "ramstream32_cpu_high_direct_persistent.hpp"
 #include "ramstream32_numa_sample.hpp"
@@ -144,9 +144,15 @@ int main(int argc, char** argv) {
     const char* cpu_low_schedule = cpu_low_schedule_name(cpu_low_schedule_mode);
     int cpu_low_domain_size = cpu_low_domain_size_from_env();
     bool cpu_low_domain_refine = cpu_low_domain_refine_from_env();
+    bool cpu_low_domain_page_tiebreak = cpu_low_domain_page_tiebreak_from_env();
     if (cpu_low_schedule_mode == CPU_LOW_SCHEDULE_DOMAIN
         && (cpu_low_domain_size <= 0 || cpu_low_domain_size > cpu_workers)) {
         std::cerr << "CPU_LOW_DOMAIN_SIZE must be in 1..CPU_WORKERS for domain schedule\n";
+        return 2;
+    }
+    if (cpu_low_domain_page_tiebreak
+        && (cpu_low_schedule_mode != CPU_LOW_SCHEDULE_DOMAIN || !cpu_low_domain_refine)) {
+        std::cerr << "CPU_LOW_DOMAIN_PAGE_TIEBREAK requires CPU_LOW_SCHEDULE=domain and CPU_LOW_DOMAIN_REFINE=1\n";
         return 2;
     }
     const char* cpu_high_mode_env = std::getenv("CPU_HIGH_MODE");
@@ -286,11 +292,17 @@ int main(int argc, char** argv) {
     int cpu_low_plan_active_domains = 0;
     int cpu_low_plan_refined_boundaries = 0;
     uint64_t cpu_low_plan_refined_job_moves = 0;
+    CpuLowDomainPageTieStats cpu_low_plan_page_stats;
     if (plan_only && cpu_low_schedule_mode != CPU_LOW_SCHEDULE_DYNAMIC) {
         CpuLowSparsePersistentPool low_plan(
             cpu_workers, cpu_low_schedule_mode, cpu_low_domain_size,
             cpu_low_domain_refine);
         low_plan.prepare_static_schedule(cpu_low_jobs, sparse);
+        if (cpu_low_domain_page_tiebreak) {
+            cpu_low_plan_page_stats = cpu_low_apply_domain_page_tiebreak(
+                low_plan, cpu_low_jobs, sparse, storage, layout);
+            low_plan.schedule_build_s += cpu_low_plan_page_stats.build_s;
+        }
         cpu_low_plan_build_s = low_plan.schedule_build_s;
         cpu_low_plan_contiguous_cap = low_plan.contiguous_optimal_cap;
         cpu_low_plan_domain_cap = low_plan.domain_normalized_cap;
@@ -301,7 +313,7 @@ int main(int argc, char** argv) {
 
     if (plan_only) {
         std::cout
-            << "backend=gridfp-ramstream32-factorized-hybrid-sparse-v5.21-plan"
+            << "backend=gridfp-ramstream32-factorized-hybrid-sparse-v5.22-plan"
             << " n=" << n
             << " gpu_high_desc_mib=" << highdesc_mib
             << " gpu_mask_mib=" << mask_mib
@@ -333,6 +345,7 @@ int main(int argc, char** argv) {
             << " cpu_low_schedule=" << cpu_low_schedule
             << " cpu_low_domain_size=" << cpu_low_domain_size
             << " cpu_low_domain_refine=" << int(cpu_low_domain_refine)
+            << " cpu_low_domain_page_tiebreak=" << int(cpu_low_domain_page_tiebreak)
             << " cpu_low_schedule_build_s=" << cpu_low_plan_build_s
             << " cpu_low_contiguous_optimal_cap=" << cpu_low_plan_contiguous_cap
             << " cpu_low_domain_normalized_cap=" << cpu_low_plan_domain_cap
@@ -340,6 +353,13 @@ int main(int argc, char** argv) {
             << " cpu_low_domain_active_domains=" << cpu_low_plan_active_domains
             << " cpu_low_domain_refined_boundaries=" << cpu_low_plan_refined_boundaries
             << " cpu_low_domain_refined_job_moves=" << cpu_low_plan_refined_job_moves
+            << " cpu_low_domain_page_boundary_moves=" << cpu_low_plan_page_stats.boundary_moves
+            << " cpu_low_domain_page_moved_jobs=" << cpu_low_plan_page_stats.moved_jobs
+            << " cpu_low_domain_page_penalty_2m_before=" << cpu_low_plan_page_stats.penalty_2m_before
+            << " cpu_low_domain_page_penalty_2m_after=" << cpu_low_plan_page_stats.penalty_2m_after
+            << " cpu_low_domain_page_penalty_4k_before=" << cpu_low_plan_page_stats.penalty_4k_before
+            << " cpu_low_domain_page_penalty_4k_after=" << cpu_low_plan_page_stats.penalty_4k_after
+            << " cpu_low_domain_page_build_s=" << cpu_low_plan_page_stats.build_s
             << " cpu_high_affinity=" << (cpu_high_explicit_affinity ? "explicit" : "default")
             << " cpu_low_affinity=" << (cpu_low_explicit_affinity ? "explicit" : "default")
             << " numa_sample_mib=" << numa_sample_mib
@@ -408,7 +428,14 @@ int main(int argc, char** argv) {
         }
     };
 
+    CpuLowDomainPageTieStats cpu_low_page_stats;
     auto wall0=std::chrono::steady_clock::now();
+    if (cpu_low_domain_page_tiebreak) {
+        cpu_low.prepare_static_schedule(cpu_low_jobs, sparse);
+        cpu_low_page_stats = cpu_low_apply_domain_page_tiebreak(
+            cpu_low, cpu_low_jobs, sparse, storage, layout);
+        cpu_low.schedule_build_s += cpu_low_page_stats.build_s;
+    }
     for(int row=0;row<W;++row){
         if (cpu_high_overlap && !selected_cpu_high_jobs.empty()
             && gpu_high_nonempty_groups) {
@@ -462,7 +489,7 @@ int main(int argc, char** argv) {
         : double(cpu_high_scratch.peak_scratch_bytes())/double(1<<20);
 
     std::cout
-        << "backend=gridfp-ramstream32-factorized-hybrid-sparse-v5.21"
+        << "backend=gridfp-ramstream32-factorized-hybrid-sparse-v5.22"
         << " n="<<n<<" residue="<<answer<<" modulus="<<mod
         << " gpu_high_desc_mib="<<highdesc_mib<<" gpu_mask_mib="<<mask_mib
         << " cpu_sparse_nn_orbit_mib="<<sparse_nn_orbit_mib
@@ -490,6 +517,7 @@ int main(int argc, char** argv) {
         << " cpu_low_schedule=" << cpu_low_schedule
         << " cpu_low_domain_size=" << cpu_low_domain_size
         << " cpu_low_domain_refine=" << int(cpu_low.domain_refine)
+        << " cpu_low_domain_page_tiebreak=" << int(cpu_low_domain_page_tiebreak)
         << " cpu_high_affinity=" << (cpu_high_explicit_affinity ? "explicit" : "default")
         << " cpu_low_affinity=" << (cpu_low_explicit_affinity ? "explicit" : "default")
         << " numa_sample_mib=" << numa_sample_mib
@@ -502,6 +530,13 @@ int main(int argc, char** argv) {
         << " cpu_low_domain_active_domains="<<cpu_low.domain_active_domains
         << " cpu_low_domain_refined_boundaries="<<cpu_low.domain_refined_boundaries
         << " cpu_low_domain_refined_job_moves="<<cpu_low.domain_refined_job_moves
+        << " cpu_low_domain_page_boundary_moves="<<cpu_low_page_stats.boundary_moves
+        << " cpu_low_domain_page_moved_jobs="<<cpu_low_page_stats.moved_jobs
+        << " cpu_low_domain_page_penalty_2m_before="<<cpu_low_page_stats.penalty_2m_before
+        << " cpu_low_domain_page_penalty_2m_after="<<cpu_low_page_stats.penalty_2m_after
+        << " cpu_low_domain_page_penalty_4k_before="<<cpu_low_page_stats.penalty_4k_before
+        << " cpu_low_domain_page_penalty_4k_after="<<cpu_low_page_stats.penalty_4k_after
+        << " cpu_low_domain_page_build_s="<<cpu_low_page_stats.build_s
         << " cpu_high_selection_hash="<<selection_hash
         << " cpu_high_max_mib="<<cpu_high_max_mib
         << " cpu_high_peak_worker_scratch_mib="<<cpu_high_peak_scratch_mib
