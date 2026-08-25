@@ -28,7 +28,9 @@ case "$REVERSE_MODE/$TRANSPOSE_MODE" in
   atomic/events) SRC_REL="src/cuda/b300/oneesan_cuda_gridfp_b300_bucket_snake_atomic_events.cu" ;;
   fused/sync) SRC_REL="src/cuda/b300/oneesan_cuda_gridfp_b300_bucket_snake_fused.cu" ;;
   fused/events) SRC_REL="src/cuda/b300/oneesan_cuda_gridfp_b300_bucket_snake_fused_events.cu" ;;
-  *) echo "TRANSPOSE_MODE must be sync or events" >&2; exit 2 ;;
+  fused/pipeline) SRC_REL="src/cuda/b300/oneesan_cuda_gridfp_b300_bucket_snake_fused_pipeline.cu" ;;
+  atomic/pipeline) echo "pipeline transpose is exposed only for fused reverse backend" >&2; exit 2 ;;
+  *) echo "TRANSPOSE_MODE must be sync, events, or pipeline" >&2; exit 2 ;;
 esac
 SUFFIX="_${REVERSE_MODE}_${TRANSPOSE_MODE}"; if [[ "$PM_ACCUM" == 1 ]]; then SUFFIX="${SUFFIX}_pm"; fi
 SRC="$(repo_path "$SRC_REL")"
