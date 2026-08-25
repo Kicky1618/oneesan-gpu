@@ -4,6 +4,7 @@ on:
   push:
     paths:
       - 'src/cuda/gridfp/ramstream32_cpu_low_domain_worker_locality.hpp'
+      - 'src/cuda/gridfp/ramstream32_cpu_low_domain_worker_coalesce.hpp'
       - 'src/cuda/gridfp/probes/ramstream32_cpu_low_domain_worker_locality_selftest.cu'
       - 'src/cuda/gridfp/probes/ramstream32_cpu_low_domain_worker_locality_plan.cu'
       - 'scripts/build/gridfp-ramstream32-cpu-low-domain-worker-locality-plan.sh'
@@ -13,6 +14,7 @@ on:
   pull_request:
     paths:
       - 'src/cuda/gridfp/ramstream32_cpu_low_domain_worker_locality.hpp'
+      - 'src/cuda/gridfp/ramstream32_cpu_low_domain_worker_coalesce.hpp'
       - 'src/cuda/gridfp/probes/ramstream32_cpu_low_domain_worker_locality_selftest.cu'
       - 'src/cuda/gridfp/probes/ramstream32_cpu_low_domain_worker_locality_plan.cu'
       - 'scripts/build/gridfp-ramstream32-cpu-low-domain-worker-locality-plan.sh'
@@ -32,9 +34,10 @@ jobs:
         run: |
           bash -n scripts/build/gridfp-ramstream32-cpu-low-domain-worker-locality-plan.sh
           bash -n scripts/bench/ramstream32-cpu-low-domain-worker-locality-plan-sweep.sh
+          grep -Fq 'neighbor-page-coalesce-under-domain-cap-v5.26-plan' scripts/bench/ramstream32-cpu-low-domain-worker-locality-plan-sweep.sh
           grep -Fq 'contiguous-under-lpt-cap-v5.25-plan' scripts/bench/ramstream32-cpu-low-domain-worker-locality-plan-sweep.sh
-          grep -Fq 'worker-locality max-worker regression' scripts/bench/ramstream32-cpu-low-domain-worker-locality-plan-sweep.sh
-          grep -Fq 'cross_worker_2m_delta=' scripts/bench/ramstream32-cpu-low-domain-worker-locality-plan-sweep.sh
+          grep -Fq 'worker-coalesce max-worker regression' scripts/bench/ramstream32-cpu-low-domain-worker-locality-plan-sweep.sh
+          grep -Fq 'v5.26_cross_worker_2m_delta=' scripts/bench/ramstream32-cpu-low-domain-worker-locality-plan-sweep.sh
       - name: Compile W10 worker locality probes
         shell: bash
         run: |
@@ -53,18 +56,23 @@ jobs:
             > /tmp/worker-locality-selftest.txt 2> /tmp/worker-locality-selftest.log
           grep -Fq 'cpu-low-domain-worker-locality-selftest OK' /tmp/worker-locality-selftest.txt
           grep -Fq 'synthetic_feasible=1 synthetic_fallback=1' /tmp/worker-locality-selftest.txt
-          grep -Fq 'max_before=' /tmp/worker-locality-selftest.txt
-          grep -Fq 'max_after=' /tmp/worker-locality-selftest.txt
+          grep -Fq 'synthetic_noncontiguous=1' /tmp/worker-locality-selftest.txt
+          grep -Fq 'coalesce_transitions_before=' /tmp/worker-locality-selftest.txt
+          grep -Fq 'coalesce_transitions_after=' /tmp/worker-locality-selftest.txt
           grep -Fq 'cpu_low_domain_worker_locality objective=contiguous-under-lpt-cap-v5.25-plan' /tmp/worker-locality-selftest.log
+          grep -Fq 'cpu_low_domain_worker_coalesce objective=neighbor-page-coalesce-under-domain-cap-v5.26-plan' /tmp/worker-locality-selftest.log
       - name: Validate structural page plan
         shell: bash
         run: |
           build/ramstream32_cpu_low_domain_worker_locality_plan 9 4 2 \
             > /tmp/worker-locality-plan.txt 2> /tmp/worker-locality-plan.log
           grep -Fq 'cpu_low_domain_worker_locality_plan OK' /tmp/worker-locality-plan.txt
-          grep -Fq 'objective=contiguous-under-lpt-cap-v5.25-plan' /tmp/worker-locality-plan.txt
+          grep -Fq 'objective=neighbor-page-coalesce-under-domain-cap-v5.26-plan' /tmp/worker-locality-plan.txt
+          grep -Fq 'parent_objective=contiguous-under-lpt-cap-v5.25-plan' /tmp/worker-locality-plan.txt
           grep -Fq 'baseline_cross_worker_pages_2m=' /tmp/worker-locality-plan.txt
           grep -Fq 'locality_cross_worker_pages_2m=' /tmp/worker-locality-plan.txt
+          grep -Fq 'coalesced_cross_worker_pages_2m=' /tmp/worker-locality-plan.txt
+          grep -Fq 'coalesce_candidate_evaluations=' /tmp/worker-locality-plan.txt
           grep -Fq 'cross_domain_pages_2m=' /tmp/worker-locality-plan.txt
           python3 - <<'PY'
           fields = {}
@@ -72,14 +80,26 @@ jobs:
               if '=' in token:
                   k, v = token.split('=', 1)
                   fields[k] = v
-          assert int(fields['locality_max_worker_cells']) <= int(fields['baseline_max_worker_cells'])
+          base = int(fields['baseline_max_worker_cells'])
+          loc = int(fields['locality_max_worker_cells'])
+          coal = int(fields['coalesced_max_worker_cells'])
+          assert coal <= loc <= base
+          p0=(int(fields['coalesce_penalty_2m_before']),
+              int(fields['coalesce_penalty_4k_before']),
+              int(fields['coalesce_owner_transitions_before']))
+          p1=(int(fields['coalesce_penalty_2m_after']),
+              int(fields['coalesce_penalty_4k_after']),
+              int(fields['coalesce_owner_transitions_after']))
+          assert p1 <= p0
           PY
       - name: Check documentation
         shell: bash
         run: |
           d=docs/ramstream32-cpu-low-worker-locality.md
           grep -Fq 'v5.25' "$d"
+          grep -Fq 'v5.26' "$d"
           grep -Fq 'contiguous-under-lpt-cap' "$d"
+          grep -Fq 'neighbor-page-coalesce-under-domain-cap' "$d"
           grep -Fq 'cross-worker' "$d"
           grep -Fq 'max worker load cannot increase' "$d"
           grep -Fq 'ramstream32-cpu-low-domain-worker-locality-plan-sweep.sh' "$d"
