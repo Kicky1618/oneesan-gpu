@@ -1,0 +1,35 @@
+name: B300 LOW mask-batch v0.43 research
+
+on:
+  push:
+    paths:
+      - 'src/cpp/probes/factor_low_maskbatch_launch.cpp'
+      - 'src/cpp/probes/factor_low_maskbatch_replica.cpp'
+      - 'docs/b300-low-mask-batch.md'
+      - '.github/workflows/b300-low-maskbatch-v43.yml'
+  pull_request:
+    paths:
+      - 'src/cpp/probes/factor_low_maskbatch_launch.cpp'
+      - 'src/cpp/probes/factor_low_maskbatch_replica.cpp'
+      - 'docs/b300-low-mask-batch.md'
+      - '.github/workflows/b300-low-maskbatch-v43.yml'
+  workflow_dispatch:
+
+jobs:
+  model:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build mask-batch models
+        run: |
+          mkdir -p build
+          g++ -O3 -std=c++17 -Wall -Wextra -Werror src/cpp/probes/factor_low_maskbatch_launch.cpp -o build/factor_low_maskbatch_launch
+          g++ -O3 -std=c++17 -Wall -Wextra -Werror src/cpp/probes/factor_low_maskbatch_replica.cpp -o build/factor_low_maskbatch_replica
+      - name: Verify launch collapse
+        run: |
+          build/factor_low_maskbatch_launch 22 11 8 3
+          build/factor_low_maskbatch_launch 28 14 8 3
+      - name: Verify exact replica task coverage
+        run: |
+          build/factor_low_maskbatch_replica 257 8 16 4096
+          build/factor_low_maskbatch_replica 1024 8 16 16384
