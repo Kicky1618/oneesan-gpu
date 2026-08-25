@@ -1,0 +1,83 @@
+name: B300 hybrid18 validation
+
+on:
+  push:
+    paths:
+      - 'src/cuda/gridfp/ramstream32_bucket_reverse_split18.hpp'
+      - 'src/cuda/gridfp/ramstream32_bucket_reverse_split18.cuh'
+      - 'src/cuda/gridfp/ramstream32_bucket_reverse_split18_alias.cuh'
+      - 'src/cuda/gridfp/ramstream32_bucket_reverse_split18_stream.cuh'
+      - 'src/cuda/gridfp/ramstream32_bucket_reverse_closure_only.cuh'
+      - 'src/cuda/gridfp/ramstream32_bucket_orbit_closure_hybrid18_graph.cuh'
+      - 'src/cuda/gridfp/probes/ramstream32_reverse_split18_plan.cu'
+      - 'src/cuda/gridfp/probes/ramstream32_bucket_reverse_split18_selftest.cu'
+      - 'src/cuda/b300/oneesan_cuda_gridfp_b300_bucket_snake_onepass_hybrid18*.cu'
+      - 'scripts/build/b300-bucket-snake-hybrid18-graph-batch.sh'
+      - 'scripts/run/b300x8-bucket-snake-hybrid18-graph-exact.sh'
+      - '.github/workflows/b300-hybrid18-validation.yml'
+  workflow_dispatch:
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    container: nvidia/cuda:12.8.1-devel-ubuntu22.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Compile and run W10 reverse split18 plan
+        shell: bash
+        run: |
+          mkdir -p build
+          nvcc -O3 -std=c++17 -lineinfo -arch=sm_80 \
+            -DTARGET_W=10 -DLOW_LUT_K=5 -DHIGH_LUT_K=4 \
+            src/cuda/gridfp/probes/ramstream32_reverse_split18_plan.cu \
+            -o build/reverse_split18_plan_w10
+          build/reverse_split18_plan_w10 | tee /tmp/reverse-split18-plan.txt
+          grep -Fq 'reverse-split18-plan OK W=10' /tmp/reverse-split18-plan.txt
+          grep -Fq 'kind_bits=0 jblock_bits=0 bytes_per_orbit=1' /tmp/reverse-split18-plan.txt
+      - name: Compile W10 reverse split18 CUDA selftest
+        shell: bash
+        run: |
+          nvcc -O3 -std=c++17 -lineinfo -arch=sm_80 \
+            -DTARGET_W=10 -DLOW_LUT_K=5 -DHIGH_LUT_K=4 \
+            src/cuda/gridfp/probes/ramstream32_bucket_reverse_split18_selftest.cu \
+            -o build/reverse_split18_selftest_w10
+          build/reverse_split18_selftest_w10 | tee /tmp/reverse-split18-selftest.txt
+          grep -Eq 'bucket-reverse-split18-selftest (OK W=10|SKIP no CUDA device)' /tmp/reverse-split18-selftest.txt
+      - name: Compile W10 PM reverse split18 CUDA selftest
+        shell: bash
+        run: |
+          nvcc -O3 -std=c++17 -lineinfo -arch=sm_80 \
+            -DTARGET_W=10 -DLOW_LUT_K=5 -DHIGH_LUT_K=4 -DGPU_DIRECT_PM_ACCUM=1 \
+            src/cuda/gridfp/probes/ramstream32_bucket_reverse_split18_selftest.cu \
+            -o build/reverse_split18_selftest_pm_w10
+      - name: Compile and plan W10 hybrid18 pipeline single driver
+        shell: bash
+        run: |
+          nvcc -O3 -std=c++17 -lineinfo -arch=sm_80 \
+            -DTARGET_W=10 -DLOW_LUT_K=5 -DHIGH_LUT_K=4 \
+            src/cuda/b300/oneesan_cuda_gridfp_b300_bucket_snake_onepass_hybrid18_pipeline.cu \
+            -o build/hybrid18_pipeline_w10
+          build/hybrid18_pipeline_w10 9 4294967291 256 4 4 64 --plan-only 2>&1 | tee /tmp/hybrid18-plan.txt
+          grep -Fq 'kernels_per_position=1' /tmp/hybrid18-plan.txt
+          grep -Fq 'transposes_per_residue=10' /tmp/hybrid18-plan.txt
+      - name: Compile W28 hybrid18 pipeline batch
+        shell: bash
+        run: |
+          nvcc -O3 -std=c++17 -lineinfo -arch=sm_80 \
+            -DTARGET_W=28 -DLOW_LUT_K=14 -DHIGH_LUT_K=13 \
+            src/cuda/b300/oneesan_cuda_gridfp_b300_bucket_snake_onepass_hybrid18_batch_pipeline.cu \
+            -o build/hybrid18_batch_pipeline_w28
+      - name: Compile W28 hybrid18 graph pipeline batch
+        shell: bash
+        run: |
+          nvcc -O3 -std=c++17 -lineinfo -arch=sm_80 \
+            -DTARGET_W=28 -DLOW_LUT_K=14 -DHIGH_LUT_K=13 \
+            src/cuda/b300/oneesan_cuda_gridfp_b300_bucket_snake_onepass_hybrid18_graph_batch_pipeline.cu \
+            -o build/hybrid18_graph_pipeline_w28
+      - name: Compile W28 PM hybrid18 graph pipeline batch
+        shell: bash
+        run: |
+          nvcc -O3 -std=c++17 -lineinfo -arch=sm_80 \
+            -DTARGET_W=28 -DLOW_LUT_K=14 -DHIGH_LUT_K=13 -DGPU_DIRECT_PM_ACCUM=1 \
+            src/cuda/b300/oneesan_cuda_gridfp_b300_bucket_snake_onepass_hybrid18_graph_batch_pipeline.cu \
+            -o build/hybrid18_graph_pipeline_pm_w28
