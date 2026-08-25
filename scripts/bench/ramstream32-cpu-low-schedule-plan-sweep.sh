@@ -15,6 +15,11 @@ ANALYZE="${ANALYZE:-1}"
 MAX_IMBALANCE="${MAX_IMBALANCE:-}"
 OUT_DIR="${OUT_DIR:-$ROOT/work/bench_ramstream32_cpu_low_schedule_plan_sweep}"
 
+# The generic topology/Pareto sweep is the standard refined-domain baseline.
+# Page-aware locality is intentionally isolated in domain-page-plan-ab.sh.
+CPU_LOW_DOMAIN_REFINE=1
+CPU_LOW_DOMAIN_PAGE_TIEBREAK=0
+
 if (( N < 2 || N > 27 )); then
   echo "N must be in 2..27" >&2
   exit 2
@@ -79,25 +84,35 @@ host=$(hostname 2>/dev/null || echo unknown)
 n=$N
 arch=$ARCH
 configs=$CONFIGS
+cpu_low_domain_refine=$CPU_LOW_DOMAIN_REFINE
+cpu_low_domain_page_tiebreak=$CPU_LOW_DOMAIN_PAGE_TIEBREAK
 analyze=$ANALYZE
 max_imbalance=${MAX_IMBALANCE:-none}
 binary_sha256=$(file_sha256 "$bin")
 EOF
 
 # Raw probe names retain hybrid_domain_* for compatibility; persisted sweep
-# columns use the production v5.20 domain terminology.
+# columns use the production domain terminology. This sweep is page=0 baseline.
 printf 'workers\tdomain_size\tdomains\tlpt_imbalance\tlpt_cross_domain_4k\tlpt_cross_domain_2m\tcontiguous_imbalance\tcontiguous_cross_domain_4k\tcontiguous_cross_domain_2m\tdomain_imbalance\tdomain_cross_domain_4k\tdomain_cross_domain_2m\tdomain_cross_worker_4k\tdomain_cross_worker_2m\tdomain_outer_normalized_cap\tdomain_active_domains\tdomain_refined_boundaries\tdomain_refined_job_moves\traw\n' >"$out"
 
 for cfg in "${configs[@]}"; do
   workers="${cfg%%:*}"
   domain="${cfg#*:}"
-  echo "schedule-plan n=$N workers=$workers domain_size=$domain" >&2
-  line="$($bin "$N" "$workers" --domain-size "$domain" | head -n1)"
+  echo "schedule-plan n=$N workers=$workers domain_size=$domain refine=1 page_tiebreak=0" >&2
+  line="$(CPU_LOW_DOMAIN_REFINE="$CPU_LOW_DOMAIN_REFINE" \
+    CPU_LOW_DOMAIN_PAGE_TIEBREAK="$CPU_LOW_DOMAIN_PAGE_TIEBREAK" \
+    "$bin" "$N" "$workers" --domain-size "$domain" | head -n1)"
   [[ "$(field "$line" workers)" == "$workers" ]] || {
     echo "worker provenance mismatch for $cfg" >&2; exit 4;
   }
   [[ "$(field "$line" domain_size)" == "$domain" ]] || {
     echo "domain provenance mismatch for $cfg" >&2; exit 4;
+  }
+  [[ "$(field "$line" hybrid_domain_refine)" == "$CPU_LOW_DOMAIN_REFINE" ]] || {
+    echo "refine provenance mismatch for $cfg" >&2; exit 4;
+  }
+  [[ "$(field "$line" hybrid_domain_page_tiebreak)" == "$CPU_LOW_DOMAIN_PAGE_TIEBREAK" ]] || {
+    echo "page provenance mismatch for $cfg" >&2; exit 4;
   }
 
   printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
