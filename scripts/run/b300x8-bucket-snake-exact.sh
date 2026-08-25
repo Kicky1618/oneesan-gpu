@@ -32,7 +32,7 @@ fi
 if [[ ! -x "$BIN" ]]; then
   echo "$BIN not found; building snake fused batch binary for n=$N transpose=$TRANSPOSE_MODE pm=$PM_ACCUM" >&2
   N="$N" OUT="$BIN" TRANSPOSE_MODE="$TRANSPOSE_MODE" PM_ACCUM="$PM_ACCUM" \
-    "$ONEESAN_ROOT/scripts/build/b300-bucket-snake-batch.sh"
+    bash "$ONEESAN_ROOT/scripts/build/b300-bucket-snake-batch.sh"
 fi
 
 export BUCKET_TRANSPOSE_CHUNK_MIB BUCKET_RESERVE_MIB
