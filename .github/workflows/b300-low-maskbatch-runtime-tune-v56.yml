@@ -1,0 +1,85 @@
+name: B300 LOW mask-batch runtime tuning v0.56 research
+
+on:
+  push:
+    paths:
+      - 'src/cpp/probes/factor_low_maskbatch_replica_tune.cpp'
+      - 'src/cuda/b300/maskshard_low_maskbatch_range_executor.cuh'
+      - 'src/cuda/b300/oneesan_b300_maskshard_v055_lowmaskbatch_ranges_graph.cu'
+      - 'src/cuda/b300/oneesan_b300_maskshard_v056_lowmaskbatch_runtime_tune.cu'
+      - 'scripts/bench/b300_maskshard_lowmaskbatch_runtime_target_sweep.py'
+      - '.github/workflows/b300-low-maskbatch-runtime-tune-v56.yml'
+  pull_request:
+    paths:
+      - 'src/cpp/probes/factor_low_maskbatch_replica_tune.cpp'
+      - 'src/cuda/b300/maskshard_low_maskbatch_range_executor.cuh'
+      - 'src/cuda/b300/oneesan_b300_maskshard_v055_lowmaskbatch_ranges_graph.cu'
+      - 'src/cuda/b300/oneesan_b300_maskshard_v056_lowmaskbatch_runtime_tune.cu'
+      - 'scripts/bench/b300_maskshard_lowmaskbatch_runtime_target_sweep.py'
+      - '.github/workflows/b300-low-maskbatch-runtime-tune-v56.yml'
+  workflow_dispatch:
+
+jobs:
+  model:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build exact target model
+        run: |
+          mkdir -p build
+          g++ -O3 -std=c++17 -Wall -Wextra -Werror \
+            src/cpp/probes/factor_low_maskbatch_replica_tune.cpp \
+            -o build/factor_low_maskbatch_replica_tune
+      - name: Sweep structural n=27 targets
+        run: |
+          for t in 16384 32768 65536 131072 262144 524288 1048576; do
+            build/factor_low_maskbatch_replica_tune 28 14 8 "$t"
+          done
+
+  cuda-compile:
+    runs-on: ubuntu-latest
+    container: nvidia/cuda:12.8.1-devel-ubuntu22.04
+    strategy:
+      matrix:
+        include:
+          - {width: 10, low: 5, high: 4}
+          - {width: 22, low: 11, high: 10}
+          - {width: 28, low: 14, high: 13}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Compile v0.55 fixed target baseline
+        shell: bash
+        run: |
+          mkdir -p build
+          nvcc -O3 -std=c++17 -lineinfo -arch=sm_80 \
+            -DTARGET_W=${{ matrix.width }} \
+            -DLOW_LUT_K=${{ matrix.low }} \
+            -DHIGH_LUT_K=${{ matrix.high }} \
+            src/cuda/b300/oneesan_b300_maskshard_v055_lowmaskbatch_ranges_graph.cu \
+            -o build/b300_maskshard_v55_w${{ matrix.width }}
+      - name: Compile v0.56 runtime target backend
+        shell: bash
+        run: |
+          nvcc -O3 -std=c++17 -lineinfo -arch=sm_80 \
+            -DTARGET_W=${{ matrix.width }} \
+            -DLOW_LUT_K=${{ matrix.low }} \
+            -DHIGH_LUT_K=${{ matrix.high }} \
+            src/cuda/b300/oneesan_b300_maskshard_v056_lowmaskbatch_runtime_tune.cu \
+            -o build/b300_maskshard_v56_w${{ matrix.width }}
+
+  sweep-driver:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Syntax-check runtime target sweep
+        run: python3 -m py_compile scripts/bench/b300_maskshard_lowmaskbatch_runtime_target_sweep.py
+      - name: Dry-run small-width sweep
+        run: |
+          python3 scripts/bench/b300_maskshard_lowmaskbatch_runtime_target_sweep.py \
+            --dry-run --n 9 --gpus 1 --threads 256 --low 5 --high 4 \
+            --target 16384 --target 65536 \
+            --modulus 4294967291 --modulus 4294967279
+      - name: Dry-run n=27 B300x8 sweep
+        run: |
+          python3 scripts/bench/b300_maskshard_lowmaskbatch_runtime_target_sweep.py \
+            --dry-run --n 27 --gpus 8 --threads 256 --low 14 --high 13
