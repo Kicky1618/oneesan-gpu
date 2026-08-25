@@ -3,6 +3,7 @@ name: ramstream32 global LOW page plan CI
 on:
   push:
     paths:
+      - 'src/cuda/gridfp/ramstream32_cpu_low_domain_page_index.hpp'
       - 'src/cuda/gridfp/ramstream32_cpu_low_domain_page.hpp'
       - 'src/cuda/gridfp/ramstream32_cpu_low_domain_page_global.hpp'
       - 'src/cuda/gridfp/probes/ramstream32_cpu_low_global_page_plan.cu'
@@ -14,6 +15,7 @@ on:
       - '.github/workflows/ramstream32-global-page-plan-ci.yml'
   pull_request:
     paths:
+      - 'src/cuda/gridfp/ramstream32_cpu_low_domain_page_index.hpp'
       - 'src/cuda/gridfp/ramstream32_cpu_low_domain_page.hpp'
       - 'src/cuda/gridfp/ramstream32_cpu_low_domain_page_global.hpp'
       - 'src/cuda/gridfp/probes/ramstream32_cpu_low_global_page_plan.cu'
@@ -50,11 +52,13 @@ jobs:
           nvcc "${common[@]}" \
             src/cuda/gridfp/probes/ramstream32_cpu_low_global_page_selftest.cu \
             -o build/ramstream32_cpu_low_global_page_selftest
-      - name: Validate synthetic global unique semantics
+      - name: Validate synthetic global unique semantics and mask index
         shell: bash
         run: |
           build/ramstream32_cpu_low_global_page_selftest | tee /tmp/global-page-selftest.txt
           grep -Fq 'cpu-low-global-page-selftest OK' /tmp/global-page-selftest.txt
+          grep -Fq 'mask_index_checked=' /tmp/global-page-selftest.txt
+          grep -Fq 'max_indexed_height=5' /tmp/global-page-selftest.txt
           grep -Fq 'local_sum_example=4' /tmp/global-page-selftest.txt
           grep -Fq 'global_unique_example=3' /tmp/global-page-selftest.txt
           grep -Fq 'global_improved_example=2' /tmp/global-page-selftest.txt
@@ -72,6 +76,7 @@ jobs:
           grep -Fq 'global_pages_2m=' /tmp/global-page-plan.txt
           grep -Fq 'global_candidate_evaluations=' /tmp/global-page-plan.txt
           grep -Fq 'cpu_low_domain_page_tiebreak objective=max_guard-page-sum-v5.23' /tmp/global-page-plan.log
+          grep -Fq 'mask_index_mib=' /tmp/global-page-plan.log
           grep -Fq 'cpu_low_domain_global_page_tiebreak objective=global-unique-max-guard-page-sum-v5.24-plan' /tmp/global-page-plan.log
           python3 - <<'PY'
           fields = {}
