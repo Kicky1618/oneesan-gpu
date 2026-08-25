@@ -12,15 +12,6 @@ and the hybrid-sparse backend sparsely samples the authoritative `main` and `blo
 
 The implementation caps each array at 32,768 sampled pages. If the requested spacing would exceed that cap, the actual spacing is increased and reported. Lazy/unresident pages and syscall failures are logged rather than treated as solver failures.
 
-Example raw output:
-
-```text
-numa_sample tag=row1 array=main bytes=... requested_spacing_mib=64 actual_spacing_mib=64 samples=30000 success=29980 N0=17000 N1=12980 E-2=20
-numa_sample tag=final array=main bytes=... requested_spacing_mib=64 actual_spacing_mib=64 samples=30000 success=30000 N0=15000 N1=15000
-```
-
-`E<negative errno>=...` entries are per-page query failures. A whole-syscall failure is reported with `syscall_errno=...` and is non-fatal. Some container/security configurations can deny `move_pages`; in that case run directly on the host or with an appropriate container policy before drawing NUMA conclusions.
-
 ## One-command diagnostic
 
 Use the dedicated runner instead of a performance benchmark:
@@ -35,37 +26,29 @@ CPU_LOW_CPU_LIST='32-95' \
 CPU_LOW_SCHEDULE=domain \
 CPU_LOW_DOMAIN_SIZE=32 \
 CPU_LOW_DOMAIN_REFINE=1 \
+CPU_LOW_DOMAIN_PAGE_TIEBREAK=0 \
 CPU_WORKERS=64 \
 NUMA_SAMPLE_MIB=64 \
 bash scripts/bench/ramstream32-numa-sample.sh
 ```
 
-The current LOW scheduler exposes four modes:
+The current LOW scheduler exposes four modes: `dynamic`, `sticky`, `contiguous`, and `domain`. Domain scheduling additionally requires `CPU_LOW_DOMAIN_SIZE`.
 
-```text
-CPU_LOW_SCHEDULE=dynamic
-CPU_LOW_SCHEDULE=sticky
-CPU_LOW_SCHEDULE=contiguous
-CPU_LOW_SCHEDULE=domain
-```
-
-`sticky` uses a one-time exact-cell LPT partition. `contiguous` keeps every worker on one ordered HIGH-mask interval. `domain` keeps only NUMA-domain ownership contiguous and restores exact-cell LPT inside each domain. `domain` additionally requires `CPU_LOW_DOMAIN_SIZE`, which must be positive and no larger than `CPU_WORKERS`.
-
-For domain scheduling, `CPU_LOW_DOMAIN_REFINE=1` is the default and enables the bounded domain-boundary LPT refinement. `CPU_LOW_DOMAIN_REFINE=0` keeps the initial outer-domain partition. Both are exact recurrence schedules; the difference is ownership geometry and resulting timing/locality.
+`CPU_LOW_DOMAIN_REFINE=1` is the default load-balancing boundary refinement. v5.22 adds `CPU_LOW_DOMAIN_PAGE_TIEBREAK=1`, an optional second stage that keeps the refined LPT load objective unchanged and uses 2 MiB then 4 KiB boundary-page exposure only as a tie-break. Page mode requires refined domain scheduling.
 
 To isolate scheduling/locality effects, hold every other condition fixed:
 
 ```bash
-CPU_LOW_SCHEDULE=dynamic    bash scripts/bench/ramstream32-numa-sample.sh
-CPU_LOW_SCHEDULE=sticky     bash scripts/bench/ramstream32-numa-sample.sh
+CPU_LOW_SCHEDULE=dynamic bash scripts/bench/ramstream32-numa-sample.sh
+CPU_LOW_SCHEDULE=sticky bash scripts/bench/ramstream32-numa-sample.sh
 CPU_LOW_SCHEDULE=contiguous bash scripts/bench/ramstream32-numa-sample.sh
 CPU_LOW_SCHEDULE=domain CPU_LOW_DOMAIN_SIZE=32 CPU_LOW_DOMAIN_REFINE=1 \
-  bash scripts/bench/ramstream32-numa-sample.sh
-CPU_LOW_SCHEDULE=domain CPU_LOW_DOMAIN_SIZE=32 CPU_LOW_DOMAIN_REFINE=0 \
-  bash scripts/bench/ramstream32-numa-sample.sh
+  CPU_LOW_DOMAIN_PAGE_TIEBREAK=0 bash scripts/bench/ramstream32-numa-sample.sh
+CPU_LOW_SCHEDULE=domain CPU_LOW_DOMAIN_SIZE=32 CPU_LOW_DOMAIN_REFINE=1 \
+  CPU_LOW_DOMAIN_PAGE_TIEBREAK=1 bash scripts/bench/ramstream32-numa-sample.sh
 ```
 
-The runner propagates and records `CPU_LOW_SCHEDULE`, `CPU_LOW_DOMAIN_SIZE`, and `CPU_LOW_DOMAIN_REFINE`. For domain mode it also checks the scheduler stderr `refine=0|1` provenance before analyzing samples, so placement results cannot silently mix refined and unrefined ownership.
+The runner propagates and records `CPU_LOW_SCHEDULE`, `CPU_LOW_DOMAIN_SIZE`, `CPU_LOW_DOMAIN_REFINE`, and `CPU_LOW_DOMAIN_PAGE_TIEBREAK`. It checks the final solver provenance. For domain mode it also verifies stderr `refine=...`, and page-aware mode requires the `cpu_low_domain_page_tiebreak` diagnostic line. The output basename includes the page mode so two sampled placements are not accidentally overwritten or confused.
 
 For a cost-model HIGH policy, replace the threshold with:
 
@@ -76,13 +59,15 @@ CPU_HIGH_GROUPS_FILE=/path/to/cpu-high.groups
 
 Sampling perturbs the run through syscalls and cache/TLB effects. Do not use the sampled run's `wall_s` as the clean performance number. Repeat the same configuration with `RAMSTREAM_NUMA_SAMPLE_MIB=0` for timing.
 
-For clean four-way LOW timing use:
+For clean scheduling measurements use:
 
 ```text
 scripts/bench/ramstream32-cpu-low-schedule-compare.sh
+scripts/bench/ramstream32-cpu-low-domain-refine-ab.sh
+scripts/bench/ramstream32-cpu-low-domain-page-ab.sh
 ```
 
-which rotates dynamic/sticky/contiguous/domain with a cyclic-latin-4 order and forces NUMA sampling off. To isolate only the effect of domain boundary refinement, use `scripts/bench/ramstream32-cpu-low-domain-refine-ab.sh` instead.
+The dedicated page A/B keeps `CPU_LOW_DOMAIN_REFINE=1` in both variants and changes only `CPU_LOW_DOMAIN_PAGE_TIEBREAK=0|1`.
 
 ## Static page-cut preflight
 
@@ -90,17 +75,21 @@ Before a multi-terabyte residue run, inspect the production static assignments w
 
 ```bash
 N=27 bash scripts/build/gridfp-ramstream32-cpu-low-schedule-plan.sh
-CPU_LOW_DOMAIN_REFINE=1 \
+CPU_LOW_DOMAIN_REFINE=1 CPU_LOW_DOMAIN_PAGE_TIEBREAK=0 \
+  ./build/ramstream32_cpu_low_schedule_plan_n27 27 64 --domain-size 32
+CPU_LOW_DOMAIN_REFINE=1 CPU_LOW_DOMAIN_PAGE_TIEBREAK=1 \
   ./build/ramstream32_cpu_low_schedule_plan_n27 27 64 --domain-size 32
 ```
 
-Repeat with `CPU_LOW_DOMAIN_REFINE=0` to see how the boundary refiner changes exact-cell imbalance and page cuts before running the large state arrays.
+For several worker/socket shapes use:
 
-The probe constructs the production LPT, contiguous, and domain schedules and then measures boundary-page ownership. It reports exact-cell imbalance, cross-worker 4 KiB/2 MiB boundary-page counts, and cross-domain cuts under the supplied worker-to-domain model.
+```text
+scripts/bench/ramstream32-cpu-low-domain-page-plan-ab.sh
+```
 
-The probe retains historical `hybrid_domain_*` raw field names for the domain schedule. The topology sweep stores those values under `domain_*` columns and the Pareto analyzer reports `scheme=domain`.
+The probe constructs the actual production assignment and measures global unique cross-worker and cross-domain 4 KiB/2 MiB boundary pages. These global counts are distinct from the page refiner's internal sum of local per-boundary penalties; use the global probe fields when deciding whether page-aware scheduling structurally improved the final multi-domain layout.
 
-These are static ownership exposures, not measured remote-memory bytes. They are useful for deciding whether domain ownership is structurally promising, but must be paired with `move_pages` measurements and clean timing.
+These are static ownership exposures, not measured remote-memory bytes. They must be paired with `move_pages` measurements and clean timing. A lower static boundary count can still lose if first-touch, THP, AutoNUMA, caches, or GPU DMA dominate actual placement.
 
 ## Analyzer
 
@@ -124,19 +113,12 @@ for `main` and `block`. A substantial drift indicates that placement changed dur
 
 ## How to use the result
 
-On the same host, compare at least:
+On the same host, compare at least refined-domain page=0 and page=1 with identical worker affinity, HIGH policy, overlap setting, THP state, and sample spacing. Read three layers together:
 
-1. dynamic LOW scheduling with default affinity;
-2. explicit HIGH/LOW affinity with dynamic scheduling;
-3. sticky with the same lists;
-4. contiguous with the same lists;
-5. refined domain with a hardware-matching `CPU_LOW_DOMAIN_SIZE`;
-6. unrefined domain with the same domain size;
-7. same-socket and split-socket HIGH/LOW layouts;
-8. overlap 0 and overlap 1.
+1. preflight `hybrid_domain_cross_domain_pages_2m/4k` for static ownership geometry;
+2. sampled node histograms and row1→final drift for actual placement;
+3. clean `cpu_low_wall_s` and whole-solver wall time with NUMA sampling disabled.
 
-Compare node histograms together with `cpu_high_wall_s`, `cpu_low_wall_s`, H2D/D2H time, static page-cut exposure, and clean no-sampling wall time. Stable scheduling is useful only if locality gains outweigh static-load imbalance.
+The purpose is to determine whether page-aware boundary ownership reduces real remote-memory pressure before experimenting with interleave, 4 KiB pages, THP changes, or `mbind`.
 
-The purpose is to determine whether the workload is actually remote-memory limited before experimenting with interleave, 4 KiB pages, THP changes, or `mbind`.
-
-Per-group `mbind` is intentionally not implemented yet. Factorized group slices can share boundary pages, especially with 2 MiB huge pages. LOW static page-cut analysis, measured page histograms, and `analyze_cpu_high_numa.py` HIGH page exposure should be considered together before imposing a memory policy.
+Per-group `mbind` remains intentionally unimplemented. Factorized group slices can share boundary pages, especially with 2 MiB huge pages. LOW static page-cut analysis, measured page histograms, and HIGH `analyze_cpu_high_numa.py` exposure should be considered together before imposing a memory policy.
