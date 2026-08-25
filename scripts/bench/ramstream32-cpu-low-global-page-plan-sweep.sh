@@ -9,7 +9,10 @@ cd "$ROOT"
 
 N="${N:-27}"
 ARCH="${ARCH:-native}"
-CONFIGS="${CONFIGS:-32:16 64:32 96:48 128:64}"
+# Include 2-domain controls and 3/4-domain cases.  With exactly two domains
+# there is only one boundary, so local and global-unique page objectives are
+# mathematically identical and v5.24 cannot improve on v5.23.
+CONFIGS="${CONFIGS:-32:16 48:16 64:16 64:32 96:32 128:32}"
 BUILD="${BUILD:-1}"
 OUT_DIR="${OUT_DIR:-$ROOT/work/bench_ramstream32_cpu_low_global_page_plan}"
 
@@ -45,10 +48,11 @@ n=$N
 arch=$ARCH
 configs=$CONFIGS
 objective=global-unique-max-guard-page-sum-v5.24-plan
+note=two-domain rows are controls because one boundary makes local and global page objectives identical
 binary_sha256=$(file_sha256 "$bin")
 EOF
 
-printf 'workers\tdomain_size\tdomains\trefined_max_worker_cells\tlocal_max_worker_cells\tglobal_max_worker_cells\trefined_pages_2m\trefined_pages_4k\tlocal_pages_2m\tlocal_pages_4k\tglobal_pages_2m\tglobal_pages_4k\tlocal_boundary_moves\tlocal_candidate_evaluations\tlocal_max_guard_rejections\tlocal_relaxed_moves\tglobal_boundary_moves\tglobal_candidate_evaluations\tglobal_max_guard_rejections\tglobal_page_improving_moves\tglobal_page_tie_load_moves\tglobal_relaxed_moves\tglobal_build_s\tglobal_total_build_s\traw\n' >"$out"
+printf 'workers\tdomain_size\tdomains\trefined_max_worker_cells\tlocal_max_worker_cells\tglobal_max_worker_cells\trefined_pages_2m\trefined_pages_4k\tlocal_pages_2m\tlocal_pages_4k\tglobal_pages_2m\tglobal_pages_4k\tlocal_boundary_moves\tlocal_candidate_evaluations\tlocal_max_guard_rejections\tlocal_relaxed_moves\tglobal_boundary_moves\tglobal_candidate_evaluations\tglobal_max_guard_rejections\tglobal_page_improving_moves\tglobal_page_tie_load_moves\tglobal_relaxed_moves\tglobal_build_s\tglobal_total_build_s\tscore_mask_index_mib\tscore_mask_index_build_s\tlocal_mask_index_build_s\tglobal_mask_index_build_s\traw\n' >"$out"
 
 for cfg in "${configs[@]}"; do
   workers="${cfg%%:*}"; domain="${cfg#*:}"
@@ -60,7 +64,8 @@ for cfg in "${configs[@]}"; do
   [[ "$(field "$line" workers)" == "$workers" ]] || { echo "worker provenance mismatch cfg=$cfg" >&2; exit 4; }
   [[ "$(field "$line" domain_size)" == "$domain" ]] || { echo "domain provenance mismatch cfg=$cfg" >&2; exit 4; }
 
-  python3 - \
+  domains="$(field "$line" domains)"
+  python3 - "$domains" \
     "$(field "$line" refined_max_worker_cells)" \
     "$(field "$line" local_max_worker_cells)" \
     "$(field "$line" global_max_worker_cells)" \
@@ -69,15 +74,17 @@ for cfg in "${configs[@]}"; do
     "$(field "$line" global_pages_2m)" \
     "$(field "$line" global_pages_4k)" <<'PY'
 import sys
-refined,local,glob,l2,l4,g2,g4=map(int,sys.argv[1:])
+domains,refined,local,glob,l2,l4,g2,g4=map(int,sys.argv[1:])
 if local > refined or glob > local:
     raise SystemExit('max-worker regression')
 if (g2,g4) > (l2,l4):
     raise SystemExit('global unique page regression')
+if domains == 2 and (g2,g4) != (l2,l4):
+    raise SystemExit('two-domain local/global equivalence violated')
 PY
 
-  printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
-    "$workers" "$domain" "$(field "$line" domains)" \
+  printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
+    "$workers" "$domain" "$domains" \
     "$(field "$line" refined_max_worker_cells)" \
     "$(field "$line" local_max_worker_cells)" \
     "$(field "$line" global_max_worker_cells)" \
@@ -99,6 +106,10 @@ PY
     "$(field "$line" global_page_improve_sum_increase_moves)" \
     "$(field "$line" global_build_s)" \
     "$(field "$line" global_total_build_s)" \
+    "$(field "$line" score_mask_index_mib)" \
+    "$(field "$line" score_mask_index_build_s)" \
+    "$(field "$line" local_mask_index_build_s)" \
+    "$(field "$line" global_mask_index_build_s)" \
     "$line" >>"$out"
 done
 
@@ -106,17 +117,23 @@ python3 - "$out" <<'PY'
 import csv, sys
 with open(sys.argv[1], newline='') as f:
     for r in csv.DictReader(f, delimiter='\t'):
+        domains=int(r['domains'])
         local=(int(r['local_pages_2m']),int(r['local_pages_4k']))
         glob=(int(r['global_pages_2m']),int(r['global_pages_4k']))
         refined=(int(r['refined_pages_2m']),int(r['refined_pages_4k']))
-        if glob < local: cls='global_beats_local'
-        elif glob == local: cls='global_ties_local'
-        else: cls='invalid_regression'
+        if domains <= 2:
+            cls='single_boundary_equivalent'
+        elif glob < local:
+            cls='global_beats_local'
+        elif glob == local:
+            cls='global_ties_local'
+        else:
+            cls='invalid_regression'
         evals=int(r['global_candidate_evaluations'])
         rejects=int(r['global_max_guard_rejections'])
         frac=rejects/evals if evals else 0.0
         print(
-            f"comparison workers={r['workers']} domain_size={r['domain_size']} "
+            f"comparison workers={r['workers']} domain_size={r['domain_size']} domains={domains} "
             f"classification={cls} "
             f"refined_pages_2m={refined[0]} refined_pages_4k={refined[1]} "
             f"local_pages_2m={local[0]} local_pages_4k={local[1]} "
@@ -126,7 +143,8 @@ with open(sys.argv[1], newline='') as f:
             f"global_candidate_evaluations={evals} "
             f"global_max_guard_reject_fraction={frac:.9f} "
             f"global_boundary_moves={r['global_boundary_moves']} "
-            f"global_build_s={float(r['global_build_s']):.9f}"
+            f"global_build_s={float(r['global_build_s']):.9f} "
+            f"score_mask_index_build_s={float(r['score_mask_index_build_s']):.9f}"
         )
 PY
 
