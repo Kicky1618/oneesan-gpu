@@ -33,6 +33,7 @@ jobs:
           grep -Fq 'cpu_low_domain_refine=$CPU_LOW_DOMAIN_REFINE' "$f"
           grep -Fq 'LOW schedule provenance mismatch' "$f"
           grep -Fq 'LOW domain provenance mismatch' "$f"
+          grep -Fq 'LOW refine provenance mismatch' "$f"
       - name: Check documented entry point
         shell: bash
         run: |
