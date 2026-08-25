@@ -1,0 +1,72 @@
+name: B300 mask-shard research CI
+
+on:
+  pull_request:
+    paths:
+      - 'src/cpp/probes/**'
+      - 'src/cuda/b300/**'
+      - 'scripts/bench/b300_maskshard_*.py'
+      - '.github/workflows/b300-maskshard-research-ci.yml'
+  workflow_dispatch:
+    inputs:
+      full_cuda:
+        description: 'Compile the latest CUDA backend for W=10,22,28'
+        required: false
+        type: boolean
+        default: false
+
+concurrency:
+  group: b300-maskshard-research-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  structural:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build structural probes
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p build
+          g++ -O3 -std=c++17 -Wall -Wextra -Werror \
+            src/cpp/probes/factor_row_depth_support.cpp \
+            -o build/factor_row_depth_support
+          g++ -O3 -std=c++17 -Wall -Wextra -Werror \
+            src/cpp/probes/factor_highclosure_rowdepth_threshold.cpp \
+            -o build/factor_highclosure_rowdepth_threshold
+          g++ -O3 -std=c++17 -Wall -Wextra -Werror \
+            src/cpp/probes/factor_low_maskbatch_replica_tune.cpp \
+            -o build/factor_low_maskbatch_replica_tune
+      - name: Run structural smoke tests
+        shell: bash
+        run: |
+          set -euo pipefail
+          build/factor_row_depth_support 14
+          build/factor_highclosure_rowdepth_threshold 28 14 256 29
+          build/factor_low_maskbatch_replica_tune 28 14 8 65536
+
+  cuda-compile:
+    if: ${{ github.event_name == 'workflow_dispatch' && inputs.full_cuda }}
+    runs-on: ubuntu-latest
+    container: nvidia/cuda:12.8.1-devel-ubuntu22.04
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - {width: 10, low: 5, high: 4}
+          - {width: 22, low: 11, high: 10}
+          - {width: 28, low: 14, high: 13}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Compile latest runtime-tuned backend
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p build
+          nvcc -O3 -std=c++17 -lineinfo -arch=sm_80 \
+            -DTARGET_W=${{ matrix.width }} \
+            -DLOW_LUT_K=${{ matrix.low }} \
+            -DHIGH_LUT_K=${{ matrix.high }} \
+            src/cuda/b300/oneesan_b300_maskshard_v056_lowmaskbatch_runtime_tune.cu \
+            -o build/maskshard_v056_w${{ matrix.width }}
