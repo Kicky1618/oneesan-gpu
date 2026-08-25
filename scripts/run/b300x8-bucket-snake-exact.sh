@@ -8,12 +8,26 @@ NGPU="${NGPU:-8}"
 TARGET_MIB="${TARGET_MIB:-16384}"
 MAX_WINDOW="${MAX_WINDOW:-14}"
 TRANSPOSE_MODE="${TRANSPOSE_MODE:-events}"
+ORBIT_CLOSURE_FUSE="${ORBIT_CLOSURE_FUSE:-0}"
 PM_ACCUM="${PM_ACCUM:-0}"
 BUCKET_TRANSPOSE_CHUNK_MIB="${BUCKET_TRANSPOSE_CHUNK_MIB:-1024}"
 BUCKET_RESERVE_MIB="${BUCKET_RESERVE_MIB:-8192}"
-SUFFIX="_${TRANSPOSE_MODE}"; if [[ "$PM_ACCUM" == 1 ]]; then SUFFIX="${SUFFIX}_pm"; fi
-BIN="${BIN:-$ONEESAN_BUILD_DIR/oneesan_cuda_gridfp_b300_bucket_snake_fused_batch${SUFFIX}_n${N}}"
-WORK_DIR="${WORK_DIR:-$ONEESAN_ROOT/work/b300_bucket_snake_exact_n${N}}"
+if [[ "$ORBIT_CLOSURE_FUSE" != 0 && "$ORBIT_CLOSURE_FUSE" != 1 ]]; then
+  echo "ORBIT_CLOSURE_FUSE must be 0 or 1" >&2
+  exit 2
+fi
+if [[ "$ORBIT_CLOSURE_FUSE" == 1 ]]; then
+  SUFFIX="_onepass_${TRANSPOSE_MODE}"
+  STEM="oneesan_cuda_gridfp_b300_bucket_snake_onepass_batch"
+  WORK_TAG="onepass_${TRANSPOSE_MODE}"
+else
+  SUFFIX="_${TRANSPOSE_MODE}"
+  STEM="oneesan_cuda_gridfp_b300_bucket_snake_fused_batch"
+  WORK_TAG="fused_${TRANSPOSE_MODE}"
+fi
+if [[ "$PM_ACCUM" == 1 ]]; then SUFFIX="${SUFFIX}_pm"; WORK_TAG="${WORK_TAG}_pm"; fi
+BIN="${BIN:-$ONEESAN_BUILD_DIR/${STEM}${SUFFIX}_n${N}}"
+WORK_DIR="${WORK_DIR:-$ONEESAN_ROOT/work/b300_bucket_snake_${WORK_TAG}_exact_n${N}}"
 
 if (( NGPU != 8 )); then
   echo "snake bucket backend currently requires NGPU=8" >&2
@@ -30,8 +44,8 @@ if (( visible < NGPU )); then
 fi
 
 if [[ ! -x "$BIN" ]]; then
-  echo "$BIN not found; building snake fused batch binary for n=$N transpose=$TRANSPOSE_MODE pm=$PM_ACCUM" >&2
-  N="$N" OUT="$BIN" TRANSPOSE_MODE="$TRANSPOSE_MODE" PM_ACCUM="$PM_ACCUM" \
+  echo "$BIN not found; building snake batch binary for n=$N transpose=$TRANSPOSE_MODE onepass=$ORBIT_CLOSURE_FUSE pm=$PM_ACCUM" >&2
+  N="$N" OUT="$BIN" TRANSPOSE_MODE="$TRANSPOSE_MODE" ORBIT_CLOSURE_FUSE="$ORBIT_CLOSURE_FUSE" PM_ACCUM="$PM_ACCUM" \
     bash "$ONEESAN_ROOT/scripts/build/b300-bucket-snake-batch.sh"
 fi
 
