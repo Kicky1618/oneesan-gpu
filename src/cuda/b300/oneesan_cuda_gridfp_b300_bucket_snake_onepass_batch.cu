@@ -4,7 +4,7 @@
 #define main bsn_single_main_unused
 #include "oneesan_cuda_gridfp_b300_bucket_snake_atomic.cu"
 #undef main
-#include "../gridfp/ramstream32_bucket_orbit_closure_fused.cuh"
+#include "../gridfp/ramstream32_bucket_orbit_closure_preflight.cuh"
 #include <vector>
 
 int main(int argc,char**argv){
@@ -15,7 +15,7 @@ int main(int argc,char**argv){
 
     auto prep0=std::chrono::steady_clock::now();build_full_dp();G_FACTOR=build_factor_tables();StorageFactorHost storage=build_storage_factor_tables(G_FACTOR);StorageLayout layout=build_storage_layout(storage);
     LowDescHost lowdesc=build_low_descriptors(storage,layout);HighDescHost highdesc=build_high_descriptors(storage,layout);LowOrbitHost loworbit=build_cpu_low_orbit(storage,layout,lowdesc);CpuHighDirectHost highdirect=build_cpu_high_direct(storage,layout,highdesc);GpuDirectGatherHost ordinary=build_gpu_direct_gather(layout,lowdesc,loworbit,highdirect);GpuDirectCrossGatherHost cross=build_gpu_direct_cross_gather(storage,layout,lowdesc,loworbit,highdirect);GpuDirectFusedHost fused=build_gpu_direct_fused_checked(layout,ordinary,cross);CpuLowSparseHost lowsparse=build_cpu_low_sparse(storage,layout,lowdesc);BucketOwnerHost owner=build_bucket_owners(G_FACTOR,storage);BucketPhysicalLayoutHost phy=build_bucket_physical_layout(layout,owner);BucketOrbitStreamsHost borbit=build_bucket_orbits(storage,layout,owner,lowsparse,highdirect);BucketFusedHost bfused=build_bucket_fused(storage,layout,owner,ordinary,cross,fused);BucketForwardOrbitClosureAttachHost fattach=build_bucket_forward_orbit_closure_attach(layout,borbit,bfused);
-    ReverseLowDescHost rlow=build_reverse_low_descriptors(storage,layout);ReverseHighDescHost rhigh=build_reverse_high_descriptors(storage,layout);ReverseOrbitHost rlo=build_reverse_orbit(storage,layout,true),rhi=build_reverse_orbit(storage,layout,false);SnakeReverseHost reverse=bsn_build_reverse(storage,layout,owner,rlow,rhigh,rlo,rhi);BucketReverseOrbitClosureAttachHost rattach=build_bucket_reverse_orbit_closure_attach(layout,reverse.atomic,reverse.fused);BucketTransposePlan tplan=build_bucket_transpose_plan(phy,NG);double prepare_s=bsn_since(prep0);
+    ReverseLowDescHost rlow=build_reverse_low_descriptors(storage,layout);ReverseHighDescHost rhigh=build_reverse_high_descriptors(storage,layout);ReverseOrbitHost rlo=build_reverse_orbit(storage,layout,true),rhi=build_reverse_orbit(storage,layout,false);SnakeReverseHost reverse=bsn_build_reverse(storage,layout,owner,rlow,rhigh,rlo,rhi);BucketReverseOrbitClosureAttachHost rattach=build_bucket_reverse_orbit_closure_attach_checked(layout,borbit,bfused,reverse.atomic,reverse.fused);BucketTransposePlan tplan=build_bucket_transpose_plan(phy,NG);double prepare_s=bsn_since(prep0);
 
     size_t view_bytes=2ull*NG*(layout.main_blocks.size()+layout.block_blocks.size())*sizeof(BucketPhysicalBlock);size_t forward_meta=borbit.bytes()+bfused.bytes()+fattach.bytes()+view_bytes,reverse_meta=reverse.bytes()+rattach.bytes(),metadata_bytes=forward_meta+reverse_meta;size_t chunk_bytes=chunk_mib<<20,staging_bytes=chunk_bytes*size_t(BUCKET_TRANSPOSE_STAGING_MULTIPLIER);uint64_t max_gpu=0,min_gpu=~uint64_t(0),peer_per_transpose=0,max_need=0;
     for(int g=0;g<NG;++g){max_gpu=std::max(max_gpu,tplan.gpu_bytes[g]);min_gpu=std::min(min_gpu,tplan.gpu_bytes[g]);max_need=std::max<uint64_t>(max_need,tplan.gpu_bytes[g]+metadata_bytes+staging_bytes);for(int s=g+1;s<NG;++s)peer_per_transpose+=2ull*tplan.slot[g][s].capacity_bytes;}
