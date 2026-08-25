@@ -19,6 +19,9 @@
 #include "maskshard_low_group_packed_closure_u32.cuh"
 #ifdef MASKSHARD_LOW_CLOSURE_PACKED_PREFIX
 #include "maskshard_low_group_packed_closure_prefix.cuh"
+#ifdef MASKSHARD_LOW_CLOSURE_PACKED_META
+#include "maskshard_low_group_packed_closure_meta.cuh"
+#endif
 #endif
 #endif
 #else
