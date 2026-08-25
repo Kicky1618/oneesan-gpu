@@ -17,9 +17,6 @@
 #error "packed LOW group config currently requires uint32 warp-row ordinals"
 #endif
 
-// Static portion shared by every row/cap for one HIGH occupancy mask.  Keep it
-// separate from the mutable config so later closure metadata does not inflate
-// the v0.39 base cache.
 struct MaskShardLowGroupPackedBase {
     FBlock main_blocks[64];
     FBlock block_blocks[32];
@@ -29,8 +26,6 @@ struct MaskShardLowGroupPackedBase {
     std::uint32_t reserved;
 };
 
-// Mutable per-LOW-group metadata consumed by the active packed kernels.  HIGH
-// execution remains unchanged and continues using the legacy D_F_* constants.
 struct MaskShardLowGroupPackedConfig {
     FBlock main_blocks[64];
     FBlock block_blocks[32];
@@ -143,19 +138,34 @@ static MaskShardLowGroupPackedConfig maskshard_build_low_group_packed_base_uncac
 }
 
 #ifdef MASKSHARD_LOW_GROUP_PACKED_CACHE
+#ifdef MASKSHARD_LOW_GROUP_STATIC_BASE_CACHE
 static std::array<MaskShardLowGroupPackedBase, (1u << HIGH_LUT_K)>
     G_MS_LOW_GROUP_PACKED_BASE_CACHE{};
+#else
+static std::array<MaskShardLowGroupPackedConfig, (1u << HIGH_LUT_K)>
+    G_MS_LOW_GROUP_PACKED_BASE_CACHE{};
+#endif
 static bool G_MS_LOW_GROUP_PACKED_BASE_CACHE_BUILT = false;
 
 static void maskshard_build_low_group_packed_base_cache() {
     if (G_MS_LOW_GROUP_PACKED_BASE_CACHE_BUILT) return;
-    for (std::uint32_t mask = 0; mask < (1u << HIGH_LUT_K); ++mask)
+    for (std::uint32_t mask = 0; mask < (1u << HIGH_LUT_K); ++mask) {
+#ifdef MASKSHARD_LOW_GROUP_STATIC_BASE_CACHE
         G_MS_LOW_GROUP_PACKED_BASE_CACHE[size_t(mask)] =
             maskshard_build_low_group_packed_static_uncached(mask);
+#else
+        G_MS_LOW_GROUP_PACKED_BASE_CACHE[size_t(mask)] =
+            maskshard_build_low_group_packed_base_uncached(mask);
+#endif
+    }
     G_MS_LOW_GROUP_PACKED_BASE_CACHE_BUILT = true;
-    std::cerr << "packed LOW group static base cache masks="
+    std::cerr << "packed LOW group base cache masks="
               << (1u << HIGH_LUT_K)
-              << " base_bytes=" << sizeof(MaskShardLowGroupPackedBase)
+#ifdef MASKSHARD_LOW_GROUP_STATIC_BASE_CACHE
+              << " static_only=1 base_bytes=" << sizeof(MaskShardLowGroupPackedBase)
+#else
+              << " static_only=0 base_bytes=" << sizeof(MaskShardLowGroupPackedConfig)
+#endif
               << " config_bytes=" << sizeof(MaskShardLowGroupPackedConfig)
               << " mib="
               << double(sizeof(G_MS_LOW_GROUP_PACKED_BASE_CACHE))
@@ -173,10 +183,14 @@ static MaskShardLowGroupPackedConfig maskshard_build_low_group_packed_base(
         std::cerr << "packed LOW group base cache invalid mask=" << mask << '\n';
         std::exit(340);
     }
+#ifdef MASKSHARD_LOW_GROUP_STATIC_BASE_CACHE
     MaskShardLowGroupPackedConfig cfg{};
     maskshard_apply_low_group_packed_base(
         cfg, G_MS_LOW_GROUP_PACKED_BASE_CACHE[size_t(mask)]);
     return cfg;
+#else
+    return G_MS_LOW_GROUP_PACKED_BASE_CACHE[size_t(mask)];
+#endif
 }
 
 #ifdef report_high_mask_shard_layout
