@@ -2,9 +2,7 @@
 set -euo pipefail
 
 ROOT="$(git rev-parse --show-toplevel 2>/dev/null || true)"
-if [[ -z "$ROOT" ]]; then
-  ROOT="$(cd "$(dirname -- "${BASH_SOURCE[0]}")/../.." && pwd)"
-fi
+if [[ -z "$ROOT" ]]; then ROOT="$(cd "$(dirname -- "${BASH_SOURCE[0]}")/../.." && pwd)"; fi
 cd "$ROOT"
 
 N="${N:-27}"
@@ -20,6 +18,7 @@ CPU_LOW_CPU_LIST="${CPU_LOW_CPU_LIST:-}"
 CPU_LOW_SCHEDULE="${CPU_LOW_SCHEDULE:-dynamic}"
 CPU_LOW_DOMAIN_SIZE="${CPU_LOW_DOMAIN_SIZE:-}"
 CPU_LOW_DOMAIN_REFINE="${CPU_LOW_DOMAIN_REFINE:-1}"
+CPU_LOW_DOMAIN_PAGE_TIEBREAK="${CPU_LOW_DOMAIN_PAGE_TIEBREAK:-0}"
 THRESHOLDS="${THRESHOLDS:-0 64 128 256 512 1024}"
 REPEATS="${REPEATS:-1}"
 BUILD="${BUILD:-1}"
@@ -35,9 +34,11 @@ if [[ "$CPU_HIGH_MODE" != scratch && "$CPU_HIGH_MODE" != direct ]]; then echo "C
 if [[ "$CPU_HIGH_OVERLAP" != 0 && "$CPU_HIGH_OVERLAP" != 1 ]]; then echo "CPU_HIGH_OVERLAP must be 0 or 1" >&2; exit 2; fi
 if [[ "$CPU_LOW_SCHEDULE" != dynamic && "$CPU_LOW_SCHEDULE" != sticky && "$CPU_LOW_SCHEDULE" != contiguous && "$CPU_LOW_SCHEDULE" != domain ]]; then echo "CPU_LOW_SCHEDULE must be dynamic, sticky, contiguous, or domain" >&2; exit 2; fi
 if [[ "$CPU_LOW_DOMAIN_REFINE" != 0 && "$CPU_LOW_DOMAIN_REFINE" != 1 ]]; then echo "CPU_LOW_DOMAIN_REFINE must be 0 or 1" >&2; exit 2; fi
+if [[ "$CPU_LOW_DOMAIN_PAGE_TIEBREAK" != 0 && "$CPU_LOW_DOMAIN_PAGE_TIEBREAK" != 1 ]]; then echo "CPU_LOW_DOMAIN_PAGE_TIEBREAK must be 0 or 1" >&2; exit 2; fi
 if [[ "$CPU_LOW_SCHEDULE" == domain ]]; then
   if [[ ! "$CPU_LOW_DOMAIN_SIZE" =~ ^[1-9][0-9]*$ ]] || (( CPU_LOW_DOMAIN_SIZE > CPU_WORKERS )); then echo "CPU_LOW_DOMAIN_SIZE must be in 1..CPU_WORKERS for domain schedule" >&2; exit 2; fi
 fi
+if [[ "$CPU_LOW_DOMAIN_PAGE_TIEBREAK" == 1 && ( "$CPU_LOW_SCHEDULE" != domain || "$CPU_LOW_DOMAIN_REFINE" != 1 ) ]]; then echo "CPU_LOW_DOMAIN_PAGE_TIEBREAK=1 requires domain schedule with refinement" >&2; exit 2; fi
 if [[ "$ANALYZE" != 0 && "$ANALYZE" != 1 ]]; then echo "ANALYZE must be 0 or 1" >&2; exit 2; fi
 if [[ "$GENERATE_POLICY" != 0 && "$GENERATE_POLICY" != 1 ]]; then echo "GENERATE_POLICY must be 0 or 1" >&2; exit 2; fi
 
@@ -93,6 +94,7 @@ cpu_low_cpu_list=${CPU_LOW_CPU_LIST:-none}
 cpu_low_schedule=$CPU_LOW_SCHEDULE
 cpu_low_domain_size=${CPU_LOW_DOMAIN_SIZE:-none}
 cpu_low_domain_refine=$CPU_LOW_DOMAIN_REFINE
+cpu_low_domain_page_tiebreak=$CPU_LOW_DOMAIN_PAGE_TIEBREAK
 thresholds=$THRESHOLDS
 repeats=$REPEATS
 analyze=$ANALYZE
@@ -106,13 +108,13 @@ if [[ -n "$cost_plan_path" ]]; then echo "cost_plan_sha256=$(file_sha256 "$cost_
 printf 'repeat\torder\tmode\toverlap\tthreshold_mib\tresidue\twall_s\th2d_s\tgpu_kernel_s\td2h_s\tcpu_high_wall_s\tcpu_high_kernel_sum_s\tcpu_low_wall_s\tpcie_removed_tib\tpcie_remaining_tib\tcpu_high_groups\traw\n' >"$out"
 
 run_one() {
-  local repeat="$1" order="$2" threshold="$3" line residue got_schedule got_domain got_refine
-  line="$(CPU_HIGH_MAX_MIB="$threshold" CPU_HIGH_WORKERS="$CPU_HIGH_WORKERS" CPU_HIGH_MODE="$CPU_HIGH_MODE" CPU_HIGH_OVERLAP="$CPU_HIGH_OVERLAP" CPU_HIGH_CPU_LIST="$CPU_HIGH_CPU_LIST" CPU_LOW_CPU_LIST="$CPU_LOW_CPU_LIST" CPU_LOW_SCHEDULE="$CPU_LOW_SCHEDULE" CPU_LOW_DOMAIN_SIZE="$CPU_LOW_DOMAIN_SIZE" CPU_LOW_DOMAIN_REFINE="$CPU_LOW_DOMAIN_REFINE" "$bin" "$N" "$MODULUS" "$GPU_TARGET_MIB" "$CPU_WORKERS" | tail -n1)"
+  local repeat="$1" order="$2" threshold="$3" line residue got_schedule got_domain got_refine got_page
+  line="$(CPU_HIGH_MAX_MIB="$threshold" CPU_HIGH_WORKERS="$CPU_HIGH_WORKERS" CPU_HIGH_MODE="$CPU_HIGH_MODE" CPU_HIGH_OVERLAP="$CPU_HIGH_OVERLAP" CPU_HIGH_CPU_LIST="$CPU_HIGH_CPU_LIST" CPU_LOW_CPU_LIST="$CPU_LOW_CPU_LIST" CPU_LOW_SCHEDULE="$CPU_LOW_SCHEDULE" CPU_LOW_DOMAIN_SIZE="$CPU_LOW_DOMAIN_SIZE" CPU_LOW_DOMAIN_REFINE="$CPU_LOW_DOMAIN_REFINE" CPU_LOW_DOMAIN_PAGE_TIEBREAK="$CPU_LOW_DOMAIN_PAGE_TIEBREAK" "$bin" "$N" "$MODULUS" "$GPU_TARGET_MIB" "$CPU_WORKERS" | tail -n1)"
   residue="$(field "$line" residue)"; got_schedule="$(field "$line" cpu_low_schedule)"
   if [[ "$got_schedule" != "$CPU_LOW_SCHEDULE" ]]; then echo "LOW schedule provenance mismatch requested=$CPU_LOW_SCHEDULE got=$got_schedule" >&2; exit 7; fi
   if [[ "$CPU_LOW_SCHEDULE" == domain ]]; then got_domain="$(field "$line" cpu_low_domain_size)"; if [[ "$got_domain" != "$CPU_LOW_DOMAIN_SIZE" ]]; then echo "LOW domain provenance mismatch requested=$CPU_LOW_DOMAIN_SIZE got=$got_domain" >&2; exit 7; fi; fi
-  got_refine="$(field "$line" cpu_low_domain_refine)"
-  if [[ "$got_refine" != "$CPU_LOW_DOMAIN_REFINE" ]]; then echo "LOW refine provenance mismatch requested=$CPU_LOW_DOMAIN_REFINE got=$got_refine" >&2; exit 7; fi
+  got_refine="$(field "$line" cpu_low_domain_refine)"; [[ "$got_refine" == "$CPU_LOW_DOMAIN_REFINE" ]] || { echo "LOW refine provenance mismatch requested=$CPU_LOW_DOMAIN_REFINE got=$got_refine" >&2; exit 7; }
+  got_page="$(field "$line" cpu_low_domain_page_tiebreak)"; [[ "$got_page" == "$CPU_LOW_DOMAIN_PAGE_TIEBREAK" ]] || { echo "LOW page provenance mismatch requested=$CPU_LOW_DOMAIN_PAGE_TIEBREAK got=$got_page" >&2; exit 7; }
   printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' "$repeat" "$order" "$CPU_HIGH_MODE" "$CPU_HIGH_OVERLAP" "$threshold" "$residue" "$(field "$line" wall_s)" "$(field "$line" h2d_s)" "$(field "$line" gpu_kernel_s)" "$(field "$line" d2h_s)" "$(field "$line" cpu_high_wall_s)" "$(field "$line" cpu_high_kernel_sum_s)" "$(field "$line" cpu_low_wall_s)" "$(field "$line" pcie_removed_tib_per_residue)" "$(field "$line" pcie_remaining_tib_per_residue)" "$(field "$line" cpu_high_groups)" "$line" >>"$out"
   printf '%s\n' "$residue"
 }
@@ -120,7 +122,7 @@ run_one() {
 reference_residue=""
 for ((r=1; r<=REPEATS; ++r)); do
   if ((r % 2 == 1)); then order=ascending; run_thresholds=("${thresholds[@]}"); else order=descending; run_thresholds=(); for ((i=${#thresholds[@]}-1; i>=0; --i)); do run_thresholds+=("${thresholds[i]}"); done; fi
-  echo "repeat $r/$REPEATS mode=$CPU_HIGH_MODE overlap=$CPU_HIGH_OVERLAP low_schedule=$CPU_LOW_SCHEDULE low_domain_size=${CPU_LOW_DOMAIN_SIZE:-none} low_domain_refine=$CPU_LOW_DOMAIN_REFINE ($order)" >&2
+  echo "repeat $r/$REPEATS mode=$CPU_HIGH_MODE overlap=$CPU_HIGH_OVERLAP low_schedule=$CPU_LOW_SCHEDULE low_domain_size=${CPU_LOW_DOMAIN_SIZE:-none} low_domain_refine=$CPU_LOW_DOMAIN_REFINE low_domain_page=$CPU_LOW_DOMAIN_PAGE_TIEBREAK ($order)" >&2
   for threshold in "${run_thresholds[@]}"; do
     echo "  CPU_HIGH_MAX_MIB=$threshold" >&2; residue="$(run_one "$r" "$order" "$threshold")"
     if [[ -z "$reference_residue" ]]; then reference_residue="$residue"; fi
@@ -131,7 +133,7 @@ done
 
 awk -F '\t' 'NR==1 {next} { n[$5]++; wall[$5]+=$7; high[$5]+=$11; low[$5]+=$13; rem[$5]+=$15 } END { for (t in n) printf("summary threshold_mib=%s runs=%d mean_wall_s=%.9f mean_cpu_high_wall_s=%.9f mean_cpu_low_wall_s=%.9f mean_pcie_remaining_tib=%.9f\n", t,n[t],wall[t]/n[t],high[t]/n[t],low[t]/n[t],rem[t]/n[t]); }' "$out" | sort -t= -k2,2n
 best="$(awk -F '\t' 'NR>1 {s[$5]+=$7;n[$5]++} END {for(t in n){m=s[t]/n[t]; if(best==""||m<best){best=m;bt=t}} printf "%s %.9f",bt,best}' "$out")"
-echo "mode=$CPU_HIGH_MODE overlap=$CPU_HIGH_OVERLAP low_schedule=$CPU_LOW_SCHEDULE low_domain_size=${CPU_LOW_DOMAIN_SIZE:-none} low_domain_refine=$CPU_LOW_DOMAIN_REFINE best_threshold_mib=${best%% *} mean_wall_s=${best#* }"
+echo "mode=$CPU_HIGH_MODE overlap=$CPU_HIGH_OVERLAP low_schedule=$CPU_LOW_SCHEDULE low_domain_size=${CPU_LOW_DOMAIN_SIZE:-none} low_domain_refine=$CPU_LOW_DOMAIN_REFINE low_domain_page=$CPU_LOW_DOMAIN_PAGE_TIEBREAK best_threshold_mib=${best%% *} mean_wall_s=${best#* }"
 
 if [[ "$ANALYZE" != 0 ]]; then
   analyze_args=(scripts/tools/analyze_cpu_high_sweep.py "$out"); if [[ -n "$cost_plan_path" ]]; then analyze_args+=(--cost-plan "$cost_plan_path"); fi; python3 "${analyze_args[@]}" | tee "$analysis_out"
