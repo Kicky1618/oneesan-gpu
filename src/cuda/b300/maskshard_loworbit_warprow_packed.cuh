@@ -21,26 +21,22 @@
 
 #include "maskshard_low_group_packed_closure.cuh"
 
-// Construct the exact orbit/closure plans once per LOW group and upload all
-// mutable fields with one symbol copy.
-static void maskshard_configure_low_group_warprow(std::uint32_t mask) {
-    int dev = -1;
-    ck(cudaGetDevice(&dev), "packed LOW warp-row group get device");
-    if (dev < 0 || dev >= int(G_MS_LOW_ORBIT_COMPACT_ROW.size())) {
-        std::cerr << "packed LOW warp-row unsupported device " << dev << '\n';
-        std::exit(336);
-    }
-
+// Pure host builder shared by the current one-mask constant-memory executor and
+// the v0.43 row-batched executor research.  No CUDA API call occurs here.
+static MaskShardLowGroupPackedConfig maskshard_build_low_group_packed_config(
+    std::uint32_t mask,
+    int zero_based_row,
+    Code* exact_orbit_state_total = nullptr
+) {
     MaskShardLowGroupPackedConfig cfg =
         maskshard_build_low_group_packed_base(mask);
-    const int zero_based_row = G_MS_LOW_ORBIT_COMPACT_ROW[size_t(dev)];
     const int cap = std::min(zero_based_row + 1, TARGET_W / 2);
 
     std::array<Code, HIGH_LUT_K + 3> state_prefix{};
     std::array<std::uint32_t, HIGH_LUT_K + 2> low_count{};
     const Code state_total = maskshard_loworbit_rowdepth_compact_cache().make_job_plan(
         mask, cap, state_prefix, low_count);
-    G_MS_LOW_ORBIT_COMPACT_TOTAL[size_t(dev)] = state_total;
+    if (exact_orbit_state_total) *exact_orbit_state_total = state_total;
 
     Code warp_total = 0;
     cfg.warp_prefix[0] = 0;
@@ -127,7 +123,23 @@ static void maskshard_configure_low_group_warprow(std::uint32_t mask) {
             std::size_t(mask) * S + std::size_t(h)];
 #endif
 #endif
+    return cfg;
+}
 
+// Existing one-mask executor: build the same exact config and publish it with
+// one constant-memory copy.  Keeping this thin wrapper preserves v0.38-v0.44
+// A/B behavior while making the builder reusable by v0.43 batching.
+static void maskshard_configure_low_group_warprow(std::uint32_t mask) {
+    int dev = -1;
+    ck(cudaGetDevice(&dev), "packed LOW warp-row group get device");
+    if (dev < 0 || dev >= int(G_MS_LOW_ORBIT_COMPACT_ROW.size())) {
+        std::cerr << "packed LOW warp-row unsupported device " << dev << '\n';
+        std::exit(336);
+    }
+    Code state_total = 0;
+    const MaskShardLowGroupPackedConfig cfg = maskshard_build_low_group_packed_config(
+        mask, G_MS_LOW_ORBIT_COMPACT_ROW[size_t(dev)], &state_total);
+    G_MS_LOW_ORBIT_COMPACT_TOTAL[size_t(dev)] = state_total;
     ck(cudaMemcpyToSymbol(D_MS_LOW_GROUP_PACKED, &cfg, sizeof(cfg)),
        "packed LOW group config");
 }
