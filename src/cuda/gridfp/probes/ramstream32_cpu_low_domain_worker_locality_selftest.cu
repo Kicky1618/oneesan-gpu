@@ -118,6 +118,7 @@ static std::pair<std::vector<Count>, std::vector<Count>> reference_window(
     return {std::move(rm), std::move(rd)};
 }
 
+#ifndef RAMSTREAM_CPU_LOW_WORKER_LOCALITY_SELFTEST_NO_MAIN
 int main() {
     constexpr Count mod = 4294967291u;
     constexpr int W = TARGET_W;
@@ -286,3 +287,4 @@ int main() {
     block_auth.release();
     return 0;
 }
+#endif
