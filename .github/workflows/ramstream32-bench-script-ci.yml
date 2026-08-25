@@ -14,6 +14,7 @@ on:
       - 'docs/ramstream32-factorized-ab.md'
       - 'docs/ramstream32-hybrid-sparse.md'
       - 'docs/ramstream32-cpu-high.md'
+      - 'docs/ramstream32-cpu-low-scheduling.md'
       - '.github/workflows/ramstream32-bench-script-ci.yml'
   pull_request:
     paths:
@@ -28,6 +29,7 @@ on:
       - 'docs/ramstream32-factorized-ab.md'
       - 'docs/ramstream32-hybrid-sparse.md'
       - 'docs/ramstream32-cpu-high.md'
+      - 'docs/ramstream32-cpu-low-scheduling.md'
       - '.github/workflows/ramstream32-bench-script-ci.yml'
   workflow_dispatch:
 
@@ -54,12 +56,16 @@ jobs:
           grep -Fq 'CPU_LOW_SCHEDULE="${CPU_LOW_SCHEDULE:-dynamic}"' "$f"
           grep -Fq 'CPU_LOW_DOMAIN_SIZE="${CPU_LOW_DOMAIN_SIZE:-}"' "$f"
           grep -Fq 'CPU_LOW_DOMAIN_REFINE="${CPU_LOW_DOMAIN_REFINE:-1}"' "$f"
+          grep -Fq 'CPU_LOW_DOMAIN_PAGE_TIEBREAK="${CPU_LOW_DOMAIN_PAGE_TIEBREAK:-0}"' "$f"
           grep -Fq 'CPU_LOW_DOMAIN_REFINE="$CPU_LOW_DOMAIN_REFINE"' "$f"
+          grep -Fq 'CPU_LOW_DOMAIN_PAGE_TIEBREAK="$CPU_LOW_DOMAIN_PAGE_TIEBREAK"' "$f"
           grep -Fq 'cpu_low_domain_size=${CPU_LOW_DOMAIN_SIZE:-none}' "$f"
           grep -Fq 'cpu_low_domain_refine=$CPU_LOW_DOMAIN_REFINE' "$f"
+          grep -Fq 'cpu_low_domain_page_tiebreak=$CPU_LOW_DOMAIN_PAGE_TIEBREAK' "$f"
           grep -Fq 'LOW schedule provenance mismatch' "$f"
           grep -Fq 'LOW domain provenance mismatch' "$f"
           grep -Fq 'LOW refine provenance mismatch' "$f"
+          grep -Fq 'LOW page provenance mismatch' "$f"
       - name: Check HIGH transfer profile regression
         shell: bash
         run: |
@@ -140,6 +146,7 @@ jobs:
           grep -Fq 'CPU_LOW_SCHEDULE=domain' "$low"
           grep -Fq 'CPU_LOW_DOMAIN_SIZE' "$low"
           grep -Fq 'CPU_LOW_DOMAIN_REFINE' "$low"
+          grep -Fq 'CPU_LOW_DOMAIN_PAGE_TIEBREAK' "$low"
           grep -Fq 'analyze_cpu_high_numa.py' "$d"
           grep -Fq 'plan_cpu_high_groups.py' "$d"
           grep -Fq -- '--overlap' "$d"
