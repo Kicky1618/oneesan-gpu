@@ -1,0 +1,96 @@
+name: B300 LOW closure packed prefix v0.41 research
+
+on:
+  push:
+    paths:
+      - 'src/cpp/probes/factor_lowclosure_rowdepth_tasks.cpp'
+      - 'src/cpp/probes/factor_lowclosure_packed_prefix.cpp'
+      - 'src/cuda/b300/maskshard_low_group_packed_config.cuh'
+      - 'src/cuda/b300/maskshard_loworbit_warprow_packed.cuh'
+      - 'src/cuda/b300/maskshard_low_group_packed_closure_u32.cuh'
+      - 'src/cuda/b300/maskshard_low_group_packed_closure_prefix.cuh'
+      - 'src/cuda/b300/maskshard_low_group_sync.cuh'
+      - 'src/cuda/b300/oneesan_b300_maskshard_v040_lowclosure_u32.cu'
+      - 'src/cuda/b300/oneesan_b300_maskshard_v041_lowclosure_packedprefix.cu'
+      - 'scripts/bench/b300_maskshard_lowclosure_packedprefix_ab.py'
+      - '.github/workflows/b300-lowclosure-packedprefix-v41.yml'
+  pull_request:
+    paths:
+      - 'src/cpp/probes/factor_lowclosure_rowdepth_tasks.cpp'
+      - 'src/cpp/probes/factor_lowclosure_packed_prefix.cpp'
+      - 'src/cuda/b300/maskshard_low_group_packed_config.cuh'
+      - 'src/cuda/b300/maskshard_loworbit_warprow_packed.cuh'
+      - 'src/cuda/b300/maskshard_low_group_packed_closure_u32.cuh'
+      - 'src/cuda/b300/maskshard_low_group_packed_closure_prefix.cuh'
+      - 'src/cuda/b300/maskshard_low_group_sync.cuh'
+      - 'src/cuda/b300/oneesan_b300_maskshard_v040_lowclosure_u32.cu'
+      - 'src/cuda/b300/oneesan_b300_maskshard_v041_lowclosure_packedprefix.cu'
+      - 'scripts/bench/b300_maskshard_lowclosure_packedprefix_ab.py'
+      - '.github/workflows/b300-lowclosure-packedprefix-v41.yml'
+  workflow_dispatch:
+
+jobs:
+  model:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build LOW closure models
+        run: |
+          mkdir -p build
+          g++ -O3 -std=c++17 -Wall -Wextra -Werror \
+            src/cpp/probes/factor_lowclosure_rowdepth_tasks.cpp \
+            -o build/factor_lowclosure_rowdepth_tasks
+          g++ -O3 -std=c++17 -Wall -Wextra -Werror \
+            src/cpp/probes/factor_lowclosure_packed_prefix.cpp \
+            -o build/factor_lowclosure_packed_prefix
+      - name: Verify LOW closure prefix regressions
+        run: |
+          build/factor_lowclosure_rowdepth_tasks 22 11 256
+          build/factor_lowclosure_rowdepth_tasks 28 14 256
+          build/factor_lowclosure_packed_prefix 22 11
+          build/factor_lowclosure_packed_prefix 28 14
+
+  cuda-compile:
+    runs-on: ubuntu-latest
+    container: nvidia/cuda:12.8.1-devel-ubuntu22.04
+    strategy:
+      matrix:
+        include:
+          - width: 22
+            low: 11
+            high: 10
+          - width: 28
+            low: 14
+            high: 13
+    steps:
+      - uses: actions/checkout@v4
+      - name: Compile v0.40 LOW closure u32 baseline
+        shell: bash
+        run: |
+          mkdir -p build
+          nvcc -O3 -std=c++17 -lineinfo -arch=sm_80 \
+            -DTARGET_W=${{ matrix.width }} \
+            -DLOW_LUT_K=${{ matrix.low }} \
+            -DHIGH_LUT_K=${{ matrix.high }} \
+            src/cuda/b300/oneesan_b300_maskshard_v040_lowclosure_u32.cu \
+            -o build/b300_maskshard_v40_w${{ matrix.width }}
+      - name: Compile v0.41 prepacked LOW closure prefix
+        shell: bash
+        run: |
+          nvcc -O3 -std=c++17 -lineinfo -arch=sm_80 \
+            -DTARGET_W=${{ matrix.width }} \
+            -DLOW_LUT_K=${{ matrix.low }} \
+            -DHIGH_LUT_K=${{ matrix.high }} \
+            src/cuda/b300/oneesan_b300_maskshard_v041_lowclosure_packedprefix.cu \
+            -o build/b300_maskshard_v41_w${{ matrix.width }}
+
+  ab-driver:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Syntax-check v0.40-v0.41 A/B
+        run: python3 -m py_compile scripts/bench/b300_maskshard_lowclosure_packedprefix_ab.py
+      - name: Dry-run v0.40-v0.41 comparison
+        run: |
+          python3 scripts/bench/b300_maskshard_lowclosure_packedprefix_ab.py \
+            --dry-run --n 27 --gpus 8 --threads 256 --modulus 4294967291
