@@ -1,0 +1,59 @@
+name: B300 LOW group static cache v0.44 research
+
+on:
+  push:
+    paths:
+      - 'src/cpp/probes/factor_lowgroup_static_cache.cpp'
+      - 'src/cuda/b300/maskshard_low_group_packed_config.cuh'
+      - 'src/cuda/b300/oneesan_b300_maskshard_v042_lowclosure_packedmeta.cu'
+      - 'src/cuda/b300/oneesan_b300_maskshard_v044_lowgroup_staticcache.cu'
+      - 'scripts/bench/b300_maskshard_lowgroup_staticcache_ab.py'
+      - '.github/workflows/b300-lowgroup-staticcache-v44.yml'
+  pull_request:
+    paths:
+      - 'src/cpp/probes/factor_lowgroup_static_cache.cpp'
+      - 'src/cuda/b300/maskshard_low_group_packed_config.cuh'
+      - 'src/cuda/b300/oneesan_b300_maskshard_v042_lowclosure_packedmeta.cu'
+      - 'src/cuda/b300/oneesan_b300_maskshard_v044_lowgroup_staticcache.cu'
+      - 'scripts/bench/b300_maskshard_lowgroup_staticcache_ab.py'
+      - '.github/workflows/b300-lowgroup-staticcache-v44.yml'
+  workflow_dispatch:
+
+jobs:
+  model:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: |
+          mkdir -p build
+          g++ -O3 -std=c++17 -Wall -Wextra -Werror src/cpp/probes/factor_lowgroup_static_cache.cpp -o build/factor_lowgroup_static_cache
+          build/factor_lowgroup_static_cache 22 11
+          build/factor_lowgroup_static_cache 28 14
+
+  cuda-compile:
+    runs-on: ubuntu-latest
+    container: nvidia/cuda:12.8.1-devel-ubuntu22.04
+    strategy:
+      matrix:
+        include:
+          - {width: 22, low: 11, high: 10}
+          - {width: 28, low: 14, high: 13}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Compile v0.42 and v0.44
+        shell: bash
+        run: |
+          mkdir -p build
+          nvcc -O3 -std=c++17 -lineinfo -arch=sm_80 \
+            -DTARGET_W=${{ matrix.width }} -DLOW_LUT_K=${{ matrix.low }} -DHIGH_LUT_K=${{ matrix.high }} \
+            src/cuda/b300/oneesan_b300_maskshard_v042_lowclosure_packedmeta.cu -o build/v42_w${{ matrix.width }}
+          nvcc -O3 -std=c++17 -lineinfo -arch=sm_80 \
+            -DTARGET_W=${{ matrix.width }} -DLOW_LUT_K=${{ matrix.low }} -DHIGH_LUT_K=${{ matrix.high }} \
+            src/cuda/b300/oneesan_b300_maskshard_v044_lowgroup_staticcache.cu -o build/v44_w${{ matrix.width }}
+
+  ab-driver:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: python3 -m py_compile scripts/bench/b300_maskshard_lowgroup_staticcache_ab.py
+      - run: python3 scripts/bench/b300_maskshard_lowgroup_staticcache_ab.py --dry-run --n 27 --gpus 8 --threads 256 --modulus 4294967291
