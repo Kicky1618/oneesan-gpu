@@ -1,0 +1,19 @@
+#ifndef BUCKET_SNAKE_REVERSE_FUSED
+#define BUCKET_SNAKE_REVERSE_FUSED 1
+#endif
+#include "../gridfp/ramstream32_bucket_orbit_closure_hybrid18_graph.cuh"
+#include "../gridfp/ramstream32_bucket_reverse_split18_alias.cuh"
+#include "../gridfp/ramstream32_bucket_reverse_closure_only.cuh"
+
+#define BSN_REVERSE_FUSED_TABLES_TYPE ReverseBucketFusedClosureOnlyDirectTables
+
+#define BucketForwardOrbitClosureAttachHost BucketForwardOrbitClosureAttach18Host
+#define BucketReverseOrbitClosureAttachHost ReverseSplit18Host
+#define BucketForwardOrbitClosureAttachDeviceTables BucketForwardOrbitClosureAttach18DeviceTables
+#define BucketReverseOrbitClosureAttachDeviceTables ReverseSplit18DeviceTables
+#define build_bucket_forward_orbit_closure_attach build_bucket_forward_orbit_closure_attach18
+#define build_bucket_reverse_orbit_closure_attach_checked build_reverse_split18_checked_direct
+#define BucketOnePassGraphs BucketHybrid18Graphs
+#define bucket_onepass_graph_sync_devices bucket_hybrid18_graph_sync_devices
+
+#include "oneesan_cuda_gridfp_b300_bucket_snake_onepass_graph_batch.cu"
