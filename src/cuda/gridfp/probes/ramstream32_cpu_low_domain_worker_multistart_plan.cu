@@ -151,6 +151,7 @@ int main(int argc, char** argv) {
     std::cout << std::setprecision(12)
               << "cpu_low_domain_worker_multistart_plan OK"
               << " objective=multistart-global-unique-worker-v5.28-plan"
+              << " exact_implementation=flat-page-delta-v5.29"
               << " n=" << n
               << " workers=" << workers
               << " domain_size=" << domain_size
@@ -182,6 +183,18 @@ int main(int argc, char** argv) {
               << " direct_accepted_moves=" << direct_stats.accepted_moves
               << " hybrid_v526_accepted_moves=" << hybrid_local_stats.accepted_moves
               << " hybrid_v527_accepted_moves=" << hybrid_stats.accepted_moves
+              << " direct_candidate_evaluations=" << direct_stats.candidate_evaluations
+              << " hybrid_candidate_evaluations=" << hybrid_stats.candidate_evaluations
+              << " direct_flat_delta_normalizations="
+              << direct_stats.flat_delta_normalizations
+              << " hybrid_flat_delta_normalizations="
+              << hybrid_stats.flat_delta_normalizations
+              << " direct_flat_delta_peak_entries="
+              << direct_stats.flat_delta_peak_entries
+              << " hybrid_flat_delta_peak_entries="
+              << hybrid_stats.flat_delta_peak_entries
+              << " direct_mask_index_build_s=" << direct_stats.mask_index_build_s
+              << " hybrid_mask_index_build_s=" << hybrid_stats.mask_index_build_s
               << " direct_build_s=" << direct_stats.build_s
               << " hybrid_v526_build_s=" << hybrid_local_stats.build_s
               << " hybrid_v527_build_s=" << hybrid_stats.build_s
