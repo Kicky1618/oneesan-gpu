@@ -70,7 +70,8 @@ jobs:
             src/cuda/b300/oneesan_cuda_gridfp_b300_bucket_snake_onepass_hybrid18_pipeline.cu \
             -o build/hybrid18_pipeline_w10
           build/hybrid18_pipeline_w10 9 4294967291 256 4 4 64 --plan-only 2>&1 | tee /tmp/hybrid18-plan.txt
-          grep -Fq 'reverse_split18 released_legacy_orbit_mib=' /tmp/hybrid18-plan.txt
+          grep -Fq 'reverse_split18_direct ' /tmp/hybrid18-plan.txt
+          grep -Fq 'release_legacy=1' /tmp/hybrid18-plan.txt
           grep -Fq 'kernels_per_position=1' /tmp/hybrid18-plan.txt
           grep -Fq 'transposes_per_residue=10' /tmp/hybrid18-plan.txt
       - name: Compile W28 hybrid18 pipeline batch
