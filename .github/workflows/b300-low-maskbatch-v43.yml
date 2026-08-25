@@ -6,6 +6,12 @@ on:
       - 'src/cpp/probes/factor_low_maskbatch_launch.cpp'
       - 'src/cpp/probes/factor_low_maskbatch_replica.cpp'
       - 'src/cuda/b300/maskshard_low_maskbatch_plan.hpp'
+      - 'src/cuda/b300/maskshard_low_maskbatch_tables.hpp'
+      - 'src/cuda/b300/maskshard_low_maskbatch_rowplan.hpp'
+      - 'src/cuda/b300/maskshard_low_maskbatch_config.cuh'
+      - 'src/cuda/b300/maskshard_low_maskbatch_kernels.cuh'
+      - 'src/cuda/b300/maskshard_low_maskbatch_executor.cuh'
+      - 'src/cuda/b300/oneesan_b300_maskshard_v043_lowmaskbatch_proto.cu'
       - 'docs/b300-low-mask-batch.md'
       - '.github/workflows/b300-low-maskbatch-v43.yml'
   pull_request:
@@ -13,6 +19,12 @@ on:
       - 'src/cpp/probes/factor_low_maskbatch_launch.cpp'
       - 'src/cpp/probes/factor_low_maskbatch_replica.cpp'
       - 'src/cuda/b300/maskshard_low_maskbatch_plan.hpp'
+      - 'src/cuda/b300/maskshard_low_maskbatch_tables.hpp'
+      - 'src/cuda/b300/maskshard_low_maskbatch_rowplan.hpp'
+      - 'src/cuda/b300/maskshard_low_maskbatch_config.cuh'
+      - 'src/cuda/b300/maskshard_low_maskbatch_kernels.cuh'
+      - 'src/cuda/b300/maskshard_low_maskbatch_executor.cuh'
+      - 'src/cuda/b300/oneesan_b300_maskshard_v043_lowmaskbatch_proto.cu'
       - 'docs/b300-low-mask-batch.md'
       - '.github/workflows/b300-low-maskbatch-v43.yml'
   workflow_dispatch:
@@ -35,3 +47,24 @@ jobs:
         run: |
           build/factor_low_maskbatch_replica 257 8 16 4096
           build/factor_low_maskbatch_replica 1024 8 16 16384
+
+  cuda-compile:
+    runs-on: ubuntu-latest
+    container: nvidia/cuda:12.8.1-devel-ubuntu22.04
+    strategy:
+      matrix:
+        include:
+          - {width: 22, low: 11, high: 10}
+          - {width: 28, low: 14, high: 13}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Compile resident mask-batch prototype
+        shell: bash
+        run: |
+          mkdir -p build
+          nvcc -O3 -std=c++17 -lineinfo -arch=sm_80 \
+            -DTARGET_W=${{ matrix.width }} \
+            -DLOW_LUT_K=${{ matrix.low }} \
+            -DHIGH_LUT_K=${{ matrix.high }} \
+            src/cuda/b300/oneesan_b300_maskshard_v043_lowmaskbatch_proto.cu \
+            -o build/b300_maskshard_v43_proto_w${{ matrix.width }}
