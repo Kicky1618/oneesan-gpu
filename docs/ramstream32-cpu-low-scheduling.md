@@ -1,12 +1,14 @@
 # RAMstream32 CPU LOW scheduling
 
-Backend v5.22 provides four scheduling modes for the persistent sparse LOW executor. `dynamic` remains the default. `sticky`, `contiguous`, and `domain` are opt-in static-owner modes.
+The hybrid RAMstream backend provides four persistent sparse LOW scheduling modes. `dynamic` remains the default; `sticky`, `contiguous`, and `domain` are opt-in static-owner schedules.
 
-## Why static scheduling is exact
+The core backend banner remains v5.22. The page-aware second-stage scheduler was revised in v5.23 without changing the recurrence or authoritative storage format.
 
-The LOW window fixes the occupancy mask of the inactive HIGH positions. Each resulting `CpuLowJob` is transition-closed for the complete LOW+center window, so different fixed-HIGH occupancy groups do not write into one another. Scheduling changes only which persistent worker evaluates each closed group; it does not change the recurrence, descriptor streams, operation ordering inside a group, or authoritative addresses.
+## Exactness
 
-The W=10 exhaustive selftest runs dynamic, LPT-sticky, contiguous, refined-domain, page-aware refined-domain, and unrefined-domain pools for two consecutive LOW generations and compares every result with the exact reference recurrence after one and two LOW windows. The boundary refiner also has a deterministic unit case: an initial `[8,8,8] | [1,1,1]` one-worker-per-domain split has pair makespan 24, and the bounded refinement moves one job to reach makespan 16 while preserving the single ordered boundary.
+The LOW window fixes the occupancy mask of the inactive HIGH positions. Each `CpuLowJob` is transition-closed for the complete LOW+center window, so distinct fixed-HIGH occupancy groups do not write into one another. Scheduling changes only which persistent worker evaluates each closed group. It does not change descriptors, operation order inside a group, recurrence arithmetic, or authoritative addresses.
+
+The W=10 exhaustive selftest runs dynamic, LPT-sticky, contiguous, refined-domain, page-aware refined-domain, and unrefined-domain pools for two consecutive LOW generations and compares every state with the reference recurrence after one and two LOW windows.
 
 ## Production modes
 
@@ -17,15 +19,21 @@ CPU_LOW_SCHEDULE=contiguous
 CPU_LOW_SCHEDULE=domain
 ```
 
-`dynamic` uses the historical atomic queue. `sticky` builds one exact-cell LPT partition. `contiguous` builds a min-max optimal partition whose workers own contiguous runs in numeric HIGH-occupancy-mask order.
+`dynamic` uses the atomic work queue.
 
-`domain` is the NUMA-oriented middle ground. It requires:
+`sticky` computes exact structural work per occupancy group, sorts by descending work, and performs one LPT assignment. The same worker owns the same groups on every row.
+
+`contiguous` sorts groups by numeric HIGH occupancy mask and computes a min-max contiguous worker partition.
+
+`domain` is the NUMA-oriented middle ground: every modeled NUMA domain owns one contiguous HIGH-mask interval, while jobs inside a domain are redistributed by exact-cell LPT.
+
+Domain mode requires:
 
 ```text
-CPU_LOW_DOMAIN_SIZE=<positive workers per modeled domain>
+CPU_LOW_DOMAIN_SIZE=<workers per modeled domain>
 ```
 
-For example, with 64 LOW workers arranged as two socket-local blocks of 32 workers:
+For 64 LOW workers modeled as two groups of 32:
 
 ```bash
 CPU_LOW_CPU_LIST='0-63' \
@@ -35,84 +43,154 @@ CPU_LOW_DOMAIN_SIZE=32 \
   27 4294967291 12288 64
 ```
 
-Domain ownership is contiguous in numeric HIGH-mask order, but jobs inside each domain are redistributed with exact-cell LPT. `CPU_LOW_DOMAIN_SIZE` must be positive and no larger than `CPU_WORKERS`.
+`CPU_LOW_DOMAIN_SIZE` must be positive and no larger than `CPU_WORKERS`.
 
-### Domain refinement control
+## Stage 1: load refinement
 
-The load-balancing boundary refiner is enabled by default and can be disabled without changing the binary:
+The ordinary domain-boundary refiner is controlled by:
 
 ```text
-CPU_LOW_DOMAIN_REFINE=1   # default: refined domain boundaries
-CPU_LOW_DOMAIN_REFINE=0   # initial outer-domain partition only
+CPU_LOW_DOMAIN_REFINE=1   # default
+CPU_LOW_DOMAIN_REFINE=0
 ```
 
-The parser also accepts `true/false`, `yes/no`, and `on/off`. Invalid values abort rather than silently selecting a mode.
+The initial outer partition bounds each domain's total exact work by `domain_workers * outer_normalized_cap`. It is only a domain-total normalization; it is not a mathematical upper bound on the final per-worker LPT load.
 
-Refinement OFF does not change the recurrence. It keeps the initial contiguous domain ranges produced by the outer normalized-cap partition, then performs the same exact-cell LPT assignment inside each domain. Refinement ON starts from that same assignment and only moves ordered domain boundaries when the local two-domain LPT objective improves. The W=10 selftest validates both modes for two consecutive LOW generations.
+When refinement is enabled, each adjacent domain pair searches at most 32 jobs to either side of the current ordered boundary. Candidates are evaluated with the same exact-cell LPT used by production. The load objective is lexicographic:
 
-### v5.22 page-aware tie-break
+```text
+1. smaller max(left LPT maximum, right LPT maximum)
+2. if tied, smaller left LPT maximum + right LPT maximum
+```
 
-v5.22 adds a second, independent optimization pass:
+Two bounded passes are used, with the second pass visiting boundaries in reverse order. Every accepted move lowers or preserves the affected pair's maximum worker load; all other domains are unchanged. Therefore the global maximum worker load cannot increase.
+
+Diagnostics:
+
+```text
+cpu_low_domain_refined_boundaries=...
+cpu_low_domain_refined_job_moves=...
+```
+
+The W=10 deterministic refinement case starts from `[8,8,8] | [1,1,1]` with one worker per domain. The initial pair maximum is 24 and one boundary move reaches 16.
+
+## Stage 2: page-aware boundary search
+
+The second stage is opt-in:
 
 ```text
 CPU_LOW_DOMAIN_PAGE_TIEBREAK=0   # default
-CPU_LOW_DOMAIN_PAGE_TIEBREAK=1   # opt-in page-aware second stage
+CPU_LOW_DOMAIN_PAGE_TIEBREAK=1
 ```
 
-It is deliberately valid only with
+It is valid only with:
 
 ```text
 CPU_LOW_SCHEDULE=domain
 CPU_LOW_DOMAIN_REFINE=1
 ```
 
-The ordinary load refiner runs first and is unchanged. The page-aware pass then considers nearby ordered domain boundaries, but a candidate is eligible only if the affected two domains have exactly the same LPT load tuple as the current boundary:
+The ordinary load refinement always runs first.
+
+### v5.22 strict objective
+
+The first page-aware implementation admitted a candidate only when both values below were exactly unchanged:
 
 ```text
-(max(left LPT makespan, right LPT makespan),
- left LPT makespan + right LPT makespan)
+pair_max = max(left LPT maximum, right LPT maximum)
+pair_sum = left LPT maximum + right LPT maximum
 ```
 
-Among load-equivalent candidates, v5.22 minimizes the boundary-page penalty lexicographically:
+Only then did it compare 2 MiB and 4 KiB boundary-page penalties. This was safe but unnecessarily restrictive: `pair_sum` equality is not required to preserve the solver's static parallel critical-path bound.
+
+### v5.23 relaxed objective
+
+v5.23 keeps the safety condition that matters:
 
 ```text
-1. fewer 2 MiB boundary pages
-2. if tied, fewer 4 KiB boundary pages
+candidate_pair_max <= current_pair_max
 ```
 
-This makes locality a tie-break rather than a competing objective. A page-aware move cannot increase the affected pair's maximum worker load, and all other domains are unchanged. The implementation rebuilds the final LPT assignments and asserts that global `max_worker_cells` did not increase.
-
-The page penalty is computed directly from the factorized authoritative layout. For each factor block, it finds the byte boundary between the two contiguous HIGH-mask ranges and counts an unaligned boundary as exposure to the corresponding 2 MiB or 4 KiB page. Main and blocked arrays are separate address spaces and are counted separately.
-
-The helper's `page_penalty_*` is a sum of per-domain-boundary penalties used by the local optimizer. It is not necessarily identical to the probe's global unique `hybrid_domain_cross_domain_pages_*` count when there are three or more domains, because two different boundaries can in principle refer to the same VM page. Use the global unique page counts from the schedule-plan probe when evaluating the final assignment.
-
-Production provenance and diagnostics now include:
+Every candidate violating that guard is rejected. Among the remaining candidates the search minimizes:
 
 ```text
-cpu_low_schedule=dynamic|sticky|contiguous|domain
-cpu_low_domain_size=...
-cpu_low_domain_refine=0|1
-cpu_low_domain_page_tiebreak=0|1
-cpu_low_schedule_build_s=...
-cpu_low_contiguous_optimal_cap=...
-cpu_low_domain_outer_normalized_cap=...
-cpu_low_domain_active_domains=...
-cpu_low_domain_refined_boundaries=...
-cpu_low_domain_refined_job_moves=...
-cpu_low_domain_page_boundary_moves=...
-cpu_low_domain_page_moved_jobs=...
-cpu_low_domain_page_penalty_2m_before=...
-cpu_low_domain_page_penalty_2m_after=...
-cpu_low_domain_page_penalty_4k_before=...
-cpu_low_domain_page_penalty_4k_after=...
-cpu_low_domain_page_build_s=...
+1. local 2 MiB boundary-page exposure
+2. local 4 KiB boundary-page exposure
+3. pair_sum
+4. pair_max
+5. distance from the current boundary
 ```
 
-`cpu_low_domain_normalized_cap` is retained as a compatibility alias for `cpu_low_domain_outer_normalized_cap`. The ordinary domain scheduler stderr line records `refine=0|1`; when page-aware mode is enabled a separate `cpu_low_domain_page_tiebreak` line records its before/after load and page-penalty values.
+The current boundary is the baseline candidate. Therefore an accepted move can never worsen the local page tuple. Because the pair-max guard is applied before ranking, an accepted move also cannot increase the affected pair's maximum worker load. Applying this step-by-step preserves the global `max_worker_cells` no-regression guarantee.
+
+This relaxation intentionally permits a case that v5.22 rejected:
+
+```text
+page exposure improves
+pair_max does not increase
+pair_sum increases
+```
+
+That is legal because `pair_sum` is not the parallel critical path. The runtime records how often this actually happens rather than assuming it is useful.
+
+The page-aware stderr record contains:
+
+```text
+objective=max_guard-page-sum-v5.23
+candidate_evaluations=...
+max_guard_rejections=...
+page_improving_moves=...
+page_tie_load_moves=...
+page_improve_sum_increase_moves=...
+boundary_moves=...
+moved_jobs=...
+penalty_2m_before=...
+penalty_2m_after=...
+penalty_4k_before=...
+penalty_4k_after=...
+max_worker_cells_before=...
+max_worker_cells_after=...
+build_s=...
+```
+
+Interpretation:
+
+- `candidate_evaluations`: nearby ordered boundary candidates whose LPT loads were evaluated.
+- `max_guard_rejections`: candidates rejected because their pair maximum would increase.
+- `page_improving_moves`: accepted moves with a strictly better `(2 MiB, 4 KiB)` page tuple.
+- `page_tie_load_moves`: accepted moves with equal page tuple but improved load secondary criteria.
+- `page_improve_sum_increase_moves`: page-improving moves that increase `pair_sum` while respecting the pair-max guard. A nonzero value is direct evidence that the v5.23 relaxation used search space unavailable to the old strict objective.
+
+The implementation checks after rebuilding all worker assignments that:
+
+```text
+max_worker_cells_after <= max_worker_cells_before
+(penalty_2m_after, penalty_4k_after)
+  <= (penalty_2m_before, penalty_4k_before)
+```
+
+A violation aborts rather than silently running the solver.
+
+## Page penalty versus global page count
+
+The page optimizer computes a local penalty for each ordered domain boundary directly from the factorized authoritative layout. For every factor block it finds the byte boundary between the left and right HIGH-mask ranges. A boundary not aligned to 2 MiB or 4 KiB contributes one page exposure at that page size. Main and blocked arrays are separate address spaces and are counted separately.
+
+`cpu_low_domain_page_penalty_*` is the sum of per-boundary local penalties. It is the objective used by the bounded local search.
+
+The schedule-plan probe also reports:
+
+```text
+hybrid_domain_cross_domain_pages_2m=...
+hybrid_domain_cross_domain_pages_4k=...
+```
+
+Those are global unique page counts for the final assignment. With three or more domains, two distinct boundaries can theoretically reference the same VM page, so the local penalty sum and global unique count need not be identical. Use the global unique counts for final topology comparison.
+
+This distinction motivates a possible later global-unique optimizer; v5.23 intentionally keeps the production search small and bounded.
 
 ## Exact work model
 
-All static modes use the same exact structural work estimate for every nonempty LOW occupancy group:
+Every static schedule uses the same exact structural work estimate for a LOW occupancy group:
 
 ```text
 sum over LOW positions and source factor blocks:
@@ -120,66 +198,20 @@ sum over LOW positions and source factor blocks:
   * (NN ops + NR ops + NL ops + LOCAL closure ops + CROSS closure ops)
 ```
 
-### LPT sticky
+The estimate measures recurrence cell iterations, not bytes or elapsed time. Real performance can still be limited by memory bandwidth, remote NUMA access, cache/TLB behavior, or GPU/CPU overlap.
 
-Groups are sorted by descending exact-cell work and assigned to the currently least-loaded worker. The partition is reused for every grid row.
+## Preflight probe
 
-### Contiguous
-
-Groups are sorted by numeric HIGH occupancy mask. Production binary-searches the smallest feasible maximum worker load under the contiguous-worker constraint. Greedy feasibility determines whether a candidate cap fits in the worker count. If the optimum needs fewer segments than workers, existing segments are split without increasing the cap.
-
-### Domain: outer partition
-
-For a domain containing `k` workers, the initial ordered partition gives it a contiguous mask range with total exact work bounded by `k * outer_normalized_cap`. Production binary-searches the smallest outer normalized cap for which all ordered jobs fit across the available domains.
-
-This outer cap is a domain-total/worker-count normalization used to choose the initial boundaries. It is not a mathematical upper bound on each worker after LPT. A large indivisible job or LPT packing can produce a worker load greater than this value; actual `max_worker_cells` and `imbalance` are the relevant balance measurements.
-
-### Boundary refinement
-
-After the initial domain ranges are constructed, the refiner can optimize the actual LPT makespan without giving up domain contiguity.
-
-For every adjacent pair of nonempty domains it searches at most 32 occupancy jobs to each side of the current boundary. Each candidate is evaluated by running the same exact-cell LPT assignment used by production inside the two affected domains. A move is accepted only when the pair objective improves lexicographically:
-
-```text
-1. smaller max(left LPT makespan, right LPT makespan)
-2. if tied, smaller left makespan + right makespan
-```
-
-Two bounded passes are used, with the second pass visiting boundaries in reverse order. Therefore an accepted move cannot increase the current maximum load of the two affected domains; all other domains are unchanged by that move. The search changes only the position of an ordered domain boundary, so each domain still owns one contiguous HIGH-mask interval.
-
-Metrics:
-
-```text
-cpu_low_domain_refined_boundaries = number of accepted load-refinement boundary moves
-cpu_low_domain_refined_job_moves  = sum of absolute load-refinement boundary displacements
-```
-
-The page-aware pass has separate counters so the two optimization stages remain distinguishable.
-
-The radius and pass count are deliberately bounded because the schedule is built on the host before the repeated LOW generations. `cpu_low_schedule_build_s` must be checked together with runtime savings.
-
-Thus the structural tradeoff is:
-
-```text
-sticky/LPT: best unconstrained worker balance, potentially many domain cuts
-contiguous: every worker owns one ordered mask interval
- domain:    every NUMA domain owns one ordered interval, refined LPT inside domains
- page tie:  same refined load objective, locality only breaks exact load ties
-```
-
-## Preflight balance and page-cut probe
-
-The schedule geometry can be inspected without allocating the multi-terabyte authoritative RAM arrays:
+Build once:
 
 ```bash
 N=27 bash scripts/build/gridfp-ramstream32-cpu-low-schedule-plan.sh
-./build/ramstream32_cpu_low_schedule_plan_n27 27 64 --domain-size 32 --workers
 ```
 
-The probe constructs the actual production sticky, contiguous, and domain pools and analyzes their cached assignments. The same binary can inspect all three domain variants:
+Inspect the three domain variants:
 
 ```bash
-CPU_LOW_DOMAIN_REFINE=0 \
+CPU_LOW_DOMAIN_REFINE=0 CPU_LOW_DOMAIN_PAGE_TIEBREAK=0 \
   ./build/ramstream32_cpu_low_schedule_plan_n27 27 64 --domain-size 32
 
 CPU_LOW_DOMAIN_REFINE=1 CPU_LOW_DOMAIN_PAGE_TIEBREAK=0 \
@@ -193,13 +225,7 @@ Important fields include:
 
 ```text
 imbalance=...
-cross_domain_pages_4k=...
-cross_domain_pages_2m=...
 contiguous_imbalance=...
-contiguous_cross_domain_pages_4k=...
-contiguous_cross_domain_pages_2m=...
-hybrid_domain_refine=...
-hybrid_domain_page_tiebreak=...
 hybrid_domain_imbalance=...
 hybrid_domain_cross_domain_pages_4k=...
 hybrid_domain_cross_domain_pages_2m=...
@@ -213,62 +239,45 @@ hybrid_domain_page_penalty_4k_before=...
 hybrid_domain_page_penalty_4k_after=...
 ```
 
-The raw probe retains the historical `hybrid_domain_*` prefix for compatibility; those fields describe the current production `CPU_LOW_SCHEDULE=domain` assignment.
+The `hybrid_domain_*` prefix is retained in raw probe output for compatibility; it describes the production `domain` schedule.
 
-`--domain-size 32` models worker IDs `0..31` as domain 0, `32..63` as domain 1, and so on. This only matches the hardware experiment if `CPU_LOW_CPU_LIST` is arranged in corresponding socket-local blocks.
+These page metrics are static ownership exposures, not measured remote-memory bytes. First-touch placement, AutoNUMA, THP, caches, and GPU DMA still determine real traffic.
 
-These page counts are static ownership exposures, not measured remote-memory bytes. First-touch placement, AutoNUMA, THP, caches, and GPU DMA still determine actual traffic.
+## Experiment separation
 
-### Refinement preflight A/B
+Three experiments answer different questions and must not be mixed.
 
-Before spending a full residue on timing, compare refined and unrefined domain plans across the intended worker/socket shapes:
+### Ordinary refinement A/B
 
 ```bash
-N=27 \
-CONFIGS='32:16 64:32 96:48 128:64' \
+N=27 CONFIGS='32:16 64:32 96:48 128:64' \
 bash scripts/bench/ramstream32-cpu-low-domain-refine-plan-ab.sh
 ```
 
-The runner invokes the same production schedule-plan binary twice per topology with `CPU_LOW_DOMAIN_REFINE=0` and `1`. It verifies zero boundary moves in the unrefined variant and records domain imbalance, maximum worker exact-cell load, cross-domain 4 KiB/2 MiB pages, cross-worker pages, outer normalized cap, accepted moves, and build time.
-
-The runner enforces a structural no-regression contract: because every accepted load-refinement move lowers or preserves the two affected domains' LPT maximum and leaves all other domains unchanged, refined `max_worker_cells` must never exceed the unrefined value. A violation exits nonzero as `refinement max-worker regression`.
-
-Its paired summary reports `imbalance_speedup`, `max_worker_cells_saved`, `cross_domain_4k_delta`, `cross_domain_2m_delta`, and `refine_extra_build_s`, together with one classification:
-
-```text
-no_change
-dominates
-balance_page_tradeoff
-page_only_improvement
-page_regression_without_balance_gain
-```
-
-`dominates` is the strongest static signal for refinement. `balance_page_tradeoff` should proceed to clean runtime A/B plus NUMA sampling rather than being accepted or rejected from the static model alone.
-
-### Page-aware preflight
-
-For v5.22, compare the same refined schedule with and without the page tie-break. A direct invocation is:
+and for full timing:
 
 ```bash
-CPU_LOW_DOMAIN_REFINE=1 CPU_LOW_DOMAIN_PAGE_TIEBREAK=0 \
-  ./build/ramstream32_cpu_low_schedule_plan_n27 27 64 --domain-size 32
-CPU_LOW_DOMAIN_REFINE=1 CPU_LOW_DOMAIN_PAGE_TIEBREAK=1 \
-  ./build/ramstream32_cpu_low_schedule_plan_n27 27 64 --domain-size 32
+bash scripts/bench/ramstream32-cpu-low-domain-refine-ab.sh
 ```
 
-The primary invariants are:
+These runners force `CPU_LOW_DOMAIN_PAGE_TIEBREAK=0`. They measure only the load-refinement stage.
 
-```text
-page-aware max_worker_cells <= ordinary refined max_worker_cells
-(page_penalty_2m_after, page_penalty_4k_after)
-  <= (page_penalty_2m_before, page_penalty_4k_before)
+### Page-aware A/B
+
+```bash
+N=27 CONFIGS='32:16 64:32 96:48 128:64' \
+bash scripts/bench/ramstream32-cpu-low-domain-page-plan-ab.sh
 ```
 
-For final topology evaluation, compare `hybrid_domain_cross_domain_pages_2m` and `_4k` between the two complete probe runs. These are global unique page counts and are the appropriate structural locality metrics across multiple domain boundaries.
+and for full timing:
 
-## Topology sweep and Pareto analysis
+```bash
+bash scripts/bench/ramstream32-cpu-low-domain-page-ab.sh
+```
 
-Several worker/domain layouts can be compared without allocating authoritative state:
+Both variants force `CPU_LOW_DOMAIN_REFINE=1`; only `CPU_LOW_DOMAIN_PAGE_TIEBREAK=0|1` changes. The runtime harness records the v5.23 search statistics from stderr in addition to wall and LOW timing.
+
+### Standard topology/Pareto sweep
 
 ```bash
 N=27 \
@@ -277,37 +286,26 @@ MAX_IMBALANCE=1.05 \
 bash scripts/bench/ramstream32-cpu-low-schedule-plan-sweep.sh
 ```
 
-Each entry is `workers:domain-size`. The persisted TSV uses production terminology:
+This baseline is deliberately fixed to:
 
 ```text
-lpt_*
-contiguous_*
-domain_*
-domain_refined_boundaries
-domain_refined_job_moves
+CPU_LOW_DOMAIN_REFINE=1
+CPU_LOW_DOMAIN_PAGE_TIEBREAK=0
 ```
 
-The analyzer `scripts/tools/analyze_cpu_low_schedule_plan_sweep.py` computes the Pareto frontier over three objectives:
+so an inherited shell environment cannot silently contaminate the topology frontier.
+
+The analyzer minimizes three objectives:
 
 ```text
-minimize worker imbalance
-minimize cross-domain 4 KiB boundary pages
-minimize cross-domain 2 MiB boundary pages
+worker imbalance
+cross-domain 4 KiB boundary pages
+cross-domain 2 MiB boundary pages
 ```
 
-It reports `scheme=lpt`, `scheme=contiguous`, or `scheme=domain`. Legacy TSV files with `hybrid_*` columns and `--scheme hybrid` remain accepted as aliases for `domain`.
+and reports `scheme=lpt`, `scheme=contiguous`, or `scheme=domain`.
 
-A candidate is omitted only when another candidate is no worse in all three objectives and strictly better in at least one. The refinement-count columns are diagnostic metadata rather than additional Pareto objectives.
-
-## Clean timing comparison
-
-The original dynamic versus LPT microcomparison remains available:
-
-```bash
-REPEATS=4 bash scripts/bench/ramstream32-cpu-low-schedule-ab.sh
-```
-
-For all four production modes, use the four-way clean harness. Keep both domain optimization controls fixed for the whole run:
+## Four-way clean timing
 
 ```bash
 N=27 \
@@ -325,69 +323,37 @@ REPEATS=8 \
 bash scripts/bench/ramstream32-cpu-low-schedule-compare.sh
 ```
 
-The harness uses a cyclic-latin-4 order:
-
-```text
-dynamic -> sticky -> contiguous -> domain
-sticky -> contiguous -> domain -> dynamic
-contiguous -> domain -> dynamic -> sticky
-domain -> dynamic -> sticky -> contiguous
-```
-
-Over every four repeats each schedule appears once in every run position. Use a fixed domain refinement/page setting for a four-way schedule comparison.
-
-### Isolate load refinement itself
-
-To compare only the ordinary boundary-refinement step, use the dedicated same-binary A/B runner:
-
-```bash
-N=27 \
-CPU_HIGH_MODE=direct \
-CPU_HIGH_OVERLAP=1 \
-CPU_HIGH_MAX_MIB=256 \
-CPU_HIGH_CPU_LIST='0-31' \
-CPU_LOW_CPU_LIST='32-95' \
-CPU_WORKERS=64 \
-CPU_HIGH_WORKERS=32 \
-CPU_LOW_DOMAIN_SIZE=32 \
-REPEATS=4 \
-bash scripts/bench/ramstream32-cpu-low-domain-refine-ab.sh
-```
-
-Odd repeats run `refine=0 -> refine=1`; even repeats reverse that order. Both variants use the same binary, domain size, HIGH policy, affinities, worker counts, modulus, and GPU target. NUMA sampling is forced off. The harness checks final stdout and scheduler stderr provenance, requires zero reported boundary moves when refinement is disabled, and verifies identical residues.
-
-Its final comparison reports:
-
-```text
-refine_speedup       = mean wall(refine=0) / mean wall(refine=1)
-refine_low_speedup   = mean LOW wall(refine=0) / mean LOW wall(refine=1)
-refine_extra_build_s = mean schedule build(refine=1) - mean schedule build(refine=0)
-```
-
-A useful refinement must recover more repeated LOW runtime than it adds to one-time schedule construction.
-
-### Isolate page-aware tie-break
-
-The page-aware experiment must keep ordinary refinement enabled in both variants and change only `CPU_LOW_DOMAIN_PAGE_TIEBREAK=0|1`. This isolates locality from the previous load-balancing change. Compare whole wall time, `cpu_low_wall_s`, page-tie build time, page moves, and global cross-domain page counts from the preflight probe. A page-aware schedule is useful only if the locality gain survives the real NUMA/cache/THP behavior of the host.
-
-No schedule or refinement setting is assumed faster. Dynamic can win from fine-grained balancing. Sticky can win from stable ownership with near-perfect load balance. Contiguous can win when page/address locality dominates. Domain is intended to retain most of sticky's balance while reducing cross-NUMA-domain ownership boundaries; the first refinement stage attacks makespan, and v5.22 uses locality only to break exact load ties.
+The runner rotates `dynamic`, `sticky`, `contiguous`, and `domain` with cyclic-latin-4 ordering. Keep both domain optimization controls fixed for the entire comparison.
 
 ## NUMA diagnosis
 
-`move_pages` sampling is diagnostic and perturbs timing, so run it separately:
+`move_pages` sampling perturbs timing and is diagnostic only:
 
 ```bash
-CPU_LOW_SCHEDULE=dynamic    bash scripts/bench/ramstream32-numa-sample.sh
-CPU_LOW_SCHEDULE=sticky     bash scripts/bench/ramstream32-numa-sample.sh
-CPU_LOW_SCHEDULE=contiguous bash scripts/bench/ramstream32-numa-sample.sh
-CPU_LOW_SCHEDULE=domain CPU_LOW_DOMAIN_SIZE=32 CPU_LOW_DOMAIN_REFINE=1 \
-  CPU_LOW_DOMAIN_PAGE_TIEBREAK=0 bash scripts/bench/ramstream32-numa-sample.sh
-CPU_LOW_SCHEDULE=domain CPU_LOW_DOMAIN_SIZE=32 CPU_LOW_DOMAIN_REFINE=1 \
-  CPU_LOW_DOMAIN_PAGE_TIEBREAK=1 bash scripts/bench/ramstream32-numa-sample.sh
+CPU_LOW_SCHEDULE=domain \
+CPU_LOW_DOMAIN_SIZE=32 \
+CPU_LOW_DOMAIN_REFINE=1 \
+CPU_LOW_DOMAIN_PAGE_TIEBREAK=0 \
+bash scripts/bench/ramstream32-numa-sample.sh
+
+CPU_LOW_SCHEDULE=domain \
+CPU_LOW_DOMAIN_SIZE=32 \
+CPU_LOW_DOMAIN_REFINE=1 \
+CPU_LOW_DOMAIN_PAGE_TIEBREAK=1 \
+bash scripts/bench/ramstream32-numa-sample.sh
 ```
 
-Keep HIGH policy, worker counts, affinity lists, overlap mode, and sample spacing identical. Compare row1/final node histograms and node-fraction drift with clean timing before considering `mbind`, interleave, THP changes, or other memory policy.
+Compare row1/final node histograms, clean no-sampling wall time, `cpu_low_wall_s`, H2D/D2H time, and the static global unique page counts before considering `mbind`, interleave, THP changes, or other memory policy.
 
 ## Benchmark provenance
 
-LOW schedule, domain size, load refinement, and page-aware tie-break are all benchmark conditions. Any timing, HIGH cost calibration, stream-weight fit, policy A/B, or NUMA measurement intended for direct comparison must propagate and record all enabled LOW scheduling controls. Changing one invalidates a direct calibration comparison.
+The following are benchmark conditions:
+
+```text
+CPU_LOW_SCHEDULE
+CPU_LOW_DOMAIN_SIZE
+CPU_LOW_DOMAIN_REFINE
+CPU_LOW_DOMAIN_PAGE_TIEBREAK
+```
+
+HIGH threshold sweeps, HIGH policy A/B, stream-weight calibration, LOW scheduling comparisons, and NUMA diagnostics propagate and record them. Changing any one invalidates a direct timing or calibration comparison.
