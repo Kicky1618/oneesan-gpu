@@ -8,6 +8,8 @@ on:
       - 'src/cuda/gridfp/ramstream32_bucket_reverse_fused.cuh'
       - 'src/cuda/gridfp/ramstream32_bucket_reverse_fused_pm.cuh'
       - 'src/cuda/gridfp/ramstream32_bucket_orbit_closure_fused.cuh'
+      - 'src/cuda/gridfp/ramstream32_bucket_orbit_closure_checked.cuh'
+      - 'src/cuda/gridfp/ramstream32_bucket_orbit_closure_preflight.cuh'
       - 'src/cuda/gridfp/probes/ramstream32_orbit_closure_fusion_plan.cu'
       - 'src/cuda/gridfp/probes/ramstream32_orbit_closure_attach_plan.cu'
       - 'src/cuda/gridfp/probes/ramstream32_bucket_orbit_closure_fused_selftest.cu'
@@ -29,6 +31,8 @@ on:
       - 'src/cuda/gridfp/ramstream32_bucket_reverse_fused.cuh'
       - 'src/cuda/gridfp/ramstream32_bucket_reverse_fused_pm.cuh'
       - 'src/cuda/gridfp/ramstream32_bucket_orbit_closure_fused.cuh'
+      - 'src/cuda/gridfp/ramstream32_bucket_orbit_closure_checked.cuh'
+      - 'src/cuda/gridfp/ramstream32_bucket_orbit_closure_preflight.cuh'
       - 'src/cuda/gridfp/probes/ramstream32_orbit_closure_fusion_plan.cu'
       - 'src/cuda/gridfp/probes/ramstream32_orbit_closure_attach_plan.cu'
       - 'src/cuda/gridfp/probes/ramstream32_bucket_orbit_closure_fused_selftest.cu'
@@ -62,6 +66,7 @@ jobs:
           build/orbit_closure_attach_w10 | tee /tmp/orbit-closure-attach.txt
           grep -Fq 'orbit-closure-attach-plan OK W=10' /tmp/orbit-closure-attach.txt
           grep -Fq 'kernels_per_position=1' /tmp/orbit-closure-attach.txt
+          grep -Fq 'source_disjoint=1' /tmp/orbit-closure-attach.txt
       - name: Compile W10 forward one-pass GPU selftest
         shell: bash
         run: |
@@ -102,6 +107,7 @@ jobs:
           grep -Fq 'backend=gridfp-b300-bucket-snake-onepass-v0.1-plan' /tmp/snake-onepass.txt
           grep -Fq 'kernels_per_position=1' /tmp/snake-onepass.txt
           grep -Fq 'transposes_per_residue=10' /tmp/snake-onepass.txt
+          grep -Fq 'orbit_main_write_overlap=0 OK' /tmp/snake-onepass.txt
       - name: Compile and run W10 one-pass pipeline batch plan
         shell: bash
         run: |
@@ -113,6 +119,7 @@ jobs:
           grep -Fq 'backend=gridfp-b300-bucket-snake-onepass-batch-v0.1-plan' /tmp/snake-onepass-batch.txt
           grep -Fq 'kernels_per_position=1' /tmp/snake-onepass-batch.txt
           grep -Fq 'transpose_staging_multiplier=2' /tmp/snake-onepass-batch.txt
+          grep -Fq 'orbit_main_write_overlap=0 OK' /tmp/snake-onepass-batch.txt
       - name: Compile W28 one-pass event production driver
         shell: bash
         run: |
