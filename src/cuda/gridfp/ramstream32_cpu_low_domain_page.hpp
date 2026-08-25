@@ -12,11 +12,17 @@
 #include <vector>
 
 // Optional second-stage refinement for CPU LOW domain scheduling.
-// It starts from the ordinary refined-domain assignment and moves only an
-// ordered boundary whose affected two-domain LPT (max,sum) load tuple is
-// unchanged. Among those load-equivalent boundaries it minimizes exact local
-// boundary-page exposure lexicographically: 2 MiB pages first, then 4 KiB.
-// Therefore enabling this pass cannot increase the global max worker load.
+// It starts from the ordinary refined-domain assignment. A candidate boundary
+// is eligible whenever the affected two-domain LPT maximum does not increase.
+// Among eligible boundaries it minimizes, in order:
+//   1. local 2 MiB boundary-page exposure,
+//   2. local 4 KiB boundary-page exposure,
+//   3. the sum of the two domain LPT maxima,
+//   4. the pair maximum,
+//   5. displacement from the current boundary.
+// The current boundary is always the baseline candidate, so accepted moves
+// cannot worsen the page tuple. The pair-max guard proves that enabling this
+// pass cannot increase the global maximum worker load.
 
 static bool cpu_low_domain_page_tiebreak_from_env() {
     const char* s = std::getenv("CPU_LOW_DOMAIN_PAGE_TIEBREAK");
@@ -36,6 +42,11 @@ struct CpuLowDomainBoundaryPagePenalty {
 struct CpuLowDomainPageTieStats {
     int boundary_moves = 0;
     uint64_t moved_jobs = 0;
+    uint64_t candidate_evaluations = 0;
+    uint64_t max_guard_rejections = 0;
+    int page_improving_moves = 0;
+    int page_tie_load_moves = 0;
+    int page_improve_sum_increase_moves = 0;
     uint64_t penalty_2m_before = 0;
     uint64_t penalty_2m_after = 0;
     uint64_t penalty_4k_before = 0;
@@ -118,6 +129,18 @@ static bool cpu_low_domain_page_penalty_less(
 ) {
     return a.pages_2m < b.pages_2m
         || (a.pages_2m == b.pages_2m && a.pages_4k < b.pages_4k);
+}
+
+static bool cpu_low_domain_page_penalty_equal(
+    const CpuLowDomainBoundaryPagePenalty& a,
+    const CpuLowDomainBoundaryPagePenalty& b
+) {
+    return a.pages_2m == b.pages_2m && a.pages_4k == b.pages_4k;
+}
+
+static uint64_t cpu_low_domain_pair_sum(uint64_t a, uint64_t b) {
+    return a > std::numeric_limits<uint64_t>::max() - b
+        ? std::numeric_limits<uint64_t>::max() : a + b;
 }
 
 static CpuLowDomainPageTieStats cpu_low_apply_domain_page_tiebreak(
@@ -239,41 +262,77 @@ static CpuLowDomainPageTieStats cpu_low_apply_domain_page_tiebreak(
             uint64_t current_right = cpu_low_lpt_range_max_cells(
                 ordered, old_boundary, right.second, right_workers, jobs);
             uint64_t current_max = std::max(current_left, current_right);
-            uint64_t current_sum = current_left + current_right;
+            uint64_t current_sum = cpu_low_domain_pair_sum(current_left, current_right);
             auto current_penalty = penalty(old_boundary);
 
             size_t best_boundary = old_boundary;
             auto best_penalty = current_penalty;
+            uint64_t best_sum = current_sum;
+            uint64_t best_max = current_max;
             size_t best_distance = 0;
+
             for (size_t candidate = search_lo; candidate <= search_hi; ++candidate) {
                 if (candidate == old_boundary) continue;
+                ++stats.candidate_evaluations;
                 uint64_t lm = cpu_low_lpt_range_max_cells(
                     ordered, left.first, candidate, left_workers, jobs);
                 uint64_t rm = cpu_low_lpt_range_max_cells(
                     ordered, candidate, right.second, right_workers, jobs);
-                if (std::max(lm, rm) != current_max || lm + rm != current_sum) continue;
+                uint64_t candidate_max = std::max(lm, rm);
+                if (candidate_max > current_max) {
+                    ++stats.max_guard_rejections;
+                    continue;
+                }
+                uint64_t candidate_sum = cpu_low_domain_pair_sum(lm, rm);
                 auto cp = penalty(candidate);
                 size_t distance = candidate > old_boundary
                     ? candidate - old_boundary : old_boundary - candidate;
-                bool better = cpu_low_domain_page_penalty_less(cp, best_penalty)
-                    || (cp.pages_2m == best_penalty.pages_2m
-                        && cp.pages_4k == best_penalty.pages_4k
-                        && best_boundary != old_boundary && distance < best_distance);
+
+                bool better = cpu_low_domain_page_penalty_less(cp, best_penalty);
+                if (!better && cpu_low_domain_page_penalty_equal(cp, best_penalty)) {
+                    better = candidate_sum < best_sum
+                        || (candidate_sum == best_sum && candidate_max < best_max)
+                        || (candidate_sum == best_sum && candidate_max == best_max
+                            && best_boundary != old_boundary && distance < best_distance);
+                }
                 if (better) {
                     best_boundary = candidate;
                     best_penalty = cp;
+                    best_sum = candidate_sum;
+                    best_max = candidate_max;
                     best_distance = distance;
                 }
             }
 
-            if (best_boundary != old_boundary
-                && cpu_low_domain_page_penalty_less(best_penalty, current_penalty)) {
+            if (best_boundary != old_boundary) {
+                bool page_improved = cpu_low_domain_page_penalty_less(
+                    best_penalty, current_penalty);
+                bool load_improved = cpu_low_domain_page_penalty_equal(
+                    best_penalty, current_penalty)
+                    && (best_sum < current_sum
+                        || (best_sum == current_sum && best_max < current_max));
+                if (!page_improved && !load_improved) {
+                    std::cerr << "cpu LOW domain page tie-break selected non-improving boundary\n";
+                    std::exit(151);
+                }
+                if (best_max > current_max) {
+                    std::cerr << "cpu LOW domain page tie-break violated pair-max guard\n";
+                    std::exit(152);
+                }
+
                 size_t distance = best_boundary > old_boundary
                     ? best_boundary - old_boundary : old_boundary - best_boundary;
                 segs[size_t(d)].second = best_boundary;
                 segs[size_t(d + 1)].first = best_boundary;
                 ++stats.boundary_moves;
                 stats.moved_jobs += distance;
+                if (page_improved) {
+                    ++stats.page_improving_moves;
+                    if (best_sum > current_sum)
+                        ++stats.page_improve_sum_increase_moves;
+                } else {
+                    ++stats.page_tie_load_moves;
+                }
                 changed = true;
             }
         }
@@ -306,11 +365,27 @@ static CpuLowDomainPageTieStats cpu_low_apply_domain_page_tiebreak(
         std::exit(150);
     }
     sum_penalties(stats.penalty_2m_after, stats.penalty_4k_after);
+    if (stats.penalty_2m_after > stats.penalty_2m_before
+        || (stats.penalty_2m_after == stats.penalty_2m_before
+            && stats.penalty_4k_after > stats.penalty_4k_before)) {
+        std::cerr << "cpu LOW domain page tie-break increased page penalty"
+                  << " before_2m=" << stats.penalty_2m_before
+                  << " after_2m=" << stats.penalty_2m_after
+                  << " before_4k=" << stats.penalty_4k_before
+                  << " after_4k=" << stats.penalty_4k_after << '\n';
+        std::exit(153);
+    }
     stats.build_s = ram_seconds_since(t0);
 
     std::cerr << "cpu_low_domain_page_tiebreak"
+              << " objective=max_guard-page-sum-v5.23"
               << " boundary_moves=" << stats.boundary_moves
               << " moved_jobs=" << stats.moved_jobs
+              << " candidate_evaluations=" << stats.candidate_evaluations
+              << " max_guard_rejections=" << stats.max_guard_rejections
+              << " page_improving_moves=" << stats.page_improving_moves
+              << " page_tie_load_moves=" << stats.page_tie_load_moves
+              << " page_improve_sum_increase_moves=" << stats.page_improve_sum_increase_moves
               << " penalty_2m_before=" << stats.penalty_2m_before
               << " penalty_2m_after=" << stats.penalty_2m_after
               << " penalty_4k_before=" << stats.penalty_4k_before
