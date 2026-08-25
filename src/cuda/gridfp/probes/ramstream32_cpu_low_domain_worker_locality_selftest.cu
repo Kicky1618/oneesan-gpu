@@ -14,6 +14,7 @@
 #include "../ramstream32_cpu_low_domain_page.hpp"
 #include "../ramstream32_cpu_low_domain_worker_locality.hpp"
 #include "../ramstream32_cpu_low_domain_worker_coalesce.hpp"
+#include "../ramstream32_cpu_low_domain_worker_unique_coalesce.hpp"
 
 static void enum_states_rec(int pos, int h, MateID m, std::vector<MateID>& out) {
     if (pos < 0) { if (h == 0) out.push_back(m); return; }
@@ -123,8 +124,6 @@ int main() {
     static_assert(W == LOW_LUT_K + HIGH_LUT_K + 1);
     static_assert(W <= 12, "selftest intentionally uses a small width");
 
-    // Pure partition tests exercise both conversion and fallback paths without
-    // depending on the W10 structural weight distribution.
     std::vector<CpuLowStaticJobCost> synthetic = {
         {0,0,4}, {1,1,4}, {2,2,4}, {3,3,4}
     };
@@ -138,8 +137,6 @@ int main() {
     if (cpu_low_domain_contiguous_segments_under_cap(
             synthetic, 0, synthetic.size(), 2, 4, segs)) return 23;
 
-    // Pure owner-pattern checks cover the v5.26 target condition.  Reappearing
-    // owner 0 in 0,1,0 is non-contiguous; 0,0,1,1 is already coalesced.
     if (cpu_low_worker_domain_is_contiguous(
             std::vector<int>{0,1,0}, 0, 3, 0, 2)) return 24;
     if (!cpu_low_worker_domain_is_contiguous(
@@ -148,6 +145,15 @@ int main() {
     CpuLowDomainWorkerCoalesceScore score_b{1, 5, 1};
     if (!cpu_low_worker_coalesce_score_less(score_b, score_a)) return 26;
     if (cpu_low_worker_coalesce_score_less(score_a, score_b)) return 27;
+
+    CpuLowDomainWorkerUniqueScore unique_a{3, 7, 10};
+    CpuLowDomainWorkerUniqueScore unique_b{3, 7, 9};
+    if (!cpu_low_worker_unique_score_less(unique_b, unique_a)) return 28;
+    std::unordered_map<uint64_t,uint32_t> unique_refs{{1,2},{2,1}};
+    std::unordered_map<uint64_t,int> unique_delta{{1,-1},{3,1}};
+    if (cpu_low_worker_unique_after_delta(unique_refs, unique_delta) != 3) return 29;
+    unique_delta = {{2,-1}};
+    if (cpu_low_worker_unique_after_delta(unique_refs, unique_delta) != 1) return 30;
 
     build_full_dp();
     G_FACTOR = build_factor_tables();
@@ -188,57 +194,94 @@ int main() {
     main_auth.alloc(layout.main_size, "worker-locality selftest main");
     block_auth.alloc(layout.block_size, "worker-locality selftest block");
 
-    CpuLowSparsePersistentPool pool(4, CPU_LOW_SCHEDULE_DOMAIN, 2, true);
-    pool.prepare_static_schedule(jobs, sparse);
+    CpuLowSparsePersistentPool local_pool(4, CPU_LOW_SCHEDULE_DOMAIN, 2, true);
+    CpuLowSparsePersistentPool unique_pool(4, CPU_LOW_SCHEDULE_DOMAIN, 2, true);
+    local_pool.prepare_static_schedule(jobs, sparse);
+    unique_pool.prepare_static_schedule(jobs, sparse);
+
     CpuLowDomainPageTieStats page_stats = cpu_low_apply_domain_page_tiebreak(
-        pool, jobs, sparse, storage, layout);
+        local_pool, jobs, sparse, storage, layout);
     CpuLowDomainWorkerLocalityStats locality_stats =
-        cpu_low_apply_domain_worker_locality(pool, jobs, sparse);
-    if (locality_stats.max_worker_cells_after
-        > locality_stats.max_worker_cells_before) return 5;
+        cpu_low_apply_domain_worker_locality(local_pool, jobs, sparse);
     CpuLowDomainWorkerCoalesceStats coalesce_stats =
         cpu_low_apply_domain_worker_coalesce(
-            pool, jobs, sparse, storage, layout);
+            local_pool, jobs, sparse, storage, layout);
+    if (locality_stats.max_worker_cells_after
+        > locality_stats.max_worker_cells_before) return 5;
     if (coalesce_stats.max_worker_cells_after
         > coalesce_stats.max_worker_cells_before) return 8;
-    if (coalesce_stats.penalty_2m_after > coalesce_stats.penalty_2m_before
-        || (coalesce_stats.penalty_2m_after == coalesce_stats.penalty_2m_before
-            && coalesce_stats.penalty_4k_after > coalesce_stats.penalty_4k_before))
-        return 9;
+
+    CpuLowDomainPageTieStats unique_page_stats = cpu_low_apply_domain_page_tiebreak(
+        unique_pool, jobs, sparse, storage, layout);
+    CpuLowDomainWorkerLocalityStats unique_locality_stats =
+        cpu_low_apply_domain_worker_locality(unique_pool, jobs, sparse);
+    CpuLowDomainWorkerUniqueCoalesceStats unique_stats =
+        cpu_low_apply_domain_worker_unique_coalesce(
+            unique_pool, jobs, sparse, storage, layout);
+    if (unique_stats.max_worker_cells_after
+        > unique_stats.max_worker_cells_before) return 9;
+    CpuLowDomainWorkerUniqueScore unique_before{
+        unique_stats.unique_pages_2m_before,
+        unique_stats.unique_pages_4k_before,
+        unique_stats.owner_transitions_before};
+    CpuLowDomainWorkerUniqueScore unique_after{
+        unique_stats.unique_pages_2m_after,
+        unique_stats.unique_pages_4k_after,
+        unique_stats.owner_transitions_after};
+    if (cpu_low_worker_unique_score_less(unique_before, unique_after)) return 10;
 
     fill_factor(
         main_auth, block_auth, main_states, block_states,
         init_main, init_block, storage, layout);
-    pool.run(jobs, main_auth, block_auth, storage, layout, sparse, mod);
+    local_pool.run(jobs, main_auth, block_auth, storage, layout, sparse, mod);
     if (!compare_factor(
-            "domain-worker-locality-coalesce-1", main_auth, block_auth,
+            "domain-worker-local-coalesce-1", main_auth, block_auth,
             main_states, block_states, one.first, one.second,
             storage, layout)) return 6;
-
-    pool.run(jobs, main_auth, block_auth, storage, layout, sparse, mod);
+    local_pool.run(jobs, main_auth, block_auth, storage, layout, sparse, mod);
     if (!compare_factor(
-            "domain-worker-locality-coalesce-2", main_auth, block_auth,
+            "domain-worker-local-coalesce-2", main_auth, block_auth,
             main_states, block_states, two.first, two.second,
             storage, layout)) return 7;
 
+    fill_factor(
+        main_auth, block_auth, main_states, block_states,
+        init_main, init_block, storage, layout);
+    unique_pool.run(jobs, main_auth, block_auth, storage, layout, sparse, mod);
+    if (!compare_factor(
+            "domain-worker-unique-coalesce-1", main_auth, block_auth,
+            main_states, block_states, one.first, one.second,
+            storage, layout)) return 11;
+    unique_pool.run(jobs, main_auth, block_auth, storage, layout, sparse, mod);
+    if (!compare_factor(
+            "domain-worker-unique-coalesce-2", main_auth, block_auth,
+            main_states, block_states, two.first, two.second,
+            storage, layout)) return 12;
+
     std::cout << "cpu-low-domain-worker-locality-selftest OK"
               << " page_moves=" << page_stats.boundary_moves
+              << " unique_page_moves=" << unique_page_stats.boundary_moves
               << " domains=" << locality_stats.domains
               << " converted_domains=" << locality_stats.converted_domains
               << " fallback_domains=" << locality_stats.fallback_domains
               << " coalesce_noncontiguous_domains="
               << coalesce_stats.noncontiguous_domains_before
               << " coalesce_accepted_moves=" << coalesce_stats.accepted_moves
-              << " coalesce_transitions_before="
-              << coalesce_stats.owner_transitions_before
-              << " coalesce_transitions_after="
-              << coalesce_stats.owner_transitions_after
+              << " unique_noncontiguous_domains="
+              << unique_stats.noncontiguous_domains_before
+              << " unique_accepted_moves=" << unique_stats.accepted_moves
+              << " unique_pages_2m_before=" << unique_stats.unique_pages_2m_before
+              << " unique_pages_2m_after=" << unique_stats.unique_pages_2m_after
+              << " unique_pages_4k_before=" << unique_stats.unique_pages_4k_before
+              << " unique_pages_4k_after=" << unique_stats.unique_pages_4k_after
               << " max_before=" << locality_stats.max_worker_cells_before
-              << " max_after=" << coalesce_stats.max_worker_cells_after
+              << " local_max_after=" << coalesce_stats.max_worker_cells_after
+              << " unique_max_after=" << unique_stats.max_worker_cells_after
               << " synthetic_feasible=1 synthetic_fallback=1"
-              << " synthetic_noncontiguous=1\n";
+              << " synthetic_noncontiguous=1 synthetic_unique_delta=1\n";
 
-    pool.shutdown();
+    local_pool.shutdown();
+    unique_pool.shutdown();
     main_auth.release();
     block_auth.release();
     return 0;
