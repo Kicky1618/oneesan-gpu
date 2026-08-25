@@ -29,6 +29,7 @@
 #include "../gridfp/ramstream32_bucket_reverse_atomic.cuh"
 #ifdef BUCKET_SNAKE_REVERSE_FUSED
 #include "../gridfp/ramstream32_bucket_reverse_fused.cuh"
+#include "../gridfp/ramstream32_bucket_reverse_fused_validate.hpp"
 #if GPU_DIRECT_PM_ACCUM
 #include "../gridfp/ramstream32_bucket_reverse_fused_pm.cuh"
 #endif
@@ -61,7 +62,7 @@ static SnakeReverseHost bsn_build_reverse(
     SnakeReverseHost z;
     z.atomic=build_reverse_bucket_atomic(storage,layout,owner,rlow,rhigh,rlo,rhi);
 #ifdef BUCKET_SNAKE_REVERSE_FUSED
-    z.fused=build_reverse_bucket_fused(layout,z.atomic);
+    z.fused=build_reverse_bucket_fused_checked(layout,owner,z.atomic);
 #endif
     return z;
 }
