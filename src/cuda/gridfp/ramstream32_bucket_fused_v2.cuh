@@ -1,9 +1,13 @@
 #pragma once
 
 // Compatibility shim. The LOW center-partner fix is integrated into the base
-// bucket kernel.  Keep this entry point for older probes; when the experimental
+// bucket kernel. Keep this entry point for older probes; when the experimental
 // pseudo-Mersenne accumulator is requested, route both LOW and subsequent HIGH
 // selftest calls through the PM closure variants.
+
+#ifndef GPU_DIRECT_PM_ACCUM
+#define GPU_DIRECT_PM_ACCUM 0
+#endif
 
 #if GPU_DIRECT_PM_ACCUM
 #include "ramstream32_bucket_fused_pm.cuh"
