@@ -16,6 +16,9 @@
 #ifndef MASKSHARD_LOW_GROUP_STATIC_BASE_CACHE
 #error "resident LOW mask-batch configs require static-only base cache"
 #endif
+#if defined(MASKSHARD_LOW_MASKBATCH_FAST_REBUILD_SETUP) && !defined(MASKSHARD_LOW_MASKBATCH_REBUILD_DYNAMIC)
+#error "fast LOW mask-batch rebuild setup requires rebuild-dynamic mode"
+#endif
 
 #include "maskshard_low_maskbatch_rowplan.hpp"
 
@@ -109,6 +112,19 @@ struct MaskShardLowMaskBatchDeviceTables {
             mask_of_local.push_back(std::uint16_t(mask));
         }
 
+#ifdef MASKSHARD_LOW_MASKBATCH_FAST_REBUILD_SETUP
+        // v0.49: the independent exact task table has already traversed every
+        // mask/cap and is the descriptor planner's authority.  v0.48 additionally
+        // rebuilt the old packed config for each owned mask/cap only to compare
+        // the same totals.  Once kernels rebuild from canonical tables, that
+        // second construction is redundant; retain the basic table-domain check.
+        if (tasks.masks != shard.masks) {
+            std::cerr << "LOW mask-batch fast setup task-table mask mismatch got="
+                      << tasks.masks << " expected=" << shard.masks << '\n';
+            std::exit(353);
+        }
+#endif
+
 #ifdef MASKSHARD_LOW_MASKBATCH_REBUILD_DYNAMIC
         {
             auto& orbit = maskshard_loworbit_rowdepth_compact_cache();
@@ -135,6 +151,7 @@ struct MaskShardLowMaskBatchDeviceTables {
         for (std::size_t local = 0; local < mask_of_local.size(); ++local) {
             const std::uint32_t mask = mask_of_local[local];
             hs[local] = maskshard_build_low_group_packed_static_uncached(mask);
+#ifndef MASKSHARD_LOW_MASKBATCH_FAST_REBUILD_SETUP
             for (int cap = 1; cap <= FULL_CAP; ++cap) {
                 Code state_total = 0;
                 const MaskShardLowGroupPackedConfig cfg =
@@ -165,6 +182,7 @@ struct MaskShardLowMaskBatchDeviceTables {
                     maskshard_extract_low_batch_dynamic(cfg);
 #endif
             }
+#endif
         }
 
         if (!hs.empty()) {
@@ -191,6 +209,11 @@ struct MaskShardLowMaskBatchDeviceTables {
 #ifdef MASKSHARD_LOW_MASKBATCH_REBUILD_DYNAMIC
                   << " dynamic_bytes_per_mask_cap=0 dynamic_mib=0"
                   << " rebuild_dynamic=1"
+#ifdef MASKSHARD_LOW_MASKBATCH_FAST_REBUILD_SETUP
+                  << " fast_rebuild_setup=1"
+#else
+                  << " fast_rebuild_setup=0"
+#endif
 #else
                   << " dynamic_bytes_per_mask_cap="
                   << sizeof(MaskShardLowBatchDynamicConfig)
