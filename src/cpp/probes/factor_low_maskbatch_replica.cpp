@@ -1,14 +1,9 @@
-#include <algorithm>
 #include <cstdint>
 #include <cstdlib>
 #include <iostream>
 #include <vector>
 
-struct Desc {
-    std::uint32_t mask = 0;
-    std::uint16_t replica = 0;
-    std::uint16_t replicas = 0;
-};
+#include "../../cuda/b300/maskshard_low_maskbatch_plan.hpp"
 
 int main(int argc, char** argv) {
     const int masks = argc > 1 ? std::atoi(argv[1]) : 257;
@@ -16,30 +11,28 @@ int main(int argc, char** argv) {
     const int max_replicas = argc > 3 ? std::atoi(argv[3]) : 16;
     const std::uint64_t target_per_cta = argc > 4
         ? std::strtoull(argv[4], nullptr, 10) : 4096ULL;
-    if (masks < 1 || warps < 1 || max_replicas < 1 || target_per_cta < 1)
+    if (masks < 1 || masks > 65535 || warps < 1 || max_replicas < 1
+        || target_per_cta < 1)
         return 1;
 
     std::vector<std::uint64_t> tasks(size_t(masks));
-    std::vector<Desc> descs;
+    std::vector<std::uint8_t> owner(size_t(masks), std::uint8_t(0));
     for (int m = 0; m < masks; ++m) {
         // Deterministic mix including zero, tiny, boundary, and large groups.
-        const std::uint64_t t = (m % 17 == 0) ? 0ULL
+        tasks[size_t(m)] = (m % 17 == 0) ? 0ULL
             : ((std::uint64_t(m + 3) * 11939ULL) % 250000ULL)
                 + std::uint64_t(m % (warps + 1));
-        tasks[size_t(m)] = t;
-        if (!t) continue;
-        const std::uint64_t want = (t + target_per_cta - 1) / target_per_cta;
-        const int r = int(std::min<std::uint64_t>(
-            std::uint64_t(max_replicas), std::max<std::uint64_t>(1, want)));
-        for (int q = 0; q < r; ++q)
-            descs.push_back({std::uint32_t(m), std::uint16_t(q), std::uint16_t(r)});
     }
+
+    const std::vector<MaskShardLowBatchDesc> descs =
+        maskshard_build_low_batch_plan(
+            owner, 0, tasks, target_per_cta, max_replicas);
 
     std::vector<std::vector<std::uint8_t>> seen(size_t(masks));
     for (int m = 0; m < masks; ++m)
         seen[size_t(m)].assign(size_t(tasks[size_t(m)]), std::uint8_t(0));
 
-    for (const Desc& d : descs) {
+    for (const MaskShardLowBatchDesc& d : descs) {
         const std::uint64_t total = tasks[d.mask];
         for (int w = 0; w < warps; ++w) {
             std::uint64_t task = std::uint64_t(d.replica) * std::uint64_t(warps)
@@ -73,6 +66,8 @@ int main(int argc, char** argv) {
               << " warps_per_cta=" << warps
               << " max_replicas=" << max_replicas
               << " descriptors=" << descs.size()
+              << " descriptor_bytes="
+              << descs.size() * sizeof(MaskShardLowBatchDesc)
               << " total_tasks=" << total_tasks
               << " exact_cover=1\n";
     return 0;
