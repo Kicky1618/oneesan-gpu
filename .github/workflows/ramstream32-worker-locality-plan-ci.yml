@@ -5,6 +5,7 @@ on:
     paths:
       - 'src/cuda/gridfp/ramstream32_cpu_low_domain_worker_locality.hpp'
       - 'src/cuda/gridfp/ramstream32_cpu_low_domain_worker_coalesce.hpp'
+      - 'src/cuda/gridfp/ramstream32_cpu_low_domain_worker_unique_coalesce.hpp'
       - 'src/cuda/gridfp/probes/ramstream32_cpu_low_domain_worker_locality_selftest.cu'
       - 'src/cuda/gridfp/probes/ramstream32_cpu_low_domain_worker_locality_plan.cu'
       - 'scripts/build/gridfp-ramstream32-cpu-low-domain-worker-locality-plan.sh'
@@ -15,6 +16,7 @@ on:
     paths:
       - 'src/cuda/gridfp/ramstream32_cpu_low_domain_worker_locality.hpp'
       - 'src/cuda/gridfp/ramstream32_cpu_low_domain_worker_coalesce.hpp'
+      - 'src/cuda/gridfp/ramstream32_cpu_low_domain_worker_unique_coalesce.hpp'
       - 'src/cuda/gridfp/probes/ramstream32_cpu_low_domain_worker_locality_selftest.cu'
       - 'src/cuda/gridfp/probes/ramstream32_cpu_low_domain_worker_locality_plan.cu'
       - 'scripts/build/gridfp-ramstream32-cpu-low-domain-worker-locality-plan.sh'
@@ -34,10 +36,11 @@ jobs:
         run: |
           bash -n scripts/build/gridfp-ramstream32-cpu-low-domain-worker-locality-plan.sh
           bash -n scripts/bench/ramstream32-cpu-low-domain-worker-locality-plan-sweep.sh
+          grep -Fq 'global-unique-neighbor-coalesce-v5.27-plan' scripts/bench/ramstream32-cpu-low-domain-worker-locality-plan-sweep.sh
           grep -Fq 'neighbor-page-coalesce-under-domain-cap-v5.26-plan' scripts/bench/ramstream32-cpu-low-domain-worker-locality-plan-sweep.sh
           grep -Fq 'contiguous-under-lpt-cap-v5.25-plan' scripts/bench/ramstream32-cpu-low-domain-worker-locality-plan-sweep.sh
-          grep -Fq 'worker-coalesce max-worker regression' scripts/bench/ramstream32-cpu-low-domain-worker-locality-plan-sweep.sh
-          grep -Fq 'v5.26_cross_worker_2m_delta=' scripts/bench/ramstream32-cpu-low-domain-worker-locality-plan-sweep.sh
+          grep -Fq 'v5.27 exact unique objective regression' scripts/bench/ramstream32-cpu-low-domain-worker-locality-plan-sweep.sh
+          grep -Fq 'v5.26_better_basin' scripts/bench/ramstream32-cpu-low-domain-worker-locality-plan-sweep.sh
       - name: Compile W10 worker locality probes
         shell: bash
         run: |
@@ -57,22 +60,27 @@ jobs:
           grep -Fq 'cpu-low-domain-worker-locality-selftest OK' /tmp/worker-locality-selftest.txt
           grep -Fq 'synthetic_feasible=1 synthetic_fallback=1' /tmp/worker-locality-selftest.txt
           grep -Fq 'synthetic_noncontiguous=1' /tmp/worker-locality-selftest.txt
-          grep -Fq 'coalesce_transitions_before=' /tmp/worker-locality-selftest.txt
-          grep -Fq 'coalesce_transitions_after=' /tmp/worker-locality-selftest.txt
+          grep -Fq 'synthetic_unique_delta=1' /tmp/worker-locality-selftest.txt
+          grep -Fq 'unique_pages_2m_before=' /tmp/worker-locality-selftest.txt
+          grep -Fq 'unique_pages_2m_after=' /tmp/worker-locality-selftest.txt
           grep -Fq 'cpu_low_domain_worker_locality objective=contiguous-under-lpt-cap-v5.25-plan' /tmp/worker-locality-selftest.log
           grep -Fq 'cpu_low_domain_worker_coalesce objective=neighbor-page-coalesce-under-domain-cap-v5.26-plan' /tmp/worker-locality-selftest.log
+          grep -Fq 'cpu_low_domain_worker_unique_coalesce objective=global-unique-neighbor-coalesce-v5.27-plan' /tmp/worker-locality-selftest.log
       - name: Validate structural page plan
         shell: bash
         run: |
           build/ramstream32_cpu_low_domain_worker_locality_plan 9 4 2 \
             > /tmp/worker-locality-plan.txt 2> /tmp/worker-locality-plan.log
           grep -Fq 'cpu_low_domain_worker_locality_plan OK' /tmp/worker-locality-plan.txt
-          grep -Fq 'objective=neighbor-page-coalesce-under-domain-cap-v5.26-plan' /tmp/worker-locality-plan.txt
+          grep -Fq 'objective=global-unique-neighbor-coalesce-v5.27-plan' /tmp/worker-locality-plan.txt
+          grep -Fq 'local_objective=neighbor-page-coalesce-under-domain-cap-v5.26-plan' /tmp/worker-locality-plan.txt
           grep -Fq 'parent_objective=contiguous-under-lpt-cap-v5.25-plan' /tmp/worker-locality-plan.txt
           grep -Fq 'baseline_cross_worker_pages_2m=' /tmp/worker-locality-plan.txt
           grep -Fq 'locality_cross_worker_pages_2m=' /tmp/worker-locality-plan.txt
           grep -Fq 'coalesced_cross_worker_pages_2m=' /tmp/worker-locality-plan.txt
-          grep -Fq 'coalesce_candidate_evaluations=' /tmp/worker-locality-plan.txt
+          grep -Fq 'unique_cross_worker_pages_2m=' /tmp/worker-locality-plan.txt
+          grep -Fq 'unique_internal_pages_2m_before=' /tmp/worker-locality-plan.txt
+          grep -Fq 'unique_internal_pages_2m_after=' /tmp/worker-locality-plan.txt
           grep -Fq 'cross_domain_pages_2m=' /tmp/worker-locality-plan.txt
           python3 - <<'PY'
           fields = {}
@@ -83,14 +91,20 @@ jobs:
           base = int(fields['baseline_max_worker_cells'])
           loc = int(fields['locality_max_worker_cells'])
           coal = int(fields['coalesced_max_worker_cells'])
+          uniq = int(fields['unique_max_worker_cells'])
           assert coal <= loc <= base
-          p0=(int(fields['coalesce_penalty_2m_before']),
-              int(fields['coalesce_penalty_4k_before']),
-              int(fields['coalesce_owner_transitions_before']))
-          p1=(int(fields['coalesce_penalty_2m_after']),
-              int(fields['coalesce_penalty_4k_after']),
-              int(fields['coalesce_owner_transitions_after']))
-          assert p1 <= p0
+          assert uniq <= loc
+          l=(int(fields['locality_cross_worker_pages_2m']),
+             int(fields['locality_cross_worker_pages_4k']),
+             int(fields['locality_worker_owner_transitions']))
+          u=(int(fields['unique_cross_worker_pages_2m']),
+             int(fields['unique_cross_worker_pages_4k']),
+             int(fields['unique_worker_owner_transitions']))
+          assert u <= l
+          assert int(fields['unique_internal_pages_2m_before']) == l[0]
+          assert int(fields['unique_internal_pages_4k_before']) == l[1]
+          assert int(fields['unique_internal_pages_2m_after']) == u[0]
+          assert int(fields['unique_internal_pages_4k_after']) == u[1]
           PY
       - name: Check documentation
         shell: bash
@@ -98,8 +112,8 @@ jobs:
           d=docs/ramstream32-cpu-low-worker-locality.md
           grep -Fq 'v5.25' "$d"
           grep -Fq 'v5.26' "$d"
-          grep -Fq 'contiguous-under-lpt-cap' "$d"
-          grep -Fq 'neighbor-page-coalesce-under-domain-cap' "$d"
+          grep -Fq 'v5.27' "$d"
+          grep -Fq 'global-unique-neighbor-coalesce' "$d"
           grep -Fq 'cross-worker' "$d"
           grep -Fq 'max worker load cannot increase' "$d"
           grep -Fq 'ramstream32-cpu-low-domain-worker-locality-plan-sweep.sh' "$d"
