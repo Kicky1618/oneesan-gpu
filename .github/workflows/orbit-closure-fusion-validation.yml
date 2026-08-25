@@ -10,6 +10,7 @@ on:
       - 'src/cuda/gridfp/ramstream32_bucket_orbit_closure_fused.cuh'
       - 'src/cuda/gridfp/ramstream32_bucket_orbit_closure_checked.cuh'
       - 'src/cuda/gridfp/ramstream32_bucket_orbit_closure_preflight.cuh'
+      - 'src/cuda/gridfp/ramstream32_reverse_bucket_derive.hpp'
       - 'src/cuda/gridfp/probes/ramstream32_orbit_closure_fusion_plan.cu'
       - 'src/cuda/gridfp/probes/ramstream32_orbit_closure_attach_plan.cu'
       - 'src/cuda/gridfp/probes/ramstream32_orbit_closure_ordinal_plan.cu'
@@ -34,6 +35,7 @@ on:
       - 'src/cuda/gridfp/ramstream32_bucket_orbit_closure_fused.cuh'
       - 'src/cuda/gridfp/ramstream32_bucket_orbit_closure_checked.cuh'
       - 'src/cuda/gridfp/ramstream32_bucket_orbit_closure_preflight.cuh'
+      - 'src/cuda/gridfp/ramstream32_reverse_bucket_derive.hpp'
       - 'src/cuda/gridfp/probes/ramstream32_orbit_closure_fusion_plan.cu'
       - 'src/cuda/gridfp/probes/ramstream32_orbit_closure_attach_plan.cu'
       - 'src/cuda/gridfp/probes/ramstream32_orbit_closure_ordinal_plan.cu'
@@ -69,6 +71,7 @@ jobs:
           grep -Fq 'orbit-closure-attach-plan OK W=10' /tmp/orbit-closure-attach.txt
           grep -Fq 'kernels_per_position=1' /tmp/orbit-closure-attach.txt
           grep -Fq 'source_disjoint=1' /tmp/orbit-closure-attach.txt
+          grep -Fq 'jblock_redundant_bits=6 OK' /tmp/orbit-closure-attach.txt
       - name: Compile and run W10 closure ordinal profile
         shell: bash
         run: |
@@ -119,6 +122,7 @@ jobs:
           grep -Fq 'kernels_per_position=1' /tmp/snake-onepass.txt
           grep -Fq 'transposes_per_residue=10' /tmp/snake-onepass.txt
           grep -Fq 'orbit_main_write_overlap=0 OK' /tmp/snake-onepass.txt
+          grep -Fq 'jblock_redundant_bits=6 OK' /tmp/snake-onepass.txt
       - name: Compile and run W10 one-pass pipeline batch plan
         shell: bash
         run: |
@@ -131,6 +135,7 @@ jobs:
           grep -Fq 'kernels_per_position=1' /tmp/snake-onepass-batch.txt
           grep -Fq 'transpose_staging_multiplier=2' /tmp/snake-onepass-batch.txt
           grep -Fq 'orbit_main_write_overlap=0 OK' /tmp/snake-onepass-batch.txt
+          grep -Fq 'jblock_redundant_bits=6 OK' /tmp/snake-onepass-batch.txt
       - name: Compile W28 closure ordinal profile
         shell: bash
         run: |
