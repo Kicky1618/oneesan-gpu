@@ -1,0 +1,232 @@
+#include <cuda_runtime.h>
+
+#include <algorithm>
+#include <cstdint>
+#include <cstdlib>
+#include <iomanip>
+#include <iostream>
+#include <numeric>
+#include <unordered_set>
+#include <vector>
+
+#define RAMSTREAM_BIDESC_COMPACT_NO_MAIN
+#include "../oneesan_cuda_gridfp_ramstream32_factorized_bidesc_compact.cu"
+#undef RAMSTREAM_BIDESC_COMPACT_NO_MAIN
+#include "../ramstream32_cpu_low_domain_page.hpp"
+#include "../ramstream32_cpu_low_domain_worker_locality.hpp"
+
+struct OwnerPageMetrics {
+    uint64_t cross_4k = 0;
+    uint64_t cross_2m = 0;
+    uint64_t owner_transitions = 0;
+};
+
+static void add_owner_boundary(
+    std::unordered_set<uint64_t>& p4,
+    std::unordered_set<uint64_t>& p2,
+    uint64_t boundary_byte,
+    uint64_t array_tag
+) {
+    constexpr uint64_t PAGE4K = 4096ull;
+    constexpr uint64_t PAGE2M = 2ull << 20;
+    constexpr uint64_t TAG = 1ull << 63;
+    uint64_t tag = array_tag ? TAG : 0;
+    if (boundary_byte % PAGE4K) p4.insert(tag | (boundary_byte / PAGE4K));
+    if (boundary_byte % PAGE2M) p2.insert(tag | (boundary_byte / PAGE2M));
+}
+
+static void scan_owner_pages(
+    const std::vector<StorageBlock>& blocks,
+    const StorageFactorHost& storage,
+    const std::vector<int>& owner,
+    uint64_t array_tag,
+    std::unordered_set<uint64_t>& p4,
+    std::unordered_set<uint64_t>& p2,
+    uint64_t& transitions
+) {
+    constexpr int S = FactorTablesHost::STRIDE;
+    const uint32_t nmasks = uint32_t(1) << HIGH_LUT_K;
+    for (const StorageBlock& sb : blocks) {
+        if (!sb.valid || !sb.rows || !sb.cols) continue;
+        bool have_prev = false;
+        uint64_t prev_end = 0;
+        int prev_owner = -1;
+        for (uint32_t mask = 0; mask < nmasks; ++mask) {
+            size_t ix = size_t(mask) * S + sb.he;
+            uint32_t rows = G_FACTOR.high_mask_off[ix + 1] - G_FACTOR.high_mask_off[ix];
+            if (!rows) continue;
+            if (owner[mask] < 0) {
+                std::cerr << "worker-locality page plan missing owner mask=" << mask << '\n';
+                std::exit(176);
+            }
+            uint32_t row0 = storage.high_mask_begin[
+                size_t(mask) * StorageFactorHost::S + sb.he];
+            uint64_t begin_elem = uint64_t(sb.off) + uint64_t(row0) * sb.cols;
+            uint64_t begin_byte = begin_elem * sizeof(Count);
+            uint64_t end_byte = begin_byte + uint64_t(rows) * sb.cols * sizeof(Count);
+            if (have_prev) {
+                if (begin_byte != prev_end) {
+                    std::cerr << "worker-locality storage mask ranges not contiguous\n";
+                    std::exit(177);
+                }
+                if (owner[mask] != prev_owner) {
+                    ++transitions;
+                    add_owner_boundary(p4, p2, begin_byte, array_tag);
+                }
+            }
+            have_prev = true;
+            prev_end = end_byte;
+            prev_owner = owner[mask];
+        }
+    }
+}
+
+static OwnerPageMetrics owner_page_metrics(
+    const StorageLayout& layout,
+    const StorageFactorHost& storage,
+    const std::vector<int>& owner
+) {
+    std::unordered_set<uint64_t> p4, p2;
+    uint64_t transitions = 0;
+    scan_owner_pages(
+        layout.main_blocks, storage, owner, 0, p4, p2, transitions);
+    scan_owner_pages(
+        layout.block_blocks, storage, owner, 1, p4, p2, transitions);
+    return {uint64_t(p4.size()), uint64_t(p2.size()), transitions};
+}
+
+static std::vector<int> worker_owner(
+    const CpuLowSparsePersistentPool& pool,
+    const std::vector<CpuLowJob>& jobs
+) {
+    std::vector<int> owner(size_t(1) << HIGH_LUT_K, -1);
+    for (int w = 0; w < pool.workers; ++w) {
+        for (size_t q : pool.sticky_worker_jobs[size_t(w)]) {
+            uint32_t mask = jobs[q].mask;
+            if (owner[mask] >= 0) {
+                std::cerr << "worker-locality duplicate mask owner\n";
+                std::exit(178);
+            }
+            owner[mask] = w;
+        }
+    }
+    return owner;
+}
+
+static std::vector<int> domain_owner(
+    const std::vector<int>& worker, int domain_size
+) {
+    std::vector<int> out(worker.size(), -1);
+    for (size_t i = 0; i < worker.size(); ++i)
+        if (worker[i] >= 0) out[i] = worker[i] / domain_size;
+    return out;
+}
+
+static uint64_t max_cells(const CpuLowSparsePersistentPool& pool) {
+    return pool.sticky_worker_cells.empty() ? 0
+        : *std::max_element(
+            pool.sticky_worker_cells.begin(), pool.sticky_worker_cells.end());
+}
+
+static uint64_t total_cells(const CpuLowSparsePersistentPool& pool) {
+    return std::accumulate(
+        pool.sticky_worker_cells.begin(), pool.sticky_worker_cells.end(), uint64_t(0));
+}
+
+int main(int argc, char** argv) {
+    int n = argc > 1 ? std::atoi(argv[1]) : TARGET_W - 1;
+    int workers = argc > 2 ? std::max(1, std::atoi(argv[2])) : 64;
+    int domain_size = argc > 3 ? std::atoi(argv[3]) : 32;
+    if (n < 2 || n + 1 != TARGET_W || n + 1 > MAXW) return 1;
+    if (workers <= 0 || domain_size <= 0 || domain_size > workers) return 1;
+    if constexpr (LOW_LUT_K + HIGH_LUT_K != TARGET_W - 1) return 1;
+
+    build_full_dp();
+    G_FACTOR = build_factor_tables();
+    StorageFactorHost storage = build_storage_factor_tables(G_FACTOR);
+    StorageLayout layout = build_storage_layout(storage);
+    LowDescHost lowdesc = build_low_descriptors(storage, layout);
+    LowOrbitHost orbit = build_cpu_low_orbit(storage, layout, lowdesc);
+    CpuLowSparseHost sparse = build_cpu_low_sparse(storage, layout, lowdesc, orbit);
+    WindowPlan low_wp = make_direct2d_window(false);
+    auto jobs = make_cpu_low_jobs(n + 1, low_wp);
+
+    CpuLowSparsePersistentPool baseline(
+        workers, CPU_LOW_SCHEDULE_DOMAIN, domain_size, true);
+    CpuLowSparsePersistentPool locality(
+        workers, CPU_LOW_SCHEDULE_DOMAIN, domain_size, true);
+    baseline.prepare_static_schedule(jobs, sparse);
+    locality.prepare_static_schedule(jobs, sparse);
+
+    CpuLowDomainPageTieStats baseline_page = cpu_low_apply_domain_page_tiebreak(
+        baseline, jobs, sparse, storage, layout);
+    CpuLowDomainPageTieStats locality_page = cpu_low_apply_domain_page_tiebreak(
+        locality, jobs, sparse, storage, layout);
+    CpuLowDomainWorkerLocalityStats loc =
+        cpu_low_apply_domain_worker_locality(locality, jobs, sparse);
+
+    uint64_t baseline_total = total_cells(baseline);
+    uint64_t locality_total = total_cells(locality);
+    if (baseline_total != locality_total) {
+        std::cerr << "worker-locality total-cell mismatch\n";
+        return 2;
+    }
+
+    uint64_t baseline_max = max_cells(baseline);
+    uint64_t locality_max = max_cells(locality);
+    if (locality_max > baseline_max) {
+        std::cerr << "worker-locality max-worker regression\n";
+        return 3;
+    }
+
+    auto base_worker_owner = worker_owner(baseline, jobs);
+    auto loc_worker_owner = worker_owner(locality, jobs);
+    OwnerPageMetrics base_worker_pages = owner_page_metrics(
+        layout, storage, base_worker_owner);
+    OwnerPageMetrics loc_worker_pages = owner_page_metrics(
+        layout, storage, loc_worker_owner);
+    OwnerPageMetrics base_domain_pages = owner_page_metrics(
+        layout, storage, domain_owner(base_worker_owner, domain_size));
+    OwnerPageMetrics loc_domain_pages = owner_page_metrics(
+        layout, storage, domain_owner(loc_worker_owner, domain_size));
+
+    if (base_domain_pages.cross_2m != loc_domain_pages.cross_2m
+        || base_domain_pages.cross_4k != loc_domain_pages.cross_4k
+        || base_domain_pages.owner_transitions != loc_domain_pages.owner_transitions) {
+        std::cerr << "worker-locality changed domain boundaries\n";
+        return 4;
+    }
+
+    double avg = workers ? double(baseline_total) / workers : 0.0;
+    std::cout << std::setprecision(12)
+              << "cpu_low_domain_worker_locality_plan OK"
+              << " objective=contiguous-under-lpt-cap-v5.25-plan"
+              << " n=" << n
+              << " workers=" << workers
+              << " domain_size=" << domain_size
+              << " domains=" << loc.domains
+              << " total_cells=" << baseline_total
+              << " baseline_max_worker_cells=" << baseline_max
+              << " locality_max_worker_cells=" << locality_max
+              << " baseline_imbalance=" << (avg ? double(baseline_max) / avg : 0.0)
+              << " locality_imbalance=" << (avg ? double(locality_max) / avg : 0.0)
+              << " converted_domains=" << loc.converted_domains
+              << " fallback_domains=" << loc.fallback_domains
+              << " unchanged_trivial_domains=" << loc.unchanged_trivial_domains
+              << " converted_jobs=" << loc.converted_jobs
+              << " contiguous_worker_segments=" << loc.contiguous_worker_segments
+              << " baseline_cross_worker_pages_2m=" << base_worker_pages.cross_2m
+              << " locality_cross_worker_pages_2m=" << loc_worker_pages.cross_2m
+              << " baseline_cross_worker_pages_4k=" << base_worker_pages.cross_4k
+              << " locality_cross_worker_pages_4k=" << loc_worker_pages.cross_4k
+              << " baseline_worker_owner_transitions=" << base_worker_pages.owner_transitions
+              << " locality_worker_owner_transitions=" << loc_worker_pages.owner_transitions
+              << " cross_domain_pages_2m=" << base_domain_pages.cross_2m
+              << " cross_domain_pages_4k=" << base_domain_pages.cross_4k
+              << " cross_domain_owner_transitions=" << base_domain_pages.owner_transitions
+              << " baseline_page_moves=" << baseline_page.boundary_moves
+              << " locality_page_moves=" << locality_page.boundary_moves
+              << " worker_locality_build_s=" << loc.build_s
+              << '\n';
+    return 0;
+}
