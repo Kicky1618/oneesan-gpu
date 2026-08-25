@@ -6,10 +6,12 @@ on:
       - 'src/cuda/gridfp/ramstream32_bucket_reverse_split18.hpp'
       - 'src/cuda/gridfp/ramstream32_bucket_reverse_split18.cuh'
       - 'src/cuda/gridfp/ramstream32_bucket_reverse_split18_alias.cuh'
+      - 'src/cuda/gridfp/ramstream32_bucket_reverse_split18_direct.hpp'
       - 'src/cuda/gridfp/ramstream32_bucket_reverse_split18_stream.cuh'
       - 'src/cuda/gridfp/ramstream32_bucket_reverse_closure_only.cuh'
       - 'src/cuda/gridfp/ramstream32_bucket_orbit_closure_hybrid18_graph.cuh'
       - 'src/cuda/gridfp/probes/ramstream32_reverse_split18_plan.cu'
+      - 'src/cuda/gridfp/probes/ramstream32_reverse_split18_direct_plan.cu'
       - 'src/cuda/gridfp/probes/ramstream32_bucket_reverse_split18_selftest.cu'
       - 'src/cuda/b300/oneesan_cuda_gridfp_b300_bucket_snake_onepass_hybrid18*.cu'
       - 'scripts/build/b300-bucket-snake-hybrid18-graph-batch.sh'
@@ -34,6 +36,16 @@ jobs:
           build/reverse_split18_plan_w10 | tee /tmp/reverse-split18-plan.txt
           grep -Fq 'reverse-split18-plan OK W=10' /tmp/reverse-split18-plan.txt
           grep -Fq 'kind_bits=0 jblock_bits=0 bytes_per_orbit=1' /tmp/reverse-split18-plan.txt
+      - name: Compile and compare W10 direct reverse split18 plan
+        shell: bash
+        run: |
+          nvcc -O3 -std=c++17 -lineinfo -arch=sm_80 \
+            -DTARGET_W=10 -DLOW_LUT_K=5 -DHIGH_LUT_K=4 \
+            src/cuda/gridfp/probes/ramstream32_reverse_split18_direct_plan.cu \
+            -o build/reverse_split18_direct_plan_w10
+          build/reverse_split18_direct_plan_w10 | tee /tmp/reverse-split18-direct-plan.txt
+          grep -Fq 'reverse-split18-direct-plan OK W=10' /tmp/reverse-split18-direct-plan.txt
+          grep -Fq 'legacy_payload_released=1' /tmp/reverse-split18-direct-plan.txt
       - name: Compile W10 reverse split18 CUDA selftest
         shell: bash
         run: |
