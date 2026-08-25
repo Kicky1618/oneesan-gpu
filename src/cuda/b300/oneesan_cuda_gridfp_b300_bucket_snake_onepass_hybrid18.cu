@@ -4,8 +4,10 @@
 #include "../gridfp/ramstream32_bucket_orbit_closure_packed18.cuh"
 #include "../gridfp/ramstream32_bucket_reverse_split18_alias.cuh"
 #include "../gridfp/ramstream32_bucket_reverse_closure_only.cuh"
+#include "../gridfp/ramstream32_reverse_build_release.hpp"
 
 #define BSN_REVERSE_FUSED_TABLES_TYPE ReverseBucketFusedClosureOnlyDirectTables
+#define build_reverse_bucket_atomic build_reverse_bucket_atomic_release_inputs
 
 #define BucketForwardOrbitClosureAttachHost BucketForwardOrbitClosureAttach18Host
 #define BucketReverseOrbitClosureAttachHost ReverseSplit18Host
