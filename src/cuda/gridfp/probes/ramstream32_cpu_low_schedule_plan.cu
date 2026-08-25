@@ -357,13 +357,23 @@ int main(int argc, char** argv) {
               << " contiguous_cross_domain_auth_page_fraction_2m=" << contiguous_domain_pages.cross_auth_2m
               << " hybrid_domain_refine=" << int(domain_refine)
               << " hybrid_domain_page_tiebreak=" << int(domain_page_tiebreak)
+              << " hybrid_domain_page_objective="
+              << (domain_page_tiebreak ? "max_guard-page-sum-v5.23" : "disabled")
               << " hybrid_domain_active_domains=" << domain_pool.domain_active_domains
               << " hybrid_domain_optimal_per_worker_cap=" << domain_pool.domain_normalized_cap
               << " hybrid_domain_outer_normalized_cap=" << domain_pool.domain_normalized_cap
               << " hybrid_domain_refined_boundaries=" << domain_pool.domain_refined_boundaries
               << " hybrid_domain_refined_job_moves=" << domain_pool.domain_refined_job_moves
+              << " hybrid_domain_page_candidate_evaluations=" << page_tie_stats.candidate_evaluations
+              << " hybrid_domain_page_max_guard_rejections=" << page_tie_stats.max_guard_rejections
+              << " hybrid_domain_page_improving_moves=" << page_tie_stats.page_improving_moves
+              << " hybrid_domain_page_tie_load_moves=" << page_tie_stats.page_tie_load_moves
+              << " hybrid_domain_page_improve_sum_increase_moves="
+              << page_tie_stats.page_improve_sum_increase_moves
               << " hybrid_domain_page_boundary_moves=" << page_tie_stats.boundary_moves
               << " hybrid_domain_page_moved_jobs=" << page_tie_stats.moved_jobs
+              << " hybrid_domain_page_max_worker_cells_before=" << page_tie_stats.max_worker_cells_before
+              << " hybrid_domain_page_max_worker_cells_after=" << page_tie_stats.max_worker_cells_after
               << " hybrid_domain_page_penalty_2m_before=" << page_tie_stats.penalty_2m_before
               << " hybrid_domain_page_penalty_2m_after=" << page_tie_stats.penalty_2m_after
               << " hybrid_domain_page_penalty_4k_before=" << page_tie_stats.penalty_4k_before
