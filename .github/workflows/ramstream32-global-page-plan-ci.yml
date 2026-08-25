@@ -36,6 +36,7 @@ jobs:
           bash -n scripts/bench/ramstream32-cpu-low-global-page-plan-sweep.sh
           grep -Fq 'global-unique-max-guard-page-sum-v5.24-plan' scripts/bench/ramstream32-cpu-low-global-page-plan-sweep.sh
           grep -Fq 'global unique page regression' scripts/bench/ramstream32-cpu-low-global-page-plan-sweep.sh
+          grep -Fq 'classification=global_beats_local' scripts/bench/ramstream32-cpu-low-global-page-plan-sweep.sh
       - name: Compile W10 global page probe
         shell: bash
         run: |
@@ -77,6 +78,9 @@ jobs:
       - name: Check documentation
         shell: bash
         run: |
-          d=docs/ramstream32-cpu-low-scheduling.md
-          grep -Fq 'possible later global-unique optimizer' "$d"
-          grep -Fq 'page_improve_sum_increase_moves' "$d"
+          p=docs/ramstream32-cpu-low-page-aware.md
+          grep -Fq 'v5.24 global-unique research optimizer' "$p"
+          grep -Fq 'gridfp-ramstream32-cpu-low-global-page-plan.sh' "$p"
+          grep -Fq 'ramstream32-cpu-low-global-page-plan-sweep.sh' "$p"
+          grep -Fq 'global_beats_local' "$p"
+          grep -Fq 'page_improve_sum_increase_moves' "$p"
