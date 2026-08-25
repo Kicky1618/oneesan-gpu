@@ -17,13 +17,8 @@
 #error "packed LOW group config currently requires uint32 warp-row ordinals"
 #endif
 
-// v0.38: all mutable per-LOW-group device metadata used by the active
-// warp-row orbit + exact LOW closure kernels lives in one constant-memory
-// object.  Older v0.37 setup issued 16 cudaMemcpyToSymbol calls per group:
-// 12 base factor-group symbols, 2 compact-task symbols, and 2 warp-row symbols.
-// The active kernels do not consume D_MAIN_DP/D_BLOCK_DP, fixed/occ, or
-// D_F_FIX_LOW, so do not refresh those legacy symbols for LOW execution.
-// HIGH execution remains unchanged and continues using the legacy D_F_* set.
+// Mutable per-LOW-group metadata consumed by the active packed kernels.  HIGH
+// execution remains unchanged and continues using the legacy D_F_* constants.
 struct MaskShardLowGroupPackedConfig {
     FBlock main_blocks[64];
     FBlock block_blocks[32];
@@ -35,10 +30,15 @@ struct MaskShardLowGroupPackedConfig {
     std::uint32_t low_count[HIGH_LUT_K + 2];
     std::uint32_t low_chunks[HIGH_LUT_K + 2];
 #ifdef MASKSHARD_LOW_CLOSURE_PACKED_PREFIX
-    // Exact LOW closure warp-task prefix for every LOW position.  v0.41 moves
-    // this from a serial per-CTA build into the existing once-per-group symbol
-    // upload.  n=27 adds only 14*65*4 = 3640 bytes of constant memory.
+    // v0.41: exact LOW closure warp-task prefixes.  n=27: 3640 bytes.
     std::uint32_t closure_prefix[LOW_LUT_K][65];
+#endif
+#ifdef MASKSHARD_LOW_CLOSURE_PACKED_META
+    // v0.42: row-resolved warp-uniform closure metadata.  These values used to
+    // come from global pointer tables inside every closure warp iteration.
+    std::uint32_t closure_begin[LOW_LUT_K][65];
+    std::uint32_t closure_selected[LOW_LUT_K][65];
+    std::uint32_t high_mask_off[HIGH_LUT_K + 2];
 #endif
 };
 
@@ -49,9 +49,9 @@ __device__ __constant__ MaskShardLowGroupPackedConfig D_MS_LOW_GROUP_PACKED;
 #error "packed LOW closure prefix requires compact row-depth closure metadata"
 #endif
 
-// Capture only the host arrays required to build exact closure task prefixes.
-// The original tables continue to be returned to the shared solver and installed
-// on every GPU as before; this is host-only metadata and adds no HBM residency.
+// Capture only host arrays needed to construct exact closure plans.  The normal
+// device tables are still built/installed by the shared solver; this copy is
+// host-only and consumes no GPU HBM.
 struct MaskShardLowClosurePrefixHostCapture {
     std::vector<std::uint32_t> block_off;
     std::vector<std::uint32_t> compact_active_count;
@@ -205,5 +205,20 @@ __device__ __forceinline__ std::uint32_t maskshard_low_packed_closure_prefix(
     int pi, int i
 ) {
     return D_MS_LOW_GROUP_PACKED.closure_prefix[pi][i];
+}
+#endif
+#ifdef MASKSHARD_LOW_CLOSURE_PACKED_META
+__device__ __forceinline__ std::uint32_t maskshard_low_packed_closure_begin(
+    int pi, int bid
+) {
+    return D_MS_LOW_GROUP_PACKED.closure_begin[pi][bid];
+}
+__device__ __forceinline__ std::uint32_t maskshard_low_packed_closure_selected(
+    int pi, int bid
+) {
+    return D_MS_LOW_GROUP_PACKED.closure_selected[pi][bid];
+}
+__device__ __forceinline__ std::uint32_t maskshard_low_packed_high_mask_off(int h) {
+    return D_MS_LOW_GROUP_PACKED.high_mask_off[h];
 }
 #endif
