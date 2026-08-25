@@ -57,10 +57,11 @@ int main(int argc,char**argv){
     size_t reverse_meta=reverse.bytes();
     size_t metadata_bytes=forward_meta+reverse_meta;
     size_t chunk_bytes=chunk_mib<<20;
+    size_t staging_bytes=chunk_bytes*size_t(BUCKET_TRANSPOSE_STAGING_MULTIPLIER);
     uint64_t max_gpu=0,min_gpu=~uint64_t(0),peer_per_transpose=0,max_need=0;
     for(int g=0;g<NG;++g){
         max_gpu=std::max(max_gpu,tplan.gpu_bytes[g]);min_gpu=std::min(min_gpu,tplan.gpu_bytes[g]);
-        max_need=std::max<uint64_t>(max_need,tplan.gpu_bytes[g]+metadata_bytes+chunk_bytes);
+        max_need=std::max<uint64_t>(max_need,tplan.gpu_bytes[g]+metadata_bytes+staging_bytes);
         for(int s=g+1;s<NG;++s)peer_per_transpose+=2ull*tplan.slot[g][s].capacity_bytes;
     }
     long double snake_peer_tib=static_cast<long double>(peer_per_transpose)*W/static_cast<long double>(1ULL<<40);
@@ -73,11 +74,14 @@ int main(int argc,char**argv){
              <<" reverse_metadata_mib="<<double(reverse_meta)/double(1<<20)
              <<" metadata_mib_per_gpu="<<double(metadata_bytes)/double(1<<20)
              <<" transpose_chunk_mib="<<chunk_mib
+             <<" transpose_staging_multiplier="<<BUCKET_TRANSPOSE_STAGING_MULTIPLIER
+             <<" transpose_staging_mib="<<double(staging_bytes)/double(1<<20)
              <<" max_device_need_gib="<<double(max_need)/double(1ULL<<30)
              <<" transposes_per_residue="<<W<<" standard_transposes="<<(2*W-1)
              <<" peer_gib_per_transpose="<<double(peer_per_transpose)/double(1ULL<<30)
              <<" snake_peer_tib_per_residue="<<double(snake_peer_tib)
-             <<" reverse_closure_atomic=0 forward_closure_atomic=0 prepare_s="<<prepare_s<<'\n';
+             <<" reverse_closure_atomic=0 forward_closure_atomic=0 pm_accum="<<GPU_DIRECT_PM_ACCUM
+             <<" prepare_s="<<prepare_s<<'\n';
     if(plan_only)return 0;
     if(mods.empty()){std::cerr<<"no moduli supplied\n";return 5;}
 
@@ -85,7 +89,7 @@ int main(int argc,char**argv){
     size_t reserve=bsn_env_mib("BUCKET_RESERVE_MIB",8192)<<20;
     for(int g=0;g<NG;++g){
         ck(cudaSetDevice(g),"snake batch mem set");size_t freeb=0,totalb=0;ck(cudaMemGetInfo(&freeb,&totalb),"snake batch mem info");
-        uint64_t need=tplan.gpu_bytes[g]+metadata_bytes+chunk_bytes+reserve;
+        uint64_t need=tplan.gpu_bytes[g]+metadata_bytes+staging_bytes+reserve;
         std::cerr<<"gpu"<<g<<" free_gib="<<double(freeb)/double(1ULL<<30)<<" need_with_reserve_gib="<<double(need)/double(1ULL<<30)<<'\n';
         if(need>freeb)return 7;
     }
