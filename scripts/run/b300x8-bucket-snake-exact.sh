@@ -17,7 +17,7 @@ if [[ "$ORBIT_CLOSURE_FUSE" != 0 && "$ORBIT_CLOSURE_FUSE" != 1 ]]; then
   exit 2
 fi
 if [[ "$ORBIT_CLOSURE_FUSE" == 1 ]]; then
-  SUFFIX="_onepass_${TRANSPOSE_MODE}"
+  SUFFIX="_${TRANSPOSE_MODE}"
   STEM="oneesan_cuda_gridfp_b300_bucket_snake_onepass_batch"
   WORK_TAG="onepass_${TRANSPOSE_MODE}"
 else
