@@ -12,6 +12,7 @@ on:
       - 'src/cuda/gridfp/ramstream32_bucket_orbit_closure_preflight.cuh'
       - 'src/cuda/gridfp/probes/ramstream32_orbit_closure_fusion_plan.cu'
       - 'src/cuda/gridfp/probes/ramstream32_orbit_closure_attach_plan.cu'
+      - 'src/cuda/gridfp/probes/ramstream32_orbit_closure_ordinal_plan.cu'
       - 'src/cuda/gridfp/probes/ramstream32_bucket_orbit_closure_fused_selftest.cu'
       - 'src/cuda/gridfp/probes/ramstream32_bucket_reverse_orbit_closure_fused_selftest.cu'
       - 'src/cuda/b300/oneesan_cuda_gridfp_b300_bucket_snake_onepass.cu'
@@ -35,6 +36,7 @@ on:
       - 'src/cuda/gridfp/ramstream32_bucket_orbit_closure_preflight.cuh'
       - 'src/cuda/gridfp/probes/ramstream32_orbit_closure_fusion_plan.cu'
       - 'src/cuda/gridfp/probes/ramstream32_orbit_closure_attach_plan.cu'
+      - 'src/cuda/gridfp/probes/ramstream32_orbit_closure_ordinal_plan.cu'
       - 'src/cuda/gridfp/probes/ramstream32_bucket_orbit_closure_fused_selftest.cu'
       - 'src/cuda/gridfp/probes/ramstream32_bucket_reverse_orbit_closure_fused_selftest.cu'
       - 'src/cuda/b300/oneesan_cuda_gridfp_b300_bucket_snake_onepass.cu'
@@ -67,6 +69,15 @@ jobs:
           grep -Fq 'orbit-closure-attach-plan OK W=10' /tmp/orbit-closure-attach.txt
           grep -Fq 'kernels_per_position=1' /tmp/orbit-closure-attach.txt
           grep -Fq 'source_disjoint=1' /tmp/orbit-closure-attach.txt
+      - name: Compile and run W10 closure ordinal profile
+        shell: bash
+        run: |
+          nvcc -O3 -std=c++17 -lineinfo -arch=sm_80 \
+            -DTARGET_W=10 -DLOW_LUT_K=5 -DHIGH_LUT_K=4 \
+            src/cuda/gridfp/probes/ramstream32_orbit_closure_ordinal_plan.cu \
+            -o build/orbit_closure_ordinal_w10
+          build/orbit_closure_ordinal_w10 | tee /tmp/orbit-closure-ordinal.txt
+          grep -Fq 'orbit-closure-ordinal-plan OK W=10' /tmp/orbit-closure-ordinal.txt
       - name: Compile W10 forward one-pass GPU selftest
         shell: bash
         run: |
@@ -120,6 +131,13 @@ jobs:
           grep -Fq 'kernels_per_position=1' /tmp/snake-onepass-batch.txt
           grep -Fq 'transpose_staging_multiplier=2' /tmp/snake-onepass-batch.txt
           grep -Fq 'orbit_main_write_overlap=0 OK' /tmp/snake-onepass-batch.txt
+      - name: Compile W28 closure ordinal profile
+        shell: bash
+        run: |
+          nvcc -O3 -std=c++17 -lineinfo -arch=sm_80 \
+            -DTARGET_W=28 -DLOW_LUT_K=14 -DHIGH_LUT_K=13 \
+            src/cuda/gridfp/probes/ramstream32_orbit_closure_ordinal_plan.cu \
+            -o build/orbit_closure_ordinal_w28
       - name: Compile W28 one-pass event production driver
         shell: bash
         run: |
