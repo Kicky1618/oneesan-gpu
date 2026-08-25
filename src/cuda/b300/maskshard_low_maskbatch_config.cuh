@@ -25,9 +25,6 @@
 static constexpr int MASKSHARD_LOW_BATCH_ROW_CAPS = (TARGET_W + 1) / 2;
 
 #ifdef MASKSHARD_LOW_MASKBATCH_REBUILD_DYNAMIC
-// v0.48: LOW-all active counts are mask-independent.  Publish the tiny
-// [cap][ending-height] table once per device; CTA kernels combine it with the
-// already-resident HIGH active-count table to rebuild exact orbit prefixes.
 __device__ __constant__ std::uint32_t
     D_MS_LOW_BATCH_LOW_COUNT[MASKSHARD_LOW_BATCH_ROW_CAPS + 1][HIGH_LUT_K + 2];
 #endif
@@ -41,9 +38,6 @@ struct MaskShardLowBatchDynamicConfig {
     std::uint32_t low_chunks[HIGH_LUT_K + 2];
     std::uint32_t closure_prefix[LOW_LUT_K][65];
 #ifndef MASKSHARD_LOW_MASKBATCH_COMPACT_DYNAMIC
-    // v0.43-v0.46 duplicate these mask-independent arrays for every mask/cap.
-    // v0.47 CTA-cached kernels stage them directly from the canonical LOW
-    // closure device tables instead, removing 2*LOW_LUT_K*65 uint32 words.
     std::uint32_t closure_begin[LOW_LUT_K][65];
     std::uint32_t closure_selected[LOW_LUT_K][65];
 #endif
@@ -54,9 +48,8 @@ struct MaskShardLowBatchDynamicConfig {
 struct MaskShardLowBatchDeviceDesc {
     std::uint16_t mask = 0;
     std::uint16_t local = 0;
-    std::uint8_t replica = 0;
-    std::uint8_t replicas = 0;
-    std::uint16_t reserved = 0;
+    std::uint16_t replica = 0;
+    std::uint16_t replicas = 0;
 };
 static_assert(sizeof(MaskShardLowBatchDeviceDesc) == 8,
               "LOW mask-batch device descriptor ABI changed");
@@ -113,11 +106,6 @@ struct MaskShardLowMaskBatchDeviceTables {
         }
 
 #ifdef MASKSHARD_LOW_MASKBATCH_FAST_REBUILD_SETUP
-        // v0.49: the independent exact task table has already traversed every
-        // mask/cap and is the descriptor planner's authority.  v0.48 additionally
-        // rebuilt the old packed config for each owned mask/cap only to compare
-        // the same totals.  Once kernels rebuild from canonical tables, that
-        // second construction is redundant; retain the basic table-domain check.
         if (tasks.masks != shard.masks) {
             std::cerr << "LOW mask-batch fast setup task-table mask mismatch got="
                       << tasks.masks << " expected=" << shard.masks << '\n';
@@ -241,7 +229,7 @@ struct MaskShardLowMaskBatchDeviceTables {
                 std::exit(352);
             }
             out.push_back({x.mask, local_of_mask[x.mask],
-                           x.replica, x.replicas, 0});
+                           x.replica, x.replicas});
         }
         return out;
     }
