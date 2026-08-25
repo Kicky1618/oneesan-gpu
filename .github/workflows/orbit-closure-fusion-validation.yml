@@ -1,0 +1,75 @@
+name: orbit closure fusion validation
+
+on:
+  push:
+    paths:
+      - 'src/cuda/gridfp/ramstream32_bucket_fused.cuh'
+      - 'src/cuda/gridfp/ramstream32_bucket_fused_pm.cuh'
+      - 'src/cuda/gridfp/ramstream32_bucket_reverse_fused.cuh'
+      - 'src/cuda/gridfp/ramstream32_bucket_reverse_fused_pm.cuh'
+      - 'src/cuda/gridfp/ramstream32_bucket_orbit_closure_fused.cuh'
+      - 'src/cuda/gridfp/probes/ramstream32_orbit_closure_fusion_plan.cu'
+      - 'src/cuda/gridfp/probes/ramstream32_orbit_closure_attach_plan.cu'
+      - 'src/cuda/gridfp/probes/ramstream32_bucket_orbit_closure_fused_selftest.cu'
+      - 'src/cuda/gridfp/probes/ramstream32_bucket_reverse_orbit_closure_fused_selftest.cu'
+      - '.github/workflows/orbit-closure-fusion-validation.yml'
+  pull_request:
+    paths:
+      - 'src/cuda/gridfp/ramstream32_bucket_fused.cuh'
+      - 'src/cuda/gridfp/ramstream32_bucket_fused_pm.cuh'
+      - 'src/cuda/gridfp/ramstream32_bucket_reverse_fused.cuh'
+      - 'src/cuda/gridfp/ramstream32_bucket_reverse_fused_pm.cuh'
+      - 'src/cuda/gridfp/ramstream32_bucket_orbit_closure_fused.cuh'
+      - 'src/cuda/gridfp/probes/ramstream32_orbit_closure_fusion_plan.cu'
+      - 'src/cuda/gridfp/probes/ramstream32_orbit_closure_attach_plan.cu'
+      - 'src/cuda/gridfp/probes/ramstream32_bucket_orbit_closure_fused_selftest.cu'
+      - 'src/cuda/gridfp/probes/ramstream32_bucket_reverse_orbit_closure_fused_selftest.cu'
+      - '.github/workflows/orbit-closure-fusion-validation.yml'
+  workflow_dispatch:
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    container: nvidia/cuda:12.8.1-devel-ubuntu22.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Compile and run W10 host attachment proof
+        shell: bash
+        run: |
+          mkdir -p build
+          nvcc -O3 -std=c++17 -lineinfo -arch=sm_80 \
+            -DTARGET_W=10 -DLOW_LUT_K=5 -DHIGH_LUT_K=4 \
+            src/cuda/gridfp/probes/ramstream32_orbit_closure_attach_plan.cu \
+            -o build/orbit_closure_attach_w10
+          build/orbit_closure_attach_w10 | tee /tmp/orbit-closure-attach.txt
+          grep -Fq 'orbit-closure-attach-plan OK W=10' /tmp/orbit-closure-attach.txt
+          grep -Fq 'kernels_per_position=1' /tmp/orbit-closure-attach.txt
+      - name: Compile W10 forward one-pass GPU selftest
+        shell: bash
+        run: |
+          nvcc -O3 -std=c++17 -lineinfo -arch=sm_80 \
+            -DTARGET_W=10 -DLOW_LUT_K=5 -DHIGH_LUT_K=4 \
+            src/cuda/gridfp/probes/ramstream32_bucket_orbit_closure_fused_selftest.cu \
+            -o build/bucket_orbit_closure_w10
+          build/bucket_orbit_closure_w10 | tee /tmp/orbit-closure-forward.txt
+          grep -Eq 'gpu-bucket-orbit-closure-selftest (OK W=10|SKIP no CUDA device)' /tmp/orbit-closure-forward.txt
+      - name: Compile W10 reverse one-pass GPU selftest
+        shell: bash
+        run: |
+          nvcc -O3 -std=c++17 -lineinfo -arch=sm_80 \
+            -DTARGET_W=10 -DLOW_LUT_K=5 -DHIGH_LUT_K=4 \
+            src/cuda/gridfp/probes/ramstream32_bucket_reverse_orbit_closure_fused_selftest.cu \
+            -o build/bucket_reverse_orbit_closure_w10
+          build/bucket_reverse_orbit_closure_w10 | tee /tmp/orbit-closure-reverse.txt
+          grep -Eq 'bucket-reverse-orbit-closure-selftest (OK W=10|SKIP no CUDA device)' /tmp/orbit-closure-reverse.txt
+      - name: Compile PM one-pass variants
+        shell: bash
+        run: |
+          nvcc -O3 -std=c++17 -lineinfo -arch=sm_80 \
+            -DTARGET_W=10 -DLOW_LUT_K=5 -DHIGH_LUT_K=4 -DGPU_DIRECT_PM_ACCUM=1 \
+            src/cuda/gridfp/probes/ramstream32_bucket_orbit_closure_fused_selftest.cu \
+            -o build/bucket_orbit_closure_pm_w10
+          nvcc -O3 -std=c++17 -lineinfo -arch=sm_80 \
+            -DTARGET_W=10 -DLOW_LUT_K=5 -DHIGH_LUT_K=4 -DGPU_DIRECT_PM_ACCUM=1 \
+            src/cuda/gridfp/probes/ramstream32_bucket_reverse_orbit_closure_fused_selftest.cu \
+            -o build/bucket_reverse_orbit_closure_pm_w10
