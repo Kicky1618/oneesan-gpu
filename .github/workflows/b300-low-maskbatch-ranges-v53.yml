@@ -1,0 +1,94 @@
+name: B300 LOW mask-batch compact ranges v0.53 research
+
+on:
+  push:
+    paths:
+      - 'src/cpp/probes/factor_low_maskbatch_ranges.cpp'
+      - 'src/cuda/b300/maskshard_low_maskbatch_range.hpp'
+      - 'src/cuda/b300/maskshard_low_maskbatch_range_plan.hpp'
+      - 'src/cuda/b300/maskshard_low_maskbatch_range_config.cuh'
+      - 'src/cuda/b300/maskshard_low_maskbatch_range_kernels.cuh'
+      - 'src/cuda/b300/maskshard_low_maskbatch_range_executor.cuh'
+      - 'src/cuda/b300/oneesan_b300_maskshard_v043_lowmaskbatch.cu'
+      - 'src/cuda/b300/oneesan_b300_maskshard_v050_lowmaskbatch_replica1024.cu'
+      - 'src/cuda/b300/oneesan_b300_maskshard_v053_lowmaskbatch_ranges.cu'
+      - 'scripts/bench/b300_maskshard_lowmaskbatch_ranges_ab.py'
+      - '.github/workflows/b300-low-maskbatch-ranges-v53.yml'
+  pull_request:
+    paths:
+      - 'src/cpp/probes/factor_low_maskbatch_ranges.cpp'
+      - 'src/cuda/b300/maskshard_low_maskbatch_range.hpp'
+      - 'src/cuda/b300/maskshard_low_maskbatch_range_plan.hpp'
+      - 'src/cuda/b300/maskshard_low_maskbatch_range_config.cuh'
+      - 'src/cuda/b300/maskshard_low_maskbatch_range_kernels.cuh'
+      - 'src/cuda/b300/maskshard_low_maskbatch_range_executor.cuh'
+      - 'src/cuda/b300/oneesan_b300_maskshard_v043_lowmaskbatch.cu'
+      - 'src/cuda/b300/oneesan_b300_maskshard_v050_lowmaskbatch_replica1024.cu'
+      - 'src/cuda/b300/oneesan_b300_maskshard_v053_lowmaskbatch_ranges.cu'
+      - 'scripts/bench/b300_maskshard_lowmaskbatch_ranges_ab.py'
+      - '.github/workflows/b300-low-maskbatch-ranges-v53.yml'
+  workflow_dispatch:
+
+jobs:
+  model:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build compact-range exact-decode probe
+        run: |
+          mkdir -p build
+          g++ -O3 -std=c++17 -Wall -Wextra -Werror \
+            src/cpp/probes/factor_low_maskbatch_ranges.cpp \
+            -o build/factor_low_maskbatch_ranges
+      - name: Verify legacy and wide range expansion
+        run: |
+          build/factor_low_maskbatch_ranges 257 1 16 4096
+          build/factor_low_maskbatch_ranges 1024 8 1024 256
+
+  cuda-compile:
+    runs-on: ubuntu-latest
+    container: nvidia/cuda:12.8.1-devel-ubuntu22.04
+    strategy:
+      matrix:
+        include:
+          - {width: 10, low: 5, high: 4}
+          - {width: 22, low: 11, high: 10}
+          - {width: 28, low: 14, high: 13}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Compile v0.50 expanded-replica baseline
+        shell: bash
+        run: |
+          mkdir -p build
+          nvcc -O3 -std=c++17 -lineinfo -arch=sm_80 \
+            -DTARGET_W=${{ matrix.width }} \
+            -DLOW_LUT_K=${{ matrix.low }} \
+            -DHIGH_LUT_K=${{ matrix.high }} \
+            src/cuda/b300/oneesan_b300_maskshard_v050_lowmaskbatch_replica1024.cu \
+            -o build/b300_maskshard_v50_w${{ matrix.width }}
+      - name: Compile v0.53 compact-range backend
+        shell: bash
+        run: |
+          nvcc -O3 -std=c++17 -lineinfo -arch=sm_80 \
+            -DTARGET_W=${{ matrix.width }} \
+            -DLOW_LUT_K=${{ matrix.low }} \
+            -DHIGH_LUT_K=${{ matrix.high }} \
+            src/cuda/b300/oneesan_b300_maskshard_v053_lowmaskbatch_ranges.cu \
+            -o build/b300_maskshard_v53_w${{ matrix.width }}
+
+  ab-driver:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Syntax-check v0.50-v0.53 A/B
+        run: python3 -m py_compile scripts/bench/b300_maskshard_lowmaskbatch_ranges_ab.py
+      - name: Dry-run small-width residue comparison
+        run: |
+          python3 scripts/bench/b300_maskshard_lowmaskbatch_ranges_ab.py \
+            --dry-run --n 9 --gpus 1 --threads 256 --low 5 --high 4 \
+            --modulus 4294967291 --modulus 4294967279
+      - name: Dry-run n=27 B300x8 comparison
+        run: |
+          python3 scripts/bench/b300_maskshard_lowmaskbatch_ranges_ab.py \
+            --dry-run --n 27 --gpus 8 --threads 256 --low 14 --high 13 \
+            --modulus 4294967291
