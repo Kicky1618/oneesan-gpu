@@ -30,7 +30,7 @@ if [[ "$ORBIT_CLOSURE_FUSE" == 1 ]]; then
     pipeline) SRC_REL="src/cuda/b300/oneesan_cuda_gridfp_b300_bucket_snake_onepass_batch_pipeline.cu" ;;
     *) echo "TRANSPOSE_MODE must be sync, events, or pipeline" >&2; exit 2 ;;
   esac
-  SUFFIX="_onepass_${TRANSPOSE_MODE}"
+  SUFFIX="_${TRANSPOSE_MODE}"
   STEM="oneesan_cuda_gridfp_b300_bucket_snake_onepass_batch"
 else
   case "$TRANSPOSE_MODE" in
