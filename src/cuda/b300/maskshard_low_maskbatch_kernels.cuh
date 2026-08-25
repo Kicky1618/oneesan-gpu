@@ -42,7 +42,7 @@ __global__ void maskshard_low_maskbatch_orbit_kernel(
 ) {
     constexpr int FULL_CAP = TARGET_W / 2;
     const MaskShardLowBatchDeviceDesc job = descs[blockIdx.x];
-    const MaskShardLowGroupPackedBase base = statics[job.local];
+    const MaskShardLowGroupPackedBase* base = statics + job.local;
     const MaskShardLowBatchDynamicConfig& dyn =
         dynamics[std::size_t(job.local) * ((TARGET_W + 1) / 2)
                  + std::size_t(cap - 1)];
@@ -60,7 +60,7 @@ __global__ void maskshard_low_maskbatch_orbit_kernel(
                             + std::uint32_t(warp_in_block);
     const std::uint32_t warp_step =
         std::uint32_t(job.replicas) * warps_per_block;
-    const int nb = base.block_nblocks;
+    const int nb = base->block_nblocks;
     const std::uint32_t total = dyn.warp_prefix[nb];
 
     for (; warp_task < total; warp_task += warp_step) {
@@ -83,7 +83,7 @@ __global__ void maskshard_low_maskbatch_orbit_kernel(
         const std::uint32_t lq = (chunk << 5) + std::uint32_t(lane);
         if (lq >= lc) continue;
 
-        const FBlock dx = base.block_blocks[dbid];
+        const FBlock dx = base->block_blocks[dbid];
         std::uint32_t dhr = 0, dlr = 0;
         if (saturated) {
             dhr = hq;
@@ -102,7 +102,7 @@ __global__ void maskshard_low_maskbatch_orbit_kernel(
         if (lowdesc_kind(bdesc) != LOWDESC_MAIN) continue;
         const std::uint32_t sbid = lowdesc_block(bdesc);
         const std::uint32_t slr = lowdesc_lr(bdesc);
-        const FBlock sx = base.main_blocks[sbid];
+        const FBlock sx = base->main_blocks[sbid];
         const Code i = sx.off + Code(dhr) * sx.stride + slr;
 
         const std::size_t sdi = std::size_t(pi) * D_LOWDESC_MAIN_TOTAL
@@ -116,7 +116,7 @@ __global__ void maskshard_low_maskbatch_orbit_kernel(
         if (ak == MS_ORBIT_AUX_NN || p == 1) {
             const std::uint32_t desc = D_LOWDESC_MAIN[sdi];
             if (lowdesc_kind(desc) != LOWDESC_MAIN) continue;
-            const FBlock y = base.main_blocks[lowdesc_block(desc)];
+            const FBlock y = base->main_blocks[lowdesc_block(desc)];
             const Code j = y.off + Code(dhr) * y.stride + lowdesc_lr(desc);
             if (ak == MS_ORBIT_AUX_NN) {
                 mainv[j] = maskshard_add_mod_plain(mainv[j], c);
@@ -130,7 +130,7 @@ __global__ void maskshard_low_maskbatch_orbit_kernel(
                 blockv[di] = 0;
             }
         } else {
-            const FBlock y = base.main_blocks[maskshard_orbit_aux_block(aux)];
+            const FBlock y = base->main_blocks[maskshard_orbit_aux_block(aux)];
             const Code j = y.off + Code(dhr) * y.stride
                          + maskshard_orbit_aux_rank(aux);
             const Count cc = mainv[j];
@@ -154,7 +154,7 @@ __global__ void maskshard_low_maskbatch_closure_kernel(
     constexpr int FULL_CAP = (TARGET_W + 1) / 2;
     constexpr std::uint32_t HR_MASK = (1u << H) - 1u;
     const MaskShardLowBatchDeviceDesc job = descs[blockIdx.x];
-    const MaskShardLowGroupPackedBase base = statics[job.local];
+    const MaskShardLowGroupPackedBase* base = statics + job.local;
     const MaskShardLowBatchDynamicConfig& dyn =
         dynamics[std::size_t(job.local) * FULL_CAP + std::size_t(cap - 1)];
     const bool saturated = cap >= FULL_CAP;
@@ -171,7 +171,7 @@ __global__ void maskshard_low_maskbatch_closure_kernel(
                        + std::uint32_t(warp_in_block);
     const std::uint32_t task_step =
         std::uint32_t(job.replicas) * warps_per_block;
-    const int nb = base.main_nblocks;
+    const int nb = base->main_nblocks;
     const std::uint32_t total = dyn.closure_prefix[pi][nb];
 
     for (; task < total; task += task_step) {
@@ -184,7 +184,7 @@ __global__ void maskshard_low_maskbatch_closure_kernel(
         bid = __shfl_sync(active, bid, 0);
         local = __shfl_sync(active, local, 0);
 
-        const FBlock x = base.main_blocks[bid];
+        const FBlock x = base->main_blocks[bid];
         const std::uint32_t a = dyn.closure_begin[pi][bid];
         const std::uint32_t selected = dyn.closure_selected[pi][bid];
         const std::uint32_t chunks = (selected + 31u) >> 5;
@@ -210,11 +210,11 @@ __global__ void maskshard_low_maskbatch_closure_kernel(
             + D_LOWDESC_MAIN_BASE[bid] + lr];
         const std::uint32_t kind = lowdesc_kind(desc);
         if (kind == LOWDESC_MAIN) {
-            const FBlock y = base.main_blocks[lowdesc_block(desc)];
+            const FBlock y = base->main_blocks[lowdesc_block(desc)];
             const Code j = y.off + Code(hr) * y.stride + lowdesc_lr(desc);
             atomic_add_mod(mainv + j, c);
         } else if (kind == LOWDESC_BLOCK) {
-            const FBlock y = base.block_blocks[lowdesc_block(desc)];
+            const FBlock y = base->block_blocks[lowdesc_block(desc)];
             const Code j = y.off + Code(hr) * y.stride + lowdesc_lr(desc);
             atomic_add_mod(blockv + j, c);
         } else if (kind == LOWDESC_CROSS) {
@@ -224,11 +224,11 @@ __global__ void maskshard_low_maskbatch_closure_kernel(
             const std::uint32_t hp = D_F_HIGH_PACKED_RANK[hc2];
             const std::uint32_t hr2 = hp & HR_MASK;
             if (p == 1) {
-                const FBlock y = base.main_blocks[lowdesc_block(desc)];
+                const FBlock y = base->main_blocks[lowdesc_block(desc)];
                 const Code j = y.off + Code(hr2) * y.stride + lowdesc_lr(desc);
                 atomic_add_mod(mainv + j, c);
             } else {
-                const FBlock y = base.block_blocks[lowdesc_block(desc)];
+                const FBlock y = base->block_blocks[lowdesc_block(desc)];
                 const Code j = y.off + Code(hr2) * y.stride + lowdesc_lr(desc);
                 atomic_add_mod(blockv + j, c);
             }
