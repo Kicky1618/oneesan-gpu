@@ -5,31 +5,45 @@ on:
     paths:
       - 'src/cuda/gridfp/ramstream32_mod_accum.cuh'
       - 'src/cuda/gridfp/ramstream32_bucket_fused_pm.cuh'
+      - 'src/cuda/gridfp/ramstream32_bucket_reverse_fused_pm.cuh'
       - 'src/cuda/gridfp/ramstream32_bucket_fused_v2.cuh'
       - 'src/cuda/gridfp/ramstream32_bucket_fused_async.cuh'
       - 'src/cuda/gridfp/probes/ramstream32_mod_accum_selftest.cu'
       - 'src/cuda/gridfp/probes/ramstream32_bucket_fused_selftest.cu'
+      - 'src/cuda/gridfp/probes/ramstream32_bucket_reverse_fused_selftest.cu'
       - 'src/cuda/b300/oneesan_cuda_gridfp_b300_bucket_fused.cu'
       - 'src/cuda/b300/oneesan_cuda_gridfp_b300_bucket_fused_events.cu'
       - 'src/cuda/b300/oneesan_cuda_gridfp_b300_bucket_fused_batch.cu'
       - 'src/cuda/b300/oneesan_cuda_gridfp_b300_bucket_fused_batch_events.cu'
+      - 'src/cuda/b300/oneesan_cuda_gridfp_b300_bucket_snake_atomic.cu'
+      - 'src/cuda/b300/oneesan_cuda_gridfp_b300_bucket_snake_fused_events.cu'
+      - 'src/cuda/b300/oneesan_cuda_gridfp_b300_bucket_snake_fused_batch_events.cu'
       - 'scripts/build/b300-bucket-fused.sh'
       - 'scripts/build/b300-bucket-fused-batch.sh'
+      - 'scripts/build/b300-bucket-snake.sh'
+      - 'scripts/build/b300-bucket-snake-batch.sh'
       - '.github/workflows/pm-accum-validation.yml'
   pull_request:
     paths:
       - 'src/cuda/gridfp/ramstream32_mod_accum.cuh'
       - 'src/cuda/gridfp/ramstream32_bucket_fused_pm.cuh'
+      - 'src/cuda/gridfp/ramstream32_bucket_reverse_fused_pm.cuh'
       - 'src/cuda/gridfp/ramstream32_bucket_fused_v2.cuh'
       - 'src/cuda/gridfp/ramstream32_bucket_fused_async.cuh'
       - 'src/cuda/gridfp/probes/ramstream32_mod_accum_selftest.cu'
       - 'src/cuda/gridfp/probes/ramstream32_bucket_fused_selftest.cu'
+      - 'src/cuda/gridfp/probes/ramstream32_bucket_reverse_fused_selftest.cu'
       - 'src/cuda/b300/oneesan_cuda_gridfp_b300_bucket_fused.cu'
       - 'src/cuda/b300/oneesan_cuda_gridfp_b300_bucket_fused_events.cu'
       - 'src/cuda/b300/oneesan_cuda_gridfp_b300_bucket_fused_batch.cu'
       - 'src/cuda/b300/oneesan_cuda_gridfp_b300_bucket_fused_batch_events.cu'
+      - 'src/cuda/b300/oneesan_cuda_gridfp_b300_bucket_snake_atomic.cu'
+      - 'src/cuda/b300/oneesan_cuda_gridfp_b300_bucket_snake_fused_events.cu'
+      - 'src/cuda/b300/oneesan_cuda_gridfp_b300_bucket_snake_fused_batch_events.cu'
       - 'scripts/build/b300-bucket-fused.sh'
       - 'scripts/build/b300-bucket-fused-batch.sh'
+      - 'scripts/build/b300-bucket-snake.sh'
+      - 'scripts/build/b300-bucket-snake-batch.sh'
       - '.github/workflows/pm-accum-validation.yml'
   workflow_dispatch:
 
@@ -50,7 +64,7 @@ jobs:
           build/ramstream32_mod_accum_selftest | tee /tmp/pm-reduce.txt
           grep -Fq 'pm-accum-selftest OK' /tmp/pm-reduce.txt
           grep -Fq 'max_inverse_scan=14' /tmp/pm-reduce.txt
-      - name: Compile W10 bucket exhaustive GPU probe with PM closures
+      - name: Compile W10 forward bucket exhaustive GPU probe with PM closures
         shell: bash
         run: |
           nvcc -O3 -std=c++17 -lineinfo -arch=sm_80 \
@@ -58,7 +72,17 @@ jobs:
             -DGPU_DIRECT_PM_ACCUM=1 \
             src/cuda/gridfp/probes/ramstream32_bucket_fused_selftest.cu \
             -o build/ramstream32_bucket_fused_pm_selftest_w10
-      - name: Compile and run W28 PM event driver plan
+      - name: Compile and conditionally run W10 reverse PM selftest
+        shell: bash
+        run: |
+          nvcc -O3 -std=c++17 -lineinfo -arch=sm_80 \
+            -DTARGET_W=10 -DLOW_LUT_K=5 -DHIGH_LUT_K=4 \
+            -DGPU_DIRECT_PM_ACCUM=1 \
+            src/cuda/gridfp/probes/ramstream32_bucket_reverse_fused_selftest.cu \
+            -o build/ramstream32_bucket_reverse_fused_pm_selftest_w10
+          build/ramstream32_bucket_reverse_fused_pm_selftest_w10 | tee /tmp/reverse-pm.txt
+          grep -Eq 'bucket-reverse-fused-selftest (OK W=10.*pm=1|SKIP no CUDA device pm=1)' /tmp/reverse-pm.txt
+      - name: Compile and run W28 forward PM event driver plan
         shell: bash
         run: |
           nvcc -O3 -std=c++17 -lineinfo -arch=sm_80 \
@@ -70,7 +94,22 @@ jobs:
             27 4294967291 256 16 8 1024 --plan-only 2>&1 | tee /tmp/pm-plan.txt
           grep -Fq 'backend=gridfp-b300-bucket-fused-v0.1-plan' /tmp/pm-plan.txt
           grep -Fq 'overlap=0' /tmp/pm-plan.txt
-      - name: Compile W28 reusable PM event batch driver
+      - name: Compile and run W28 snake PM event plan
+        shell: bash
+        run: |
+          nvcc -O3 -std=c++17 -lineinfo -arch=sm_80 \
+            -DTARGET_W=28 -DLOW_LUT_K=14 -DHIGH_LUT_K=13 \
+            -DGPU_DIRECT_PM_ACCUM=1 \
+            src/cuda/b300/oneesan_cuda_gridfp_b300_bucket_snake_fused_events.cu \
+            -o build/oneesan_cuda_gridfp_b300_bucket_snake_fused_events_pm_n27
+          build/oneesan_cuda_gridfp_b300_bucket_snake_fused_events_pm_n27 \
+            27 4294967291 256 16 8 1024 --plan-only 2>&1 | tee /tmp/snake-pm.txt
+          grep -Fq 'backend=gridfp-b300-bucket-snake-fused-v0.2-plan' /tmp/snake-pm.txt
+          grep -Fq 'transposes_per_residue=28' /tmp/snake-pm.txt
+          grep -Fq 'reverse_closure_atomic=0' /tmp/snake-pm.txt
+          grep -Fq 'pm_accum=1' /tmp/snake-pm.txt
+          grep -Fq 'reverse_bucket_fused_validate' /tmp/snake-pm.txt
+      - name: Compile W28 reusable forward PM event batch driver
         shell: bash
         run: |
           nvcc -O3 -std=c++17 -lineinfo -arch=sm_80 \
@@ -78,3 +117,11 @@ jobs:
             -DGPU_DIRECT_PM_ACCUM=1 \
             src/cuda/b300/oneesan_cuda_gridfp_b300_bucket_fused_batch_events.cu \
             -o build/oneesan_cuda_gridfp_b300_bucket_fused_batch_events_pm_n27
+      - name: Compile W28 reusable snake PM event batch driver
+        shell: bash
+        run: |
+          nvcc -O3 -std=c++17 -lineinfo -arch=sm_80 \
+            -DTARGET_W=28 -DLOW_LUT_K=14 -DHIGH_LUT_K=13 \
+            -DGPU_DIRECT_PM_ACCUM=1 \
+            src/cuda/b300/oneesan_cuda_gridfp_b300_bucket_snake_fused_batch_events.cu \
+            -o build/oneesan_cuda_gridfp_b300_bucket_snake_fused_batch_events_pm_n27
