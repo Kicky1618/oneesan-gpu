@@ -29,6 +29,9 @@
 #include "../gridfp/ramstream32_bucket_reverse_atomic.cuh"
 #ifdef BUCKET_SNAKE_REVERSE_FUSED
 #include "../gridfp/ramstream32_bucket_reverse_fused.cuh"
+#if GPU_DIRECT_PM_ACCUM
+#include "../gridfp/ramstream32_bucket_reverse_fused_pm.cuh"
+#endif
 #endif
 #include "gridfp_bucket_transpose.cuh"
 
@@ -81,14 +84,22 @@ struct SnakeReverseDeviceTables {
 
 static void bsn_launch_reverse_low(const StorageLayout&layout,int threads,int gx,int gy){
 #ifdef BUCKET_SNAKE_REVERSE_FUSED
+#if GPU_DIRECT_PM_ACCUM
+    bucket_launch_reverse_low_fused_pm(layout,threads,gx,gy);
+#else
     bucket_launch_reverse_low_fused(layout,threads,gx,gy);
+#endif
 #else
     bucket_launch_reverse_low_atomic(layout,threads,gx,gy);
 #endif
 }
 static void bsn_launch_reverse_high(const StorageLayout&layout,int threads,int gx,int gy){
 #ifdef BUCKET_SNAKE_REVERSE_FUSED
+#if GPU_DIRECT_PM_ACCUM
+    bucket_launch_reverse_high_fused_pm(layout,threads,gx,gy);
+#else
     bucket_launch_reverse_high_fused(layout,threads,gx,gy);
+#endif
 #else
     bucket_launch_reverse_high_atomic(layout,threads,gx,gy);
 #endif
@@ -128,7 +139,7 @@ int main(int argc,char**argv){
              <<" metadata_mib_per_gpu="<<double(metadata_bytes)/double(1<<20)<<" transpose_chunk_mib="<<chunk_mib<<" max_device_need_gib="<<double(max_need)/double(1ULL<<30)
              <<" transposes_per_residue="<<W<<" standard_transposes="<<(2*W-1)<<" peer_gib_per_transpose="<<double(peer_per_transpose)/double(1ULL<<30)
              <<" snake_peer_tib_per_residue="<<double(snake_peer_tib)
-             <<" reverse_closure_atomic="<<BSN_REVERSE_CLOSURE_ATOMIC<<" forward_closure_atomic=0 prepare_s="<<prepare_s<<'\n';
+             <<" reverse_closure_atomic="<<BSN_REVERSE_CLOSURE_ATOMIC<<" forward_closure_atomic=0 pm_accum="<<GPU_DIRECT_PM_ACCUM<<" prepare_s="<<prepare_s<<'\n';
     if(plan_only)return 0;
 
     int visible=0;ck(cudaGetDeviceCount(&visible),"snake device count");if(visible<NG){std::cerr<<"need 8 GPUs visible="<<visible<<'\n';return 3;}size_t reserve=bsn_env_mib("BUCKET_RESERVE_MIB",8192)<<20;
@@ -145,7 +156,7 @@ int main(int argc,char**argv){
         std::cerr<<"row "<<(row+1)<<'/'<<W<<" fh="<<fh<<" fl="<<fl<<" rl="<<rl<<" rh="<<rh<<" transpose="<<ts<<'\n';
     }
     double wall=bsn_since(wall0);BucketAddress fa=bucket_rank_main_host(MateID(R),storage,layout,owner,phy);bool final_lmajor=(W%2)==0;int agpu=final_lmajor?int(fa.owner_l):int(fa.owner_h),aslot=final_lmajor?int(fa.owner_h):int(fa.owner_l);Count answer=0;ck(cudaSetDevice(agpu),"snake answer set");ck(cudaMemcpy(&answer,reinterpret_cast<uint8_t*>(base[agpu])+tplan.slot[agpu][aslot].off_bytes+uint64_t(fa.off)*sizeof(Count),sizeof(answer),cudaMemcpyDeviceToHost),"snake answer");
-    std::cout<<"backend="<<BSN_BACKEND<<" n="<<n<<" residue="<<answer<<" modulus="<<mod<<" forward_high_s="<<fh<<" forward_low_s="<<fl<<" reverse_low_s="<<rl<<" reverse_high_s="<<rh<<" transpose_s="<<ts<<" wall_s="<<wall<<" transposes="<<tx.transposes<<" peer_gib="<<tx.peer_gib<<" final_layout="<<(final_lmajor?"L-major":"H-major")<<" reverse_closure_atomic="<<BSN_REVERSE_CLOSURE_ATOMIC<<" forward_closure_atomic=0\n";
+    std::cout<<"backend="<<BSN_BACKEND<<" n="<<n<<" residue="<<answer<<" modulus="<<mod<<" forward_high_s="<<fh<<" forward_low_s="<<fl<<" reverse_low_s="<<rl<<" reverse_high_s="<<rh<<" transpose_s="<<ts<<" wall_s="<<wall<<" transposes="<<tx.transposes<<" peer_gib="<<tx.peer_gib<<" final_layout="<<(final_lmajor?"L-major":"H-major")<<" reverse_closure_atomic="<<BSN_REVERSE_CLOSURE_ATOMIC<<" forward_closure_atomic=0 pm_accum="<<GPU_DIRECT_PM_ACCUM<<"\n";
     bool ok=tx.transposes==uint64_t(W);if(n==21&&mod==4294967291u&&answer!=998035516u){std::cerr<<"n21 snake residue mismatch got="<<answer<<" expected=998035516\n";ok=false;}
     tx.release();for(int g=0;g<NG;++g){ck(cudaSetDevice(g),"snake release set");rt[g].release();ft[g].release();cudaFree(base[g]);}return ok?0:5;
 }
