@@ -1,6 +1,6 @@
 #pragma once
 
-#include "ramstream32_cpu_low_sparse_persistent.hpp"
+#include "ramstream32_cpu_low_domain_page_index.hpp"
 
 #include <algorithm>
 #include <chrono>
@@ -53,6 +53,8 @@ struct CpuLowDomainPageTieStats {
     uint64_t penalty_4k_after = 0;
     uint64_t max_worker_cells_before = 0;
     uint64_t max_worker_cells_after = 0;
+    double mask_index_mib = 0.0;
+    double mask_index_build_s = 0.0;
     double build_s = 0.0;
 };
 
@@ -69,40 +71,31 @@ static uint32_t cpu_low_unique_pages(std::vector<uint64_t>& pages) {
 static CpuLowDomainBoundaryPagePenalty cpu_low_domain_boundary_page_penalty_blocks(
     const std::vector<StorageBlock>& blocks,
     const StorageFactorHost& storage,
+    const CpuLowDomainPageMaskIndex& mask_index,
     uint32_t threshold_mask
 ) {
-    constexpr int S = FactorTablesHost::STRIDE;
     constexpr uint64_t PAGE4K = 4096ull;
     constexpr uint64_t PAGE2M = 2ull << 20;
-    const uint32_t nmasks = 1u << HIGH_LUT_K;
     std::vector<uint64_t> pages4k, pages2m;
     pages4k.reserve(blocks.size());
     pages2m.reserve(blocks.size());
 
     for (const StorageBlock& sb : blocks) {
         if (!sb.valid || !sb.rows || !sb.cols) continue;
-        bool have_left = false;
-        for (uint32_t mask = 0; mask < threshold_mask; ++mask) {
-            size_t ix = size_t(mask) * S + sb.he;
-            if (G_FACTOR.high_mask_off[ix + 1] != G_FACTOR.high_mask_off[ix]) {
-                have_left = true;
-                break;
-            }
+        if (sb.he >= mask_index.stride) {
+            std::cerr << "cpu LOW domain page penalty height out of range\n";
+            std::exit(167);
         }
-        if (!have_left) continue;
+        if (mask_index.first_nonempty[sb.he] >= threshold_mask) continue;
+        uint32_t mask = mask_index.next(sb.he, threshold_mask);
+        if (mask >= mask_index.nmasks) continue;
 
-        for (uint32_t mask = threshold_mask; mask < nmasks; ++mask) {
-            size_t ix = size_t(mask) * S + sb.he;
-            uint32_t rows = G_FACTOR.high_mask_off[ix + 1] - G_FACTOR.high_mask_off[ix];
-            if (!rows) continue;
-            uint32_t row0 = storage.high_mask_begin[
-                size_t(mask) * StorageFactorHost::S + sb.he];
-            uint64_t begin_elem = uint64_t(sb.off) + uint64_t(row0) * sb.cols;
-            uint64_t begin_byte = begin_elem * sizeof(Count);
-            if (begin_byte % PAGE4K) pages4k.push_back(begin_byte / PAGE4K);
-            if (begin_byte % PAGE2M) pages2m.push_back(begin_byte / PAGE2M);
-            break;
-        }
+        uint32_t row0 = storage.high_mask_begin[
+            size_t(mask) * StorageFactorHost::S + sb.he];
+        uint64_t begin_elem = uint64_t(sb.off) + uint64_t(row0) * sb.cols;
+        uint64_t begin_byte = begin_elem * sizeof(Count);
+        if (begin_byte % PAGE4K) pages4k.push_back(begin_byte / PAGE4K);
+        if (begin_byte % PAGE2M) pages2m.push_back(begin_byte / PAGE2M);
     }
 
     CpuLowDomainBoundaryPagePenalty z;
@@ -113,12 +106,13 @@ static CpuLowDomainBoundaryPagePenalty cpu_low_domain_boundary_page_penalty_bloc
 
 static CpuLowDomainBoundaryPagePenalty cpu_low_domain_boundary_page_penalty(
     const StorageLayout& layout, const StorageFactorHost& storage,
+    const CpuLowDomainPageMaskIndex& mask_index,
     uint32_t threshold_mask
 ) {
     auto a = cpu_low_domain_boundary_page_penalty_blocks(
-        layout.main_blocks, storage, threshold_mask);
+        layout.main_blocks, storage, mask_index, threshold_mask);
     auto b = cpu_low_domain_boundary_page_penalty_blocks(
-        layout.block_blocks, storage, threshold_mask);
+        layout.block_blocks, storage, mask_index, threshold_mask);
     return {uint32_t(a.pages_2m + b.pages_2m),
             uint32_t(a.pages_4k + b.pages_4k)};
 }
@@ -182,6 +176,13 @@ static CpuLowDomainPageTieStats cpu_low_apply_domain_page_tiebreak(
         return stats;
     }
 
+    auto index_t0 = std::chrono::steady_clock::now();
+    CpuLowDomainPageMaskIndex mask_index = cpu_low_build_domain_page_mask_index();
+    stats.mask_index_build_s = ram_seconds_since(index_t0);
+    stats.mask_index_mib = double(
+        mask_index.first_nonempty.size() * sizeof(uint32_t)
+        + mask_index.next_nonempty.size() * sizeof(uint32_t)) / double(1 << 20);
+
     const int domains = (pool.workers + pool.domain_size - 1) / pool.domain_size;
     std::vector<int> job_domain(jobs.size(), -1);
     for (int w = 0; w < pool.workers; ++w) {
@@ -214,7 +215,7 @@ static CpuLowDomainPageTieStats cpu_low_apply_domain_page_tiebreak(
         if (boundary == 0 || boundary >= ordered.size()) return {};
         if (!ready[boundary]) {
             cache[boundary] = cpu_low_domain_boundary_page_penalty(
-                layout, storage, ordered[boundary].mask);
+                layout, storage, mask_index, ordered[boundary].mask);
             ready[boundary] = 1;
         }
         return cache[boundary];
@@ -392,6 +393,8 @@ static CpuLowDomainPageTieStats cpu_low_apply_domain_page_tiebreak(
               << " penalty_4k_after=" << stats.penalty_4k_after
               << " max_worker_cells_before=" << stats.max_worker_cells_before
               << " max_worker_cells_after=" << stats.max_worker_cells_after
+              << " mask_index_mib=" << stats.mask_index_mib
+              << " mask_index_build_s=" << stats.mask_index_build_s
               << " build_s=" << stats.build_s << '\n';
     return stats;
 }
