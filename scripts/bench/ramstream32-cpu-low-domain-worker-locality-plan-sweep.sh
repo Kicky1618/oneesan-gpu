@@ -44,48 +44,69 @@ host=$(hostname 2>/dev/null || echo unknown)
 n=$N
 arch=$ARCH
 configs=$CONFIGS
-objective=contiguous-under-lpt-cap-v5.25-plan
+objective=neighbor-page-coalesce-under-domain-cap-v5.26-plan
+parent_objective=contiguous-under-lpt-cap-v5.25-plan
 baseline=refined-domain-plus-v5.23-page
 binary_sha256=$(file_sha256 "$bin")
 EOF
 
-printf 'workers\tdomain_size\tdomains\tconverted_domains\tfallback_domains\tconverted_jobs\tbaseline_max_worker_cells\tlocality_max_worker_cells\tbaseline_cross_worker_2m\tlocality_cross_worker_2m\tbaseline_cross_worker_4k\tlocality_cross_worker_4k\tbaseline_owner_transitions\tlocality_owner_transitions\tcross_domain_2m\tcross_domain_4k\tworker_locality_build_s\traw\n' >"$out"
+printf 'workers\tdomain_size\tdomains\tconverted_domains\tfallback_domains\tcoalesce_noncontiguous_domains\tcoalesce_improved_domains\tcoalesce_accepted_moves\tcoalesce_cap_rejections\tbaseline_max_worker_cells\tlocality_max_worker_cells\tcoalesced_max_worker_cells\tbaseline_cross_worker_2m\tlocality_cross_worker_2m\tcoalesced_cross_worker_2m\tbaseline_cross_worker_4k\tlocality_cross_worker_4k\tcoalesced_cross_worker_4k\tbaseline_owner_transitions\tlocality_owner_transitions\tcoalesced_owner_transitions\tcross_domain_2m\tcross_domain_4k\tworker_locality_build_s\tworker_coalesce_build_s\traw\n' >"$out"
 
 for cfg in "${configs[@]}"; do
   workers="${cfg%%:*}"; domain="${cfg#*:}"
-  echo "worker-locality-plan n=$N workers=$workers domain_size=$domain" >&2
+  echo "worker-coalesce-plan n=$N workers=$workers domain_size=$domain" >&2
   line="$($bin "$N" "$workers" "$domain" 2> >(tee /dev/stderr) | tail -n1)"
-  [[ "$(field "$line" objective)" == contiguous-under-lpt-cap-v5.25-plan ]] || {
+  [[ "$(field "$line" objective)" == neighbor-page-coalesce-under-domain-cap-v5.26-plan ]] || {
     echo "objective provenance mismatch cfg=$cfg" >&2; exit 4;
+  }
+  [[ "$(field "$line" parent_objective)" == contiguous-under-lpt-cap-v5.25-plan ]] || {
+    echo "parent objective provenance mismatch cfg=$cfg" >&2; exit 4;
   }
   [[ "$(field "$line" workers)" == "$workers" ]] || { echo "worker provenance mismatch cfg=$cfg" >&2; exit 4; }
   [[ "$(field "$line" domain_size)" == "$domain" ]] || { echo "domain provenance mismatch cfg=$cfg" >&2; exit 4; }
 
   python3 - \
     "$(field "$line" baseline_max_worker_cells)" \
-    "$(field "$line" locality_max_worker_cells)" <<'PY'
+    "$(field "$line" locality_max_worker_cells)" \
+    "$(field "$line" coalesced_max_worker_cells)" \
+    "$(field "$line" coalesce_penalty_2m_before)" \
+    "$(field "$line" coalesce_penalty_2m_after)" \
+    "$(field "$line" coalesce_penalty_4k_before)" \
+    "$(field "$line" coalesce_penalty_4k_after)" \
+    "$(field "$line" coalesce_owner_transitions_before)" \
+    "$(field "$line" coalesce_owner_transitions_after)" <<'PY'
 import sys
-base,loc=map(int,sys.argv[1:])
-if loc > base:
-    raise SystemExit('worker-locality max-worker regression')
+base,loc,coal,p20,p21,p40,p41,t0,t1=map(int,sys.argv[1:])
+if loc > base or coal > loc:
+    raise SystemExit('worker-coalesce max-worker regression')
+if (p21,p41,t1) > (p20,p40,t0):
+    raise SystemExit('worker-coalesce internal objective regression')
 PY
 
-  printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
+  printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
     "$workers" "$domain" "$(field "$line" domains)" \
     "$(field "$line" converted_domains)" \
     "$(field "$line" fallback_domains)" \
-    "$(field "$line" converted_jobs)" \
+    "$(field "$line" coalesce_noncontiguous_domains_before)" \
+    "$(field "$line" coalesce_improved_domains)" \
+    "$(field "$line" coalesce_accepted_moves)" \
+    "$(field "$line" coalesce_cap_rejections)" \
     "$(field "$line" baseline_max_worker_cells)" \
     "$(field "$line" locality_max_worker_cells)" \
+    "$(field "$line" coalesced_max_worker_cells)" \
     "$(field "$line" baseline_cross_worker_pages_2m)" \
     "$(field "$line" locality_cross_worker_pages_2m)" \
+    "$(field "$line" coalesced_cross_worker_pages_2m)" \
     "$(field "$line" baseline_cross_worker_pages_4k)" \
     "$(field "$line" locality_cross_worker_pages_4k)" \
+    "$(field "$line" coalesced_cross_worker_pages_4k)" \
     "$(field "$line" baseline_worker_owner_transitions)" \
     "$(field "$line" locality_worker_owner_transitions)" \
+    "$(field "$line" coalesced_worker_owner_transitions)" \
     "$(field "$line" cross_domain_pages_2m)" \
     "$(field "$line" cross_domain_pages_4k)" \
     "$(field "$line" worker_locality_build_s)" \
+    "$(field "$line" worker_coalesce_build_s)" \
     "$line" >>"$out"
 done
 
@@ -93,22 +114,32 @@ python3 - "$out" <<'PY'
 import csv, sys
 with open(sys.argv[1], newline='') as f:
     for r in csv.DictReader(f, delimiter='\t'):
-        b2,l2=int(r['baseline_cross_worker_2m']),int(r['locality_cross_worker_2m'])
-        b4,l4=int(r['baseline_cross_worker_4k']),int(r['locality_cross_worker_4k'])
-        bt,lt=int(r['baseline_owner_transitions']),int(r['locality_owner_transitions'])
-        converted=int(r['converted_domains'])
-        fallback=int(r['fallback_domains'])
-        if (l2,l4) < (b2,b4): cls='page_improvement'
-        elif (l2,l4) == (b2,b4) and lt < bt: cls='transition_only_improvement'
-        elif (l2,l4) == (b2,b4) and lt == bt: cls='no_change'
-        else: cls='page_tradeoff'
+        b=(int(r['baseline_cross_worker_2m']),int(r['baseline_cross_worker_4k']))
+        l=(int(r['locality_cross_worker_2m']),int(r['locality_cross_worker_4k']))
+        c=(int(r['coalesced_cross_worker_2m']),int(r['coalesced_cross_worker_4k']))
+        bt=int(r['baseline_owner_transitions'])
+        lt=int(r['locality_owner_transitions'])
+        ct=int(r['coalesced_owner_transitions'])
+        if c < l: cls='v5.26_unique_page_improvement'
+        elif c == l and ct < lt: cls='v5.26_transition_only_improvement'
+        elif c == l and ct == lt: cls='v5.26_no_change'
+        else: cls='v5.26_unique_page_tradeoff'
+        if l < b: parent='v5.25_page_improvement'
+        elif l == b and lt < bt: parent='v5.25_transition_only_improvement'
+        elif l == b and lt == bt: parent='v5.25_no_change'
+        else: parent='v5.25_page_tradeoff'
         print(
             f"comparison workers={r['workers']} domain_size={r['domain_size']} "
-            f"classification={cls} converted_domains={converted} fallback_domains={fallback} "
-            f"cross_worker_2m_delta={l2-b2} cross_worker_4k_delta={l4-b4} "
-            f"owner_transition_delta={lt-bt} "
-            f"max_worker_cells_saved={int(r['baseline_max_worker_cells'])-int(r['locality_max_worker_cells'])} "
-            f"worker_locality_build_s={float(r['worker_locality_build_s']):.9f}"
+            f"parent_classification={parent} classification={cls} "
+            f"converted_domains={r['converted_domains']} fallback_domains={r['fallback_domains']} "
+            f"coalesce_noncontiguous_domains={r['coalesce_noncontiguous_domains']} "
+            f"coalesce_improved_domains={r['coalesce_improved_domains']} "
+            f"coalesce_accepted_moves={r['coalesce_accepted_moves']} "
+            f"v5.26_cross_worker_2m_delta={c[0]-l[0]} "
+            f"v5.26_cross_worker_4k_delta={c[1]-l[1]} "
+            f"v5.26_owner_transition_delta={ct-lt} "
+            f"v5.26_max_worker_cells_saved={int(r['locality_max_worker_cells'])-int(r['coalesced_max_worker_cells'])} "
+            f"worker_coalesce_build_s={float(r['worker_coalesce_build_s']):.9f}"
         )
 PY
 
