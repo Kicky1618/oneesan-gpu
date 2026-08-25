@@ -1,6 +1,6 @@
 # RAMstream32 CPU LOW worker multistart exact selection
 
-v5.28 is a research-only selector built on the v5.25-v5.27 intra-domain locality work.
+v5.28 is a research-only selector built on the v5.25-v5.27 intra-domain locality work. The exact v5.27 objective now uses the v5.29 flat page-delta implementation during candidate evaluation.
 
 The motivation is a greedy-search basin problem. v5.27 optimizes the exact global unique cross-worker page tuple, but greedily accepting only immediate exact improvements can still get stuck. v5.26 follows a different local page-cardinality objective and can take a different route through the ownership space.
 
@@ -106,6 +106,15 @@ selected_max_worker_cells
 
 The probe hard-checks all structural dominance relations and verifies that the copied selected schedule is exactly the winning branch's worker-job assignment and worker-cell vector.
 
+The exact branch stderr also carries:
+
+```text
+objective=global-unique-neighbor-coalesce-v5.27-plan
+implementation=flat-page-delta-v5.29
+```
+
+so the plan result records both objective semantics and candidate-evaluation implementation.
+
 ## n=27 topology sweep
 
 Use:
@@ -151,6 +160,8 @@ The selected schedule executes two consecutive real LOW generations. Every main 
 
 The test also checks that the selected exact tuple dominates parent, direct, raw v5.26, and hybrid, and that the selected maximum worker load does not exceed the v5.25 parent maximum.
 
+`ramstream32_cpu_low_worker_flat_delta_selftest.cu` separately validates the v5.29 page-delta algebra, including opposite-sign cancellation and normalized `+2/-2` duplicate-page deltas.
+
 ## Promotion gate
 
 v5.28 is not wired into the production solver.
@@ -164,6 +175,6 @@ selected_max_worker_cells <= parent_max_worker_cells
 
 A stronger practical signal is repeated `hybrid_wins` or a useful selected page reduction on the intended two-socket host topologies.
 
-The remaining cost question is schedule construction. v5.28 evaluates both branches, and current v5.27 candidate evaluation still uses temporary hash maps for page deltas. Before production promotion, the exact planner should be profiled and likely changed to a small sorted-vector delta representation if build time is material.
+v5.29 has already removed the per-candidate temporary `unordered_map` construction from the exact branches. The remaining cost question is measured schedule-build time. If exact planning is still material at n=27, the next targets are the persistent page-reference lookup table and the tiny flat-delta normalization itself.
 
 After structural preflight, a same-binary runtime A/B is still mandatory. Clean `cpu_low_wall_s` and whole-solver wall time, not static page counts, decide whether the scheduling stage belongs in production.
