@@ -1,5 +1,6 @@
 #pragma once
 
+#include <algorithm>
 #include <array>
 #include <cstdint>
 #include <cstdlib>
@@ -18,7 +19,20 @@
 
 #include "maskshard_low_maskbatch_rowplan.hpp"
 
+static constexpr int MASKSHARD_LOW_BATCH_ROW_CAPS = (TARGET_W + 1) / 2;
+
+#ifdef MASKSHARD_LOW_MASKBATCH_REBUILD_DYNAMIC
+// v0.48: LOW-all active counts are mask-independent.  Publish the tiny
+// [cap][ending-height] table once per device; CTA kernels combine it with the
+// already-resident HIGH active-count table to rebuild exact orbit prefixes.
+__device__ __constant__ std::uint32_t
+    D_MS_LOW_BATCH_LOW_COUNT[MASKSHARD_LOW_BATCH_ROW_CAPS + 1][HIGH_LUT_K + 2];
+#endif
+
 struct MaskShardLowBatchDynamicConfig {
+#ifdef MASKSHARD_LOW_MASKBATCH_REBUILD_DYNAMIC
+    std::uint32_t unused = 0;
+#else
     std::uint32_t warp_prefix[HIGH_LUT_K + 3];
     std::uint32_t low_count[HIGH_LUT_K + 2];
     std::uint32_t low_chunks[HIGH_LUT_K + 2];
@@ -31,6 +45,7 @@ struct MaskShardLowBatchDynamicConfig {
     std::uint32_t closure_selected[LOW_LUT_K][65];
 #endif
     std::uint32_t high_mask_off[HIGH_LUT_K + 2];
+#endif
 };
 
 struct MaskShardLowBatchDeviceDesc {
@@ -43,6 +58,7 @@ struct MaskShardLowBatchDeviceDesc {
 static_assert(sizeof(MaskShardLowBatchDeviceDesc) == 8,
               "LOW mask-batch device descriptor ABI changed");
 
+#ifndef MASKSHARD_LOW_MASKBATCH_REBUILD_DYNAMIC
 static MaskShardLowBatchDynamicConfig maskshard_extract_low_batch_dynamic(
     const MaskShardLowGroupPackedConfig& cfg
 ) {
@@ -64,9 +80,10 @@ static MaskShardLowBatchDynamicConfig maskshard_extract_low_batch_dynamic(
         }
     return d;
 }
+#endif
 
 struct MaskShardLowMaskBatchDeviceTables {
-    static constexpr int FULL_CAP = (TARGET_W + 1) / 2;
+    static constexpr int FULL_CAP = MASKSHARD_LOW_BATCH_ROW_CAPS;
 
     int dev = -1;
     std::vector<std::uint16_t> local_of_mask;
@@ -92,9 +109,29 @@ struct MaskShardLowMaskBatchDeviceTables {
             mask_of_local.push_back(std::uint16_t(mask));
         }
 
+#ifdef MASKSHARD_LOW_MASKBATCH_REBUILD_DYNAMIC
+        {
+            auto& orbit = maskshard_loworbit_rowdepth_compact_cache();
+            orbit.build();
+            std::array<std::uint32_t,
+                       (FULL_CAP + 1) * (HIGH_LUT_K + 2)> hlow{};
+            for (int cap = 1; cap <= FULL_CAP; ++cap) {
+                const int orbit_cap = std::min(cap, TARGET_W / 2);
+                for (int h = 0; h <= HIGH_LUT_K + 1; ++h)
+                    hlow[std::size_t(cap) * (HIGH_LUT_K + 2) + std::size_t(h)] =
+                        orbit.low_count[std::size_t(h)][std::size_t(orbit_cap)];
+            }
+            ck(cudaMemcpyToSymbol(D_MS_LOW_BATCH_LOW_COUNT,
+                                  hlow.data(), sizeof(hlow)),
+               "LOW mask-batch LOW-count table");
+        }
+#endif
+
         std::vector<MaskShardLowGroupPackedBase> hs(mask_of_local.size());
+#ifndef MASKSHARD_LOW_MASKBATCH_REBUILD_DYNAMIC
         std::vector<MaskShardLowBatchDynamicConfig> hd(
             mask_of_local.size() * FULL_CAP);
+#endif
         for (std::size_t local = 0; local < mask_of_local.size(); ++local) {
             const std::uint32_t mask = mask_of_local[local];
             hs[local] = maskshard_build_low_group_packed_static_uncached(mask);
@@ -123,8 +160,10 @@ struct MaskShardLowMaskBatchDeviceTables {
                         std::exit(351);
                     }
                 }
+#ifndef MASKSHARD_LOW_MASKBATCH_REBUILD_DYNAMIC
                 hd[local * FULL_CAP + std::size_t(cap - 1)] =
                     maskshard_extract_low_batch_dynamic(cfg);
+#endif
             }
         }
 
@@ -135,6 +174,7 @@ struct MaskShardLowMaskBatchDeviceTables {
                           cudaMemcpyHostToDevice),
                "LOW mask-batch static config copy");
         }
+#ifndef MASKSHARD_LOW_MASKBATCH_REBUILD_DYNAMIC
         if (!hd.empty()) {
             ck(cudaMalloc(&d_dynamic, hd.size() * sizeof(hd[0])),
                "LOW mask-batch dynamic config alloc");
@@ -142,11 +182,16 @@ struct MaskShardLowMaskBatchDeviceTables {
                           cudaMemcpyHostToDevice),
                "LOW mask-batch dynamic config copy");
         }
+#endif
 
         std::cerr << "LOW mask-batch resident config dev=" << dev
                   << " masks=" << mask_of_local.size()
                   << " static_mib="
                   << double(hs.size() * sizeof(hs[0])) / double(1ULL << 20)
+#ifdef MASKSHARD_LOW_MASKBATCH_REBUILD_DYNAMIC
+                  << " dynamic_bytes_per_mask_cap=0 dynamic_mib=0"
+                  << " rebuild_dynamic=1"
+#else
                   << " dynamic_bytes_per_mask_cap="
                   << sizeof(MaskShardLowBatchDynamicConfig)
                   << " dynamic_mib="
@@ -155,6 +200,7 @@ struct MaskShardLowMaskBatchDeviceTables {
                   << " compact_dynamic=1"
 #else
                   << " compact_dynamic=0"
+#endif
 #endif
                   << '\n';
     }
