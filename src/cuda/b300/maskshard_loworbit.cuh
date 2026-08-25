@@ -1,0 +1,265 @@
+#pragma once
+
+#include <cstdint>
+#include "maskshard_index.cuh"
+
+static_assert(LOW_LUT_K < 15, "compact LOW+center orbit code requires LOW<15");
+
+__device__ __forceinline__ uint32_t maskshard_active_low_center(
+    const FBlock& x, uint32_t low_all_rank
+) {
+    constexpr int L = LOW_LUT_K;
+    const uint32_t lc = D_F_LOW_ALL_CODES[D_F_LOW_ALL_OFF[x.hs] + low_all_rank];
+    return lc | (uint32_t(x.c) << (2 * L));
+}
+
+__device__ __forceinline__ MateValuePair maskshard_low_pair_from_active(
+    uint32_t active, int p
+) {
+    return MateValuePair((active >> (2 * (p - 1))) & 15u);
+}
+
+__device__ __forceinline__ MateValuePair maskshard_low_pair(
+    const FBlock& x, uint32_t low_all_rank, int p
+) {
+    return maskshard_low_pair_from_active(
+        maskshard_active_low_center(x, low_all_rank), p);
+}
+
+__device__ __forceinline__ uint32_t maskshard_set_low_pair(
+    uint32_t active, int p, MateValuePair v
+) {
+    const uint32_t shift = uint32_t(2 * (p - 1));
+    const uint32_t z = 15u << shift;
+    return (active & ~z) | (uint32_t(v) << shift);
+}
+
+__device__ __forceinline__ uint32_t maskshard_drop_low_symbol(
+    uint32_t active, int p
+) {
+    const uint32_t shift = uint32_t(2 * p);
+    const uint32_t lowmask = (uint32_t(1) << shift) - 1u;
+    return (active & lowmask) | ((active & ~lowmask) >> 2);
+}
+
+__device__ __forceinline__ Code maskshard_main_from_low_active(
+    const FBlock& source, uint32_t active, uint32_t high_mask_rank
+) {
+    constexpr int L = LOW_LUT_K;
+    constexpr uint32_t LM = (uint32_t(1) << (2 * L)) - 1u;
+    const uint32_t lc = active & LM;
+    const uint32_t cv = (active >> (2 * L)) & 3u;
+    const uint32_t packed = D_F_LOW_PACKED_RANK[lc];
+    if (packed == 0xffffffffu) return ~Code(0);
+    const uint32_t lr = packed >> L;
+    const int bid = 3 * int(source.he) + int(cv);
+    const FBlock y = D_F_MAIN_BLOCKS[bid];
+    return y.off + Code(high_mask_rank) * y.stride + lr;
+}
+
+__device__ __forceinline__ Code maskshard_block_from_low_active(
+    const FBlock& source, uint32_t blocked_low, uint32_t high_mask_rank
+) {
+    constexpr int L = LOW_LUT_K;
+    const uint32_t packed = D_F_LOW_PACKED_RANK[blocked_low];
+    if (packed == 0xffffffffu) return ~Code(0);
+    const uint32_t lr = packed >> L;
+    const FBlock y = D_F_BLOCK_BLOCKS[source.he];
+    return y.off + Code(high_mask_rank) * y.stride + lr;
+}
+
+__global__ void maskshard_main_block_loworbit_kernel(
+    Count* mainv, Count* blockv, Code n, int p
+) {
+    const Code step = Code(gridDim.x) * blockDim.x;
+    const uint32_t pi = uint32_t(LOW_LUT_K - p);
+
+#ifdef MASKSHARD_BLOCK_ORBIT
+    const int last_bid = D_F_BLOCK_NBLOCKS - 1;
+    if (last_bid < 0) return;
+    const Code block_n = D_F_BLOCK_BLOCKS[last_bid].end;
+    Code di = Code(blockIdx.x) * blockDim.x + threadIdx.x;
+    for (; di < block_n; di += step) {
+        const int dbid = f_find_block(di);
+        const FBlock dx = D_F_BLOCK_BLOCKS[dbid];
+        uint32_t dhr = 0, dlr = 0;
+        maskshard_split_rank(di, dx, dhr, dlr);
+
+        const size_t bdi = size_t(pi) * D_LOWDESC_BLOCK_TOTAL
+                         + D_LOWDESC_BLOCK_BASE[dbid] + dlr;
+        const uint32_t bdesc = D_LOWDESC_BLOCK[bdi];
+        if (lowdesc_kind(bdesc) != LOWDESC_MAIN) continue;
+        const uint32_t sbid = lowdesc_block(bdesc);
+        const uint32_t slr = lowdesc_lr(bdesc);
+        const FBlock sx = D_F_MAIN_BLOCKS[sbid];
+        const Code i = sx.off + Code(dhr) * sx.stride + slr;
+
+        const size_t sdi = size_t(pi) * D_LOWDESC_MAIN_TOTAL
+                         + D_LOWDESC_MAIN_BASE[sbid] + slr;
+#ifdef MASKSHARD_BLOCK_ORBIT_AUX
+        // v0.7 compact aux follows block_desc coordinates exactly.
+        const uint32_t aux = D_MS_LOW_ORBIT_AUX[bdi];
+#else
+        const uint32_t aux = D_MS_LOW_ORBIT_AUX[sdi];
+#endif
+        const uint32_t ak = maskshard_orbit_aux_kind(aux);
+        if (ak == MS_ORBIT_AUX_INVALID) continue;
+
+        const Count c = mainv[i];
+        const Count d = blockv[di];
+        if (ak == MS_ORBIT_AUX_NN || p == 1) {
+            const uint32_t desc = D_LOWDESC_MAIN[sdi];
+            if (lowdesc_kind(desc) != LOWDESC_MAIN) continue;
+            const FBlock y = D_F_MAIN_BLOCKS[lowdesc_block(desc)];
+            const Code j = y.off + Code(dhr) * y.stride + lowdesc_lr(desc);
+            if (ak == MS_ORBIT_AUX_NN) {
+                mainv[j] = maskshard_add_mod_plain(mainv[j], c);
+                mainv[i] = maskshard_add_mod_plain(c, d);
+                blockv[di] = 0;
+            } else {
+                const Count cc = mainv[j];
+                mainv[i] = maskshard_add_mod_plain(maskshard_add_mod_plain(c, cc), d);
+                mainv[j] = maskshard_add_mod_plain(c, cc);
+                blockv[di] = 0;
+            }
+        } else {
+            const FBlock y = D_F_MAIN_BLOCKS[maskshard_orbit_aux_block(aux)];
+            const Code j = y.off + Code(dhr) * y.stride + maskshard_orbit_aux_rank(aux);
+            const Count cc = mainv[j];
+            mainv[i] = maskshard_add_mod_plain(maskshard_add_mod_plain(c, cc), d);
+            blockv[di] = c;
+        }
+    }
+    (void)n;
+#else
+    Code i = Code(blockIdx.x) * blockDim.x + threadIdx.x;
+    for (; i < n; i += step) {
+        const int bid = f_find_main(i);
+        const FBlock x = D_F_MAIN_BLOCKS[bid];
+        uint32_t hr = 0, lr = 0;
+        maskshard_split_rank(i, x, hr, lr);
+
+#ifdef MASKSHARD_ORBIT_AUX
+        const size_t di = size_t(pi) * D_LOWDESC_MAIN_TOTAL
+                        + D_LOWDESC_MAIN_BASE[bid] + lr;
+        const uint32_t aux = D_MS_LOW_ORBIT_AUX[di];
+        const uint32_t ak = maskshard_orbit_aux_kind(aux);
+        if (ak == MS_ORBIT_AUX_INVALID) continue;
+        const uint32_t desc = D_LOWDESC_MAIN[di];
+
+        Code j = ~Code(0), dj = ~Code(0);
+        if (ak == MS_ORBIT_AUX_NN || p == 1) {
+            if (lowdesc_kind(desc) != LOWDESC_MAIN) continue;
+            const FBlock ym = D_F_MAIN_BLOCKS[lowdesc_block(desc)];
+            const FBlock yd = D_F_BLOCK_BLOCKS[maskshard_orbit_aux_block(aux)];
+            j = ym.off + Code(hr) * ym.stride + lowdesc_lr(desc);
+            dj = yd.off + Code(hr) * yd.stride + maskshard_orbit_aux_rank(aux);
+        } else {
+            if (lowdesc_kind(desc) != LOWDESC_BLOCK) continue;
+            const FBlock ym = D_F_MAIN_BLOCKS[maskshard_orbit_aux_block(aux)];
+            const FBlock yd = D_F_BLOCK_BLOCKS[lowdesc_block(desc)];
+            j = ym.off + Code(hr) * ym.stride + maskshard_orbit_aux_rank(aux);
+            dj = yd.off + Code(hr) * yd.stride + lowdesc_lr(desc);
+        }
+
+        const Count c = mainv[i];
+        const Count d = blockv[dj];
+        if (ak == MS_ORBIT_AUX_NN) {
+            mainv[j] = maskshard_add_mod_plain(mainv[j], c);
+            mainv[i] = maskshard_add_mod_plain(c, d);
+            blockv[dj] = 0;
+        } else {
+            const Count cc = mainv[j];
+            const Count all = maskshard_add_mod_plain(maskshard_add_mod_plain(c, cc), d);
+            mainv[i] = all;
+            if (p == 1) {
+                mainv[j] = maskshard_add_mod_plain(c, cc);
+                blockv[dj] = 0;
+            } else {
+                blockv[dj] = c;
+            }
+        }
+#else
+        const uint32_t active = maskshard_active_low_center(x, lr);
+        const MateValuePair w = maskshard_low_pair_from_active(active, p);
+        if (w != NN && w != NR && w != NL) continue;
+
+        MateValuePair cw = LR;
+        if (w == NR) cw = RN;
+        else if (w == NL) cw = LN;
+        const Code j = maskshard_main_from_low_active(
+            x, maskshard_set_low_pair(active, p, cw), hr);
+        const Code dj = maskshard_block_from_low_active(
+            x, maskshard_drop_low_symbol(active, p), hr);
+        if (j == ~Code(0) || dj == ~Code(0)) continue;
+
+        const Count c = mainv[i];
+        const Count d = blockv[dj];
+        if (w == NN) {
+            mainv[j] = maskshard_add_mod_plain(mainv[j], c);
+            mainv[i] = maskshard_add_mod_plain(c, d);
+            blockv[dj] = 0;
+        } else {
+            const Count cc = mainv[j];
+            const Count all = maskshard_add_mod_plain(maskshard_add_mod_plain(c, cc), d);
+            mainv[i] = all;
+            if (p == 1) {
+                mainv[j] = maskshard_add_mod_plain(c, cc);
+                blockv[dj] = 0;
+            } else {
+                blockv[dj] = c;
+            }
+        }
+#endif
+    }
+#endif
+}
+
+__global__ void maskshard_main_lowdesc_closure_inplace_kernel(
+    Count* mainv, Count* blockv, Code n, int p
+) {
+    constexpr int S = MAXW + 2;
+    constexpr uint32_t HR_MASK = (1u << HIGH_LUT_K) - 1u;
+    Code i = Code(blockIdx.x) * blockDim.x + threadIdx.x;
+    const Code step = Code(gridDim.x) * blockDim.x;
+    const uint32_t pi = uint32_t(LOW_LUT_K - p);
+    for (; i < n; i += step) {
+        const int bid = f_find_main(i);
+        const FBlock x = D_F_MAIN_BLOCKS[bid];
+        uint32_t hr = 0, lr = 0;
+        maskshard_split_rank(i, x, hr, lr);
+        const MateValuePair w = maskshard_low_pair(x, lr, p);
+        if (w != LL && w != RR && w != RL) continue;
+
+        const Count c = mainv[i];
+        if (!c) continue;
+        const uint32_t desc = D_LOWDESC_MAIN[
+            size_t(pi) * D_LOWDESC_MAIN_TOTAL + D_LOWDESC_MAIN_BASE[bid] + lr];
+        const uint32_t kind = lowdesc_kind(desc);
+        if (kind == LOWDESC_MAIN) {
+            const FBlock y = D_F_MAIN_BLOCKS[lowdesc_block(desc)];
+            const Code j = y.off + Code(hr) * y.stride + lowdesc_lr(desc);
+            atomic_add_mod(mainv + j, c);
+        } else if (kind == LOWDESC_BLOCK) {
+            const FBlock y = D_F_BLOCK_BLOCKS[lowdesc_block(desc)];
+            const Code j = y.off + Code(hr) * y.stride + lowdesc_lr(desc);
+            atomic_add_mod(blockv + j, c);
+        } else if (kind == LOWDESC_CROSS) {
+            const uint32_t a = D_F_HIGH_MASK_OFF[size_t(D_F_MASK) * S + x.he];
+            const uint32_t hc = D_F_HIGH_MASK_CODES[a + hr];
+            const uint32_t hc2 = lowdesc_flip_high(hc, lowdesc_depth(desc));
+            if (hc2 == 0xffffffffu) continue;
+            const uint32_t hp = D_F_HIGH_PACKED_RANK[hc2];
+            const uint32_t hr2 = hp & HR_MASK;
+            if (p == 1) {
+                const FBlock y = D_F_MAIN_BLOCKS[lowdesc_block(desc)];
+                const Code j = y.off + Code(hr2) * y.stride + lowdesc_lr(desc);
+                atomic_add_mod(mainv + j, c);
+            } else {
+                const FBlock y = D_F_BLOCK_BLOCKS[lowdesc_block(desc)];
+                const Code j = y.off + Code(hr2) * y.stride + lowdesc_lr(desc);
+                atomic_add_mod(blockv + j, c);
+            }
+        }
+    }
+}

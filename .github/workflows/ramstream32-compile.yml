@@ -2,24 +2,8 @@ name: ramstream32 CUDA compile
 
 on:
   push:
-    paths:
-      - 'src/cuda/gridfp/oneesan_cuda_gridfp_ramstream32_factorized_forced2.cu'
-      - 'src/cuda/gridfp/oneesan_cuda_gridfp_ramstream32_factorized_direct2d.cu'
-      - 'src/cuda/gridfp/oneesan_cuda_gridfp_ramstream32_factorized_lowdesc.cu'
-      - 'src/cuda/gridfp/oneesan_cuda_gridfp_ramstream32_factorized_bidesc*.cu'
-      - 'src/cuda/gridfp/oneesan_cuda_gridfp_ramstream32_factorized_hybrid*.cu'
-      - 'src/cuda/gridfp/ramstream32_factorized_storage.hpp'
-      - 'src/cuda/gridfp/ramstream32_lowdesc.cuh'
-      - 'src/cuda/gridfp/ramstream32_highdesc.cuh'
-      - 'src/cuda/gridfp/ramstream32_bidesc_compact.cuh'
-      - 'src/cuda/gridfp/ramstream32_cpu_low*.hpp'
-      - 'src/cuda/gridfp/probes/ramstream32_cpu_low_selftest.cu'
-      - 'src/cuda/b300/oneesan_cuda_gridfp_b300_hbm32_factorized_batch.cu'
-      - 'src/cpp/probes/factor_window_mask_components.cpp'
-      - 'src/cuda/common/**'
-      - 'scripts/build/gridfp-ramstream32-factorized*.sh'
-      - '.github/workflows/ramstream32-compile.yml'
-  pull_request:
+    branches:
+      - main
     paths:
       - 'src/cuda/gridfp/oneesan_cuda_gridfp_ramstream32_factorized_forced2.cu'
       - 'src/cuda/gridfp/oneesan_cuda_gridfp_ramstream32_factorized_direct2d.cu'
@@ -38,6 +22,10 @@ on:
       - 'scripts/build/gridfp-ramstream32-factorized*.sh'
       - '.github/workflows/ramstream32-compile.yml'
   workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
 
 jobs:
   compile:
