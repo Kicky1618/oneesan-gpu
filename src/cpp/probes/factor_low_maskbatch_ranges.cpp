@@ -17,8 +17,8 @@ int main(int argc, char** argv) {
         || max_replicas < 1 || max_replicas > 65535 || target == 0)
         return 1;
 
-    std::vector<std::uint8_t> owner(std::size_t(masks));
-    std::vector<std::uint64_t> tasks(std::size_t(masks));
+    std::vector<std::uint8_t> owner(static_cast<std::size_t>(masks));
+    std::vector<std::uint64_t> tasks(static_cast<std::size_t>(masks));
     for (int m = 0; m < masks; ++m) {
         owner[std::size_t(m)] = std::uint8_t((m * 5 + 3) % devices);
         tasks[std::size_t(m)] = (m % 19 == 0) ? 0ULL
