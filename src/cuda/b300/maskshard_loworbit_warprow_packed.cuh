@@ -35,8 +35,8 @@ static void maskshard_configure_low_group_warprow(std::uint32_t mask) {
 
     MaskShardLowGroupPackedConfig cfg =
         maskshard_build_low_group_packed_base(mask);
-    const int cap = std::min(
-        G_MS_LOW_ORBIT_COMPACT_ROW[size_t(dev)] + 1, TARGET_W / 2);
+    const int zero_based_row = G_MS_LOW_ORBIT_COMPACT_ROW[size_t(dev)];
+    const int cap = std::min(zero_based_row + 1, TARGET_W / 2);
 
     std::array<Code, HIGH_LUT_K + 3> state_prefix{};
     std::array<std::uint32_t, HIGH_LUT_K + 2> low_count{};
@@ -67,6 +67,52 @@ static void maskshard_configure_low_group_warprow(std::uint32_t mask) {
         }
         cfg.warp_prefix[h + 1] = std::uint32_t(warp_total);
     }
+
+#ifdef MASKSHARD_LOW_CLOSURE_PACKED_PREFIX
+    if (!G_MS_LOW_CLOSURE_PREFIX_HOST.built) {
+        std::cerr << "packed LOW closure prefix host metadata unavailable\n";
+        std::exit(341);
+    }
+    constexpr int H = HIGH_LUT_K;
+    constexpr int FULL_CAP = (TARGET_W + 1) / 2;
+    constexpr int CAP_STRIDE = FULL_CAP + 1;
+    const int closure_cap = std::min(zero_based_row + 1, FULL_CAP);
+    const auto& host = G_MS_LOW_CLOSURE_PREFIX_HOST;
+    for (int pi = 0; pi < LOW_LUT_K; ++pi) {
+        std::uint64_t total = 0;
+        cfg.closure_prefix[pi][0] = 0;
+        for (int b = 0; b < cfg.main_nblocks; ++b) {
+            const FBlock x = cfg.main_blocks[b];
+            const std::uint32_t a = host.block_off[
+                std::size_t(pi) * 65 + std::size_t(b)];
+            const std::uint32_t z = host.block_off[
+                std::size_t(pi) * 65 + std::size_t(b + 1)];
+            const std::uint32_t selected = closure_cap >= FULL_CAP
+                ? z - a
+                : host.compact_active_count[
+                    (std::size_t(pi) * 65 + std::size_t(b)) * CAP_STRIDE
+                    + std::size_t(closure_cap)];
+            const std::uint32_t rows = closure_cap >= FULL_CAP
+                ? (x.stride
+                    ? std::uint32_t((x.end - x.off) / x.stride)
+                    : 0u)
+                : std::uint32_t(host.high_active_count[
+                    (std::size_t(mask) * (H + 2) + x.he) * CAP_STRIDE
+                    + std::size_t(closure_cap)]);
+            const std::uint32_t chunks = (selected + 31u) >> 5;
+            total += std::uint64_t(rows) * chunks;
+            if (total > 0xffffffffULL) {
+                std::cerr << "packed LOW closure prefix u32 overflow mask="
+                          << mask << " pi=" << pi << " b=" << b
+                          << " total=" << total << '\n';
+                std::exit(342);
+            }
+            cfg.closure_prefix[pi][b + 1] = std::uint32_t(total);
+        }
+        for (int b = cfg.main_nblocks + 1; b < 65; ++b)
+            cfg.closure_prefix[pi][b] = std::uint32_t(total);
+    }
+#endif
 
     ck(cudaMemcpyToSymbol(D_MS_LOW_GROUP_PACKED, &cfg, sizeof(cfg)),
        "packed LOW group config");
