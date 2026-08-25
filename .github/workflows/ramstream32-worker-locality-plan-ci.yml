@@ -11,6 +11,7 @@ on:
       - 'scripts/build/gridfp-ramstream32-cpu-low-domain-worker-locality-plan.sh'
       - 'scripts/bench/ramstream32-cpu-low-domain-worker-locality-plan-sweep.sh'
       - 'docs/ramstream32-cpu-low-worker-locality.md'
+      - 'docs/ramstream32-cpu-low-worker-unique.md'
       - '.github/workflows/ramstream32-worker-locality-plan-ci.yml'
   pull_request:
     paths:
@@ -22,6 +23,7 @@ on:
       - 'scripts/build/gridfp-ramstream32-cpu-low-domain-worker-locality-plan.sh'
       - 'scripts/bench/ramstream32-cpu-low-domain-worker-locality-plan-sweep.sh'
       - 'docs/ramstream32-cpu-low-worker-locality.md'
+      - 'docs/ramstream32-cpu-low-worker-unique.md'
       - '.github/workflows/ramstream32-worker-locality-plan-ci.yml'
   workflow_dispatch:
 
@@ -112,8 +114,10 @@ jobs:
           d=docs/ramstream32-cpu-low-worker-locality.md
           grep -Fq 'v5.25' "$d"
           grep -Fq 'v5.26' "$d"
-          grep -Fq 'v5.27' "$d"
-          grep -Fq 'global-unique-neighbor-coalesce' "$d"
-          grep -Fq 'cross-worker' "$d"
           grep -Fq 'max worker load cannot increase' "$d"
           grep -Fq 'ramstream32-cpu-low-domain-worker-locality-plan-sweep.sh' "$d"
+          u=docs/ramstream32-cpu-low-worker-unique.md
+          grep -Fq 'v5.27' "$u"
+          grep -Fq 'global-unique-neighbor-coalesce' "$u"
+          grep -Fq 'v5.26_better_basin' "$u"
+          grep -Fq 'exact global unique' "$u"
