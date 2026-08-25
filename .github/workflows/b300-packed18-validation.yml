@@ -1,0 +1,73 @@
+name: B300 packed18 validation
+
+on:
+  push:
+    paths:
+      - 'src/cuda/gridfp/ramstream32_bucket_orbit_closure_packed18.cuh'
+      - 'src/cuda/gridfp/ramstream32_bucket_orbit_closure_packed18_stream.cuh'
+      - 'src/cuda/gridfp/ramstream32_bucket_orbit_closure_packed18_graph.cuh'
+      - 'src/cuda/gridfp/probes/ramstream32_orbit_closure_packed18_plan.cu'
+      - 'src/cuda/gridfp/probes/ramstream32_bucket_orbit_closure_packed18_selftest.cu'
+      - 'src/cuda/b300/oneesan_cuda_gridfp_b300_bucket_snake_onepass_packed18*.cu'
+      - 'scripts/build/b300-bucket-snake-packed18-batch.sh'
+      - 'scripts/build/b300-bucket-snake-packed18-graph-batch.sh'
+      - 'scripts/run/b300x8-bucket-snake-packed18-exact.sh'
+      - 'scripts/run/b300x8-bucket-snake-packed18-graph-exact.sh'
+      - '.github/workflows/b300-packed18-validation.yml'
+  workflow_dispatch:
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    container: nvidia/cuda:12.8.1-devel-ubuntu22.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Compile and run W10 packed18 reconstruction plan
+        shell: bash
+        run: |
+          mkdir -p build
+          nvcc -O3 -std=c++17 -lineinfo -arch=sm_80 \
+            -DTARGET_W=10 -DLOW_LUT_K=5 -DHIGH_LUT_K=4 \
+            src/cuda/gridfp/probes/ramstream32_orbit_closure_packed18_plan.cu \
+            -o build/packed18_plan_w10
+          build/packed18_plan_w10 | tee /tmp/packed18-plan.txt
+          grep -Fq 'orbit-closure-packed18-plan OK W=10' /tmp/packed18-plan.txt
+          grep -Fq 'forward_bytes_per_orbit=1' /tmp/packed18-plan.txt
+          grep -Fq 'reverse_bytes_per_orbit=1.25' /tmp/packed18-plan.txt
+      - name: Compile W10 packed18 CUDA selftest
+        shell: bash
+        run: |
+          nvcc -O3 -std=c++17 -lineinfo -arch=sm_80 \
+            -DTARGET_W=10 -DLOW_LUT_K=5 -DHIGH_LUT_K=4 \
+            src/cuda/gridfp/probes/ramstream32_bucket_orbit_closure_packed18_selftest.cu \
+            -o build/packed18_selftest_w10
+          build/packed18_selftest_w10 | tee /tmp/packed18-selftest.txt
+          grep -Eq 'bucket-orbit-closure-packed18-selftest (OK W=10|SKIP no CUDA device)' /tmp/packed18-selftest.txt
+      - name: Compile W10 PM packed18 CUDA selftest
+        shell: bash
+        run: |
+          nvcc -O3 -std=c++17 -lineinfo -arch=sm_80 \
+            -DTARGET_W=10 -DLOW_LUT_K=5 -DHIGH_LUT_K=4 -DGPU_DIRECT_PM_ACCUM=1 \
+            src/cuda/gridfp/probes/ramstream32_bucket_orbit_closure_packed18_selftest.cu \
+            -o build/packed18_selftest_pm_w10
+      - name: Compile W28 packed18 pipeline batch
+        shell: bash
+        run: |
+          nvcc -O3 -std=c++17 -lineinfo -arch=sm_80 \
+            -DTARGET_W=28 -DLOW_LUT_K=14 -DHIGH_LUT_K=13 \
+            src/cuda/b300/oneesan_cuda_gridfp_b300_bucket_snake_onepass_packed18_batch_pipeline.cu \
+            -o build/packed18_batch_pipeline_w28
+      - name: Compile W28 packed18 graph pipeline batch
+        shell: bash
+        run: |
+          nvcc -O3 -std=c++17 -lineinfo -arch=sm_80 \
+            -DTARGET_W=28 -DLOW_LUT_K=14 -DHIGH_LUT_K=13 \
+            src/cuda/b300/oneesan_cuda_gridfp_b300_bucket_snake_onepass_packed18_graph_batch_pipeline.cu \
+            -o build/packed18_graph_pipeline_w28
+      - name: Compile W28 PM packed18 graph pipeline batch
+        shell: bash
+        run: |
+          nvcc -O3 -std=c++17 -lineinfo -arch=sm_80 \
+            -DTARGET_W=28 -DLOW_LUT_K=14 -DHIGH_LUT_K=13 -DGPU_DIRECT_PM_ACCUM=1 \
+            src/cuda/b300/oneesan_cuda_gridfp_b300_bucket_snake_onepass_packed18_graph_batch_pipeline.cu \
+            -o build/packed18_graph_pipeline_pm_w28
