@@ -12,7 +12,7 @@ int main(int argc, char** argv) {
     const int max_replicas = argc > 4 ? std::atoi(argv[4]) : 16;
     const int high = W - 1 - low;
     if (W < 4 || low < 1 || high < 1 || high >= 31
-        || ngpu < 1 || max_replicas < 1 || max_replicas > 255)
+        || ngpu < 1 || max_replicas < 1 || max_replicas > 65535)
         return 1;
 
     const U64 masks = U64(1) << high;
