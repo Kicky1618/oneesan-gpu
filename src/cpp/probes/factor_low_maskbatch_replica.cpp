@@ -12,7 +12,7 @@ int main(int argc, char** argv) {
     const std::uint64_t target_per_cta = argc > 4
         ? std::strtoull(argv[4], nullptr, 10) : 4096ULL;
     if (masks < 1 || masks > 65535 || warps < 1 || max_replicas < 1
-        || target_per_cta < 1)
+        || max_replicas > 65535 || target_per_cta < 1)
         return 1;
 
     std::vector<std::uint64_t> tasks(size_t(masks));
@@ -32,7 +32,13 @@ int main(int argc, char** argv) {
     for (int m = 0; m < masks; ++m)
         seen[size_t(m)].assign(size_t(tasks[size_t(m)]), std::uint8_t(0));
 
+    bool saw_wide_replica = false;
+    std::uint16_t max_replica_field = 0;
+    std::uint16_t max_replicas_field = 0;
     for (const MaskShardLowBatchDesc& d : descs) {
+        max_replica_field = std::max(max_replica_field, d.replica);
+        max_replicas_field = std::max(max_replicas_field, d.replicas);
+        saw_wide_replica = saw_wide_replica || d.replica > 255u || d.replicas > 255u;
         const std::uint64_t total = tasks[d.mask];
         for (int w = 0; w < warps; ++w) {
             std::uint64_t task = std::uint64_t(d.replica) * std::uint64_t(warps)
@@ -62,12 +68,21 @@ int main(int argc, char** argv) {
         }
     }
 
+    if (max_replicas > 255 && !saw_wide_replica) {
+        std::cerr << "wide replica ABI was not exercised max_replicas="
+                  << max_replicas << '\n';
+        return 4;
+    }
+
     std::cout << "low-maskbatch-replica masks=" << masks
               << " warps_per_cta=" << warps
               << " max_replicas=" << max_replicas
               << " descriptors=" << descs.size()
               << " descriptor_bytes="
               << descs.size() * sizeof(MaskShardLowBatchDesc)
+              << " max_replica_field=" << max_replica_field
+              << " max_replicas_field=" << max_replicas_field
+              << " wide_replica_exercised=" << (saw_wide_replica ? 1 : 0)
               << " total_tasks=" << total_tasks
               << " exact_cover=1\n";
     return 0;
