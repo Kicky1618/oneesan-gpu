@@ -1,6 +1,6 @@
 # RAMstream32 CPU LOW page-aware experiment protocol
 
-The core hybrid backend banner remains v5.22, while the page-aware second-stage scheduler uses the v5.23 relaxed objective.
+The core hybrid backend banner remains v5.22, while the production page-aware second-stage scheduler uses the v5.23 relaxed objective.
 
 Production first builds the ordinary refined-domain assignment. Page-aware mode then searches nearby ordered domain boundaries subject to the hard guard:
 
@@ -78,9 +78,64 @@ max_worker_cells_after=...
 
 A high `max_guard_rejections / candidate_evaluations` ratio means the remaining search space is constrained mainly by load balance. A low ratio with few page moves means page alignment, rather than the load guard, is probably the limiting factor.
 
+## v5.24 global-unique research optimizer
+
+For three or more domains, the production v5.23 objective is still local: it minimizes the sum of per-boundary page penalties. Two different domain boundaries can map to the same VM page, so minimizing that sum is not always identical to minimizing the final global unique cross-domain page count.
+
+A research-only v5.24 planner now evaluates the exact union of page IDs across every domain boundary. Main and blocked authoritative arrays are tagged as distinct address spaces before the union is counted.
+
+It is deliberately not wired into production. The experiment runs:
+
+```text
+ordinary refined domain
+  -> local v5.23 page pass
+  -> global-unique v5.24 page pass
+```
+
+The v5.24 stage keeps the same pair-max safety guard and ranks candidates by:
+
+```text
+1. global unique 2 MiB cross-domain pages
+2. global unique 4 KiB cross-domain pages
+3. pair_sum
+4. pair_max
+5. boundary displacement
+```
+
+Build and sweep it with:
+
+```bash
+N=27 bash scripts/build/gridfp-ramstream32-cpu-low-global-page-plan.sh
+
+N=27 \
+CONFIGS='32:16 64:32 96:48 128:64' \
+bash scripts/bench/ramstream32-cpu-low-global-page-plan-sweep.sh
+```
+
+The probe compares three assignments:
+
+```text
+refined: ordinary load-refined domain schedule
+local:   refined + production v5.23 local page pass
+global:  local + research v5.24 global-unique pass
+```
+
+Hard checks are:
+
+```text
+local_max_worker_cells <= refined_max_worker_cells
+global_max_worker_cells <= local_max_worker_cells
+(global_pages_2m, global_pages_4k)
+  <= (local_global_pages_2m, local_global_pages_4k)
+```
+
+The sweep reports `classification=global_beats_local` only when the exact global unique tuple improves beyond v5.23. `global_ties_local` means the extra optimization stage did not buy structural locality for that topology.
+
+This is the current promotion gate: v5.24 should not be added to production unless n=27 topology sweeps show repeated `global_beats_local` cases with modest schedule-build cost. Runtime timing would still be required after that, because fewer shared VM pages do not automatically imply fewer remote-memory transactions.
+
 ## Page-aware runtime A/B
 
-After a promising preflight result:
+After a promising v5.23 preflight result:
 
 ```bash
 N=27 \
@@ -106,7 +161,7 @@ RAMSTREAM_NUMA_SAMPLE_MIB=0
 
 and alternates only page=0/page=1 order. It verifies identical residues and stdout/stderr provenance.
 
-The TSV now records both performance and search behavior:
+The TSV records both performance and search behavior:
 
 ```text
 wall_s
@@ -126,15 +181,15 @@ page_penalty_4k_before/after
 
 A useful result must improve clean `cpu_low_wall_s` or whole wall time enough to amortize one-time schedule construction. Static page improvement alone is not sufficient.
 
-## How to interpret v5.23 versus v5.22
+## How to interpret v5.23 versus the old strict objective
 
-The most informative cases are:
+The most informative case is:
 
 ```text
 page_improve_sum_increase_moves > 0
 ```
 
-The relaxed criterion definitely used candidates unavailable to v5.22.
+The relaxed criterion definitely used candidates unavailable to the old strict objective.
 
 ```text
 page_improving_moves > 0
