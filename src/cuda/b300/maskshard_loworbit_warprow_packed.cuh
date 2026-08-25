@@ -21,10 +21,8 @@
 
 #include "maskshard_low_group_packed_closure.cuh"
 
-// v0.38: construct the exact state plan once, derive the warp-row plan from the
-// same host arrays, and upload every mutable per-group field with one symbol
-// copy.  The old compact state prefix is not copied because the active warp-row
-// kernel never reads it; only its host total is retained for exact launch sizing.
+// Construct the exact orbit/closure plans once per LOW group and upload all
+// mutable fields with one symbol copy.
 static void maskshard_configure_low_group_warprow(std::uint32_t mask) {
     int dev = -1;
     ck(cudaGetDevice(&dev), "packed LOW warp-row group get device");
@@ -74,6 +72,7 @@ static void maskshard_configure_low_group_warprow(std::uint32_t mask) {
         std::exit(341);
     }
     constexpr int H = HIGH_LUT_K;
+    constexpr int S = FactorTablesHost::STRIDE;
     constexpr int FULL_CAP = (TARGET_W + 1) / 2;
     constexpr int CAP_STRIDE = FULL_CAP + 1;
     const int closure_cap = std::min(zero_based_row + 1, FULL_CAP);
@@ -108,10 +107,25 @@ static void maskshard_configure_low_group_warprow(std::uint32_t mask) {
                 std::exit(342);
             }
             cfg.closure_prefix[pi][b + 1] = std::uint32_t(total);
+#ifdef MASKSHARD_LOW_CLOSURE_PACKED_META
+            cfg.closure_begin[pi][b] = a;
+            cfg.closure_selected[pi][b] = selected;
+#endif
         }
         for (int b = cfg.main_nblocks + 1; b < 65; ++b)
             cfg.closure_prefix[pi][b] = std::uint32_t(total);
+#ifdef MASKSHARD_LOW_CLOSURE_PACKED_META
+        for (int b = cfg.main_nblocks; b < 65; ++b) {
+            cfg.closure_begin[pi][b] = 0;
+            cfg.closure_selected[pi][b] = 0;
+        }
+#endif
     }
+#ifdef MASKSHARD_LOW_CLOSURE_PACKED_META
+    for (int h = 0; h <= H + 1; ++h)
+        cfg.high_mask_off[h] = G_FACTOR.high_mask_off[
+            std::size_t(mask) * S + std::size_t(h)];
+#endif
 #endif
 
     ck(cudaMemcpyToSymbol(D_MS_LOW_GROUP_PACKED, &cfg, sizeof(cfg)),
