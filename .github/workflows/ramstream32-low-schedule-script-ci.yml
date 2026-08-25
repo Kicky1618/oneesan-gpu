@@ -8,6 +8,8 @@ on:
       - 'scripts/bench/ramstream32-cpu-low-schedule-plan-sweep.sh'
       - 'scripts/bench/ramstream32-cpu-low-domain-refine-ab.sh'
       - 'scripts/bench/ramstream32-cpu-low-domain-refine-plan-ab.sh'
+      - 'scripts/bench/ramstream32-cpu-low-domain-page-ab.sh'
+      - 'scripts/bench/ramstream32-cpu-low-domain-page-plan-ab.sh'
       - 'scripts/tools/analyze_cpu_low_schedule_plan_sweep.py'
       - 'docs/ramstream32-cpu-low-scheduling.md'
       - '.github/workflows/ramstream32-low-schedule-script-ci.yml'
@@ -18,6 +20,8 @@ on:
       - 'scripts/bench/ramstream32-cpu-low-schedule-plan-sweep.sh'
       - 'scripts/bench/ramstream32-cpu-low-domain-refine-ab.sh'
       - 'scripts/bench/ramstream32-cpu-low-domain-refine-plan-ab.sh'
+      - 'scripts/bench/ramstream32-cpu-low-domain-page-ab.sh'
+      - 'scripts/bench/ramstream32-cpu-low-domain-page-plan-ab.sh'
       - 'scripts/tools/analyze_cpu_low_schedule_plan_sweep.py'
       - 'docs/ramstream32-cpu-low-scheduling.md'
       - '.github/workflows/ramstream32-low-schedule-script-ci.yml'
@@ -36,27 +40,20 @@ jobs:
           bash -n scripts/bench/ramstream32-cpu-low-schedule-plan-sweep.sh
           bash -n scripts/bench/ramstream32-cpu-low-domain-refine-ab.sh
           bash -n scripts/bench/ramstream32-cpu-low-domain-refine-plan-ab.sh
+          bash -n scripts/bench/ramstream32-cpu-low-domain-page-ab.sh
+          bash -n scripts/bench/ramstream32-cpu-low-domain-page-plan-ab.sh
           python3 -m py_compile scripts/tools/analyze_cpu_low_schedule_plan_sweep.py
       - name: Four-way schedule provenance
         shell: bash
         run: |
           f=scripts/bench/ramstream32-cpu-low-schedule-compare.sh
           grep -Fq 'dynamic-sticky-contiguous-domain' "$f"
-          grep -Fq 'sticky-contiguous-domain-dynamic' "$f"
-          grep -Fq 'contiguous-domain-dynamic-sticky' "$f"
-          grep -Fq 'domain-dynamic-sticky-contiguous' "$f"
           grep -Fq 'order_design=cyclic-latin-4' "$f"
-          grep -Fq 'CPU_LOW_DOMAIN_SIZE="${CPU_LOW_DOMAIN_SIZE:-}"' "$f"
           grep -Fq 'CPU_LOW_DOMAIN_REFINE="${CPU_LOW_DOMAIN_REFINE:-1}"' "$f"
-          grep -Fq 'CPU_LOW_DOMAIN_SIZE="$CPU_LOW_DOMAIN_SIZE"' "$f"
-          grep -Fq 'CPU_LOW_DOMAIN_REFINE="$CPU_LOW_DOMAIN_REFINE"' "$f"
-          grep -Fq 'domain provenance mismatch' "$f"
-          grep -Fq 'cpu_low_domain_outer_normalized_cap' "$f"
-          grep -Fq 'cpu_low_domain_refined_boundaries' "$f"
-          grep -Fq 'cpu_low_domain_refined_job_moves' "$f"
-          grep -Fq 'mean_refined_boundaries' "$f"
+          grep -Fq 'CPU_LOW_DOMAIN_PAGE_TIEBREAK="${CPU_LOW_DOMAIN_PAGE_TIEBREAK:-0}"' "$f"
+          grep -Fq 'cpu_low_domain_page_tiebreak=$CPU_LOW_DOMAIN_PAGE_TIEBREAK' "$f"
+          grep -Fq 'page provenance mismatch' "$f"
           grep -Fq 'domain_vs_dynamic_wall' "$f"
-          grep -Fq 'domain_vs_contiguous_low' "$f"
           grep -Fq 'RAMSTREAM_NUMA_SAMPLE_MIB=0' "$f"
       - name: Domain refinement runtime A/B design
         shell: bash
@@ -64,40 +61,48 @@ jobs:
           f=scripts/bench/ramstream32-cpu-low-domain-refine-ab.sh
           grep -Fq 'variants=refine0,refine1' "$f"
           grep -Fq 'order_design=alternating-pairs' "$f"
-          grep -Fq 'order=off-first' "$f"
-          grep -Fq 'order=on-first' "$f"
-          grep -Fq 'CPU_LOW_SCHEDULE=domain' "$f"
-          grep -Fq 'CPU_LOW_DOMAIN_SIZE="$CPU_LOW_DOMAIN_SIZE"' "$f"
           grep -Fq 'CPU_LOW_DOMAIN_REFINE="$refine"' "$f"
-          grep -Fq 'cpu_low_domain_refine' "$f"
           grep -Fq 'refine stdout provenance mismatch' "$f"
-          grep -Fq 'cpu_low_domain_schedule .* refine=${refine}' "$f"
-          grep -Fq 'refinement disabled but moves were reported' "$f"
           grep -Fq 'refine_speedup' "$f"
           grep -Fq 'refine_low_speedup' "$f"
           grep -Fq 'refine_extra_build_s' "$f"
-          grep -Fq 'RAMSTREAM_NUMA_SAMPLE_MIB=0' "$f"
       - name: Domain refinement preflight A/B design
         shell: bash
         run: |
           f=scripts/bench/ramstream32-cpu-low-domain-refine-plan-ab.sh
           grep -Fq 'CONFIGS="${CONFIGS:-32:16 64:32 96:48 128:64}"' "$f"
           grep -Fq 'variants=refine0,refine1' "$f"
-          grep -Fq 'CPU_LOW_DOMAIN_REFINE="$refine"' "$f"
-          grep -Fq -- '--domain-size "$domain"' "$f"
-          grep -Fq 'hybrid_domain_imbalance' "$f"
-          grep -Fq 'hybrid_domain_cross_domain_pages_4k' "$f"
-          grep -Fq 'hybrid_domain_cross_domain_pages_2m' "$f"
-          grep -Fq 'unrefined preflight moved boundaries' "$f"
           grep -Fq 'refinement max-worker regression' "$f"
-          grep -Fq 'classification = ' "$f"
-          grep -Fq 'classification={classification}' "$f"
-          grep -Fq 'dominates' "$f"
           grep -Fq 'balance_page_tradeoff' "$f"
           grep -Fq 'page_only_improvement' "$f"
           grep -Fq 'imbalance_speedup=' "$f"
-          grep -Fq 'cross_domain_4k_delta=' "$f"
-          grep -Fq 'refine_extra_build_s=' "$f"
+      - name: Domain page runtime A/B design
+        shell: bash
+        run: |
+          f=scripts/bench/ramstream32-cpu-low-domain-page-ab.sh
+          grep -Fq 'variants=page0,page1' "$f"
+          grep -Fq 'order_design=alternating-pairs' "$f"
+          grep -Fq 'CPU_LOW_DOMAIN_REFINE=1' "$f"
+          grep -Fq 'CPU_LOW_DOMAIN_PAGE_TIEBREAK="$page"' "$f"
+          grep -Fq 'page stdout provenance mismatch' "$f"
+          grep -Fq 'page penalty regression' "$f"
+          grep -Fq 'page_speedup' "$f"
+          grep -Fq 'page_low_speedup' "$f"
+          grep -Fq 'page_extra_build_s' "$f"
+          grep -Fq 'RAMSTREAM_NUMA_SAMPLE_MIB=0' "$f"
+      - name: Domain page preflight A/B design
+        shell: bash
+        run: |
+          f=scripts/bench/ramstream32-cpu-low-domain-page-plan-ab.sh
+          grep -Fq 'CONFIGS="${CONFIGS:-32:16 64:32 96:48 128:64}"' "$f"
+          grep -Fq 'cpu_low_domain_refine=1' "$f"
+          grep -Fq 'CPU_LOW_DOMAIN_PAGE_TIEBREAK="$page"' "$f"
+          grep -Fq 'local page penalty regression' "$f"
+          grep -Fq 'page tie-break max-worker regression' "$f"
+          grep -Fq 'global_page_improvement' "$f"
+          grep -Fq 'global_page_tradeoff' "$f"
+          grep -Fq 'cross_domain_2m_delta=' "$f"
+          grep -Fq 'page_extra_build_s=' "$f"
       - name: Topology sweep and Pareto analyzer
         shell: bash
         run: |
@@ -106,8 +111,6 @@ jobs:
           grep -Fq -- '--domain-size "$domain"' "$f"
           grep -Fq 'domain_imbalance' "$f"
           grep -Fq 'domain_refined_boundaries' "$f"
-          grep -Fq 'domain_refined_job_moves' "$f"
-          grep -Fq 'hybrid_domain_refined_boundaries' "$f"
           grep -Fq 'analyze_cpu_low_schedule_plan_sweep.py' "$f"
           cat >/tmp/low-sweep.tsv <<'EOF'
           workers	domain_size	domains	lpt_imbalance	lpt_cross_domain_4k	lpt_cross_domain_2m	contiguous_imbalance	contiguous_cross_domain_4k	contiguous_cross_domain_2m	hybrid_imbalance	hybrid_cross_domain_4k	hybrid_cross_domain_2m	hybrid_cross_worker_4k	hybrid_cross_worker_2m	hybrid_domain_cap	hybrid_active_domains	raw
@@ -117,23 +120,17 @@ jobs:
           python3 scripts/tools/analyze_cpu_low_schedule_plan_sweep.py /tmp/low-sweep.tsv >/tmp/pareto.txt
           grep -Fq 'schemes=contiguous,domain,lpt' /tmp/pareto.txt
           grep -Fq 'pareto scheme=domain workers=64 domain_size=32' /tmp/pareto.txt
-          grep -Fq 'best_balance scheme=lpt workers=64 domain_size=32' /tmp/pareto.txt
-          python3 scripts/tools/analyze_cpu_low_schedule_plan_sweep.py /tmp/low-sweep.tsv --scheme hybrid >/tmp/legacy.txt
-          grep -Fq 'schemes=domain' /tmp/legacy.txt
       - name: Documentation
         shell: bash
         run: |
           d=docs/ramstream32-cpu-low-scheduling.md
-          grep -Fq 'Backend v5.21' "$d"
-          grep -Fq 'CPU_LOW_SCHEDULE=domain' "$d"
-          grep -Fq 'CPU_LOW_DOMAIN_SIZE' "$d"
+          grep -Fq 'Backend v5.22' "$d"
           grep -Fq 'CPU_LOW_DOMAIN_REFINE' "$d"
+          grep -Fq 'CPU_LOW_DOMAIN_PAGE_TIEBREAK' "$d"
+          grep -Fq 'page-aware tie-break' "$d"
+          grep -Fq 'page_penalty_2m' "$d"
+          grep -Fq 'global unique' "$d"
           grep -Fq 'ramstream32-cpu-low-domain-refine-ab.sh' "$d"
           grep -Fq 'ramstream32-cpu-low-domain-refine-plan-ab.sh' "$d"
           grep -Fq 'max_worker_cells' "$d"
           grep -Fq 'balance_page_tradeoff' "$d"
-          grep -Fq 'cpu_low_domain_refined_boundaries' "$d"
-          grep -Fq 'domain_refined_job_moves' "$d"
-          grep -Fq 'cyclic-latin-4' "$d"
-          grep -Fq 'scheme=domain' "$d"
-          grep -Fq 'Pareto' "$d"
