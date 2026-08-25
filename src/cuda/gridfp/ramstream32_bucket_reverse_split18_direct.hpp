@@ -3,10 +3,9 @@
 #include "ramstream32_bucket_reverse_split18.hpp"
 
 // Build split18 directly from the legacy reverse orbit stream and fused
-// closure destinations.  The old path first materialized a 32-bit attachment
-// entry for every orbit, then immediately converted that entry to an 18-bit
-// destination-block-local ordinal.  Here the lookup and localization are
-// fused, removing that 4 B/orbit transient.
+// closure destinations. The old path first materialized a 32-bit attachment
+// entry for every orbit, then immediately converted it to an 18-bit
+// destination-block-local ordinal. Here lookup and localization are fused.
 static ReverseSplit18Host build_reverse_split18_direct_checked(
     const StorageLayout&layout,const BucketOrbitStreamsHost&bo,const BucketFusedHost&bf,
     ReverseBucketAtomicHost&rb,const ReverseBucketFusedHost&rf,bool release_legacy=false
@@ -33,6 +32,17 @@ static ReverseSplit18Host build_reverse_split18_direct_checked(
         auto&used=low?used_low:used_high;
         const char*what=low?"reverse-split18-direct-low":"reverse-split18-direct-high";
 
+        size_t nn=0,nr=0,nl=0;
+        for(const uint64_t w:ov){
+            const uint32_t kind=rb_orbit_kind(w);
+            if(kind==CPU_ORBIT_NN)++nn;
+            else if(kind==CPU_ORBIT_NR)++nr;
+            else if(kind==CPU_ORBIT_NL)++nl;
+            else{std::cerr<<"reverse split direct invalid orbit kind="<<kind<<'\n';std::exit(432);}
+        }
+        s.nn.reserve(nn);s.nn_hi.reserve(nn);
+        s.nr.reserve(nr);s.nr_hi.reserve(nr);
+        s.nl.reserve(nl);s.nl_hi.reserve(nl);
         s.nn_off.resize(size_t(steps)*pitch);
         s.nr_off.resize(size_t(steps)*pitch);
         s.nl_off.resize(size_t(steps)*pitch);
@@ -43,6 +53,8 @@ static ReverseSplit18Host build_reverse_split18_direct_checked(
             const uint32_t nt=low?uint32_t(layout.block_blocks.size()):
                 (edge?uint32_t(layout.main_blocks.size()):uint32_t(layout.block_blocks.size()));
             std::unordered_map<BkocKey,uint32_t>dst;
+            const uint32_t fbegin=fo[size_t(pi)*fp],fend=fo[size_t(pi)*fp+nt];
+            dst.reserve(size_t(fend-fbegin));
             for(uint32_t dbid=0;dbid<nt;++dbid){
                 const size_t doi=size_t(pi)*fp+dbid;
                 const uint32_t a=fo[doi],b=fo[doi+1];
@@ -71,8 +83,7 @@ static ReverseSplit18Host build_reverse_split18_direct_checked(
                     const uint8_t hi=uint8_t(z>>10);
                     if(kind==CPU_ORBIT_NN){s.nn.push_back(nw);s.nn_hi.push_back(hi);}
                     else if(kind==CPU_ORBIT_NR){s.nr.push_back(nw);s.nr_hi.push_back(hi);}
-                    else if(kind==CPU_ORBIT_NL){s.nl.push_back(nw);s.nl_hi.push_back(hi);}
-                    else{std::cerr<<"reverse split direct invalid orbit kind="<<kind<<'\n';std::exit(432);}
+                    else{s.nl.push_back(nw);s.nl_hi.push_back(hi);}
                 }
             }
             const size_t end=size_t(pi)*pitch+rb.nblocks;
@@ -80,6 +91,7 @@ static ReverseSplit18Host build_reverse_split18_direct_checked(
             s.nr_off[end]=uint32_t(s.nr.size());
             s.nl_off[end]=uint32_t(s.nl.size());
         }
+        if(s.nn.size()!=nn||s.nr.size()!=nr||s.nl.size()!=nl)std::exit(437);
     };
 
     build_side(true,out.low);
@@ -105,9 +117,6 @@ static ReverseSplit18Host build_reverse_split18_direct_checked(
     if(out.low.ops()+out.high.ops()!=legacy_ops)std::exit(436);
 
     if(release_legacy){
-        // rf is already fully materialized, and direct closure-only device
-        // tables ignore rb.  Release the remaining source-oriented closure
-        // payload too; nblocks is retained for diagnostics only.
         std::vector<ReverseBucketClosureOp>().swap(rb.low_closure);
         std::vector<ReverseBucketClosureOp>().swap(rb.high_closure);
         std::vector<uint32_t>().swap(rb.low_closure_off);
@@ -121,6 +130,6 @@ static ReverseSplit18Host build_reverse_split18_direct_checked(
              <<" avoided_attach_mib="<<double(4ull*legacy_ops)/double(1<<20)
              <<" legacy_orbit_mib="<<double(legacy_orbit_bytes)/double(1<<20)
              <<" legacy_total_mib="<<double(legacy_total_bytes)/double(1<<20)
-             <<" release_legacy="<<int(release_legacy)<<'\n';
+             <<" exact_reserve=1 release_legacy="<<int(release_legacy)<<'\n';
     return out;
 }
