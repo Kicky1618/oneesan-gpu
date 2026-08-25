@@ -45,7 +45,11 @@
 // unit is parsed; the new main below sees its low-closure capture/report hooks.
 #define cudaMalloc maskshard_guarded_cuda_malloc
 #include "maskshard_loworbit_warprow_packed.cuh"
+#ifdef MASKSHARD_LOW_MASKBATCH_COMPACT_RANGES
+#include "maskshard_low_maskbatch_range_executor.cuh"
+#else
 #include "maskshard_low_maskbatch_executor.cuh"
+#endif
 
 int main(int argc, char** argv) {
     const int n = argc > 1 ? std::atoi(argv[1]) : TARGET_W - 1;
