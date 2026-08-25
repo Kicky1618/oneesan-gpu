@@ -68,6 +68,7 @@ host=$(hostname 2>/dev/null || echo unknown)
 n=$N
 arch=$ARCH
 configs=$CONFIGS
+cpu_low_domain_page_tiebreak=0
 variants=refine0,refine1
 binary_sha256=$(file_sha256 "$bin")
 EOF
@@ -78,13 +79,17 @@ for cfg in "${configs[@]}"; do
   workers="${cfg%%:*}"
   domain="${cfg#*:}"
   for refine in 0 1; do
-    echo "domain-refine-plan n=$N workers=$workers domain_size=$domain refine=$refine" >&2
-    line="$(CPU_LOW_DOMAIN_REFINE="$refine" "$bin" "$N" "$workers" --domain-size "$domain" | head -n1)"
+    echo "domain-refine-plan n=$N workers=$workers domain_size=$domain refine=$refine page_tiebreak=0" >&2
+    line="$(CPU_LOW_DOMAIN_REFINE="$refine" CPU_LOW_DOMAIN_PAGE_TIEBREAK=0 \
+      "$bin" "$N" "$workers" --domain-size "$domain" | head -n1)"
     [[ "$(field "$line" workers)" == "$workers" ]] || {
       echo "worker provenance mismatch for $cfg refine=$refine" >&2; exit 4;
     }
     [[ "$(field "$line" domain_size)" == "$domain" ]] || {
       echo "domain provenance mismatch for $cfg refine=$refine" >&2; exit 4;
+    }
+    [[ "$(field "$line" hybrid_domain_page_tiebreak)" == 0 ]] || {
+      echo "page tie-break leaked into refine preflight cfg=$cfg refine=$refine" >&2; exit 4;
     }
     boundaries="$(field "$line" hybrid_domain_refined_boundaries)"
     moves="$(field "$line" hybrid_domain_refined_job_moves)"
