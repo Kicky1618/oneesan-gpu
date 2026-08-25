@@ -17,6 +17,9 @@
 #include "maskshard_loworbit_warprow_packed.cuh"
 #ifdef MASKSHARD_LOW_CLOSURE_TASK_U32
 #include "maskshard_low_group_packed_closure_u32.cuh"
+#ifdef MASKSHARD_LOW_CLOSURE_PACKED_PREFIX
+#include "maskshard_low_group_packed_closure_prefix.cuh"
+#endif
 #endif
 #else
 #include "maskshard_loworbit_warprow.cuh"
