@@ -54,6 +54,10 @@ struct SnakeReverseHost {
     }
 };
 
+#ifndef BSN_REVERSE_RESIDENT_BYTES
+#define BSN_REVERSE_RESIDENT_BYTES(h) ((h).bytes())
+#endif
+
 static SnakeReverseHost bsn_build_reverse(
     const StorageFactorHost&storage,const StorageLayout&layout,const BucketOwnerHost&owner,
     const ReverseLowDescHost&rlow,const ReverseHighDescHost&rhigh,
@@ -69,7 +73,11 @@ static SnakeReverseHost bsn_build_reverse(
 
 struct SnakeReverseDeviceTables {
 #ifdef BUCKET_SNAKE_REVERSE_FUSED
+#ifdef BSN_REVERSE_FUSED_TABLES_TYPE
+    BSN_REVERSE_FUSED_TABLES_TYPE impl;
+#else
     ReverseBucketFusedDeviceTables impl;
+#endif
 #else
     ReverseBucketAtomicDeviceTables impl;
 #endif
@@ -129,7 +137,7 @@ int main(int argc,char**argv){
     BucketTransposePlan tplan=build_bucket_transpose_plan(phy,NG);double prepare_s=bsn_since(prep0);
 
     size_t view_bytes=2ull*NG*(layout.main_blocks.size()+layout.block_blocks.size())*sizeof(BucketPhysicalBlock);
-    size_t forward_meta=borbit.bytes()+bfused.bytes()+view_bytes,reverse_meta=reverse.bytes();size_t metadata_bytes=forward_meta+reverse_meta;
+    size_t forward_meta=borbit.bytes()+bfused.bytes()+view_bytes,reverse_meta=BSN_REVERSE_RESIDENT_BYTES(reverse);size_t metadata_bytes=forward_meta+reverse_meta;
     size_t chunk_bytes=chunk_mib<<20,staging_bytes=chunk_bytes*size_t(BUCKET_TRANSPOSE_STAGING_MULTIPLIER);
     uint64_t max_gpu=0,min_gpu=~uint64_t(0),peer_per_transpose=0,max_need=0;
     for(int g=0;g<NG;++g){max_gpu=std::max(max_gpu,tplan.gpu_bytes[g]);min_gpu=std::min(min_gpu,tplan.gpu_bytes[g]);max_need=std::max<uint64_t>(max_need,tplan.gpu_bytes[g]+metadata_bytes+staging_bytes);for(int s=g+1;s<NG;++s)peer_per_transpose+=2ull*tplan.slot[g][s].capacity_bytes;}
