@@ -14,6 +14,7 @@
 #undef RAMSTREAM_BIDESC_COMPACT_NO_MAIN
 #include "../ramstream32_cpu_low_domain_page.hpp"
 #include "../ramstream32_cpu_low_domain_worker_locality.hpp"
+#include "../ramstream32_cpu_low_domain_worker_coalesce.hpp"
 
 struct OwnerPageMetrics {
     uint64_t cross_4k = 0;
@@ -133,6 +134,12 @@ static uint64_t total_cells(const CpuLowSparsePersistentPool& pool) {
         pool.sticky_worker_cells.begin(), pool.sticky_worker_cells.end(), uint64_t(0));
 }
 
+static bool same_metrics(const OwnerPageMetrics& a, const OwnerPageMetrics& b) {
+    return a.cross_2m == b.cross_2m
+        && a.cross_4k == b.cross_4k
+        && a.owner_transitions == b.owner_transitions;
+}
+
 int main(int argc, char** argv) {
     int n = argc > 1 ? std::atoi(argv[1]) : TARGET_W - 1;
     int workers = argc > 2 ? std::max(1, std::atoi(argv[2])) : 64;
@@ -155,52 +162,82 @@ int main(int argc, char** argv) {
         workers, CPU_LOW_SCHEDULE_DOMAIN, domain_size, true);
     CpuLowSparsePersistentPool locality(
         workers, CPU_LOW_SCHEDULE_DOMAIN, domain_size, true);
+    CpuLowSparsePersistentPool coalesced(
+        workers, CPU_LOW_SCHEDULE_DOMAIN, domain_size, true);
     baseline.prepare_static_schedule(jobs, sparse);
     locality.prepare_static_schedule(jobs, sparse);
+    coalesced.prepare_static_schedule(jobs, sparse);
 
     CpuLowDomainPageTieStats baseline_page = cpu_low_apply_domain_page_tiebreak(
         baseline, jobs, sparse, storage, layout);
     CpuLowDomainPageTieStats locality_page = cpu_low_apply_domain_page_tiebreak(
         locality, jobs, sparse, storage, layout);
+    CpuLowDomainPageTieStats coalesced_page = cpu_low_apply_domain_page_tiebreak(
+        coalesced, jobs, sparse, storage, layout);
+
     CpuLowDomainWorkerLocalityStats loc =
         cpu_low_apply_domain_worker_locality(locality, jobs, sparse);
+    CpuLowDomainWorkerLocalityStats coal_parent =
+        cpu_low_apply_domain_worker_locality(coalesced, jobs, sparse);
+    CpuLowDomainWorkerCoalesceStats coal =
+        cpu_low_apply_domain_worker_coalesce(
+            coalesced, jobs, sparse, storage, layout);
 
     uint64_t baseline_total = total_cells(baseline);
     uint64_t locality_total = total_cells(locality);
-    if (baseline_total != locality_total) {
-        std::cerr << "worker-locality total-cell mismatch\n";
+    uint64_t coalesced_total = total_cells(coalesced);
+    if (baseline_total != locality_total || baseline_total != coalesced_total) {
+        std::cerr << "worker-coalesce total-cell mismatch\n";
         return 2;
     }
 
     uint64_t baseline_max = max_cells(baseline);
     uint64_t locality_max = max_cells(locality);
-    if (locality_max > baseline_max) {
-        std::cerr << "worker-locality max-worker regression\n";
+    uint64_t coalesced_max = max_cells(coalesced);
+    if (locality_max > baseline_max || coalesced_max > locality_max) {
+        std::cerr << "worker-coalesce max-worker regression"
+                  << " baseline=" << baseline_max
+                  << " locality=" << locality_max
+                  << " coalesced=" << coalesced_max << '\n';
         return 3;
     }
 
     auto base_worker_owner = worker_owner(baseline, jobs);
     auto loc_worker_owner = worker_owner(locality, jobs);
+    auto coal_worker_owner = worker_owner(coalesced, jobs);
     OwnerPageMetrics base_worker_pages = owner_page_metrics(
         layout, storage, base_worker_owner);
     OwnerPageMetrics loc_worker_pages = owner_page_metrics(
         layout, storage, loc_worker_owner);
+    OwnerPageMetrics coal_worker_pages = owner_page_metrics(
+        layout, storage, coal_worker_owner);
     OwnerPageMetrics base_domain_pages = owner_page_metrics(
         layout, storage, domain_owner(base_worker_owner, domain_size));
     OwnerPageMetrics loc_domain_pages = owner_page_metrics(
         layout, storage, domain_owner(loc_worker_owner, domain_size));
+    OwnerPageMetrics coal_domain_pages = owner_page_metrics(
+        layout, storage, domain_owner(coal_worker_owner, domain_size));
 
-    if (base_domain_pages.cross_2m != loc_domain_pages.cross_2m
-        || base_domain_pages.cross_4k != loc_domain_pages.cross_4k
-        || base_domain_pages.owner_transitions != loc_domain_pages.owner_transitions) {
-        std::cerr << "worker-locality changed domain boundaries\n";
+    if (!same_metrics(base_domain_pages, loc_domain_pages)
+        || !same_metrics(base_domain_pages, coal_domain_pages)) {
+        std::cerr << "worker-coalesce changed domain boundaries\n";
         return 4;
+    }
+    if (coal.penalty_2m_after > coal.penalty_2m_before
+        || (coal.penalty_2m_after == coal.penalty_2m_before
+            && coal.penalty_4k_after > coal.penalty_4k_before)
+        || (coal.penalty_2m_after == coal.penalty_2m_before
+            && coal.penalty_4k_after == coal.penalty_4k_before
+            && coal.owner_transitions_after > coal.owner_transitions_before)) {
+        std::cerr << "worker-coalesce internal objective regression\n";
+        return 5;
     }
 
     double avg = workers ? double(baseline_total) / workers : 0.0;
     std::cout << std::setprecision(12)
               << "cpu_low_domain_worker_locality_plan OK"
-              << " objective=contiguous-under-lpt-cap-v5.25-plan"
+              << " objective=neighbor-page-coalesce-under-domain-cap-v5.26-plan"
+              << " parent_objective=contiguous-under-lpt-cap-v5.25-plan"
               << " n=" << n
               << " workers=" << workers
               << " domain_size=" << domain_size
@@ -208,25 +245,52 @@ int main(int argc, char** argv) {
               << " total_cells=" << baseline_total
               << " baseline_max_worker_cells=" << baseline_max
               << " locality_max_worker_cells=" << locality_max
+              << " coalesced_max_worker_cells=" << coalesced_max
               << " baseline_imbalance=" << (avg ? double(baseline_max) / avg : 0.0)
               << " locality_imbalance=" << (avg ? double(locality_max) / avg : 0.0)
+              << " coalesced_imbalance=" << (avg ? double(coalesced_max) / avg : 0.0)
               << " converted_domains=" << loc.converted_domains
               << " fallback_domains=" << loc.fallback_domains
               << " unchanged_trivial_domains=" << loc.unchanged_trivial_domains
               << " converted_jobs=" << loc.converted_jobs
               << " contiguous_worker_segments=" << loc.contiguous_worker_segments
+              << " coalesce_noncontiguous_domains_before="
+              << coal.noncontiguous_domains_before
+              << " coalesce_improved_domains=" << coal.improved_domains
+              << " coalesce_contiguous_domains_after="
+              << coal.contiguous_domains_after
+              << " coalesce_candidate_evaluations=" << coal.candidate_evaluations
+              << " coalesce_cap_rejections=" << coal.cap_rejections
+              << " coalesce_accepted_moves=" << coal.accepted_moves
+              << " coalesce_page_improving_moves=" << coal.page_improving_moves
+              << " coalesce_transition_only_moves=" << coal.transition_only_moves
+              << " coalesce_moved_cells=" << coal.moved_cells
+              << " coalesce_penalty_2m_before=" << coal.penalty_2m_before
+              << " coalesce_penalty_2m_after=" << coal.penalty_2m_after
+              << " coalesce_penalty_4k_before=" << coal.penalty_4k_before
+              << " coalesce_penalty_4k_after=" << coal.penalty_4k_after
+              << " coalesce_owner_transitions_before="
+              << coal.owner_transitions_before
+              << " coalesce_owner_transitions_after="
+              << coal.owner_transitions_after
               << " baseline_cross_worker_pages_2m=" << base_worker_pages.cross_2m
               << " locality_cross_worker_pages_2m=" << loc_worker_pages.cross_2m
+              << " coalesced_cross_worker_pages_2m=" << coal_worker_pages.cross_2m
               << " baseline_cross_worker_pages_4k=" << base_worker_pages.cross_4k
               << " locality_cross_worker_pages_4k=" << loc_worker_pages.cross_4k
+              << " coalesced_cross_worker_pages_4k=" << coal_worker_pages.cross_4k
               << " baseline_worker_owner_transitions=" << base_worker_pages.owner_transitions
               << " locality_worker_owner_transitions=" << loc_worker_pages.owner_transitions
+              << " coalesced_worker_owner_transitions=" << coal_worker_pages.owner_transitions
               << " cross_domain_pages_2m=" << base_domain_pages.cross_2m
               << " cross_domain_pages_4k=" << base_domain_pages.cross_4k
               << " cross_domain_owner_transitions=" << base_domain_pages.owner_transitions
               << " baseline_page_moves=" << baseline_page.boundary_moves
               << " locality_page_moves=" << locality_page.boundary_moves
+              << " coalesced_page_moves=" << coalesced_page.boundary_moves
               << " worker_locality_build_s=" << loc.build_s
+              << " coalesced_parent_build_s=" << coal_parent.build_s
+              << " worker_coalesce_build_s=" << coal.build_s
               << '\n';
     return 0;
 }
