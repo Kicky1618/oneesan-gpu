@@ -34,9 +34,47 @@ struct MaskShardLowGroupPackedConfig {
     std::uint32_t warp_prefix[HIGH_LUT_K + 3];
     std::uint32_t low_count[HIGH_LUT_K + 2];
     std::uint32_t low_chunks[HIGH_LUT_K + 2];
+#ifdef MASKSHARD_LOW_CLOSURE_PACKED_PREFIX
+    // Exact LOW closure warp-task prefix for every LOW position.  v0.41 moves
+    // this from a serial per-CTA build into the existing once-per-group symbol
+    // upload.  n=27 adds only 14*65*4 = 3640 bytes of constant memory.
+    std::uint32_t closure_prefix[LOW_LUT_K][65];
+#endif
 };
 
 __device__ __constant__ MaskShardLowGroupPackedConfig D_MS_LOW_GROUP_PACKED;
+
+#ifdef MASKSHARD_LOW_CLOSURE_PACKED_PREFIX
+#ifndef MASKSHARD_LOW_CLOSURE_ROW_DEPTH_COMPACT
+#error "packed LOW closure prefix requires compact row-depth closure metadata"
+#endif
+
+// Capture only the host arrays required to build exact closure task prefixes.
+// The original tables continue to be returned to the shared solver and installed
+// on every GPU as before; this is host-only metadata and adds no HBM residency.
+struct MaskShardLowClosurePrefixHostCapture {
+    std::vector<std::uint32_t> block_off;
+    std::vector<std::uint32_t> compact_active_count;
+    std::vector<std::uint16_t> high_active_count;
+    bool built = false;
+};
+static MaskShardLowClosurePrefixHostCapture G_MS_LOW_CLOSURE_PREFIX_HOST{};
+
+static MaskShardLowClosureColsHost maskshard_build_low_closure_cols_capture(
+    const StorageFactorHost& storage,
+    const StorageLayout& layout,
+    const LowDescHost& low_desc
+) {
+    MaskShardLowClosureColsHost out =
+        build_maskshard_low_closure_cols(storage, layout, low_desc);
+    G_MS_LOW_CLOSURE_PREFIX_HOST.block_off = out.block_off;
+    G_MS_LOW_CLOSURE_PREFIX_HOST.compact_active_count = out.compact_active_count;
+    G_MS_LOW_CLOSURE_PREFIX_HOST.high_active_count = out.high_active_count;
+    G_MS_LOW_CLOSURE_PREFIX_HOST.built = true;
+    return out;
+}
+#define build_maskshard_low_closure_cols maskshard_build_low_closure_cols_capture
+#endif
 
 static MaskShardLowGroupPackedConfig maskshard_build_low_group_packed_base_uncached(
     std::uint32_t mask
@@ -162,3 +200,10 @@ __device__ __forceinline__ std::uint32_t maskshard_low_packed_low_count(int i) {
 __device__ __forceinline__ std::uint32_t maskshard_low_packed_low_chunks(int i) {
     return D_MS_LOW_GROUP_PACKED.low_chunks[i];
 }
+#ifdef MASKSHARD_LOW_CLOSURE_PACKED_PREFIX
+__device__ __forceinline__ std::uint32_t maskshard_low_packed_closure_prefix(
+    int pi, int i
+) {
+    return D_MS_LOW_GROUP_PACKED.closure_prefix[pi][i];
+}
+#endif
