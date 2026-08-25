@@ -14,6 +14,7 @@ static ReverseSplit18Host build_reverse_split18_direct_checked(
     validate_reverse_bucket_partner_blocks(layout,rb);
     (void)validate_bucket_orbit_closure_fusion(layout,bo,bf,rb,rf);
 
+    const size_t legacy_ops=rb.low_orbit.size()+rb.high_orbit.size();
     const size_t legacy_orbit_bytes=reverse_bucket_orbit_bytes(rb);
     const size_t legacy_total_bytes=rb.bytes();
     ReverseSplit18Host out;out.nblocks=rb.nblocks;
@@ -101,8 +102,7 @@ static ReverseSplit18Host build_reverse_split18_direct_checked(
                  <<" used="<<unsigned(used_high[q])<<'\n';std::exit(434);
     }
     if(attached!=rf.low_dst.size()+rf.high_dst.size())std::exit(435);
-    if(out.low.ops()+out.high.ops()!=
-       (release_legacy?out.low.ops()+out.high.ops():rb.low_orbit.size()+rb.high_orbit.size()))std::exit(436);
+    if(out.low.ops()+out.high.ops()!=legacy_ops)std::exit(436);
 
     if(release_legacy){
         // rf is already fully materialized, and direct closure-only device
@@ -118,7 +118,7 @@ static ReverseSplit18Host build_reverse_split18_direct_checked(
              <<" high_ops="<<out.high.ops()
              <<" attached="<<attached
              <<" split_mib="<<double(out.bytes())/double(1<<20)
-             <<" avoided_attach_mib="<<double(4ull*(out.low.ops()+out.high.ops()))/double(1<<20)
+             <<" avoided_attach_mib="<<double(4ull*legacy_ops)/double(1<<20)
              <<" legacy_orbit_mib="<<double(legacy_orbit_bytes)/double(1<<20)
              <<" legacy_total_mib="<<double(legacy_total_bytes)/double(1<<20)
              <<" release_legacy="<<int(release_legacy)<<'\n';
