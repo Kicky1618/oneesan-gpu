@@ -12,6 +12,7 @@ on:
       - 'scripts/bench/ramstream32-cpu-low-domain-page-plan-ab.sh'
       - 'scripts/tools/analyze_cpu_low_schedule_plan_sweep.py'
       - 'docs/ramstream32-cpu-low-scheduling.md'
+      - 'docs/ramstream32-cpu-low-page-aware.md'
       - '.github/workflows/ramstream32-low-schedule-script-ci.yml'
   pull_request:
     paths:
@@ -24,6 +25,7 @@ on:
       - 'scripts/bench/ramstream32-cpu-low-domain-page-plan-ab.sh'
       - 'scripts/tools/analyze_cpu_low_schedule_plan_sweep.py'
       - 'docs/ramstream32-cpu-low-scheduling.md'
+      - 'docs/ramstream32-cpu-low-page-aware.md'
       - '.github/workflows/ramstream32-low-schedule-script-ci.yml'
   workflow_dispatch:
 
@@ -135,16 +137,17 @@ jobs:
         shell: bash
         run: |
           d=docs/ramstream32-cpu-low-scheduling.md
+          p=docs/ramstream32-cpu-low-page-aware.md
           grep -Fq 'Backend v5.22' "$d"
           grep -Fq 'CPU_LOW_DOMAIN_REFINE' "$d"
           grep -Fq 'CPU_LOW_DOMAIN_PAGE_TIEBREAK' "$d"
           grep -Fq 'page-aware tie-break' "$d"
           grep -Fq 'page_penalty_2m' "$d"
           grep -Fq 'global unique' "$d"
-          grep -Fq 'ramstream32-cpu-low-domain-refine-ab.sh' "$d"
-          grep -Fq 'ramstream32-cpu-low-domain-refine-plan-ab.sh' "$d"
-          grep -Fq 'ramstream32-cpu-low-domain-page-ab.sh' "$d"
-          grep -Fq 'ramstream32-cpu-low-domain-page-plan-ab.sh' "$d"
-          grep -Fq 'standard topology/Pareto sweep' "$d"
-          grep -Fq 'max_worker_cells' "$d"
-          grep -Fq 'balance_page_tradeoff' "$d"
+          grep -Fq 'ramstream32-cpu-low-domain-refine-ab.sh' "$p"
+          grep -Fq 'ramstream32-cpu-low-domain-refine-plan-ab.sh' "$p"
+          grep -Fq 'ramstream32-cpu-low-domain-page-ab.sh' "$p"
+          grep -Fq 'ramstream32-cpu-low-domain-page-plan-ab.sh' "$p"
+          grep -Fq 'standard topology/Pareto sweep' "$p"
+          grep -Fq 'max_worker_cells' "$p"
+          grep -Fq 'global unique' "$p"
