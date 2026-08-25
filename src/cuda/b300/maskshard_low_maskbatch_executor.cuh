@@ -9,6 +9,18 @@
 
 #include "maskshard_low_maskbatch_kernels.cuh"
 
+#ifndef MASKSHARD_LOW_MASKBATCH_TARGET_TASKS_PER_CTA
+#define MASKSHARD_LOW_MASKBATCH_TARGET_TASKS_PER_CTA 16384
+#endif
+#ifndef MASKSHARD_LOW_MASKBATCH_MAX_REPLICAS
+#define MASKSHARD_LOW_MASKBATCH_MAX_REPLICAS 16
+#endif
+static_assert(MASKSHARD_LOW_MASKBATCH_TARGET_TASKS_PER_CTA >= 1,
+              "LOW mask-batch target tasks per CTA must be positive");
+static_assert(MASKSHARD_LOW_MASKBATCH_MAX_REPLICAS >= 1
+              && MASKSHARD_LOW_MASKBATCH_MAX_REPLICAS <= 65535,
+              "LOW mask-batch replica cap must fit uint16");
+
 struct MaskShardLowMaskBatchRowDevicePlan {
     std::uint32_t orbit_count = 0;
     std::array<std::uint32_t, LOW_LUT_K + 1> closure_off{};
@@ -26,8 +38,9 @@ struct MaskShardLowMaskBatchExecutor {
     static constexpr int ROW_CAPS = (TARGET_W + 1) / 2;
 
     int ngpu = 0;
-    std::uint64_t target_tasks_per_cta = 16384;
-    int max_replicas = 16;
+    std::uint64_t target_tasks_per_cta =
+        std::uint64_t(MASKSHARD_LOW_MASKBATCH_TARGET_TASKS_PER_CTA);
+    int max_replicas = MASKSHARD_LOW_MASKBATCH_MAX_REPLICAS;
     MaskShardLowMaskBatchTablesHost tasks;
     std::array<MaskShardLowMaskBatchDeviceTables, 8> cfg;
     std::array<MaskShardLowBatchDeviceDesc*, 8> d_orbit{};
