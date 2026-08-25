@@ -8,11 +8,11 @@
 
 struct MaskShardLowBatchDesc {
     std::uint16_t mask = 0;
-    std::uint8_t replica = 0;
-    std::uint8_t replicas = 0;
+    std::uint16_t replica = 0;
+    std::uint16_t replicas = 0;
 };
-static_assert(sizeof(MaskShardLowBatchDesc) == 4,
-              "LOW mask-batch descriptor should stay compact");
+static_assert(sizeof(MaskShardLowBatchDesc) == 6,
+              "LOW mask-batch host descriptor ABI changed");
 
 static std::vector<MaskShardLowBatchDesc> maskshard_build_low_batch_plan(
     const std::vector<std::uint8_t>& owner,
@@ -22,7 +22,7 @@ static std::vector<MaskShardLowBatchDesc> maskshard_build_low_batch_plan(
     int max_replicas = 16
 ) {
     if (owner.size() != task_count.size() || device < 0
-        || target_tasks_per_cta == 0 || max_replicas < 1 || max_replicas > 255) {
+        || target_tasks_per_cta == 0 || max_replicas < 1 || max_replicas > 65535) {
         std::cerr << "invalid LOW mask-batch plan arguments\n";
         std::exit(343);
     }
@@ -45,8 +45,8 @@ static std::vector<MaskShardLowBatchDesc> maskshard_build_low_batch_plan(
         for (int q = 0; q < replicas; ++q) {
             out.push_back({
                 std::uint16_t(mask),
-                std::uint8_t(q),
-                std::uint8_t(replicas),
+                std::uint16_t(q),
+                std::uint16_t(replicas),
             });
         }
     }
