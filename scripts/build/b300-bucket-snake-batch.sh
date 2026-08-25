@@ -21,7 +21,8 @@ fi
 case "$TRANSPOSE_MODE" in
   sync) SRC_REL="src/cuda/b300/oneesan_cuda_gridfp_b300_bucket_snake_fused_batch.cu" ;;
   events) SRC_REL="src/cuda/b300/oneesan_cuda_gridfp_b300_bucket_snake_fused_batch_events.cu" ;;
-  *) echo "TRANSPOSE_MODE must be sync or events" >&2; exit 2 ;;
+  pipeline) SRC_REL="src/cuda/b300/oneesan_cuda_gridfp_b300_bucket_snake_fused_batch_pipeline.cu" ;;
+  *) echo "TRANSPOSE_MODE must be sync, events, or pipeline" >&2; exit 2 ;;
 esac
 SUFFIX="_${TRANSPOSE_MODE}"; if [[ "$PM_ACCUM" == 1 ]]; then SUFFIX="${SUFFIX}_pm"; fi
 SRC="$(repo_path "$SRC_REL")"
