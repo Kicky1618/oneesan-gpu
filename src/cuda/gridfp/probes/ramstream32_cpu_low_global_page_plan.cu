@@ -1,6 +1,7 @@
 #include <cuda_runtime.h>
 
 #include <algorithm>
+#include <chrono>
 #include <cstdint>
 #include <cstdlib>
 #include <cstring>
@@ -43,6 +44,13 @@ int main(int argc, char** argv) {
     WindowPlan low_wp = make_direct2d_window(false);
     auto jobs = make_cpu_low_jobs(n + 1, low_wp);
 
+    auto score_index_t0 = std::chrono::steady_clock::now();
+    CpuLowDomainPageMaskIndex score_index = cpu_low_build_domain_page_mask_index();
+    double score_index_build_s = ram_seconds_since(score_index_t0);
+    double score_index_mib = double(
+        score_index.first_nonempty.size() * sizeof(uint32_t)
+        + score_index.next_nonempty.size() * sizeof(uint32_t)) / double(1 << 20);
+
     CpuLowSparsePersistentPool refined(
         workers, CPU_LOW_SCHEDULE_DOMAIN, domain_size, true);
     CpuLowSparsePersistentPool local(
@@ -60,14 +68,16 @@ int main(int argc, char** argv) {
     }
 
     CpuLowDomainGlobalPageScore refined_score =
-        cpu_low_domain_global_page_score_for_pool(refined, jobs, storage, layout);
+        cpu_low_domain_global_page_score_for_pool(
+            refined, jobs, storage, layout, score_index);
     uint64_t refined_max = max_cells(refined);
 
     CpuLowDomainPageTieStats local_stats = cpu_low_apply_domain_page_tiebreak(
         local, jobs, sparse, storage, layout);
     local.schedule_build_s += local_stats.build_s;
     CpuLowDomainGlobalPageScore local_score =
-        cpu_low_domain_global_page_score_for_pool(local, jobs, storage, layout);
+        cpu_low_domain_global_page_score_for_pool(
+            local, jobs, storage, layout, score_index);
     uint64_t local_max = max_cells(local);
 
     CpuLowDomainPageTieStats global_local_stats = cpu_low_apply_domain_page_tiebreak(
@@ -78,7 +88,8 @@ int main(int argc, char** argv) {
             global, jobs, sparse, storage, layout);
     global.schedule_build_s += global_stats.build_s;
     CpuLowDomainGlobalPageScore global_score =
-        cpu_low_domain_global_page_score_for_pool(global, jobs, storage, layout);
+        cpu_low_domain_global_page_score_for_pool(
+            global, jobs, storage, layout, score_index);
     uint64_t global_max = max_cells(global);
 
     if (local_max > refined_max || global_max > local_max) {
@@ -88,9 +99,7 @@ int main(int argc, char** argv) {
                   << " global=" << global_max << '\n';
         return 3;
     }
-    if (cpu_low_domain_global_page_score_less(global_score, local_score)) {
-        // expected improvement or equality
-    } else if (!cpu_low_domain_global_page_score_equal(global_score, local_score)) {
+    if (cpu_low_domain_global_page_score_less(local_score, global_score)) {
         std::cerr << "cpu LOW global page plan global-score regression"
                   << " local_2m=" << local_score.pages_2m
                   << " local_4k=" << local_score.pages_4k
@@ -124,11 +133,17 @@ int main(int argc, char** argv) {
               << " local_global_pages_4k=" << local_score.pages_4k
               << " global_pages_2m=" << global_score.pages_2m
               << " global_pages_4k=" << global_score.pages_4k
+              << " score_mask_index_mib=" << score_index_mib
+              << " score_mask_index_build_s=" << score_index_build_s
               << " local_boundary_moves=" << local_stats.boundary_moves
               << " local_candidate_evaluations=" << local_stats.candidate_evaluations
               << " local_max_guard_rejections=" << local_stats.max_guard_rejections
               << " local_page_improve_sum_increase_moves="
               << local_stats.page_improve_sum_increase_moves
+              << " local_mask_index_mib=" << local_stats.mask_index_mib
+              << " local_mask_index_build_s=" << local_stats.mask_index_build_s
+              << " global_local_mask_index_mib=" << global_local_stats.mask_index_mib
+              << " global_local_mask_index_build_s=" << global_local_stats.mask_index_build_s
               << " global_boundary_moves=" << global_stats.boundary_moves
               << " global_moved_jobs=" << global_stats.moved_jobs
               << " global_candidate_evaluations=" << global_stats.candidate_evaluations
@@ -137,6 +152,8 @@ int main(int argc, char** argv) {
               << " global_page_tie_load_moves=" << global_stats.page_tie_load_moves
               << " global_page_improve_sum_increase_moves="
               << global_stats.page_improve_sum_increase_moves
+              << " global_mask_index_mib=" << global_stats.mask_index_mib
+              << " global_mask_index_build_s=" << global_stats.mask_index_build_s
               << " global_build_s=" << global_stats.build_s
               << " local_total_build_s=" << local.schedule_build_s
               << " global_total_build_s=" << global.schedule_build_s
