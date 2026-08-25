@@ -1,0 +1,89 @@
+name: B300 LOW mask-batch CTA cache v0.46 research
+
+on:
+  push:
+    paths:
+      - 'src/cpp/probes/factor_low_maskbatch_ctacache.cpp'
+      - 'src/cuda/b300/maskshard_low_maskbatch_kernels.cuh'
+      - 'src/cuda/b300/maskshard_low_maskbatch_kernels_global.cuh'
+      - 'src/cuda/b300/maskshard_low_maskbatch_kernels_cached.cuh'
+      - 'src/cuda/b300/oneesan_b300_maskshard_v045_lowmaskbatch_resident.cu'
+      - 'src/cuda/b300/oneesan_b300_maskshard_v046_lowmaskbatch_ctacache.cu'
+      - 'scripts/bench/b300_maskshard_lowmaskbatch_ctacache_ab.py'
+      - '.github/workflows/b300-low-maskbatch-ctacache-v46.yml'
+  pull_request:
+    paths:
+      - 'src/cpp/probes/factor_low_maskbatch_ctacache.cpp'
+      - 'src/cuda/b300/maskshard_low_maskbatch_kernels.cuh'
+      - 'src/cuda/b300/maskshard_low_maskbatch_kernels_global.cuh'
+      - 'src/cuda/b300/maskshard_low_maskbatch_kernels_cached.cuh'
+      - 'src/cuda/b300/oneesan_b300_maskshard_v045_lowmaskbatch_resident.cu'
+      - 'src/cuda/b300/oneesan_b300_maskshard_v046_lowmaskbatch_ctacache.cu'
+      - 'scripts/bench/b300_maskshard_lowmaskbatch_ctacache_ab.py'
+      - '.github/workflows/b300-low-maskbatch-ctacache-v46.yml'
+  workflow_dispatch:
+
+jobs:
+  model:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build CTA cache model
+        run: |
+          mkdir -p build
+          g++ -O3 -std=c++17 -Wall -Wextra -Werror \
+            src/cpp/probes/factor_low_maskbatch_ctacache.cpp \
+            -o build/factor_low_maskbatch_ctacache
+      - name: Verify shared-memory footprints
+        run: |
+          build/factor_low_maskbatch_ctacache 10 5 16384
+          build/factor_low_maskbatch_ctacache 22 11 16384
+          build/factor_low_maskbatch_ctacache 28 14 16384
+
+  cuda-compile:
+    runs-on: ubuntu-latest
+    container: nvidia/cuda:12.8.1-devel-ubuntu22.04
+    strategy:
+      matrix:
+        include:
+          - {width: 10, low: 5, high: 4}
+          - {width: 22, low: 11, high: 10}
+          - {width: 28, low: 14, high: 13}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Compile v0.45 resident/global-config baseline
+        shell: bash
+        run: |
+          mkdir -p build
+          nvcc -O3 -std=c++17 -lineinfo -arch=sm_80 \
+            -DTARGET_W=${{ matrix.width }} \
+            -DLOW_LUT_K=${{ matrix.low }} \
+            -DHIGH_LUT_K=${{ matrix.high }} \
+            src/cuda/b300/oneesan_b300_maskshard_v045_lowmaskbatch_resident.cu \
+            -o build/b300_maskshard_v45_w${{ matrix.width }}
+      - name: Compile v0.46 CTA-cached configs
+        shell: bash
+        run: |
+          nvcc -O3 -std=c++17 -lineinfo -arch=sm_80 \
+            -DTARGET_W=${{ matrix.width }} \
+            -DLOW_LUT_K=${{ matrix.low }} \
+            -DHIGH_LUT_K=${{ matrix.high }} \
+            src/cuda/b300/oneesan_b300_maskshard_v046_lowmaskbatch_ctacache.cu \
+            -o build/b300_maskshard_v46_w${{ matrix.width }}
+
+  ab-driver:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Syntax-check v0.45-v0.46 A/B
+        run: python3 -m py_compile scripts/bench/b300_maskshard_lowmaskbatch_ctacache_ab.py
+      - name: Dry-run small-width residue comparison
+        run: |
+          python3 scripts/bench/b300_maskshard_lowmaskbatch_ctacache_ab.py \
+            --dry-run --n 9 --gpus 1 --threads 256 --low 5 --high 4 \
+            --modulus 4294967291 --modulus 4294967279
+      - name: Dry-run n=27 B300x8 comparison
+        run: |
+          python3 scripts/bench/b300_maskshard_lowmaskbatch_ctacache_ab.py \
+            --dry-run --n 27 --gpus 8 --threads 256 --low 14 --high 13 \
+            --modulus 4294967291
