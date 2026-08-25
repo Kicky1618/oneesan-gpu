@@ -1,10 +1,11 @@
 #ifndef BUCKET_SNAKE_REVERSE_FUSED
 #define BUCKET_SNAKE_REVERSE_FUSED 1
 #endif
-#define main bsn_batch_twopass_main_unused
-#include "oneesan_cuda_gridfp_b300_bucket_snake_fused_batch.cu"
+#define main bsn_single_main_unused
+#include "oneesan_cuda_gridfp_b300_bucket_snake_atomic.cu"
 #undef main
 #include "../gridfp/ramstream32_bucket_orbit_closure_fused.cuh"
+#include <vector>
 
 int main(int argc,char**argv){
     if(argc<5){std::cerr<<"usage: "<<argv[0]<<" n target_mib max_window gpus p1 [p2 ...] [--plan-only]\n";return 1;}
