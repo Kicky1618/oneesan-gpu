@@ -144,11 +144,20 @@ struct BucketTransposeCtx {
     }
 };
 
-// Selection hook used by the event-driven wrapper. This point is intentionally
-// after all baseline types are defined, so the event header sees Count,
-// BucketTransposePlan and the K8 round helper through the normal driver include
-// order. The macro alias affects only code appearing after this include.
-#ifdef BUCKET_TRANSPOSE_USE_EVENTS
+#ifndef BUCKET_TRANSPOSE_STAGING_MULTIPLIER
+#define BUCKET_TRANSPOSE_STAGING_MULTIPLIER 1
+#endif
+
+// Selection hooks. Both variants preserve BucketTransposeCtx's public API.
+// The pipeline owns two chunk-sized staging buffers per GPU; sync/events own
+// one, so drivers can use BUCKET_TRANSPOSE_STAGING_MULTIPLIER for exact HBM
+// preflight accounting.
+#if defined(BUCKET_TRANSPOSE_USE_PIPELINE)
+#undef BUCKET_TRANSPOSE_STAGING_MULTIPLIER
+#define BUCKET_TRANSPOSE_STAGING_MULTIPLIER 2
+#include "gridfp_bucket_transpose_pipeline.cuh"
+#define BucketTransposeCtx BucketTransposePipelineCtx
+#elif defined(BUCKET_TRANSPOSE_USE_EVENTS)
 #include "gridfp_bucket_transpose_events.cuh"
 #define BucketTransposeCtx BucketTransposeEventCtx
 #endif
