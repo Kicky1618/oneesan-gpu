@@ -13,7 +13,7 @@
 #define RAMSTREAM_BIDESC_COMPACT_NO_MAIN
 #include "../oneesan_cuda_gridfp_ramstream32_factorized_bidesc_compact.cu"
 #undef RAMSTREAM_BIDESC_COMPACT_NO_MAIN
-#include "../ramstream32_cpu_low_sparse_persistent.hpp"
+#include "../ramstream32_cpu_low_domain_page.hpp"
 
 struct CpuLowBoundaryPages {
     std::unordered_set<uint64_t> shared_4k;
@@ -203,6 +203,13 @@ int main(int argc, char** argv) {
         }
     }
 
+    bool domain_refine = cpu_low_domain_refine_from_env();
+    bool domain_page_tiebreak = cpu_low_domain_page_tiebreak_from_env();
+    if (domain_page_tiebreak && (!domain_refine || domain_size <= 0)) {
+        std::cerr << "CPU_LOW_DOMAIN_PAGE_TIEBREAK requires --domain-size and CPU_LOW_DOMAIN_REFINE=1\n";
+        return 1;
+    }
+
     int W = n + 1;
     if (W != TARGET_W || n < 2 || W > MAXW || workers <= 0) return 1;
     if constexpr (LOW_LUT_K + HIGH_LUT_K != TARGET_W - 1) return 1;
@@ -221,10 +228,19 @@ int main(int argc, char** argv) {
     CpuLowSparsePersistentPool lpt_pool(workers, CPU_LOW_SCHEDULE_STICKY);
     CpuLowSparsePersistentPool contiguous_pool(workers, CPU_LOW_SCHEDULE_CONTIGUOUS);
     CpuLowSparsePersistentPool domain_pool(
-        workers, CPU_LOW_SCHEDULE_DOMAIN, domain_size > 0 ? domain_size : workers);
+        workers, CPU_LOW_SCHEDULE_DOMAIN, domain_size > 0 ? domain_size : workers,
+        domain_refine);
     lpt_pool.prepare_static_schedule(jobs, sparse);
     contiguous_pool.prepare_static_schedule(jobs, sparse);
-    if (domain_size > 0) domain_pool.prepare_static_schedule(jobs, sparse);
+    CpuLowDomainPageTieStats page_tie_stats;
+    if (domain_size > 0) {
+        domain_pool.prepare_static_schedule(jobs, sparse);
+        if (domain_page_tiebreak) {
+            page_tie_stats = cpu_low_apply_domain_page_tiebreak(
+                domain_pool, jobs, sparse, storage, layout);
+            domain_pool.schedule_build_s += page_tie_stats.build_s;
+        }
+    }
 
     size_t nonempty_jobs = 0;
     uint64_t exact_total = 0;
@@ -339,11 +355,20 @@ int main(int argc, char** argv) {
               << " contiguous_cross_domain_auth_page_fraction_4k=" << contiguous_domain_pages.cross_auth_4k
               << " contiguous_cross_domain_pages_2m=" << contiguous_domain_pages.cross_2m
               << " contiguous_cross_domain_auth_page_fraction_2m=" << contiguous_domain_pages.cross_auth_2m
+              << " hybrid_domain_refine=" << int(domain_refine)
+              << " hybrid_domain_page_tiebreak=" << int(domain_page_tiebreak)
               << " hybrid_domain_active_domains=" << domain_pool.domain_active_domains
               << " hybrid_domain_optimal_per_worker_cap=" << domain_pool.domain_normalized_cap
               << " hybrid_domain_outer_normalized_cap=" << domain_pool.domain_normalized_cap
               << " hybrid_domain_refined_boundaries=" << domain_pool.domain_refined_boundaries
               << " hybrid_domain_refined_job_moves=" << domain_pool.domain_refined_job_moves
+              << " hybrid_domain_page_boundary_moves=" << page_tie_stats.boundary_moves
+              << " hybrid_domain_page_moved_jobs=" << page_tie_stats.moved_jobs
+              << " hybrid_domain_page_penalty_2m_before=" << page_tie_stats.penalty_2m_before
+              << " hybrid_domain_page_penalty_2m_after=" << page_tie_stats.penalty_2m_after
+              << " hybrid_domain_page_penalty_4k_before=" << page_tie_stats.penalty_4k_before
+              << " hybrid_domain_page_penalty_4k_after=" << page_tie_stats.penalty_4k_after
+              << " hybrid_domain_page_build_s=" << page_tie_stats.build_s
               << " hybrid_domain_min_worker_cells=" << cpu_low_min_cells(domain_pool.sticky_worker_cells)
               << " hybrid_domain_max_worker_cells=" << cpu_low_max_cells(domain_pool.sticky_worker_cells)
               << " hybrid_domain_imbalance=" << hybrid_imbalance
