@@ -12,7 +12,7 @@
 #define RAMSTREAM_BIDESC_COMPACT_NO_MAIN
 #include "../oneesan_cuda_gridfp_ramstream32_factorized_bidesc_compact.cu"
 #undef RAMSTREAM_BIDESC_COMPACT_NO_MAIN
-#include "../ramstream32_cpu_low_sparse_persistent.hpp"
+#include "../ramstream32_cpu_low_domain_page.hpp"
 #include "../ramstream32_cpu_high.hpp"
 #include "../ramstream32_cpu_high_direct_persistent.hpp"
 
@@ -216,6 +216,25 @@ int main() {
                         main_states, block_states, low2_rm, low2_rd, storage, layout)) return 27;
 
     fill_factor(main_auth, block_auth, main_states, block_states, init_m, init_d, storage, layout);
+    CpuLowSparsePersistentPool sparse_domain_page_pool(2, CPU_LOW_SCHEDULE_DOMAIN, 1, true);
+    sparse_domain_page_pool.prepare_static_schedule(low_jobs, sparse);
+    CpuLowDomainPageTieStats page_tie_stats = cpu_low_apply_domain_page_tiebreak(
+        sparse_domain_page_pool, low_jobs, sparse, storage, layout);
+    sparse_domain_page_pool.schedule_build_s += page_tie_stats.build_s;
+    if (page_tie_stats.max_worker_cells_after > page_tie_stats.max_worker_cells_before
+        || page_tie_stats.penalty_2m_after > page_tie_stats.penalty_2m_before
+        || (page_tie_stats.penalty_2m_after == page_tie_stats.penalty_2m_before
+            && page_tie_stats.penalty_4k_after > page_tie_stats.penalty_4k_before)) return 34;
+    sparse_domain_page_pool.run(
+        low_jobs, main_auth, block_auth, storage, layout, sparse, mod);
+    if (!compare_factor("sparse-domain-page-1", main_auth, block_auth,
+                        main_states, block_states, low_rm, low_rd, storage, layout)) return 35;
+    sparse_domain_page_pool.run(
+        low_jobs, main_auth, block_auth, storage, layout, sparse, mod);
+    if (!compare_factor("sparse-domain-page-2", main_auth, block_auth,
+                        main_states, block_states, low2_rm, low2_rd, storage, layout)) return 36;
+
+    fill_factor(main_auth, block_auth, main_states, block_states, init_m, init_d, storage, layout);
     CpuLowSparsePersistentPool sparse_domain_unrefined_pool(
         2, CPU_LOW_SCHEDULE_DOMAIN, 1, false);
     sparse_domain_unrefined_pool.run(
@@ -323,6 +342,15 @@ int main() {
               << " sparse_domain_active_domains=" << sparse_domain_pool.domain_active_domains
               << " sparse_domain_refined_boundaries=" << sparse_domain_pool.domain_refined_boundaries
               << " sparse_domain_refined_job_moves=" << sparse_domain_pool.domain_refined_job_moves
+              << " sparse_domain_page_groups=" << sparse_domain_page_pool.groups()
+              << " sparse_domain_page_boundary_moves=" << page_tie_stats.boundary_moves
+              << " sparse_domain_page_moved_jobs=" << page_tie_stats.moved_jobs
+              << " sparse_domain_page_penalty_2m_before=" << page_tie_stats.penalty_2m_before
+              << " sparse_domain_page_penalty_2m_after=" << page_tie_stats.penalty_2m_after
+              << " sparse_domain_page_penalty_4k_before=" << page_tie_stats.penalty_4k_before
+              << " sparse_domain_page_penalty_4k_after=" << page_tie_stats.penalty_4k_after
+              << " sparse_domain_page_max_before=" << page_tie_stats.max_worker_cells_before
+              << " sparse_domain_page_max_after=" << page_tie_stats.max_worker_cells_after
               << " sparse_domain_unrefined_groups=" << sparse_domain_unrefined_pool.groups()
               << " sparse_domain_unrefined_refine=" << int(sparse_domain_unrefined_pool.domain_refine)
               << " sparse_domain_unrefined_boundaries=" << sparse_domain_unrefined_pool.domain_refined_boundaries
@@ -356,6 +384,7 @@ int main() {
     sparse_sticky_pool.shutdown();
     sparse_contiguous_pool.shutdown();
     sparse_domain_pool.shutdown();
+    sparse_domain_page_pool.shutdown();
     sparse_domain_unrefined_pool.shutdown();
     high_persistent_pool.shutdown();
     high_pool.release();
