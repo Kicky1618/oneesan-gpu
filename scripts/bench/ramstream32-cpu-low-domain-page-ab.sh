@@ -97,6 +97,7 @@ cpu_low_cpu_list=${CPU_LOW_CPU_LIST:-none}
 cpu_low_schedule=domain
 cpu_low_domain_size=$CPU_LOW_DOMAIN_SIZE
 cpu_low_domain_refine=1
+page_objective=max_guard-page-sum-v5.23
 variants=page0,page1
 order_design=alternating-pairs
 repeats=$REPEATS
@@ -108,12 +109,14 @@ if [[ -n "$CPU_HIGH_GROUPS_FILE" ]]; then
   echo "cpu_high_groups_file_sha256=$(file_sha256 "$CPU_HIGH_GROUPS_FILE")" >>"$meta"
 fi
 
-printf 'repeat\torder\tpage_tiebreak\tresidue\twall_s\tcpu_low_wall_s\tcpu_low_kernel_sum_s\tcpu_low_schedule_build_s\tpage_build_s\tpage_boundary_moves\tpage_moved_jobs\tpage_penalty_2m_before\tpage_penalty_2m_after\tpage_penalty_4k_before\tpage_penalty_4k_after\tcpu_high_wall_s\th2d_s\tgpu_kernel_s\td2h_s\tstderr_log\traw\n' >"$out"
+printf 'repeat\torder\tpage_tiebreak\tresidue\twall_s\tcpu_low_wall_s\tcpu_low_kernel_sum_s\tcpu_low_schedule_build_s\tpage_build_s\tpage_objective\tpage_candidate_evaluations\tpage_max_guard_rejections\tpage_improving_moves\tpage_tie_load_moves\tpage_improve_sum_increase_moves\tpage_boundary_moves\tpage_moved_jobs\tpage_max_worker_cells_before\tpage_max_worker_cells_after\tpage_penalty_2m_before\tpage_penalty_2m_after\tpage_penalty_4k_before\tpage_penalty_4k_after\tcpu_high_wall_s\th2d_s\tgpu_kernel_s\td2h_s\tstderr_log\traw\n' >"$out"
 
 run_one() {
   local repeat="$1" order="$2" page="$3"
   local stderr_log="$log_dir/repeat${repeat}-${order}-page${page}.stderr.txt"
   local line residue got_schedule got_domain got_refine got_page
+  local page_line="" objective=disabled evals=0 rejects=0 page_moves=0 load_moves=0 sum_increase=0
+  local max_before=0 max_after=0
 
   line="$(CPU_HIGH_MODE="$CPU_HIGH_MODE" \
     CPU_HIGH_OVERLAP="$CPU_HIGH_OVERLAP" \
@@ -143,9 +146,32 @@ run_one() {
     echo "refinement stderr provenance mismatch log=$stderr_log" >&2; exit 7;
   }
   if [[ "$page" == 1 ]]; then
-    grep -Fq 'cpu_low_domain_page_tiebreak ' "$stderr_log" || {
+    page_line="$(grep -F 'cpu_low_domain_page_tiebreak ' "$stderr_log" | tail -n1)"
+    [[ -n "$page_line" ]] || {
       echo "page tie-break stderr provenance missing log=$stderr_log" >&2; exit 7;
     }
+    objective="$(field "$page_line" objective)"
+    [[ "$objective" == max_guard-page-sum-v5.23 ]] || {
+      echo "page objective mismatch got=$objective" >&2; exit 7;
+    }
+    evals="$(field "$page_line" candidate_evaluations)"
+    rejects="$(field "$page_line" max_guard_rejections)"
+    page_moves="$(field "$page_line" page_improving_moves)"
+    load_moves="$(field "$page_line" page_tie_load_moves)"
+    sum_increase="$(field "$page_line" page_improve_sum_increase_moves)"
+    max_before="$(field "$page_line" max_worker_cells_before)"
+    max_after="$(field "$page_line" max_worker_cells_after)"
+    python3 - "$evals" "$rejects" "$page_moves" "$load_moves" "$sum_increase" \
+      "$max_before" "$max_after" <<'PY'
+import sys
+evals,rejects,page_moves,load_moves,sum_increase,max_before,max_after=map(int,sys.argv[1:])
+if rejects > evals:
+    raise SystemExit('max-guard rejection count exceeds candidate evaluations')
+if sum_increase > page_moves:
+    raise SystemExit('sum-increase move count exceeds page-improving moves')
+if max_after > max_before:
+    raise SystemExit('page max-worker regression')
+PY
     local p20 p21 p40 p41
     p20="$(field "$line" cpu_low_domain_page_penalty_2m_before)"
     p21="$(field "$line" cpu_low_domain_page_penalty_2m_after)"
@@ -159,13 +185,15 @@ if (p21,p41) > (p20,p40):
 PY
   fi
 
-  printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
+  printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
     "$repeat" "$order" "$page" "$residue" \
     "$(field "$line" wall_s)" "$(field "$line" cpu_low_wall_s)" \
     "$(field "$line" cpu_low_kernel_sum_s)" "$(field "$line" cpu_low_schedule_build_s)" \
     "$(field "$line" cpu_low_domain_page_build_s)" \
+    "$objective" "$evals" "$rejects" "$page_moves" "$load_moves" "$sum_increase" \
     "$(field "$line" cpu_low_domain_page_boundary_moves)" \
     "$(field "$line" cpu_low_domain_page_moved_jobs)" \
+    "$max_before" "$max_after" \
     "$(field "$line" cpu_low_domain_page_penalty_2m_before)" \
     "$(field "$line" cpu_low_domain_page_penalty_2m_after)" \
     "$(field "$line" cpu_low_domain_page_penalty_4k_before)" \
@@ -206,12 +234,13 @@ awk -F '\t' '
   {
     p=$3; n[p]++;
     wall[p]+=$5; low[p]+=$6; kernel[p]+=$7; build[p]+=$8; pbuild[p]+=$9;
-    moves[p]+=$10; moved[p]+=$11; high[p]+=$16;
+    evals[p]+=$11; rejects[p]+=$12; pimprove[p]+=$13; lmove[p]+=$14; sinc[p]+=$15;
+    moves[p]+=$16; moved[p]+=$17; high[p]+=$24;
   }
   END {
     for (p=0; p<=1; ++p) if (n[p])
-      printf("summary page_tiebreak=%d runs=%d mean_wall_s=%.9f mean_cpu_low_wall_s=%.9f mean_cpu_low_kernel_sum_s=%.9f mean_schedule_build_s=%.9f mean_page_build_s=%.9f mean_page_boundary_moves=%.3f mean_page_moved_jobs=%.3f mean_cpu_high_wall_s=%.9f\n",
-             p,n[p],wall[p]/n[p],low[p]/n[p],kernel[p]/n[p],build[p]/n[p],pbuild[p]/n[p],moves[p]/n[p],moved[p]/n[p],high[p]/n[p]);
+      printf("summary page_tiebreak=%d runs=%d mean_wall_s=%.9f mean_cpu_low_wall_s=%.9f mean_cpu_low_kernel_sum_s=%.9f mean_schedule_build_s=%.9f mean_page_build_s=%.9f mean_candidate_evaluations=%.3f mean_max_guard_rejections=%.3f mean_page_improving_moves=%.3f mean_page_tie_load_moves=%.3f mean_page_improve_sum_increase_moves=%.3f mean_page_boundary_moves=%.3f mean_page_moved_jobs=%.3f mean_cpu_high_wall_s=%.9f\n",
+             p,n[p],wall[p]/n[p],low[p]/n[p],kernel[p]/n[p],build[p]/n[p],pbuild[p]/n[p],evals[p]/n[p],rejects[p]/n[p],pimprove[p]/n[p],lmove[p]/n[p],sinc[p]/n[p],moves[p]/n[p],moved[p]/n[p],high[p]/n[p]);
     if (n[0] && n[1]) {
       w0=wall[0]/n[0]; w1=wall[1]/n[1]; l0=low[0]/n[0]; l1=low[1]/n[1];
       b0=build[0]/n[0]; b1=build[1]/n[1];
