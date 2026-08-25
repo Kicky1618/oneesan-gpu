@@ -7,8 +7,11 @@ on:
       - 'src/cuda/gridfp/ramstream32_reverse_desc.hpp'
       - 'src/cuda/gridfp/ramstream32_reverse_orbit.hpp'
       - 'src/cuda/gridfp/ramstream32_bucket_reverse_atomic.cuh'
+      - 'src/cuda/gridfp/ramstream32_bucket_reverse_fused.cuh'
       - 'src/cuda/b300/oneesan_cuda_gridfp_b300_bucket_snake_atomic.cu'
       - 'src/cuda/b300/oneesan_cuda_gridfp_b300_bucket_snake_atomic_events.cu'
+      - 'src/cuda/b300/oneesan_cuda_gridfp_b300_bucket_snake_fused.cu'
+      - 'src/cuda/b300/oneesan_cuda_gridfp_b300_bucket_snake_fused_events.cu'
       - 'scripts/build/b300-bucket-snake.sh'
       - '.github/workflows/b300-bucket-snake-validation.yml'
   pull_request:
@@ -17,8 +20,11 @@ on:
       - 'src/cuda/gridfp/ramstream32_reverse_desc.hpp'
       - 'src/cuda/gridfp/ramstream32_reverse_orbit.hpp'
       - 'src/cuda/gridfp/ramstream32_bucket_reverse_atomic.cuh'
+      - 'src/cuda/gridfp/ramstream32_bucket_reverse_fused.cuh'
       - 'src/cuda/b300/oneesan_cuda_gridfp_b300_bucket_snake_atomic.cu'
       - 'src/cuda/b300/oneesan_cuda_gridfp_b300_bucket_snake_atomic_events.cu'
+      - 'src/cuda/b300/oneesan_cuda_gridfp_b300_bucket_snake_fused.cu'
+      - 'src/cuda/b300/oneesan_cuda_gridfp_b300_bucket_snake_fused_events.cu'
       - 'scripts/build/b300-bucket-snake.sh'
       - '.github/workflows/b300-bucket-snake-validation.yml'
   workflow_dispatch:
@@ -29,29 +35,29 @@ jobs:
     container: nvidia/cuda:12.8.1-devel-ubuntu22.04
     steps:
       - uses: actions/checkout@v4
-      - name: Compile and run W22 sync snake plan
+      - name: Compile and run W22 sync atomic snake plan
         shell: bash
         run: |
           mkdir -p build
           nvcc -O3 -std=c++17 -lineinfo -arch=sm_80 \
             -DTARGET_W=22 -DLOW_LUT_K=11 -DHIGH_LUT_K=10 \
             src/cuda/b300/oneesan_cuda_gridfp_b300_bucket_snake_atomic.cu \
-            -o build/snake_sync_w22
-          build/snake_sync_w22 21 4294967291 256 16 8 256 --plan-only 2>&1 | tee /tmp/snake22.txt
+            -o build/snake_atomic_sync_w22
+          build/snake_atomic_sync_w22 21 4294967291 256 16 8 256 --plan-only 2>&1 | tee /tmp/snake22.txt
           grep -Fq 'backend=gridfp-b300-bucket-snake-atomic-v0.1-plan' /tmp/snake22.txt
           grep -Fq 'transposes_per_residue=22' /tmp/snake22.txt
           grep -Fq 'standard_transposes=43' /tmp/snake22.txt
           grep -Fq 'reverse_closure_atomic=1' /tmp/snake22.txt
-      - name: Compile and run W28 event snake plan
+      - name: Compile and run W28 event fused snake plan
         shell: bash
         run: |
           nvcc -O3 -std=c++17 -lineinfo -arch=sm_80 \
             -DTARGET_W=28 -DLOW_LUT_K=14 -DHIGH_LUT_K=13 \
-            src/cuda/b300/oneesan_cuda_gridfp_b300_bucket_snake_atomic_events.cu \
-            -o build/snake_events_w28
-          build/snake_events_w28 27 4294967291 256 16 8 1024 --plan-only 2>&1 | tee /tmp/snake28.txt
-          grep -Fq 'backend=gridfp-b300-bucket-snake-atomic-v0.1-plan' /tmp/snake28.txt
+            src/cuda/b300/oneesan_cuda_gridfp_b300_bucket_snake_fused_events.cu \
+            -o build/snake_fused_events_w28
+          build/snake_fused_events_w28 27 4294967291 256 16 8 1024 --plan-only 2>&1 | tee /tmp/snake28.txt
+          grep -Fq 'backend=gridfp-b300-bucket-snake-fused-v0.2-plan' /tmp/snake28.txt
           grep -Fq 'states=520735012027' /tmp/snake28.txt
           grep -Fq 'transposes_per_residue=28' /tmp/snake28.txt
           grep -Fq 'standard_transposes=55' /tmp/snake28.txt
-          grep -Fq 'reverse_closure_atomic=1' /tmp/snake28.txt
+          grep -Fq 'reverse_closure_atomic=0' /tmp/snake28.txt
