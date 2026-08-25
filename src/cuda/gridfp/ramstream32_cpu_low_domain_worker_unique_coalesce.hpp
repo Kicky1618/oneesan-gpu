@@ -10,22 +10,16 @@
 #include <iostream>
 #include <limits>
 #include <unordered_map>
+#include <utility>
 #include <vector>
 
-// Research-only v5.27 exact-unique worker-boundary coalescing stage.
-//
-// v5.26 minimizes a sum of per-boundary page cardinalities. Different worker
-// boundaries can expose the same VM page, so that local sum is not identical to
-// the exact global unique cross-worker page set. v5.27 keeps a reference count
-// for every page ID currently exposed by every worker transition, including the
-// fixed transitions at domain boundaries. A one-job neighbour move changes at
-// most two transition boundaries, so its exact effect on the global unique page
-// set can be evaluated incrementally.
-//
-// The legal move set and load proof are the same as v5.26: a job may move only
-// to the owner of its immediate left/right neighbour inside the same domain,
-// and the destination must remain below the domain's pre-pass worker maximum.
-// Therefore domain ownership and the global max-worker bound cannot regress.
+// Research-only v5.27 exact-unique worker-boundary coalescing objective.
+// v5.29 keeps the same exact objective and legal moves, but replaces the two
+// per-candidate unordered_map page-delta tables with reusable sorted flat
+// vectors. A move touches at most two boundary signatures, so each temporary
+// delta contains only O(number of factor blocks) entries. This removes heap
+// hash-table construction from the n=27 candidate hot path without changing
+// the accepted-move semantics.
 
 struct CpuLowDomainWorkerUniqueScore {
     uint64_t pages_2m = 0;
@@ -51,12 +45,16 @@ struct CpuLowDomainWorkerUniqueCoalesceStats {
     uint64_t unique_pages_4k_after = 0;
     uint64_t owner_transitions_before = 0;
     uint64_t owner_transitions_after = 0;
+    uint64_t flat_delta_normalizations = 0;
+    size_t flat_delta_peak_entries = 0;
     uint64_t max_worker_cells_before = 0;
     uint64_t max_worker_cells_after = 0;
     double mask_index_mib = 0.0;
     double mask_index_build_s = 0.0;
     double build_s = 0.0;
 };
+
+using CpuLowWorkerUniqueFlatDelta = std::vector<std::pair<uint64_t,int>>;
 
 static bool cpu_low_worker_unique_score_less(
     const CpuLowDomainWorkerUniqueScore& a,
@@ -100,9 +98,37 @@ static void cpu_low_worker_unique_ref_add(
         cpu_low_worker_unique_ref_add_one(refs, page, delta);
 }
 
-static uint64_t cpu_low_worker_unique_after_delta(
+static void cpu_low_worker_unique_flat_delta_append(
+    CpuLowWorkerUniqueFlatDelta& delta,
+    const std::vector<uint64_t>& pages,
+    int sign
+) {
+    for (uint64_t page : pages) delta.push_back({page, sign});
+}
+
+static void cpu_low_worker_unique_flat_delta_normalize(
+    CpuLowWorkerUniqueFlatDelta& delta
+) {
+    if (delta.size() <= 1) return;
+    std::sort(delta.begin(), delta.end(), [](const auto& a, const auto& b) {
+        return a.first < b.first;
+    });
+    size_t out = 0;
+    for (size_t i = 0; i < delta.size();) {
+        uint64_t page = delta[i].first;
+        int sum = 0;
+        do {
+            sum += delta[i].second;
+            ++i;
+        } while (i < delta.size() && delta[i].first == page);
+        if (sum) delta[out++] = {page, sum};
+    }
+    delta.resize(out);
+}
+
+static uint64_t cpu_low_worker_unique_after_flat_delta(
     const std::unordered_map<uint64_t,uint32_t>& refs,
-    const std::unordered_map<uint64_t,int>& delta
+    const CpuLowWorkerUniqueFlatDelta& delta
 ) {
     uint64_t unique = refs.size();
     for (const auto& kv : delta) {
@@ -117,6 +143,34 @@ static uint64_t cpu_low_worker_unique_after_delta(
         else if (old > 0 && now == 0) --unique;
     }
     return unique;
+}
+
+// Compatibility helper retained for the synthetic W10 test. The production
+// candidate path uses the normalized flat representation above.
+static uint64_t cpu_low_worker_unique_after_delta(
+    const std::unordered_map<uint64_t,uint32_t>& refs,
+    const std::unordered_map<uint64_t,int>& delta
+) {
+    CpuLowWorkerUniqueFlatDelta flat;
+    flat.reserve(delta.size());
+    for (const auto& kv : delta) if (kv.second) flat.push_back(kv);
+    cpu_low_worker_unique_flat_delta_normalize(flat);
+    return cpu_low_worker_unique_after_flat_delta(refs, flat);
+}
+
+static void cpu_low_worker_unique_apply_flat_delta(
+    std::unordered_map<uint64_t,uint32_t>& refs,
+    const CpuLowWorkerUniqueFlatDelta& delta
+) {
+    for (const auto& kv : delta) {
+        if (kv.second < 0) {
+            for (int j = 0; j < -kv.second; ++j)
+                cpu_low_worker_unique_ref_add_one(refs, kv.first, -1);
+        } else {
+            for (int j = 0; j < kv.second; ++j)
+                cpu_low_worker_unique_ref_add_one(refs, kv.first, +1);
+        }
+    }
 }
 
 static uint32_t cpu_low_worker_unique_transition_weight_blocks(
@@ -282,6 +336,15 @@ cpu_low_apply_domain_worker_unique_coalesce(
     stats.unique_pages_4k_before = refs4k.size();
     stats.owner_transitions_before = transitions;
 
+    // Reusable candidate/best buffers. A move changes at most two signatures.
+    const size_t flat_reserve = 2 * (
+        layout.main_blocks.size() + layout.block_blocks.size());
+    CpuLowWorkerUniqueFlatDelta candidate_d2, candidate_d4, best_d2, best_d4;
+    candidate_d2.reserve(flat_reserve);
+    candidate_d4.reserve(flat_reserve);
+    best_d2.reserve(flat_reserve);
+    best_d4.reserve(flat_reserve);
+
     std::vector<uint64_t> loads = pool.sticky_worker_cells;
     for (int d = 0; d < stats.domains; ++d) {
         auto seg = domain_segs[size_t(d)];
@@ -326,8 +389,9 @@ cpu_low_apply_domain_worker_unique_coalesce(
                     uint64_t(refs2m.size()), uint64_t(refs4k.size()), transitions};
                 CpuLowDomainWorkerUniqueScore best = current;
                 int best_dst = -1;
-                std::unordered_map<uint64_t,int> best_d2, best_d4;
                 int64_t best_transition_delta = 0;
+                best_d2.clear();
+                best_d4.clear();
 
                 for (int c = 0; c < nc; ++c) {
                     int dst = candidates[c];
@@ -341,7 +405,8 @@ cpu_low_apply_domain_worker_unique_coalesce(
                         continue;
                     }
 
-                    std::unordered_map<uint64_t,int> d2, d4;
+                    candidate_d2.clear();
+                    candidate_d4.clear();
                     int64_t transition_delta = 0;
                     auto change_edge = [&](size_t boundary,
                                            int old_left, int old_right,
@@ -351,8 +416,10 @@ cpu_low_apply_domain_worker_unique_coalesce(
                         if (old_active == new_active) return;
                         int delta = new_active ? +1 : -1;
                         const auto& sig = signature(boundary);
-                        for (uint64_t page : sig.pages_2m) d2[page] += delta;
-                        for (uint64_t page : sig.pages_4k) d4[page] += delta;
+                        cpu_low_worker_unique_flat_delta_append(
+                            candidate_d2, sig.pages_2m, delta);
+                        cpu_low_worker_unique_flat_delta_append(
+                            candidate_d4, sig.pages_4k, delta);
                         transition_delta += int64_t(delta) * transition_weight(boundary);
                     };
 
@@ -365,20 +432,27 @@ cpu_low_apply_domain_worker_unique_coalesce(
                             src, owner[i + 1],
                             dst, owner[i + 1]);
 
+                    stats.flat_delta_peak_entries = std::max(
+                        stats.flat_delta_peak_entries,
+                        std::max(candidate_d2.size(), candidate_d4.size()));
+                    cpu_low_worker_unique_flat_delta_normalize(candidate_d2);
+                    cpu_low_worker_unique_flat_delta_normalize(candidate_d4);
+                    stats.flat_delta_normalizations += 2;
+
                     int64_t candidate_transitions = int64_t(transitions) + transition_delta;
                     if (candidate_transitions < 0) {
                         std::cerr << "cpu LOW worker unique transition underflow\n";
                         std::exit(203);
                     }
                     CpuLowDomainWorkerUniqueScore candidate{
-                        cpu_low_worker_unique_after_delta(refs2m, d2),
-                        cpu_low_worker_unique_after_delta(refs4k, d4),
+                        cpu_low_worker_unique_after_flat_delta(refs2m, candidate_d2),
+                        cpu_low_worker_unique_after_flat_delta(refs4k, candidate_d4),
                         uint64_t(candidate_transitions)};
                     if (cpu_low_worker_unique_score_less(candidate, best)) {
                         best = candidate;
                         best_dst = dst;
-                        best_d2.swap(d2);
-                        best_d4.swap(d4);
+                        best_d2 = candidate_d2;
+                        best_d4 = candidate_d4;
                         best_transition_delta = transition_delta;
                     }
                 }
@@ -387,24 +461,8 @@ cpu_low_apply_domain_worker_unique_coalesce(
                     bool page_improved = best.pages_2m < current.pages_2m
                         || (best.pages_2m == current.pages_2m
                             && best.pages_4k < current.pages_4k);
-                    for (const auto& kv : best_d2) {
-                        if (kv.second < 0) {
-                            for (int j = 0; j < -kv.second; ++j)
-                                cpu_low_worker_unique_ref_add_one(refs2m, kv.first, -1);
-                        } else {
-                            for (int j = 0; j < kv.second; ++j)
-                                cpu_low_worker_unique_ref_add_one(refs2m, kv.first, +1);
-                        }
-                    }
-                    for (const auto& kv : best_d4) {
-                        if (kv.second < 0) {
-                            for (int j = 0; j < -kv.second; ++j)
-                                cpu_low_worker_unique_ref_add_one(refs4k, kv.first, -1);
-                        } else {
-                            for (int j = 0; j < kv.second; ++j)
-                                cpu_low_worker_unique_ref_add_one(refs4k, kv.first, +1);
-                        }
-                    }
+                    cpu_low_worker_unique_apply_flat_delta(refs2m, best_d2);
+                    cpu_low_worker_unique_apply_flat_delta(refs4k, best_d4);
                     int64_t next_transitions = int64_t(transitions) + best_transition_delta;
                     if (next_transitions < 0) {
                         std::cerr << "cpu LOW worker unique accepted transition underflow\n";
@@ -509,6 +567,7 @@ cpu_low_apply_domain_worker_unique_coalesce(
 
     std::cerr << "cpu_low_domain_worker_unique_coalesce"
               << " objective=global-unique-neighbor-coalesce-v5.27-plan"
+              << " implementation=flat-page-delta-v5.29"
               << " domains=" << stats.domains
               << " nonempty_domains=" << stats.nonempty_domains
               << " noncontiguous_domains_before=" << stats.noncontiguous_domains_before
@@ -526,6 +585,8 @@ cpu_low_apply_domain_worker_unique_coalesce(
               << " unique_pages_4k_after=" << stats.unique_pages_4k_after
               << " owner_transitions_before=" << stats.owner_transitions_before
               << " owner_transitions_after=" << stats.owner_transitions_after
+              << " flat_delta_normalizations=" << stats.flat_delta_normalizations
+              << " flat_delta_peak_entries=" << stats.flat_delta_peak_entries
               << " max_worker_cells_before=" << stats.max_worker_cells_before
               << " max_worker_cells_after=" << stats.max_worker_cells_after
               << " mask_index_mib=" << stats.mask_index_mib
