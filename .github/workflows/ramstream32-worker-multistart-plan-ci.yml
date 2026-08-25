@@ -10,9 +10,11 @@ on:
       - 'src/cuda/gridfp/probes/ramstream32_cpu_low_domain_worker_locality_selftest.cu'
       - 'src/cuda/gridfp/probes/ramstream32_cpu_low_domain_worker_multistart_selftest.cu'
       - 'src/cuda/gridfp/probes/ramstream32_cpu_low_domain_worker_multistart_plan.cu'
+      - 'src/cuda/gridfp/probes/ramstream32_cpu_low_worker_flat_delta_selftest.cu'
       - 'scripts/build/gridfp-ramstream32-cpu-low-domain-worker-multistart-plan.sh'
       - 'scripts/bench/ramstream32-cpu-low-domain-worker-multistart-plan-sweep.sh'
       - 'docs/ramstream32-cpu-low-worker-multistart.md'
+      - 'docs/ramstream32-cpu-low-worker-flat-delta.md'
       - '.github/workflows/ramstream32-worker-multistart-plan-ci.yml'
   pull_request:
     paths:
@@ -23,9 +25,11 @@ on:
       - 'src/cuda/gridfp/probes/ramstream32_cpu_low_domain_worker_locality_selftest.cu'
       - 'src/cuda/gridfp/probes/ramstream32_cpu_low_domain_worker_multistart_selftest.cu'
       - 'src/cuda/gridfp/probes/ramstream32_cpu_low_domain_worker_multistart_plan.cu'
+      - 'src/cuda/gridfp/probes/ramstream32_cpu_low_worker_flat_delta_selftest.cu'
       - 'scripts/build/gridfp-ramstream32-cpu-low-domain-worker-multistart-plan.sh'
       - 'scripts/bench/ramstream32-cpu-low-domain-worker-multistart-plan-sweep.sh'
       - 'docs/ramstream32-cpu-low-worker-multistart.md'
+      - 'docs/ramstream32-cpu-low-worker-flat-delta.md'
       - '.github/workflows/ramstream32-worker-multistart-plan-ci.yml'
   workflow_dispatch:
 
@@ -49,11 +53,22 @@ jobs:
           mkdir -p build
           common=(-O3 -std=c++17 -arch=sm_80 -DTARGET_W=10 -DLOW_LUT_K=5 -DHIGH_LUT_K=4)
           nvcc "${common[@]}" \
+            src/cuda/gridfp/probes/ramstream32_cpu_low_worker_flat_delta_selftest.cu \
+            -o build/ramstream32_cpu_low_worker_flat_delta_selftest
+          nvcc "${common[@]}" \
             src/cuda/gridfp/probes/ramstream32_cpu_low_domain_worker_multistart_selftest.cu \
             -o build/ramstream32_cpu_low_domain_worker_multistart_selftest
           nvcc "${common[@]}" \
             src/cuda/gridfp/probes/ramstream32_cpu_low_domain_worker_multistart_plan.cu \
             -o build/ramstream32_cpu_low_domain_worker_multistart_plan
+      - name: Validate flat page delta algebra
+        shell: bash
+        run: |
+          build/ramstream32_cpu_low_worker_flat_delta_selftest | tee /tmp/worker-flat-delta.txt
+          grep -Fq 'cpu-low-worker-flat-delta-selftest OK' /tmp/worker-flat-delta.txt
+          grep -Fq 'cancellation=1' /tmp/worker-flat-delta.txt
+          grep -Fq 'double_remove=1' /tmp/worker-flat-delta.txt
+          grep -Fq 'double_insert=1' /tmp/worker-flat-delta.txt
       - name: Validate selected exact recurrence
         shell: bash
         run: |
@@ -62,7 +77,7 @@ jobs:
           grep -Fq 'cpu-low-domain-worker-multistart-selftest OK' /tmp/worker-multistart-selftest.txt
           grep -Fq 'selected_source=' /tmp/worker-multistart-selftest.txt
           grep -Fq 'exact_generations=2' /tmp/worker-multistart-selftest.txt
-          grep -Fq 'cpu_low_domain_worker_unique_coalesce objective=global-unique-neighbor-coalesce-v5.27-plan' /tmp/worker-multistart-selftest.log
+          grep -Fq 'cpu_low_domain_worker_unique_coalesce objective=global-unique-neighbor-coalesce-v5.27-plan implementation=flat-page-delta-v5.29' /tmp/worker-multistart-selftest.log
           grep -Fq 'cpu_low_domain_worker_coalesce objective=neighbor-page-coalesce-under-domain-cap-v5.26-plan' /tmp/worker-multistart-selftest.log
       - name: Validate multistart structural plan
         shell: bash
@@ -76,6 +91,7 @@ jobs:
           grep -Fq 'raw_v526_pages_2m=' /tmp/worker-multistart-plan.txt
           grep -Fq 'hybrid_pages_2m=' /tmp/worker-multistart-plan.txt
           grep -Fq 'selected_pages_2m=' /tmp/worker-multistart-plan.txt
+          grep -Fq 'implementation=flat-page-delta-v5.29' /tmp/worker-multistart-plan.log
           python3 - <<'PY'
           fields = {}
           for token in open('/tmp/worker-multistart-plan.txt').readline().split():
@@ -103,3 +119,7 @@ jobs:
           grep -Fq 'hybrid_wins' "$d"
           grep -Fq 'v5.26_better_basin' "$d"
           grep -Fq 'selected exact tuple' "$d"
+          f=docs/ramstream32-cpu-low-worker-flat-delta.md
+          grep -Fq 'v5.29' "$f"
+          grep -Fq 'flat-page-delta-v5.29' "$f"
+          grep -Fq 'unordered_map' "$f"
