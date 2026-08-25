@@ -5,6 +5,7 @@ on:
     paths:
       - 'src/cuda/gridfp/probes/ramstream32_cpu_low_schedule_plan.cu'
       - 'src/cuda/gridfp/ramstream32_cpu_low_sparse_persistent.hpp'
+      - 'src/cuda/gridfp/ramstream32_cpu_low_domain_page.hpp'
       - 'src/cuda/gridfp/ramstream32_cpu_low_sparse.hpp'
       - 'scripts/build/gridfp-ramstream32-cpu-low-schedule-plan.sh'
       - 'docs/ramstream32-cpu-low-scheduling.md'
@@ -13,6 +14,7 @@ on:
     paths:
       - 'src/cuda/gridfp/probes/ramstream32_cpu_low_schedule_plan.cu'
       - 'src/cuda/gridfp/ramstream32_cpu_low_sparse_persistent.hpp'
+      - 'src/cuda/gridfp/ramstream32_cpu_low_domain_page.hpp'
       - 'src/cuda/gridfp/ramstream32_cpu_low_sparse.hpp'
       - 'scripts/build/gridfp-ramstream32-cpu-low-schedule-plan.sh'
       - 'docs/ramstream32-cpu-low-scheduling.md'
@@ -65,6 +67,8 @@ jobs:
                   fields[k] = v
           assert fields['domain_size'] == '1'
           assert fields['domains'] == '2'
+          assert fields['hybrid_domain_refine'] == '1'
+          assert fields['hybrid_domain_page_tiebreak'] == '0'
           assert fields['cross_domain_pages_4k'] == fields['cross_worker_pages_4k']
           assert fields['cross_domain_pages_2m'] == fields['cross_worker_pages_2m']
           assert fields['contiguous_cross_domain_pages_4k'] == fields['contiguous_cross_worker_pages_4k']
@@ -91,14 +95,44 @@ jobs:
           grep -Fq 'hybrid_domain_cross_domain_pages_4k=0' /tmp/low-domain2.txt
           grep -Fq 'hybrid_domain_cross_domain_pages_2m=0' /tmp/low-domain2.txt
           grep -Fq 'hybrid_domain_imbalance=' /tmp/low-domain2.txt
+      - name: Validate page-aware domain tie-break
+        shell: bash
+        run: |
+          CPU_LOW_DOMAIN_PAGE_TIEBREAK=1 \
+            build/ramstream32_cpu_low_schedule_plan 9 2 --domain-size 1 \
+            >/tmp/low-page.txt 2>/tmp/low-page.log
+          python3 - <<'PY'
+          fields = {}
+          for token in open('/tmp/low-page.txt').readline().split():
+              if '=' in token:
+                  k, v = token.split('=', 1)
+                  fields[k] = v
+          assert fields['hybrid_domain_refine'] == '1'
+          assert fields['hybrid_domain_page_tiebreak'] == '1'
+          assert int(fields['hybrid_domain_page_boundary_moves']) >= 0
+          assert int(fields['hybrid_domain_page_moved_jobs']) >= 0
+          p20 = int(fields['hybrid_domain_page_penalty_2m_before'])
+          p21 = int(fields['hybrid_domain_page_penalty_2m_after'])
+          p40 = int(fields['hybrid_domain_page_penalty_4k_before'])
+          p41 = int(fields['hybrid_domain_page_penalty_4k_after'])
+          assert (p21, p41) <= (p20, p40)
+          PY
+          grep -Fq 'cpu_low_domain_page_tiebreak ' /tmp/low-page.log
+
+          if CPU_LOW_DOMAIN_REFINE=0 CPU_LOW_DOMAIN_PAGE_TIEBREAK=1 \
+            build/ramstream32_cpu_low_schedule_plan 9 2 --domain-size 1 >/tmp/bad-page.txt 2>&1; then
+            echo 'page tie-break without refinement unexpectedly succeeded' >&2; exit 1
+          fi
+          grep -Fq 'CPU_LOW_DOMAIN_PAGE_TIEBREAK requires --domain-size and CPU_LOW_DOMAIN_REFINE=1' /tmp/bad-page.txt
       - name: Check documentation
         shell: bash
         run: |
           d=docs/ramstream32-cpu-low-scheduling.md
-          grep -Fq 'Backend v5.20' "$d"
+          grep -Fq 'Backend v5.22' "$d"
           grep -Fq 'ramstream32_cpu_low_schedule_plan_n27' "$d"
           grep -Fq -- '--workers' "$d"
           grep -Fq -- '--domain-size' "$d"
+          grep -Fq 'CPU_LOW_DOMAIN_PAGE_TIEBREAK' "$d"
           grep -Fq 'hybrid_domain_imbalance' "$d"
           grep -Fq 'hybrid_domain_refined_boundaries' "$d"
           grep -Fq 'cpu_low_domain_refined_job_moves' "$d"
