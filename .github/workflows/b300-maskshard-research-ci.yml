@@ -62,6 +62,9 @@ jobs:
           g++ -O3 -std=c++17 -Wall -Wextra -Werror \
             src/cpp/probes/factor_high_nblock_once.cpp \
             -o build/factor_high_nblock_once
+          g++ -O3 -std=c++17 -Wall -Wextra -Werror \
+            src/cpp/probes/factor_high_fblock_layout_dedup.cpp \
+            -o build/factor_high_fblock_layout_dedup
           python3 -m py_compile \
             scripts/bench/b300_maskshard_highgroupsync_ab.py \
             scripts/bench/b300_maskshard_highdeadcopies_ab.py \
@@ -69,7 +72,8 @@ jobs:
             scripts/bench/b300_maskshard_highgroupsizecache_ab.py \
             scripts/bench/b300_maskshard_highrowbatchasync_ab.py \
             scripts/bench/b300_maskshard_highpinnedconfig_ab.py \
-            scripts/bench/b300_maskshard_highnblockonce_ab.py
+            scripts/bench/b300_maskshard_highnblockonce_ab.py \
+            scripts/bench/b300_maskshard_highfblockdedup_ab.py
       - name: Run structural smoke tests
         shell: bash
         run: |
@@ -85,6 +89,7 @@ jobs:
           build/factor_high_row_batch_async 28 14 8
           build/factor_high_pinned_config 28 14
           build/factor_high_nblock_once 28 14 8
+          build/factor_high_fblock_layout_dedup 28 14 8
 
   cuda-compile:
     if: ${{ github.event_name == 'workflow_dispatch' && inputs.full_cuda }}
@@ -99,7 +104,7 @@ jobs:
           - {width: 28, low: 14, high: 13}
     steps:
       - uses: actions/checkout@v4
-      - name: Compile latest invariant-count HIGH row-batch backend
+      - name: Compile latest deduplicated HIGH row-batch backend
         shell: bash
         run: |
           set -euo pipefail
@@ -108,5 +113,5 @@ jobs:
             -DTARGET_W=${{ matrix.width }} \
             -DLOW_LUT_K=${{ matrix.low }} \
             -DHIGH_LUT_K=${{ matrix.high }} \
-            src/cuda/b300/oneesan_b300_maskshard_v063_highnblockonce.cu \
-            -o build/maskshard_v063_w${{ matrix.width }}
+            src/cuda/b300/oneesan_b300_maskshard_v064_highfblockdedup.cu \
+            -o build/maskshard_v064_w${{ matrix.width }}
