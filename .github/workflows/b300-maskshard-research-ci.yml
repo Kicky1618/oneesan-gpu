@@ -71,6 +71,9 @@ jobs:
           g++ -O3 -std=c++17 -Wall -Wextra -Werror \
             src/cpp/probes/factor_high_group_size_class_cache.cpp \
             -o build/factor_high_group_size_class_cache
+          g++ -O3 -std=c++17 -Wall -Wextra -Werror \
+            src/cpp/probes/factor_high_row_plan_class_cache.cpp \
+            -o build/factor_high_row_plan_class_cache
           python3 -m py_compile \
             scripts/bench/b300_maskshard_highgroupsync_ab.py \
             scripts/bench/b300_maskshard_highdeadcopies_ab.py \
@@ -81,7 +84,8 @@ jobs:
             scripts/bench/b300_maskshard_highnblockonce_ab.py \
             scripts/bench/b300_maskshard_highfblockdedup_ab.py \
             scripts/bench/b300_maskshard_highfblockclasscache_ab.py \
-            scripts/bench/b300_maskshard_highgroupsizeclass_ab.py
+            scripts/bench/b300_maskshard_highgroupsizeclass_ab.py \
+            scripts/bench/b300_maskshard_highrowplanclass_ab.py
       - name: Run structural smoke tests
         shell: bash
         run: |
@@ -100,6 +104,7 @@ jobs:
           build/factor_high_fblock_layout_dedup 28 14 8
           build/factor_high_fblock_class_cache 28 14
           build/factor_high_group_size_class_cache 28 14
+          build/factor_high_row_plan_class_cache 28 14
 
   cuda-compile:
     if: ${{ github.event_name == 'workflow_dispatch' && inputs.full_cuda }}
@@ -123,5 +128,5 @@ jobs:
             -DTARGET_W=${{ matrix.width }} \
             -DLOW_LUT_K=${{ matrix.low }} \
             -DHIGH_LUT_K=${{ matrix.high }} \
-            src/cuda/b300/oneesan_b300_maskshard_v066_highgroupsizeclass.cu \
-            -o build/maskshard_v066_w${{ matrix.width }}
+            src/cuda/b300/oneesan_b300_maskshard_v067_highrowplanclass.cu \
+            -o build/maskshard_v067_w${{ matrix.width }}
