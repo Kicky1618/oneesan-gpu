@@ -46,7 +46,7 @@ __global__ void maskshard_main_lowdesc_closure_cols_inplace_kernel(
                 else hi = mid;
             }
             bid = lo - 1;
-            local = uint32_t(row) - prefix[bid];
+            local = task - prefix[bid];
         }
         bid = __shfl_sync(active, bid, 0);
         const uint32_t local_lo = __shfl_sync(active, uint32_t(local), 0);
