@@ -5,6 +5,7 @@
 #include "oneesan_cuda_gridfp_b300_bucket_snake_atomic.cu"
 #undef main
 #include "../gridfp/ramstream32_bucket_orbit_closure_preflight.cuh"
+#include "../gridfp/ramstream32_forward_build_release.hpp"
 
 int main(int argc,char**argv){
     int n=argc>1?std::atoi(argv[1]):TARGET_W-1;Count mod=argc>2?Count(std::strtoul(argv[2],nullptr,10)):4294967291u;
@@ -13,8 +14,8 @@ int main(int argc,char**argv){
     constexpr int NG=BUCKET_NGPU;int W=n+1;if(W!=TARGET_W||LOW_LUT_K+HIGH_LUT_K+1!=TARGET_W)return 1;if(threads<=0||threads>1024||gx<=0||gy<=0||!chunk_mib)return 2;
 
     auto prep0=std::chrono::steady_clock::now();build_full_dp();G_FACTOR=build_factor_tables();StorageFactorHost storage=build_storage_factor_tables(G_FACTOR);StorageLayout layout=build_storage_layout(storage);
-    LowDescHost lowdesc=build_low_descriptors(storage,layout);HighDescHost highdesc=build_high_descriptors(storage,layout);LowOrbitHost loworbit=build_cpu_low_orbit(storage,layout,lowdesc);CpuHighDirectHost highdirect=build_cpu_high_direct(storage,layout,highdesc);GpuDirectGatherHost ordinary=build_gpu_direct_gather(layout,lowdesc,loworbit,highdirect);GpuDirectCrossGatherHost cross=build_gpu_direct_cross_gather(storage,layout,lowdesc,loworbit,highdirect);GpuDirectFusedHost fused=build_gpu_direct_fused_checked(layout,ordinary,cross);CpuLowSparseHost lowsparse=build_cpu_low_sparse(storage,layout,lowdesc);
-    BucketOwnerHost owner=build_bucket_owners(G_FACTOR,storage);BucketPhysicalLayoutHost phy=build_bucket_physical_layout(layout,owner);BucketOrbitStreamsHost borbit=build_bucket_orbits(storage,layout,owner,lowsparse,highdirect);BucketFusedHost bfused=build_bucket_fused(storage,layout,owner,ordinary,cross,fused);BucketForwardOrbitClosureAttachHost fattach=build_bucket_forward_orbit_closure_attach(layout,borbit,bfused);
+    LowDescHost lowdesc=build_low_descriptors(storage,layout);HighDescHost highdesc=build_high_descriptors(storage,layout);LowOrbitHost loworbit=build_cpu_low_orbit(storage,layout,lowdesc);CpuHighDirectHost highdirect=build_cpu_high_direct(storage,layout,highdesc);bsn_forward_release_highdesc(highdesc);GpuDirectGatherHost ordinary=build_gpu_direct_gather(layout,lowdesc,loworbit,highdirect);GpuDirectCrossGatherHost cross=build_gpu_direct_cross_gather(storage,layout,lowdesc,loworbit,highdirect);GpuDirectFusedHost fused=build_gpu_direct_fused_checked(layout,ordinary,cross);CpuLowSparseHost lowsparse=build_cpu_low_sparse(storage,layout,lowdesc,loworbit);bsn_forward_release_lowdesc_orbit(lowdesc,loworbit);
+    BucketOwnerHost owner=build_bucket_owners(G_FACTOR,storage);BucketPhysicalLayoutHost phy=build_bucket_physical_layout(layout,owner);BucketOrbitStreamsHost borbit=build_bucket_orbits(storage,layout,owner,lowsparse,highdirect);bsn_forward_release_bucket_orbit_inputs(lowsparse,highdirect);BucketFusedHost bfused=build_bucket_fused(storage,layout,owner,ordinary,cross,fused);bsn_forward_release_bucket_fused_inputs(ordinary,cross,fused);BucketForwardOrbitClosureAttachHost fattach=build_bucket_forward_orbit_closure_attach(layout,borbit,bfused);
     ReverseLowDescHost rlow=build_reverse_low_descriptors(storage,layout);ReverseHighDescHost rhigh=build_reverse_high_descriptors(storage,layout);ReverseOrbitHost rlo=build_reverse_orbit(storage,layout,true),rhi=build_reverse_orbit(storage,layout,false);SnakeReverseHost reverse=bsn_build_reverse(storage,layout,owner,rlow,rhigh,rlo,rhi);BucketReverseOrbitClosureAttachHost rattach=build_bucket_reverse_orbit_closure_attach_checked(layout,borbit,bfused,reverse.atomic,reverse.fused);
     BucketTransposePlan tplan=build_bucket_transpose_plan(phy,NG);double prepare_s=bsn_since(prep0);
 

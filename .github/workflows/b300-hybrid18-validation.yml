@@ -11,6 +11,10 @@ on:
       - 'src/cuda/gridfp/ramstream32_bucket_reverse_closure_only.cuh'
       - 'src/cuda/gridfp/ramstream32_bucket_orbit_closure_hybrid18_graph.cuh'
       - 'src/cuda/gridfp/ramstream32_reverse_build_release.hpp'
+      - 'src/cuda/gridfp/ramstream32_forward_build_release.hpp'
+      - 'src/cuda/b300/oneesan_cuda_gridfp_b300_bucket_snake_onepass.cu'
+      - 'src/cuda/b300/oneesan_cuda_gridfp_b300_bucket_snake_onepass_batch.cu'
+      - 'src/cuda/b300/oneesan_cuda_gridfp_b300_bucket_snake_onepass_graph_batch.cu'
       - 'src/cuda/gridfp/probes/ramstream32_reverse_split18_plan.cu'
       - 'src/cuda/gridfp/probes/ramstream32_reverse_split18_direct_plan.cu'
       - 'src/cuda/gridfp/probes/ramstream32_bucket_reverse_split18_selftest.cu'
@@ -71,6 +75,10 @@ jobs:
             src/cuda/b300/oneesan_cuda_gridfp_b300_bucket_snake_onepass_hybrid18_pipeline.cu \
             -o build/hybrid18_pipeline_w10
           build/hybrid18_pipeline_w10 9 4294967291 256 4 4 64 --plan-only 2>&1 | tee /tmp/hybrid18-plan.txt
+          grep -Fq 'forward_build release_stage=highdesc ' /tmp/hybrid18-plan.txt
+          grep -Fq 'forward_build release_stage=lowdesc-loworbit ' /tmp/hybrid18-plan.txt
+          grep -Fq 'forward_build release_stage=bucket-orbit-inputs ' /tmp/hybrid18-plan.txt
+          grep -Fq 'forward_build release_stage=bucket-fused-inputs ' /tmp/hybrid18-plan.txt
           grep -Fq 'reverse_build released_source_mib=' /tmp/hybrid18-plan.txt
           grep -Fq 'reverse_split18_direct ' /tmp/hybrid18-plan.txt
           grep -Fq 'exact_reserve=1 release_legacy=1' /tmp/hybrid18-plan.txt
