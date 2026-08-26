@@ -16,15 +16,24 @@ on:
       - 'src/cuda/gridfp/ramstream32_cpu_low_domain_worker_augmented_fixedpoint.hpp'
       - 'src/cuda/gridfp/probes/ramstream32_cpu_low_worker_flat_delta_selftest.cu'
       - 'src/cuda/gridfp/probes/ramstream32_cpu_low_worker_dense_page_selftest.cu'
+      - 'src/cuda/gridfp/probes/ramstream32_cpu_low_worker_dense_page_plan.cu'
+      - 'src/cuda/gridfp/probes/ramstream32_cpu_low_worker_dense_compare_plan.cu'
       - 'src/cuda/gridfp/probes/ramstream32_cpu_low_worker_dense_equivalence_selftest.cu'
+      - 'src/cuda/gridfp/probes/ramstream32_cpu_low_domain_worker_multistart_plan.cu'
+      - 'src/cuda/gridfp/probes/ramstream32_cpu_low_worker_shared_multistart_plan.cu'
       - 'src/cuda/gridfp/probes/ramstream32_cpu_low_worker_shared_multistart_selftest.cu'
+      - 'src/cuda/gridfp/probes/ramstream32_cpu_low_worker_run_plan.cu'
       - 'src/cuda/gridfp/probes/ramstream32_cpu_low_worker_run_selftest.cu'
+      - 'src/cuda/gridfp/probes/ramstream32_cpu_low_worker_swap_plan.cu'
       - 'src/cuda/gridfp/probes/ramstream32_cpu_low_worker_swap_selftest.cu'
+      - 'src/cuda/gridfp/probes/ramstream32_cpu_low_worker_fixedpoint_plan.cu'
       - 'src/cuda/gridfp/probes/ramstream32_cpu_low_worker_fixedpoint_selftest.cu'
+      - 'src/cuda/gridfp/probes/ramstream32_cpu_low_worker_plateau_plan.cu'
       - 'src/cuda/gridfp/probes/ramstream32_cpu_low_worker_plateau_selftest.cu'
-      - 'src/cuda/gridfp/probes/ramstream32_cpu_low_worker_augmented_selftest.cu'
       - 'src/cuda/gridfp/probes/ramstream32_cpu_low_worker_augmented_plan.cu'
+      - 'src/cuda/gridfp/probes/ramstream32_cpu_low_worker_augmented_selftest.cu'
       - 'scripts/build/gridfp-ramstream32-cpu-low-worker-dense-page-plan.sh'
+      - 'scripts/build/gridfp-ramstream32-cpu-low-worker-dense-compare-plan.sh'
       - 'scripts/bench/ramstream32-cpu-low-worker-dense-compare-plan-sweep.sh'
       - 'scripts/build/gridfp-ramstream32-cpu-low-domain-worker-multistart-plan.sh'
       - 'scripts/bench/ramstream32-cpu-low-domain-worker-multistart-plan-sweep.sh'
@@ -65,15 +74,24 @@ on:
       - 'src/cuda/gridfp/ramstream32_cpu_low_domain_worker_augmented_fixedpoint.hpp'
       - 'src/cuda/gridfp/probes/ramstream32_cpu_low_worker_flat_delta_selftest.cu'
       - 'src/cuda/gridfp/probes/ramstream32_cpu_low_worker_dense_page_selftest.cu'
+      - 'src/cuda/gridfp/probes/ramstream32_cpu_low_worker_dense_page_plan.cu'
+      - 'src/cuda/gridfp/probes/ramstream32_cpu_low_worker_dense_compare_plan.cu'
       - 'src/cuda/gridfp/probes/ramstream32_cpu_low_worker_dense_equivalence_selftest.cu'
+      - 'src/cuda/gridfp/probes/ramstream32_cpu_low_domain_worker_multistart_plan.cu'
+      - 'src/cuda/gridfp/probes/ramstream32_cpu_low_worker_shared_multistart_plan.cu'
       - 'src/cuda/gridfp/probes/ramstream32_cpu_low_worker_shared_multistart_selftest.cu'
+      - 'src/cuda/gridfp/probes/ramstream32_cpu_low_worker_run_plan.cu'
       - 'src/cuda/gridfp/probes/ramstream32_cpu_low_worker_run_selftest.cu'
+      - 'src/cuda/gridfp/probes/ramstream32_cpu_low_worker_swap_plan.cu'
       - 'src/cuda/gridfp/probes/ramstream32_cpu_low_worker_swap_selftest.cu'
+      - 'src/cuda/gridfp/probes/ramstream32_cpu_low_worker_fixedpoint_plan.cu'
       - 'src/cuda/gridfp/probes/ramstream32_cpu_low_worker_fixedpoint_selftest.cu'
+      - 'src/cuda/gridfp/probes/ramstream32_cpu_low_worker_plateau_plan.cu'
       - 'src/cuda/gridfp/probes/ramstream32_cpu_low_worker_plateau_selftest.cu'
-      - 'src/cuda/gridfp/probes/ramstream32_cpu_low_worker_augmented_selftest.cu'
       - 'src/cuda/gridfp/probes/ramstream32_cpu_low_worker_augmented_plan.cu'
+      - 'src/cuda/gridfp/probes/ramstream32_cpu_low_worker_augmented_selftest.cu'
       - 'scripts/build/gridfp-ramstream32-cpu-low-worker-dense-page-plan.sh'
+      - 'scripts/build/gridfp-ramstream32-cpu-low-worker-dense-compare-plan.sh'
       - 'scripts/bench/ramstream32-cpu-low-worker-dense-compare-plan-sweep.sh'
       - 'scripts/build/gridfp-ramstream32-cpu-low-domain-worker-multistart-plan.sh'
       - 'scripts/bench/ramstream32-cpu-low-domain-worker-multistart-plan-sweep.sh'
@@ -112,6 +130,7 @@ jobs:
         run: |
           scripts=(
             scripts/build/gridfp-ramstream32-cpu-low-worker-dense-page-plan.sh
+            scripts/build/gridfp-ramstream32-cpu-low-worker-dense-compare-plan.sh
             scripts/bench/ramstream32-cpu-low-worker-dense-compare-plan-sweep.sh
             scripts/build/gridfp-ramstream32-cpu-low-domain-worker-multistart-plan.sh
             scripts/bench/ramstream32-cpu-low-domain-worker-multistart-plan-sweep.sh
@@ -138,7 +157,7 @@ jobs:
           grep -Fq 'alternating-run-swap-v5.34-plan' src/cuda/gridfp/ramstream32_cpu_low_domain_worker_unique_fixedpoint.hpp
           grep -Fq 'exact-neutral-load-descent-v5.35-plan' src/cuda/gridfp/ramstream32_cpu_low_domain_worker_neutral_balance.hpp
           grep -Fq 'exact-neutral-augmented-v5.36-plan' src/cuda/gridfp/ramstream32_cpu_low_domain_worker_augmented_fixedpoint.hpp
-      - name: Compile W10 research integration probes
+      - name: Compile W10 exact selftests
         shell: bash
         run: |
           mkdir -p build
@@ -153,9 +172,27 @@ jobs:
             src/cuda/gridfp/probes/ramstream32_cpu_low_worker_fixedpoint_selftest.cu
             src/cuda/gridfp/probes/ramstream32_cpu_low_worker_plateau_selftest.cu
             src/cuda/gridfp/probes/ramstream32_cpu_low_worker_augmented_selftest.cu
-            src/cuda/gridfp/probes/ramstream32_cpu_low_worker_augmented_plan.cu
           )
           for src in "${sources[@]}"; do
+            out="build/$(basename "${src%.cu}")"
+            nvcc "${common[@]}" "$src" -o "$out"
+          done
+      - name: Compile W10 plan wrappers cheaply
+        shell: bash
+        run: |
+          common=(-O0 -std=c++17 -arch=sm_80 -DTARGET_W=10 -DLOW_LUT_K=5 -DHIGH_LUT_K=4)
+          plans=(
+            src/cuda/gridfp/probes/ramstream32_cpu_low_worker_dense_page_plan.cu
+            src/cuda/gridfp/probes/ramstream32_cpu_low_worker_dense_compare_plan.cu
+            src/cuda/gridfp/probes/ramstream32_cpu_low_domain_worker_multistart_plan.cu
+            src/cuda/gridfp/probes/ramstream32_cpu_low_worker_shared_multistart_plan.cu
+            src/cuda/gridfp/probes/ramstream32_cpu_low_worker_run_plan.cu
+            src/cuda/gridfp/probes/ramstream32_cpu_low_worker_swap_plan.cu
+            src/cuda/gridfp/probes/ramstream32_cpu_low_worker_fixedpoint_plan.cu
+            src/cuda/gridfp/probes/ramstream32_cpu_low_worker_plateau_plan.cu
+            src/cuda/gridfp/probes/ramstream32_cpu_low_worker_augmented_plan.cu
+          )
+          for src in "${plans[@]}"; do
             out="build/$(basename "${src%.cu}")"
             nvcc "${common[@]}" "$src" -o "$out"
           done
@@ -186,6 +223,19 @@ jobs:
           build/ramstream32_cpu_low_worker_augmented_selftest > /tmp/aug.txt 2> /tmp/aug.log
           grep -Fq 'cpu-low-worker-augmented-selftest OK' /tmp/aug.txt
           grep -Fq 'exact_generations=2' /tmp/aug.txt
+      - name: Run W10 plan smoke checks
+        shell: bash
+        run: |
+          build/ramstream32_cpu_low_worker_dense_page_plan 9 | grep -F 'cpu_low_worker_dense_page_plan OK'
+          build/ramstream32_cpu_low_worker_dense_compare_plan 9 4 2 | grep -F 'cpu_low_worker_dense_compare_plan OK'
+          build/ramstream32_cpu_low_domain_worker_multistart_plan 9 4 2 | grep -F 'cpu_low_domain_worker_multistart_plan OK'
+          build/ramstream32_cpu_low_worker_shared_multistart_plan 9 4 2 > /tmp/shared-plan.txt 2> /tmp/shared-plan.log
+          grep -Fq 'cpu_low_worker_shared_multistart_plan OK' /tmp/shared-plan.txt
+          grep -Fq 'workspace_audit_ok=1' /tmp/shared-plan.txt
+          build/ramstream32_cpu_low_worker_run_plan 9 4 2 4 | grep -F 'cpu_low_worker_run_plan OK'
+          build/ramstream32_cpu_low_worker_swap_plan 9 4 2 4 4 | grep -F 'cpu_low_worker_swap_plan OK'
+          build/ramstream32_cpu_low_worker_fixedpoint_plan 9 4 2 4 4 | grep -F 'cpu_low_worker_fixedpoint_plan OK'
+          build/ramstream32_cpu_low_worker_plateau_plan 9 4 2 4 4 | grep -F 'cpu_low_worker_plateau_plan OK'
           build/ramstream32_cpu_low_worker_augmented_plan 9 4 2 4 4 > /tmp/aug-plan.txt 2> /tmp/aug-plan.log
           grep -Fq 'cpu_low_worker_augmented_plan OK' /tmp/aug-plan.txt
           grep -Fq 'limits_clear=1' /tmp/aug-plan.txt
