@@ -39,7 +39,7 @@ jobs:
     container: nvidia/cuda:12.8.1-devel-ubuntu22.04
     steps:
       - uses: actions/checkout@v4
-      - name: Check scripts
+      - name: Check scripts and helper reuse
         shell: bash
         run: |
           bash -n scripts/build/gridfp-ramstream32-cpu-low-domain-worker-multistart-plan.sh
@@ -47,6 +47,9 @@ jobs:
           grep -Fq 'multistart-global-unique-worker-v5.28-plan' scripts/bench/ramstream32-cpu-low-domain-worker-multistart-plan-sweep.sh
           grep -Fq 'selected branch failed dominance contract' scripts/bench/ramstream32-cpu-low-domain-worker-multistart-plan-sweep.sh
           grep -Fq 'hybrid_wins' scripts/bench/ramstream32-cpu-low-domain-worker-multistart-plan-sweep.sh
+          grep -Fq '#ifndef RAMSTREAM_CPU_LOW_WORKER_LOCALITY_SELFTEST_NO_MAIN' src/cuda/gridfp/probes/ramstream32_cpu_low_domain_worker_locality_selftest.cu
+          grep -Fq '#define RAMSTREAM_CPU_LOW_WORKER_LOCALITY_SELFTEST_NO_MAIN' src/cuda/gridfp/probes/ramstream32_cpu_low_domain_worker_multistart_selftest.cu
+          ! grep -Fq '#define main ramstream_worker_locality_embedded_main' src/cuda/gridfp/probes/ramstream32_cpu_low_domain_worker_multistart_selftest.cu
       - name: Compile W10 multistart probes
         shell: bash
         run: |
