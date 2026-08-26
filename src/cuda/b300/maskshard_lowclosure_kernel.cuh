@@ -70,7 +70,7 @@ __global__ void maskshard_main_lowdesc_closure_cols_inplace_kernel(
         if (!c) continue;
 
         const uint32_t desc = D_LOWDESC_MAIN[
-            size_t(pi) * D_LOWDESC_MAIN_TOTAL + D_LOWDESC_MAIN_BASE[bid] + lr];
+            size_t(pi) * 65 + D_LOWDESC_MAIN_BASE[bid] + lr];
         const uint32_t kind = lowdesc_kind(desc);
         if (kind == LOWDESC_MAIN) {
             const FBlock y = D_F_MAIN_BLOCKS[lowdesc_block(desc)];
@@ -178,6 +178,10 @@ __global__ void maskshard_main_lowdesc_closure_cols_inplace_kernel(
 
 #ifdef MASKSHARD_HIGH_GROUP_SIZE_CACHE
 #include "maskshard_high_group_size_cache.cuh"
+#endif
+
+#ifdef MASKSHARD_HIGH_ROW_BATCH_ASYNC
+#include "maskshard_high_row_batch_async.cuh"
 #endif
 
 #ifdef MASKSHARD_LOW_PAIR_SYNC
