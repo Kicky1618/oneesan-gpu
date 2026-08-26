@@ -14,8 +14,19 @@ struct BucketReverseHybrid18Rec8Host {
     size_t bytes() const { return split.bytes() + rec8.bytes(); }
 };
 
+static void bucket_release_forward_legacy_closure_payload(BucketFusedHost&f){
+    std::vector<BucketFusedDst>().swap(f.low_dst);std::vector<BucketFusedDst>().swap(f.high_dst);
+    std::vector<uint32_t>().swap(f.low_local_src);std::vector<uint32_t>().swap(f.low_cross_op);
+    std::vector<uint32_t>().swap(f.high_local_src);std::vector<uint32_t>().swap(f.high_cross_op);
+}
+static void bucket_release_reverse_legacy_closure_payload(ReverseBucketFusedHost&f){
+    std::vector<BucketFusedDst>().swap(f.low_dst);std::vector<BucketFusedDst>().swap(f.high_dst);
+    std::vector<uint32_t>().swap(f.low_local_src);std::vector<uint32_t>().swap(f.low_cross_op);
+    std::vector<uint32_t>().swap(f.high_local_src);std::vector<uint32_t>().swap(f.high_cross_op);
+}
+
 static BucketForwardHybrid18Rec8Host build_bucket_forward_hybrid18_rec8(
-    const StorageLayout&layout,BucketOrbitStreamsHost&bo,const BucketFusedHost&bf
+    const StorageLayout&layout,BucketOrbitStreamsHost&bo,BucketFusedHost&bf
 ){
     BucketForwardHybrid18Rec8Host out;
     out.attach=build_bucket_forward_orbit_closure_attach18(layout,bo,bf);
@@ -23,12 +34,18 @@ static BucketForwardHybrid18Rec8Host build_bucket_forward_hybrid18_rec8(
     return out;
 }
 static BucketReverseHybrid18Rec8Host build_bucket_reverse_hybrid18_rec8_checked(
-    const StorageLayout&layout,const BucketOrbitStreamsHost&bo,const BucketFusedHost&bf,
-    ReverseBucketAtomicHost&rb,const ReverseBucketFusedHost&rf
+    const StorageLayout&layout,const BucketOrbitStreamsHost&bo,BucketFusedHost&bf,
+    ReverseBucketAtomicHost&rb,ReverseBucketFusedHost&rf
 ){
     BucketReverseHybrid18Rec8Host out;
     out.rec8=build_bucket_reverse_onepass_rec8(rf);
     out.split=build_reverse_split18_direct_checked(layout,bo,bf,rb,rf,true);
+    // All attachment/localization checks are complete.  From this point on the
+    // 16-B destination records and split local/CROSS source arrays are fully
+    // superseded by rec8.  Keep only offsets and code/direct tables needed by
+    // runtime record-id reconstruction and inactive-half CROSS inversion.
+    bucket_release_forward_legacy_closure_payload(bf);
+    bucket_release_reverse_legacy_closure_payload(rf);
     return out;
 }
 
@@ -46,13 +63,13 @@ struct BucketReverseHybrid18Rec8DeviceTables {
 };
 
 // Forward bucket tables still provide orbit streams, block views, ternary
-// direct maps, code tables and fused offsets. One-pass rec8 has its own record
-// and source arrays, so release the legacy 16-B destination records and the
-// separate source arrays immediately after install.
+// direct maps, code tables and fused offsets.  Legacy closure payload vectors
+// are already empty after build_bucket_reverse_hybrid18_rec8_checked().
 struct BucketFusedHybrid18Rec8Tables {
     BucketFusedDeviceTables base;
     void install_metadata(const StorageLayout&layout,const BucketOrbitStreamsHost&o,const BucketFusedHost&f){
         base.install_metadata(layout,o,f);
+        // Defensive for callers that did not use the checked host builder.
         if(base.low_dst)cudaFree(base.low_dst);base.low_dst=nullptr;
         if(base.high_dst)cudaFree(base.high_dst);base.high_dst=nullptr;
         if(base.low_local_src)cudaFree(base.low_local_src);base.low_local_src=nullptr;
