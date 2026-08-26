@@ -48,7 +48,7 @@ objective=shared-dense-multistart-v5.31-plan
 binary_sha256=$(file_sha256 "$bin")
 EOF
 
-printf 'workers\tdomain_size\tselected_source\tdirect_pages_2m\tdirect_pages_4k\thybrid_pages_2m\thybrid_pages_4k\tlegacy_total_build_s\tworkspace_build_s\tworkspace_mib\tshared_direct_search_s\tshared_v526_build_s\tshared_hybrid_search_s\tshared_total_build_s\tshared_vs_legacy_speedup\tdirect_candidate_evaluations\thybrid_candidate_evaluations\traw\n' >"$out"
+printf 'workers\tdomain_size\tselected_source\tdirect_pages_2m\tdirect_pages_4k\thybrid_pages_2m\thybrid_pages_4k\tlegacy_total_build_s\tworkspace_build_s\tworkspace_mib\tworkspace_audit_ok\tworkspace_audited_jobs\tworkspace_audited_cells\tworkspace_audit_s\tshared_direct_search_s\tshared_v526_build_s\tshared_hybrid_search_s\tshared_total_build_s\tshared_vs_legacy_speedup\tdirect_candidate_evaluations\thybrid_candidate_evaluations\traw\n' >"$out"
 
 for cfg in "${configs[@]}"; do
   workers="${cfg%%:*}"; domain="${cfg#*:}"
@@ -60,13 +60,20 @@ for cfg in "${configs[@]}"; do
   [[ "$(field "$line" identical_direct_schedule)" == 1 ]] || exit 4
   [[ "$(field "$line" identical_hybrid_schedule)" == 1 ]] || exit 4
   [[ "$(field "$line" identical_selector)" == 1 ]] || exit 4
-  printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
+  [[ "$(field "$line" workspace_audit_ok)" == 1 ]] || {
+    echo "workspace structural audit failed cfg=$cfg" >&2; exit 4;
+  }
+  printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
     "$workers" "$domain" "$(field "$line" selected_source)" \
     "$(field "$line" direct_pages_2m)" "$(field "$line" direct_pages_4k)" \
     "$(field "$line" hybrid_pages_2m)" "$(field "$line" hybrid_pages_4k)" \
     "$(field "$line" legacy_total_build_s)" \
     "$(field "$line" workspace_build_s)" \
     "$(field "$line" workspace_mib)" \
+    "$(field "$line" workspace_audit_ok)" \
+    "$(field "$line" workspace_audited_jobs)" \
+    "$(field "$line" workspace_audited_cells)" \
+    "$(field "$line" workspace_audit_s)" \
     "$(field "$line" shared_direct_search_s)" \
     "$(field "$line" shared_v526_build_s)" \
     "$(field "$line" shared_hybrid_search_s)" \
@@ -81,6 +88,8 @@ python3 - "$out" <<'PY'
 import csv, statistics, sys
 rows=list(csv.DictReader(open(sys.argv[1], newline=''), delimiter='\t'))
 for r in rows:
+    if r['workspace_audit_ok'] != '1':
+        raise SystemExit('workspace audit regression')
     speed=float(r['shared_vs_legacy_speedup'])
     cls='shared_faster' if speed > 1.02 else ('shared_slower' if speed < 0.98 else 'near_tie')
     print(
@@ -89,6 +98,8 @@ for r in rows:
         f"legacy_total_build_s={float(r['legacy_total_build_s']):.9f} "
         f"shared_total_build_s={float(r['shared_total_build_s']):.9f} "
         f"workspace_build_s={float(r['workspace_build_s']):.9f} "
+        f"workspace_audit_s={float(r['workspace_audit_s']):.9f} "
+        f"workspace_audited_jobs={r['workspace_audited_jobs']} "
         f"workspace_mib={float(r['workspace_mib']):.6f}"
     )
 if rows:
