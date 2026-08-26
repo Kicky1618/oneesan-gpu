@@ -29,7 +29,7 @@ jobs:
     container: nvidia/cuda:12.8.1-devel-ubuntu22.04
     steps:
       - uses: actions/checkout@v4
-      - name: Check scripts
+      - name: Check scripts and workspace audit
         shell: bash
         run: |
           bash -n scripts/build/gridfp-ramstream32-cpu-low-worker-shared-multistart-plan.sh
@@ -37,6 +37,11 @@ jobs:
           grep -Fq 'shared-dense-multistart-v5.31-plan' scripts/bench/ramstream32-cpu-low-worker-shared-multistart-plan-sweep.sh
           grep -Fq 'identical_direct_schedule' scripts/bench/ramstream32-cpu-low-worker-shared-multistart-plan-sweep.sh
           grep -Fq 'shared_vs_legacy_speedup' scripts/bench/ramstream32-cpu-low-worker-shared-multistart-plan-sweep.sh
+          w=src/cuda/gridfp/ramstream32_cpu_low_domain_worker_exact_workspace.hpp
+          grep -Fq 'structural_audit_ok' "$w"
+          grep -Fq 'empty job was indexed' "$w"
+          grep -Fq 'cell sum overflow' "$w"
+          grep -Fq 'dense boundary invalid' "$w"
       - name: Compile W10 shared probes
         shell: bash
         run: |
