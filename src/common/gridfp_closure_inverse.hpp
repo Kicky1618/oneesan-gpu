@@ -49,22 +49,17 @@ ONEESAN_CINV_HD int ordinary_closure_preimages_partial(
     return n;
 }
 
+// The closure relation {LL,RR,RL}->NN is invariant under horizontal
+// reflection plus L/R exchange: LL and RR exchange roles while RL is fixed.
+// Therefore the reverse-scan inverse set, expressed in its local coordinate
+// system, is exactly the same set as the forward inverse at the same p.
 template<int MAX_OUT>
 ONEESAN_CINV_HD int ordinary_closure_preimages_partial_reverse(
     MateID dest, int len, int p, MateID (&out)[MAX_OUT]
 ) {
-    if (p <= 0 || p >= len) return 0;
-    MateID mirrored = mirror_mate(dest, len);
-    MateID tmp[MAX_OUT]{};
-    int n = ordinary_closure_preimages_partial(mirrored, len, len - p, tmp);
-    for (int i = 0; i < n; ++i) out[i] = mirror_mate(tmp[i], len);
-    return n;
+    return ordinary_closure_preimages_partial(dest, len, p, out);
 }
 
-// LOW+center active side. Only an RR mate search can escape across the center
-// into HIGH. `dest` is the post-closure active partial word with pair NN.
-// Return 0 if RR finds its mate before the inactive boundary. Otherwise return
-// the boundary stack depth and reconstruct the unique active RR source.
 ONEESAN_CINV_HD int low_cross_preimage_partial(
     MateID dest, int len, int p, MateID& source
 ) {
@@ -80,8 +75,6 @@ ONEESAN_CINV_HD int low_cross_preimage_partial(
     return s;
 }
 
-// center+HIGH active side. Only an LL mate search can escape across the center
-// into LOW. Symmetric to low_cross_preimage_partial().
 ONEESAN_CINV_HD int high_cross_preimage_partial(
     MateID dest, int len, int p, MateID& source
 ) {
