@@ -79,6 +79,10 @@ cpu_low_apply_domain_worker_unique_dense_coalesce(
     for (size_t i = 0; i < jobs.size(); ++i) {
         if (!jobs[i].main_size && !jobs[i].block_size) continue;
         uint64_t cells = cpu_low_sparse_job_cells(jobs[i], sparse);
+        if (cells > std::numeric_limits<uint64_t>::max() - expected_cells) {
+            std::cerr << "cpu LOW dense unique cell sum overflow\n";
+            std::exit(331);
+        }
         ordered.push_back({i, jobs[i].mask, cells});
         expected_cells += cells;
     }
@@ -86,6 +90,12 @@ cpu_low_apply_domain_worker_unique_dense_coalesce(
         if (a.mask != b.mask) return a.mask < b.mask;
         return a.index < b.index;
     });
+    for (size_t i = 1; i < ordered.size(); ++i) {
+        if (ordered[i - 1].mask == ordered[i].mask) {
+            std::cerr << "cpu LOW dense unique duplicate occupancy mask\n";
+            std::exit(332);
+        }
+    }
 
     stats.domains = (pool.workers + pool.domain_size - 1) / pool.domain_size;
     stats.max_worker_cells_before = pool.sticky_worker_cells.empty() ? 0
@@ -214,6 +224,10 @@ cpu_low_apply_domain_worker_unique_dense_coalesce(
                 size_t i = (pass & 1) ? (seg.second - 1 - qq) : (seg.first + qq);
                 int src = owner[i];
                 uint64_t cells = ordered[i].cells;
+                if (loads[size_t(src)] < cells) {
+                    std::cerr << "cpu LOW dense unique source load underflow\n";
+                    std::exit(333);
+                }
 
                 int candidates[2] = {-1, -1};
                 int nc = 0;
@@ -238,7 +252,7 @@ cpu_low_apply_domain_worker_unique_dense_coalesce(
                         std::cerr << "cpu LOW dense unique crossed domain\n";
                         std::exit(229);
                     }
-                    if (loads[size_t(dst)] > cap - cells) {
+                    if (cells > cap || loads[size_t(dst)] > cap - cells) {
                         ++stats.cap_rejections;
                         continue;
                     }
@@ -307,6 +321,10 @@ cpu_low_apply_domain_worker_unique_dense_coalesce(
                         std::exit(231);
                     }
                     transitions = uint64_t(next_transitions);
+                    if (loads[size_t(src)] < cells) {
+                        std::cerr << "cpu LOW dense unique accepted source load underflow\n";
+                        std::exit(334);
+                    }
                     loads[size_t(src)] -= cells;
                     loads[size_t(best_dst)] += cells;
                     if (loads[size_t(best_dst)] > cap) {
