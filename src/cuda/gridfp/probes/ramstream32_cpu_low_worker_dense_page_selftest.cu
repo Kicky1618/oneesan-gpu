@@ -1,3 +1,6 @@
+#define RAMSTREAM_BIDESC_COMPACT_NO_MAIN
+#include "../oneesan_cuda_gridfp_ramstream32_factorized_bidesc_compact.cu"
+#undef RAMSTREAM_BIDESC_COMPACT_NO_MAIN
 #include "../ramstream32_cpu_low_domain_worker_dense_page.hpp"
 
 #include <iostream>
