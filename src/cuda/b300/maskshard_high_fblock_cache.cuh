@@ -1,5 +1,6 @@
 #pragma once
 
+#include <algorithm>
 #include <array>
 #include <cstdint>
 #include <cstdlib>
@@ -15,45 +16,170 @@
 #error "HIGH FBlock cache uses v0.57 worker-thread scoping"
 #endif
 
-// HIGH jobs fix the complete LOW occupancy mask.  Their factorized MAIN/BLOCKED
+// HIGH jobs fix the complete LOW occupancy mask. Their factorized MAIN/BLOCKED
 // FBlock layouts depend only on that LOW mask, yet the legacy host path rebuilds
-// both std::vector<FBlock> objects for every row and residue.  build_high_jobs()
+// both std::vector<FBlock> objects for every row and residue. build_high_jobs()
 // already visits every LOW mask once on the main thread before workers start, so
-// retain those first vectors and return allocation-free views thereafter.
+// retain those first layouts and return allocation-free views thereafter.
 //
 // Calls with fix_low=false belong to the LOW path and are forwarded to the
-// original builders unchanged.  The view has an rvalue conversion back to
+// original builders unchanged. The view has a conversion back to
 // std::vector<FBlock> so older LOW helper code with an explicit vector type keeps
 // exactly its previous behavior.
 class MaskShardHighFBlockView {
-    const std::vector<FBlock>* cached_ = nullptr;
+    const std::vector<FBlock>* cached_vec_ = nullptr;
+    const FBlock* cached_raw_ = nullptr;
+    std::size_t cached_raw_size_ = 0;
     std::vector<FBlock> owned_;
-
-    const std::vector<FBlock>& vec() const {
-        return cached_ ? *cached_ : owned_;
-    }
 
 public:
     MaskShardHighFBlockView() = default;
     explicit MaskShardHighFBlockView(const std::vector<FBlock>* cached)
-        : cached_(cached) {}
+        : cached_vec_(cached) {}
+    MaskShardHighFBlockView(const FBlock* cached, std::size_t n)
+        : cached_raw_(cached), cached_raw_size_(n) {}
     explicit MaskShardHighFBlockView(std::vector<FBlock>&& owned)
         : owned_(std::move(owned)) {}
 
-    bool empty() const { return vec().empty(); }
-    std::size_t size() const { return vec().size(); }
-    const FBlock& back() const { return vec().back(); }
-    const FBlock* data() const { return vec().data(); }
-    const FBlock& operator[](std::size_t i) const { return vec()[i]; }
-    auto begin() const { return vec().begin(); }
-    auto end() const { return vec().end(); }
+    std::size_t size() const {
+        if (cached_raw_) return cached_raw_size_;
+        if (cached_vec_) return cached_vec_->size();
+        return owned_.size();
+    }
+    bool empty() const { return size() == 0; }
+    const FBlock* data() const {
+        if (cached_raw_) return cached_raw_;
+        if (cached_vec_) return cached_vec_->data();
+        return owned_.data();
+    }
+    const FBlock& back() const { return data()[size() - 1]; }
+    const FBlock& operator[](std::size_t i) const { return data()[i]; }
+    const FBlock* begin() const { return data(); }
+    const FBlock* end() const { return data() + size(); }
 
     operator std::vector<FBlock>() && {
-        if (cached_) return *cached_;
-        return std::move(owned_);
+        if (!cached_vec_ && !cached_raw_) return std::move(owned_);
+        return std::vector<FBlock>(begin(), end());
     }
-    operator std::vector<FBlock>() const & { return vec(); }
+    operator std::vector<FBlock>() const & {
+        return std::vector<FBlock>(begin(), end());
+    }
 };
+
+#ifdef MASKSHARD_HIGH_PINNED_CONFIG
+
+// v0.62: replace 32,768 small std::vector payload allocations with two pinned,
+// contiguous process-lifetime arenas. This makes the v0.61
+// cudaMemcpyToSymbolAsync() FBlock sources eligible for true asynchronous DMA
+// instead of forcing pageable-memory staging on every HIGH job.
+static constexpr std::size_t MS_HIGH_FBLOCK_MASKS = 1u << LOW_LUT_K;
+static constexpr std::size_t MS_HIGH_MAIN_BLOCKS_PER_MASK =
+    std::size_t(3) * std::size_t(HIGH_LUT_K + 2);
+static constexpr std::size_t MS_HIGH_BLOCK_BLOCKS_PER_MASK =
+    std::size_t(HIGH_LUT_K + 2);
+
+static FBlock* G_MS_HIGH_FBLOCK_PINNED_MAIN = nullptr;
+static FBlock* G_MS_HIGH_FBLOCK_PINNED_BLOCK = nullptr;
+static std::array<std::uint8_t, MS_HIGH_FBLOCK_MASKS>
+    G_MS_HIGH_FBLOCK_PINNED_MAIN_BUILT{};
+static std::array<std::uint8_t, MS_HIGH_FBLOCK_MASKS>
+    G_MS_HIGH_FBLOCK_PINNED_BLOCK_BUILT{};
+
+static void maskshard_high_fblock_ensure_pinned_storage() {
+    if (G_MS_HIGH_FBLOCK_PINNED_MAIN) return;
+    void* mainp = nullptr;
+    void* blockp = nullptr;
+    const std::size_t main_bytes = MS_HIGH_FBLOCK_MASKS
+        * MS_HIGH_MAIN_BLOCKS_PER_MASK * sizeof(FBlock);
+    const std::size_t block_bytes = MS_HIGH_FBLOCK_MASKS
+        * MS_HIGH_BLOCK_BLOCKS_PER_MASK * sizeof(FBlock);
+    ck(cudaHostAlloc(&mainp, main_bytes, cudaHostAllocPortable),
+       "HIGH FBlock pinned MAIN cache");
+    ck(cudaHostAlloc(&blockp, block_bytes, cudaHostAllocPortable),
+       "HIGH FBlock pinned BLOCKED cache");
+    G_MS_HIGH_FBLOCK_PINNED_MAIN = static_cast<FBlock*>(mainp);
+    G_MS_HIGH_FBLOCK_PINNED_BLOCK = static_cast<FBlock*>(blockp);
+    std::cerr << "HIGH FBlock pinned cache allocated main_mib="
+              << double(main_bytes) / double(1ULL << 20)
+              << " blocked_mib="
+              << double(block_bytes) / double(1ULL << 20)
+              << " total_mib="
+              << double(main_bytes + block_bytes) / double(1ULL << 20)
+              << '\n';
+}
+
+static MaskShardHighFBlockView maskshard_high_cached_main_blocks(
+    bool fix_low, std::uint32_t mask
+) {
+    if (!fix_low)
+        return MaskShardHighFBlockView(
+            (make_factor_main_blocks)(false, mask));
+    if (mask >= MS_HIGH_FBLOCK_MASKS) {
+        std::cerr << "HIGH FBlock MAIN cache mask overflow mask=" << mask << '\n';
+        std::exit(360);
+    }
+    maskshard_high_fblock_ensure_pinned_storage();
+    FBlock* const dst = G_MS_HIGH_FBLOCK_PINNED_MAIN
+        + std::size_t(mask) * MS_HIGH_MAIN_BLOCKS_PER_MASK;
+    if (!G_MS_HIGH_FBLOCK_PINNED_MAIN_BUILT[mask]) {
+        if (std::this_thread::get_id() != G_MS_HIGH_GROUP_SYNC_MAIN_THREAD) {
+            std::cerr << "HIGH FBlock MAIN cache miss on worker mask=" << mask << '\n';
+            std::exit(361);
+        }
+        const std::vector<FBlock> v = (make_factor_main_blocks)(true, mask);
+        if (v.size() != MS_HIGH_MAIN_BLOCKS_PER_MASK) {
+            std::cerr << "HIGH FBlock pinned MAIN size mismatch mask=" << mask
+                      << " got=" << v.size()
+                      << " expected=" << MS_HIGH_MAIN_BLOCKS_PER_MASK << '\n';
+            std::exit(368);
+        }
+        std::copy(v.begin(), v.end(), dst);
+        G_MS_HIGH_FBLOCK_PINNED_MAIN_BUILT[mask] = 1;
+    }
+    return MaskShardHighFBlockView(dst, MS_HIGH_MAIN_BLOCKS_PER_MASK);
+}
+
+static MaskShardHighFBlockView maskshard_high_cached_block_blocks(
+    bool fix_low, std::uint32_t mask
+) {
+    if (!fix_low)
+        return MaskShardHighFBlockView(
+            (make_factor_block_blocks)(false, mask));
+    if (mask >= MS_HIGH_FBLOCK_MASKS) {
+        std::cerr << "HIGH FBlock BLOCKED cache mask overflow mask=" << mask << '\n';
+        std::exit(362);
+    }
+    maskshard_high_fblock_ensure_pinned_storage();
+    FBlock* const dst = G_MS_HIGH_FBLOCK_PINNED_BLOCK
+        + std::size_t(mask) * MS_HIGH_BLOCK_BLOCKS_PER_MASK;
+    if (!G_MS_HIGH_FBLOCK_PINNED_BLOCK_BUILT[mask]) {
+        if (std::this_thread::get_id() != G_MS_HIGH_GROUP_SYNC_MAIN_THREAD) {
+            std::cerr << "HIGH FBlock BLOCKED cache miss on worker mask=" << mask << '\n';
+            std::exit(363);
+        }
+        const std::vector<FBlock> v = (make_factor_block_blocks)(true, mask);
+        if (v.size() != MS_HIGH_BLOCK_BLOCKS_PER_MASK) {
+            std::cerr << "HIGH FBlock pinned BLOCKED size mismatch mask=" << mask
+                      << " got=" << v.size()
+                      << " expected=" << MS_HIGH_BLOCK_BLOCKS_PER_MASK << '\n';
+            std::exit(369);
+        }
+        std::copy(v.begin(), v.end(), dst);
+        G_MS_HIGH_FBLOCK_PINNED_BLOCK_BUILT[mask] = 1;
+        if (mask + 1 == MS_HIGH_FBLOCK_MASKS) {
+            const std::size_t payload = MS_HIGH_FBLOCK_MASKS
+                * (MS_HIGH_MAIN_BLOCKS_PER_MASK + MS_HIGH_BLOCK_BLOCKS_PER_MASK)
+                * sizeof(FBlock);
+            std::cerr << "HIGH FBlock cache masks=" << MS_HIGH_FBLOCK_MASKS
+                      << " payload_mib="
+                      << double(payload) / double(1ULL << 20)
+                      << " worker_rebuilds=0 pinned=1 contiguous=1\n";
+        }
+    }
+    return MaskShardHighFBlockView(dst, MS_HIGH_BLOCK_BLOCKS_PER_MASK);
+}
+
+#else
 
 struct MaskShardHighFBlockCacheEntry {
     std::vector<FBlock> main_blocks;
@@ -114,11 +240,13 @@ static MaskShardHighFBlockView maskshard_high_cached_block_blocks(
                       << G_MS_HIGH_FBLOCK_CACHE.size()
                       << " payload_mib="
                       << double(payload) / double(1ULL << 20)
-                      << " worker_rebuilds=0\n";
+                      << " worker_rebuilds=0 pinned=0\n";
         }
     }
     return MaskShardHighFBlockView(&e.block_blocks);
 }
+
+#endif
 
 // Function-like macros do not expand the parenthesized original names used in
 // the wrappers above.
