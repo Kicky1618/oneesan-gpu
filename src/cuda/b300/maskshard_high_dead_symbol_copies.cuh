@@ -84,8 +84,10 @@ static bool maskshard_high_fblock_layout_redundant(
 
     // v0.62 keeps every source array pinned and immutable through the whole
     // solve, so remembering its pointer is safe until this row-worker exits.
-    // FBlock has an explicit pad byte and sizeof(FBlock)==24 in this backend,
-    // making bytewise comparison deterministic for the cached arrays.
+    // v0.65 aliases every mask of one occupancy-count class to the same pinned
+    // slot, making pointer equality the common fast path. The bytewise fallback
+    // preserves v0.64 behavior when per-mask storage is still in use.
+    if (*last == src) return true;
     if (*last && std::memcmp(*last, src, count) == 0) return true;
     *last = src;
     return false;
