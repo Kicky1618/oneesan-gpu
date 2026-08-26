@@ -56,12 +56,16 @@ jobs:
           g++ -O3 -std=c++17 -Wall -Wextra -Werror \
             src/cpp/probes/factor_high_row_batch_async.cpp \
             -o build/factor_high_row_batch_async
+          g++ -O3 -std=c++17 -Wall -Wextra -Werror \
+            src/cpp/probes/factor_high_pinned_config.cpp \
+            -o build/factor_high_pinned_config
           python3 -m py_compile \
             scripts/bench/b300_maskshard_highgroupsync_ab.py \
             scripts/bench/b300_maskshard_highdeadcopies_ab.py \
             scripts/bench/b300_maskshard_highfblockcache_ab.py \
             scripts/bench/b300_maskshard_highgroupsizecache_ab.py \
-            scripts/bench/b300_maskshard_highrowbatchasync_ab.py
+            scripts/bench/b300_maskshard_highrowbatchasync_ab.py \
+            scripts/bench/b300_maskshard_highpinnedconfig_ab.py
       - name: Run structural smoke tests
         shell: bash
         run: |
@@ -75,6 +79,7 @@ jobs:
           build/factor_high_fblock_cache 28 14
           build/factor_high_group_size_cache 28 14
           build/factor_high_row_batch_async 28 14 8
+          build/factor_high_pinned_config 28 14
 
   cuda-compile:
     if: ${{ github.event_name == 'workflow_dispatch' && inputs.full_cuda }}
@@ -89,7 +94,7 @@ jobs:
           - {width: 28, low: 14, high: 13}
     steps:
       - uses: actions/checkout@v4
-      - name: Compile latest HIGH row-batch-async backend
+      - name: Compile latest pinned HIGH row-batch backend
         shell: bash
         run: |
           set -euo pipefail
@@ -98,5 +103,5 @@ jobs:
             -DTARGET_W=${{ matrix.width }} \
             -DLOW_LUT_K=${{ matrix.low }} \
             -DHIGH_LUT_K=${{ matrix.high }} \
-            src/cuda/b300/oneesan_b300_maskshard_v061_highrowbatchasync.cu \
-            -o build/maskshard_v061_w${{ matrix.width }}
+            src/cuda/b300/oneesan_b300_maskshard_v062_highpinnedconfig.cu \
+            -o build/maskshard_v062_w${{ matrix.width }}
