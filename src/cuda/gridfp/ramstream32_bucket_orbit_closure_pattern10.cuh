@@ -1,0 +1,59 @@
+#pragma once
+
+#include "ramstream32_bucket_closure_pattern10.cuh"
+#include "ramstream32_bucket_reverse_split54.cuh"
+
+__device__ __forceinline__ BkczPlan bkcp10_forward_low_plan(uint16_t id,uint32_t dest_loc,const BucketPhysicalBlock&db,int p){
+    BkczPlan z{};if(id==oneesan::gridfp::CLOSURE_PATTERN10_NONE)return z;uint32_t dc=bkci_low_code(dest_loc,db.hs);MateID d=p==1?(MateID(dc)|(MateID(db.c)<<(2*LOW_LUT_K))):minsert(MateID(dc),p,N);return bkcp10_build_low_plan(d,db.he,p,id);
+}
+__device__ __forceinline__ BkczPlan bkcp10_forward_high_plan(uint16_t id,uint32_t dest_loc,const BucketPhysicalBlock&db,int p){
+    BkczPlan z{};if(id==oneesan::gridfp::CLOSURE_PATTERN10_NONE)return z;uint32_t dc=bkci_high_code(dest_loc,db.he);int rel=p-LOW_LUT_K;MateID d=minsert(MateID(dc),rel,N);return bkcp10_build_high_plan(d,db.hs,rel,id);
+}
+__device__ __forceinline__ BkczPlan bkcp10_reverse_low_plan(uint16_t id,uint32_t dest_loc,const BucketPhysicalBlock&db,int p){
+    BkczPlan z{};if(id==oneesan::gridfp::CLOSURE_PATTERN10_NONE)return z;uint32_t dc=bkci_low_code(dest_loc,db.hs);MateID d=blocked_exclude_reverse(MateID(dc),LOW_LUT_K+1,p);return bkcp10_build_low_plan(d,db.he,p,id);
+}
+__device__ __forceinline__ BkczPlan bkcp10_reverse_high_plan(uint16_t id,uint32_t dest_loc,const BucketPhysicalBlock&db,int p,bool edge){
+    BkczPlan z{};if(id==oneesan::gridfp::CLOSURE_PATTERN10_NONE)return z;uint32_t dc=bkci_high_code(dest_loc,db.he);int rel=p-LOW_LUT_K;MateID d=edge?(MateID(db.c)|(MateID(dc)<<2)):blocked_exclude_reverse(MateID(dc),HIGH_LUT_K+1,rel);return bkcp10_build_high_plan(d,db.hs,rel,id);
+}
+
+__device__ __forceinline__ uint32_t bkcp10_reverse_low_jblock(uint32_t bid,const BucketPhysicalBlock&xb,int p,uint32_t kind){if(p!=LOW_LUT_K)return bid;uint32_t center=kind==CPU_ORBIT_NN?uint32_t(::L):uint32_t(N);return 3u*uint32_t(xb.he)+center;}
+__device__ __forceinline__ uint32_t bkcp10_reverse_high_jblock(uint32_t bid,const BucketPhysicalBlock&xb,int p,uint32_t kind){if(p!=LOW_LUT_K+1)return bid;uint32_t center=kind==CPU_ORBIT_NR?uint32_t(::L):uint32_t(R);int he=int(xb.hs)+(center==uint32_t(R)?1:-1);return uint32_t(3*he+int(center));}
+
+__global__ void bucket_low_orbit_closure_pattern10_kernel(int p){
+    uint32_t bid=blockIdx.z;if(bid>=D_BKF_MAIN_NBLOCKS)return;uint32_t pi=uint32_t(LOW_LUT_K-p);size_t oi=size_t(pi)*D_BKF_LOW_PITCH+bid;
+    uint32_t na=D_BKF_LOW_NN_OFF[oi],nb=D_BKF_LOW_NN_OFF[oi+1],ra=D_BKF_LOW_NR_OFF[oi],rb=D_BKF_LOW_NR_OFF[oi+1],la=D_BKF_LOW_NL_OFF[oi],lb=D_BKF_LOW_NL_OFF[oi+1],n0=nb-na,n1=rb-ra,total=n0+n1+(lb-la);if(!total)return;
+    for(uint32_t k=uint32_t(blockIdx.x)*blockDim.x+threadIdx.x;k<total;k+=uint32_t(gridDim.x)*blockDim.x){
+        uint32_t kind;BucketOrbitOp op;if(k<n0){kind=CPU_ORBIT_NN;op=D_BKF_LOW_NN[na+k];}else if(k<n0+n1){kind=CPU_ORBIT_NR;op=D_BKF_LOW_NR[ra+k-n0];}else{kind=CPU_ORBIT_NL;op=D_BKF_LOW_NL[la+k-n0-n1];}
+        uint32_t sl=bkf_orbit_src(op),jl=bkf_orbit_partner(op),dl=bkf_orbit_drop(op),ss=bkf_loc_owner(sl),js=bkf_loc_owner(jl),ds=bkf_loc_owner(dl);BucketPhysicalBlock xb=bkf_low_main(ss,bid);if(!xb.valid||!xb.rows||!xb.cols)continue;
+        uint32_t jbid=bid;if(p==LOW_LUT_K){uint32_t center=kind==CPU_ORBIT_NR?uint32_t(R):uint32_t(::L);jbid=3u*uint32_t(xb.he)+center;}BucketPhysicalBlock jb=bkf_low_main(js,jbid),db=bkf_low_block(ds,uint32_t(xb.he));uint32_t sr=bkf_loc_rank(sl),jr=bkf_loc_rank(jl),dr=bkf_loc_rank(dl);uint16_t id=bkcp10_id(op);BkczPlan plan=p==1?bkcp10_forward_low_plan(id,sl,xb,p):bkcp10_forward_low_plan(id,dl,db,p);
+        for(uint32_t hr=blockIdx.y;hr<xb.rows;hr+=gridDim.y){Count*ip=bkf_ptr(ss,xb.off+Code(hr)*xb.cols+sr),*jp=bkf_ptr(js,jb.off+Code(hr)*jb.cols+jr),*dp=bkf_ptr(ds,db.off+Code(hr)*db.cols+dr);Count c=*ip,old=*dp,extra=bkcz_low_plan_sum(plan,p==1?xb:db,hr);if(kind==CPU_ORBIT_NN){*jp=gpu_direct_add(*jp,c);*ip=gpu_direct_add(gpu_direct_add(c,old),p==1?extra:0);*dp=p==1?0:extra;}else{Count cc=*jp,all=gpu_direct_add(gpu_direct_add(c,cc),old);if(p==1){*ip=all;*jp=gpu_direct_add(c,cc);*dp=0;}else{*ip=all;*dp=gpu_direct_add(c,extra);}}}
+    }
+}
+
+__global__ void bucket_high_orbit_closure_pattern10_kernel(int p){
+    uint32_t bid=blockIdx.z;if(bid>=D_BKF_MAIN_NBLOCKS)return;uint32_t pi=uint32_t((TARGET_W-1)-p);size_t oi=size_t(pi)*D_BKF_HIGH_PITCH+bid;uint32_t na=D_BKF_HIGH_NN_OFF[oi],nb=D_BKF_HIGH_NN_OFF[oi+1],ra=D_BKF_HIGH_NRNL_OFF[oi],rb=D_BKF_HIGH_NRNL_OFF[oi+1],n0=nb-na,total=n0+(rb-ra);if(!total)return;__shared__ BkczPlan plan;
+    for(uint32_t k=blockIdx.y;k<total;k+=gridDim.y){bool nn=k<n0;uint32_t qi=nn?na+k:ra+k-n0;BucketOrbitOp op=nn?D_BKF_HIGH_NN[qi]:D_BKF_HIGH_NRNL[qi];uint32_t sl=bkf_orbit_src(op),jl=bkf_orbit_partner(op),dl=bkf_orbit_drop(op),ss=bkf_loc_owner(sl),js=bkf_loc_owner(jl),ds=bkf_loc_owner(dl);BucketPhysicalBlock xb=bkf_high_main(ss,bid);if(!xb.valid||!xb.rows||!xb.cols)continue;uint32_t jbid=bid;if(p==LOW_LUT_K+1){uint32_t center=nn?uint32_t(R):uint32_t(N);int he=int(xb.hs)+(center==uint32_t(R)?1:0);jbid=uint32_t(3*he+int(center));}BucketPhysicalBlock jb=bkf_high_main(js,jbid),db=bkf_high_block(ds,uint32_t(xb.hs));uint32_t sr=bkf_loc_rank(sl),jr=bkf_loc_rank(jl),dr=bkf_loc_rank(dl);if(threadIdx.x==0)plan=bkcp10_forward_high_plan(bkcp10_id(op),dl,db,p);__syncthreads();
+        for(uint32_t lr=uint32_t(blockIdx.x)*blockDim.x+threadIdx.x;lr<xb.cols;lr+=uint32_t(gridDim.x)*blockDim.x){Count*ip=bkf_ptr(ss,xb.off+Code(sr)*xb.cols+lr),*jp=bkf_ptr(js,jb.off+Code(jr)*jb.cols+lr),*dp=bkf_ptr(ds,db.off+Code(dr)*db.cols+lr);Count c=*ip,old=*dp,extra=bkcz_high_plan_sum(plan,db,lr);if(nn){*jp=gpu_direct_add(*jp,c);*ip=gpu_direct_add(c,old);*dp=extra;}else{Count cc=*jp;*ip=gpu_direct_add(gpu_direct_add(c,cc),old);*dp=gpu_direct_add(c,extra);}}
+        __syncthreads();
+    }
+}
+
+__global__ void bucket_reverse_low_pattern10_kernel(int p){
+    uint32_t bid=blockIdx.z;if(bid>=D_BKF_MAIN_NBLOCKS)return;uint32_t pi=uint32_t(p-1);size_t oi=size_t(pi)*D_RS54_PITCH+bid;uint32_t na=D_RS54_LOW_NN_OFF[oi],nb=D_RS54_LOW_NN_OFF[oi+1],ra=D_RS54_LOW_NR_OFF[oi],rb=D_RS54_LOW_NR_OFF[oi+1],la=D_RS54_LOW_NL_OFF[oi],lb=D_RS54_LOW_NL_OFF[oi+1],n0=nb-na,n1=rb-ra,total=n0+n1+(lb-la);if(!total)return;
+    for(uint32_t k=uint32_t(blockIdx.x)*blockDim.x+threadIdx.x;k<total;k+=uint32_t(gridDim.x)*blockDim.x){uint32_t kind;BucketOrbitOp op;if(k<n0){kind=CPU_ORBIT_NN;op=D_RS54_LOW_NN[na+k];}else if(k<n0+n1){kind=CPU_ORBIT_NR;op=D_RS54_LOW_NR[ra+k-n0];}else{kind=CPU_ORBIT_NL;op=D_RS54_LOW_NL[la+k-n0-n1];}uint32_t sl=bkf_orbit_src(op),jl=bkf_orbit_partner(op),dl=bkf_orbit_drop(op),ss=bkf_loc_owner(sl),js=bkf_loc_owner(jl),ds=bkf_loc_owner(dl);BucketPhysicalBlock xb=bkf_low_main(ss,bid),jb=bkf_low_main(js,bkcp10_reverse_low_jblock(bid,xb,p,kind)),db=bkf_low_block(ds,uint32_t(xb.he));BkczPlan plan=bkcp10_reverse_low_plan(bkcp10_id(op),dl,db,p);
+        for(uint32_t hr=blockIdx.y;hr<xb.rows;hr+=gridDim.y){Count*ip=bkf_ptr(ss,xb.off+Code(hr)*xb.cols+bkf_loc_rank(sl)),*jp=bkf_ptr(js,jb.off+Code(hr)*jb.cols+bkf_loc_rank(jl)),*dp=bkf_ptr(ds,db.off+Code(hr)*db.cols+bkf_loc_rank(dl));Count c=*ip,old=*dp,extra=bkcz_low_plan_sum(plan,db,hr);if(kind==CPU_ORBIT_NN){*jp=gpu_direct_add(*jp,c);*ip=gpu_direct_add(c,old);*dp=extra;}else{Count cc=*jp;*ip=gpu_direct_add(gpu_direct_add(c,cc),old);*dp=gpu_direct_add(c,extra);}}
+    }
+}
+
+__global__ void bucket_reverse_high_pattern10_kernel(int p){
+    uint32_t bid=blockIdx.z;if(bid>=D_BKF_MAIN_NBLOCKS)return;uint32_t pi=uint32_t(p-(LOW_LUT_K+1));size_t oi=size_t(pi)*D_RS54_PITCH+bid;uint32_t na=D_RS54_HIGH_NN_OFF[oi],nb=D_RS54_HIGH_NN_OFF[oi+1],ra=D_RS54_HIGH_NR_OFF[oi],rb=D_RS54_HIGH_NR_OFF[oi+1],la=D_RS54_HIGH_NL_OFF[oi],lb=D_RS54_HIGH_NL_OFF[oi+1],n0=nb-na,n1=rb-ra,total=n0+n1+(lb-la);if(!total)return;bool edge=p==TARGET_W-1;__shared__ BkczPlan plan;
+    for(uint32_t k=blockIdx.y;k<total;k+=gridDim.y){uint32_t kind;BucketOrbitOp op;if(k<n0){kind=CPU_ORBIT_NN;op=D_RS54_HIGH_NN[na+k];}else if(k<n0+n1){kind=CPU_ORBIT_NR;op=D_RS54_HIGH_NR[ra+k-n0];}else{kind=CPU_ORBIT_NL;op=D_RS54_HIGH_NL[la+k-n0-n1];}uint32_t sl=bkf_orbit_src(op),jl=bkf_orbit_partner(op),dl=bkf_orbit_drop(op),ss=bkf_loc_owner(sl),js=bkf_loc_owner(jl),ds=bkf_loc_owner(dl);BucketPhysicalBlock xb=bkf_high_main(ss,bid),jb=bkf_high_main(js,bkcp10_reverse_high_jblock(bid,xb,p,kind)),db=bkf_high_block(ds,uint32_t(xb.hs));if(threadIdx.x==0)plan=edge?bkcp10_reverse_high_plan(bkcp10_id(op),sl,xb,p,true):bkcp10_reverse_high_plan(bkcp10_id(op),dl,db,p,false);__syncthreads();
+        for(uint32_t lr=uint32_t(blockIdx.x)*blockDim.x+threadIdx.x;lr<xb.cols;lr+=uint32_t(gridDim.x)*blockDim.x){Count*ip=bkf_ptr(ss,xb.off+Code(bkf_loc_rank(sl))*xb.cols+lr),*jp=bkf_ptr(js,jb.off+Code(bkf_loc_rank(jl))*jb.cols+lr),*dp=bkf_ptr(ds,db.off+Code(bkf_loc_rank(dl))*db.cols+lr);Count c=*ip,old=*dp,extra=bkcz_high_plan_sum(plan,edge?xb:db,lr);if(kind==CPU_ORBIT_NN){*jp=gpu_direct_add(*jp,c);*ip=gpu_direct_add(gpu_direct_add(c,old),edge?extra:0);*dp=edge?0:extra;}else{Count cc=*jp;*ip=gpu_direct_add(gpu_direct_add(c,cc),old);if(edge){*jp=gpu_direct_add(c,cc);*dp=0;}else *dp=gpu_direct_add(c,extra);}}
+        __syncthreads();
+    }
+}
+
+static void bucket_launch_low_orbit_closure_pattern10(const StorageLayout&layout,int threads=256,int gx=16,int gy=8){dim3 block(threads),grid(gx,gy,unsigned(layout.main_blocks.size()));for(int p=LOW_LUT_K;p>=1;--p){bucket_low_orbit_closure_pattern10_kernel<<<grid,block>>>(p);ck(cudaGetLastError(),"bucket low closure pattern10");}}
+static void bucket_launch_high_orbit_closure_pattern10(const StorageLayout&layout,int threads=256,int gx=16,int gy=8){dim3 block(threads),grid(gx,gy,unsigned(layout.main_blocks.size()));for(int p=TARGET_W-1;p>=LOW_LUT_K+1;--p){bucket_high_orbit_closure_pattern10_kernel<<<grid,block>>>(p);ck(cudaGetLastError(),"bucket high closure pattern10");}}
+static void bucket_launch_reverse_low_pattern10(const StorageLayout&layout,int threads=256,int gx=16,int gy=8){dim3 block(threads),grid(gx,gy,unsigned(layout.main_blocks.size()));for(int p=1;p<=LOW_LUT_K;++p){bucket_reverse_low_pattern10_kernel<<<grid,block>>>(p);ck(cudaGetLastError(),"bucket reverse low pattern10");}}
+static void bucket_launch_reverse_high_pattern10(const StorageLayout&layout,int threads=256,int gx=16,int gy=8){dim3 block(threads),grid(gx,gy,unsigned(layout.main_blocks.size()));for(int p=LOW_LUT_K+1;p<TARGET_W;++p){bucket_reverse_high_pattern10_kernel<<<grid,block>>>(p);ck(cudaGetLastError(),"bucket reverse high pattern10");}}
