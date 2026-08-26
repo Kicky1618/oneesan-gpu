@@ -136,6 +136,17 @@ struct MaskShardHighRowBatchPlanCache {
 
 static MaskShardHighRowBatchPlanCache G_MS_HIGH_ROW_BATCH_PLAN_CACHE{};
 
+#ifdef MASKSHARD_HIGH_ROW_PLAN_COPY_DEDUP
+#ifndef MASKSHARD_HIGH_ROW_PLAN_CLASS_CACHE
+#error "HIGH row-plan copy dedup requires class-cached plans"
+#endif
+#ifndef MASKSHARD_HIGH_PINNED_CONFIG
+#error "HIGH row-plan copy dedup requires persistent pinned plan sources"
+#endif
+static thread_local const MaskShardHighRowBatchPlan*
+    G_MS_HIGH_LAST_ROW_BATCH_PLAN = nullptr;
+#endif
+
 static void maskshard_report_high_mask_shard_layout_row_batch_async(
     const MaskShardLayout& s
 ) {
@@ -163,6 +174,14 @@ static Code maskshard_configure_row_depth_compact_group_row_batch_async(
     }
 
     const auto& p = cache.at(cache.index(mask, cap));
+#ifdef MASKSHARD_HIGH_ROW_PLAN_COPY_DEDUP
+    // Every DP row creates fresh worker threads, hence this starts null for the
+    // row. Jobs are globally sorted by work/popcount, so a worker sees long runs
+    // of the same class plan. Stream 0 already contains the previous plan copy
+    // before all kernels that consume it; skipping an identical pointer is safe.
+    if (G_MS_HIGH_LAST_ROW_BATCH_PLAN == &p) return p.total;
+    G_MS_HIGH_LAST_ROW_BATCH_PLAN = &p;
+#endif
     ck(cudaMemcpyToSymbolAsync(
            D_MS_ROW_DEPTH_COMPACT_TASK_PREFIX,
            p.prefix.data(), sizeof(p.prefix), 0,
