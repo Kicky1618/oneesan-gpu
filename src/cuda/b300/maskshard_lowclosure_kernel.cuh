@@ -70,7 +70,7 @@ __global__ void maskshard_main_lowdesc_closure_cols_inplace_kernel(
         if (!c) continue;
 
         const uint32_t desc = D_LOWDESC_MAIN[
-            size_t(pi) * 65 + D_LOWDESC_MAIN_BASE[bid] + lr];
+            size_t(pi) * D_LOWDESC_MAIN_TOTAL + D_LOWDESC_MAIN_BASE[bid] + lr];
         const uint32_t kind = lowdesc_kind(desc);
         if (kind == LOWDESC_MAIN) {
             const FBlock y = D_F_MAIN_BLOCKS[lowdesc_block(desc)];
