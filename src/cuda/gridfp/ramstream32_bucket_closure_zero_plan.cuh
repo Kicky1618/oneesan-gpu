@@ -2,20 +2,24 @@
 
 #include "ramstream32_bucket_closure_zero.cuh"
 
-// A destination has at most one RL predecessor plus one candidate per other
-// position in its factor, hence the exact local-source bound is the factor
-// width. Right-size this per-thread object instead of reserving a fixed 16.
-static constexpr int BKCZ_MAX_LOCAL=(LOW_LUT_K>HIGH_LUT_K?LOW_LUT_K:HIGH_LUT_K);
+// LL/RR remote-candidate positions form no-adjacent masks on each side of the
+// NN pair. For an active factor of K symbols plus center, ordinary sources are
+// one implicit RL source plus at most ceil(K/2) remote LL/RR sources. This is
+// an exact topology bound, not an empirical W=28 observation. At K<=14 the
+// per-orbit plan therefore needs at most 8 local descriptors instead of K.
+static constexpr int BKCZ_MAX_FACTOR=(LOW_LUT_K>HIGH_LUT_K?LOW_LUT_K:HIGH_LUT_K);
+static constexpr int BKCZ_MAX_LOCAL=1+(BKCZ_MAX_FACTOR+1)/2;
 static_assert(BKCZ_MAX_LOCAL>0,"zero-closure source plan requires non-empty factors");
 static_assert(BKCZ_MAX_LOCAL<=255,"zero-closure local_n no longer fits uint8_t");
+static_assert(BKCZ_MAX_FACTOR<=14||BKCZ_MAX_LOCAL<=16,"unexpected closure plan growth");
 struct BkczPlan{
     uint32_t local[BKCZ_MAX_LOCAL];
     uint32_t cross_src=0;
     uint8_t local_n=0,cross_depth=0,cross_valid=0,pad=0;
 };
 
-__device__ __forceinline__ void bkcz_plan_add_low(BkczPlan&p,MateID x,int fixed_he){uint32_t loc=0,bid=0;if(bkcz_low_source_ref(x,fixed_he,loc,bid)&&p.local_n<BKCZ_MAX_LOCAL)p.local[p.local_n++]=bkf_src_pack(bid,loc);}
-__device__ __forceinline__ void bkcz_plan_add_high(BkczPlan&p,MateID x,int fixed_hs){uint32_t loc=0,bid=0;if(bkcz_high_source_ref(x,fixed_hs,loc,bid)&&p.local_n<BKCZ_MAX_LOCAL)p.local[p.local_n++]=bkf_src_pack(bid,loc);}
+__device__ __forceinline__ void bkcz_plan_add_low(BkczPlan&p,MateID x,int fixed_he){uint32_t loc=0,bid=0;if(bkcz_low_source_ref(x,fixed_he,loc,bid)){if(p.local_n>=BKCZ_MAX_LOCAL)return;p.local[p.local_n++]=bkf_src_pack(bid,loc);}}
+__device__ __forceinline__ void bkcz_plan_add_high(BkczPlan&p,MateID x,int fixed_hs){uint32_t loc=0,bid=0;if(bkcz_high_source_ref(x,fixed_hs,loc,bid)){if(p.local_n>=BKCZ_MAX_LOCAL)return;p.local[p.local_n++]=bkf_src_pack(bid,loc);}}
 
 __device__ __forceinline__ BkczPlan bkcz_build_low_plan(MateID d,int fixed_he,int p){
     BkczPlan z{};if(mpair(d,p)!=NN)return z;MateID x=msetpair(d,p,RL);bkcz_plan_add_low(z,x,fixed_he);int bal=0;for(int q=p-2;q>=0;--q){MateValue v=mget(d,q);if(bal==0&&v==L){x=msetpair(d,p,LL);x=mset(x,q,R);bkcz_plan_add_low(z,x,fixed_he);}if(v==L)++bal;else if(v==R)--bal;if(bal<0)break;}bal=0;for(int q=p+1;q<LOW_LUT_K+1;++q){MateValue v=mget(d,q);if(bal==0&&v==R){x=msetpair(d,p,RR);x=mset(x,q,L);bkcz_plan_add_low(z,x,fixed_he);}if(v==R)++bal;else if(v==L)--bal;if(bal<0)break;}
