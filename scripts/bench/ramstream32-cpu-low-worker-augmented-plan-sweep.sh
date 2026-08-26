@@ -4,7 +4,7 @@ ROOT="$(git rev-parse --show-toplevel 2>/dev/null || true)";[[ -n "$ROOT" ]]||RO
 N="${N:-27}";ARCH="${ARCH:-native}";CONFIGS="${CONFIGS:-32:16 64:32 96:48 128:64}";MAX_RUN="${MAX_RUN:-4}";MAX_SWAP="${MAX_SWAP:-4}";BUILD="${BUILD:-1}";OUT_DIR="${OUT_DIR:-$ROOT/work/bench_ramstream32_cpu_low_worker_augmented}"
 if((N<2||N>27));then exit 2;fi;for x in MAX_RUN MAX_SWAP;do v="${!x}";[[ "$v" =~ ^[1-9][0-9]*$ ]]&&((v<=64))||exit 2;done
 read -r -a configs<<<"$CONFIGS";for cfg in "${configs[@]}";do [[ "$cfg" =~ ^([1-9][0-9]*):([1-9][0-9]*)$ ]]||exit 2;((BASH_REMATCH[2]<=BASH_REMATCH[1]))||exit 2;done
-if[[ "$BUILD" != 0 ]];then N="$N" ARCH="$ARCH" bash scripts/build/gridfp-ramstream32-cpu-low-worker-augmented-plan.sh;fi
+if [[ "$BUILD" != 0 ]];then N="$N" ARCH="$ARCH" bash scripts/build/gridfp-ramstream32-cpu-low-worker-augmented-plan.sh;fi
 bin="$ROOT/build/ramstream32_cpu_low_worker_augmented_plan_n${N}";[[ -x "$bin" ]]||exit 3;mkdir -p "$OUT_DIR";ts="$(date -u +%Y%m%dT%H%M%SZ)";out="$OUT_DIR/augmented-n${N}-${ts}.tsv";meta="$OUT_DIR/augmented-n${N}-${ts}.meta"
 field(){ local line="$1" key="$2" token;for token in $line;do [[ "$token" == "$key="* ]]&&{ printf '%s\n' "${token#*=}";return 0;};done;return 1;}
 cat >"$meta" <<EOF
