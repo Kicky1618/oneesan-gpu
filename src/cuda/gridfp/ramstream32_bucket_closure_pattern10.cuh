@@ -3,6 +3,7 @@
 #include "../../common/gridfp_closure_pattern10.hpp"
 #include "ramstream32_bucket_closure_zero_plan.cuh"
 
+#include <algorithm>
 #include <cstdint>
 #include <cstdlib>
 #include <iostream>
