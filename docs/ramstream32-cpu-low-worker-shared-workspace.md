@@ -22,7 +22,36 @@ same immutable workspace for direct and hybrid exact searches.
 
 The exact objective and accepted schedules are unchanged.
 
-## Workspace provenance
+## Workspace provenance and one-time structural audit
+
+A workspace records the exact `jobs` and `CpuLowSparseHost` object addresses
+that produced it. A branch using a different topology aborts rather than silently
+reusing stale metadata.
+
+The expensive structural validation is done once, while the workspace is being
+built. The audit checks:
+
+- every non-empty job appears exactly once in `ordered` and `ordered_pos`;
+- every empty job has no ordered position;
+- `(mask,index)` order is strict and each recorded mask is in range;
+- recomputed exact-cell weights match the stored values;
+- the total exact-cell count cannot overflow `uint64_t`;
+- dense 2 MiB and 4 KiB universes are sorted and duplicate-free;
+- every dense boundary signature is sorted, duplicate-free, and in range;
+- boundary/transition sentinel entries and vector sizes are consistent.
+
+The workspace records:
+
+```text
+structural_audit_ok
+audited_jobs
+audited_cells
+audit_s
+```
+
+Per-search `cpu_low_validate_worker_exact_workspace()` remains O(1): it checks
+object provenance, the successful audit flag, and vector sizes rather than
+rescanning all masks for every run/swap/neutral pass.
 
 The shared exact coalescer logs:
 
@@ -33,10 +62,6 @@ workspace_mib=...
 workspace_build_s=...
 branch_search_s=...
 ```
-
-A workspace records the exact `jobs` and `CpuLowSparseHost` object addresses
-that produced it. A branch using a different topology aborts rather than silently
-reusing stale metadata.
 
 ## W=10 exactness/equivalence
 
@@ -50,8 +75,10 @@ legacy selector == shared selector
 candidate and accepted-move traces agree
 ```
 
-The shared selector winner then executes two real LOW generations, with every
-main and blocked state checked against the independent reference recurrence.
+Building the workspace necessarily runs the structural audit; any failed audit
+stops before the exact search starts. The shared selector winner then executes
+two real LOW generations, with every main and blocked state checked against the
+independent reference recurrence.
 
 ## n=27 plan comparison
 
@@ -78,7 +105,7 @@ legacy_total_build_s
   + legacy hybrid exact build
 
 shared_total_build_s
-  = one workspace build
+  = one audited workspace build
   + shared direct search
   + v5.26 build
   + shared hybrid search
