@@ -1,0 +1,74 @@
+name: ramstream32 LOW worker swap coalesce CI
+
+on:
+  push:
+    paths:
+      - 'src/cuda/gridfp/ramstream32_cpu_low_domain_worker_unique_swap_coalesce.hpp'
+      - 'src/cuda/gridfp/probes/ramstream32_cpu_low_worker_swap_plan.cu'
+      - 'src/cuda/gridfp/probes/ramstream32_cpu_low_worker_swap_selftest.cu'
+      - 'scripts/build/gridfp-ramstream32-cpu-low-worker-swap-plan.sh'
+      - 'scripts/bench/ramstream32-cpu-low-worker-swap-plan-sweep.sh'
+      - 'docs/ramstream32-cpu-low-worker-swap-coalesce.md'
+      - '.github/workflows/ramstream32-worker-swap-coalesce-ci.yml'
+  pull_request:
+    paths:
+      - 'src/cuda/gridfp/ramstream32_cpu_low_domain_worker_unique_swap_coalesce.hpp'
+      - 'src/cuda/gridfp/probes/ramstream32_cpu_low_worker_swap_plan.cu'
+      - 'src/cuda/gridfp/probes/ramstream32_cpu_low_worker_swap_selftest.cu'
+      - 'scripts/build/gridfp-ramstream32-cpu-low-worker-swap-plan.sh'
+      - 'scripts/bench/ramstream32-cpu-low-worker-swap-plan-sweep.sh'
+      - 'docs/ramstream32-cpu-low-worker-swap-coalesce.md'
+      - '.github/workflows/ramstream32-worker-swap-coalesce-ci.yml'
+  workflow_dispatch:
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    container: nvidia/cuda:12.8.1-devel-ubuntu22.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Check scripts
+        shell: bash
+        run: |
+          bash -n scripts/build/gridfp-ramstream32-cpu-low-worker-swap-plan.sh
+          bash -n scripts/bench/ramstream32-cpu-low-worker-swap-plan-sweep.sh
+          grep -Fq 'bounded-swap-global-unique-v5.33-plan' scripts/bench/ramstream32-cpu-low-worker-swap-plan-sweep.sh
+          grep -Fq 'atomic_swap_improvement' scripts/bench/ramstream32-cpu-low-worker-swap-plan-sweep.sh
+          grep -Fq 'move_limit_hit' scripts/bench/ramstream32-cpu-low-worker-swap-plan-sweep.sh
+      - name: Compile W10 swap probes
+        shell: bash
+        run: |
+          mkdir -p build
+          common=(-O3 -std=c++17 -arch=sm_80 -DTARGET_W=10 -DLOW_LUT_K=5 -DHIGH_LUT_K=4)
+          nvcc "${common[@]}" \
+            src/cuda/gridfp/probes/ramstream32_cpu_low_worker_swap_selftest.cu \
+            -o build/ramstream32_cpu_low_worker_swap_selftest
+          nvcc "${common[@]}" \
+            src/cuda/gridfp/probes/ramstream32_cpu_low_worker_swap_plan.cu \
+            -o build/ramstream32_cpu_low_worker_swap_plan
+      - name: Validate bounded-swap exact recurrence
+        shell: bash
+        run: |
+          build/ramstream32_cpu_low_worker_swap_selftest \
+            > /tmp/swap-selftest.txt 2> /tmp/swap-selftest.log
+          grep -Fq 'cpu-low-worker-swap-selftest OK' /tmp/swap-selftest.txt
+          grep -Fq 'exact_generations=2' /tmp/swap-selftest.txt
+          grep -Fq 'cpu_low_domain_worker_unique_swap_coalesce objective=bounded-swap-global-unique-v5.33-plan' /tmp/swap-selftest.log
+      - name: Validate W10 swap plans
+        shell: bash
+        run: |
+          for s in 1 2 4; do
+            build/ramstream32_cpu_low_worker_swap_plan 9 4 2 "$s" 4 \
+              > "/tmp/swap-plan-$s.txt" 2> "/tmp/swap-plan-$s.log"
+            grep -Fq 'cpu_low_worker_swap_plan OK' "/tmp/swap-plan-$s.txt"
+            grep -Fq 'objective=bounded-swap-global-unique-v5.33-plan' "/tmp/swap-plan-$s.txt"
+            grep -Fq "max_swap=$s" "/tmp/swap-plan-$s.txt"
+            grep -Fq 'move_limit_hit=0' "/tmp/swap-plan-$s.txt"
+          done
+      - name: Check documentation
+        shell: bash
+        run: |
+          d=docs/ramstream32-cpu-low-worker-swap-coalesce.md
+          grep -Fq 'v5.33' "$d"
+          grep -Fq 'atomic_swap_improvement' "$d"
+          grep -Fq 'max_left_used' "$d"
