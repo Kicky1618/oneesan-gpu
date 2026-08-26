@@ -428,7 +428,8 @@ static uint64_t cpu_low_build_domain_schedule(
     }
     uint64_t normalized_cap = lo;
 
-    std::vector<std::pair<size_t,size_t>> segs(size_t(domains));
+    std::vector<std::pair<size_t,size_t>> segs(
+        size_t(domains), std::pair<size_t,size_t>{0, 0});
     size_t i = 0;
     for (int d = 0; d < domains; ++d) {
         int first_worker = d * domain_size;
