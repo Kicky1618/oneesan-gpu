@@ -65,6 +65,10 @@ int main(int argc, char** argv) {
 
     CpuLowWorkerExactWorkspace ws = cpu_low_build_worker_exact_workspace(
         jobs, sparse, storage, layout);
+    if (!ws.structural_audit_ok) {
+        std::cerr << "shared multistart workspace audit failed\n";
+        return 8;
+    }
 
     CpuLowDomainWorkerUniqueCoalesceStats legacy_direct_stats =
         cpu_low_apply_domain_worker_unique_coalesce(
@@ -163,6 +167,10 @@ int main(int argc, char** argv) {
               << " legacy_total_build_s=" << legacy_total
               << " workspace_build_s=" << ws.build_s
               << " workspace_mib=" << double(ws.bytes()) / double(1 << 20)
+              << " workspace_audit_ok=" << (ws.structural_audit_ok ? 1 : 0)
+              << " workspace_audited_jobs=" << ws.audited_jobs
+              << " workspace_audited_cells=" << ws.audited_cells
+              << " workspace_audit_s=" << ws.audit_s
               << " shared_direct_search_s=" << shared_direct_stats.build_s
               << " shared_v526_build_s=" << shared_local.build_s
               << " shared_hybrid_search_s=" << shared_hybrid_stats.build_s
