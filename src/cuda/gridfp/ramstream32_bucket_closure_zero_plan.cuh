@@ -2,12 +2,12 @@
 
 #include "ramstream32_bucket_closure_zero.cuh"
 
-static constexpr int BKCZ_MAX_LOCAL=16;
-// One RL predecessor plus at most every other position in the same factor can
-// contribute a local predecessor, so LOW/HIGH require at most their factor
-// width entries. Never silently truncate a wider production build.
-static_assert(LOW_LUT_K<=BKCZ_MAX_LOCAL,"zero-closure LOW local source cache too small");
-static_assert(HIGH_LUT_K<=BKCZ_MAX_LOCAL,"zero-closure HIGH local source cache too small");
+// A destination has at most one RL predecessor plus one candidate per other
+// position in its factor, hence the exact local-source bound is the factor
+// width. Right-size this per-thread object instead of reserving a fixed 16.
+static constexpr int BKCZ_MAX_LOCAL=(LOW_LUT_K>HIGH_LUT_K?LOW_LUT_K:HIGH_LUT_K);
+static_assert(BKCZ_MAX_LOCAL>0,"zero-closure source plan requires non-empty factors");
+static_assert(BKCZ_MAX_LOCAL<=255,"zero-closure local_n no longer fits uint8_t");
 struct BkczPlan{
     uint32_t local[BKCZ_MAX_LOCAL];
     uint32_t cross_src=0;
