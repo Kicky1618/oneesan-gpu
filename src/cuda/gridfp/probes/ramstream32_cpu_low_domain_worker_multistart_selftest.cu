@@ -1,9 +1,9 @@
 // Reuse the independent W10 recurrence/reference helpers from the existing
-// worker-locality exactness test without duplicating them. Rename its main so
-// this translation unit can define a dedicated v5.28 selector test.
-#define main ramstream_worker_locality_embedded_main
+// worker-locality exactness test without duplicating them. Its dedicated
+// NO_MAIN guard exposes the helpers without macro-renaming main across headers.
+#define RAMSTREAM_CPU_LOW_WORKER_LOCALITY_SELFTEST_NO_MAIN
 #include "ramstream32_cpu_low_domain_worker_locality_selftest.cu"
-#undef main
+#undef RAMSTREAM_CPU_LOW_WORKER_LOCALITY_SELFTEST_NO_MAIN
 
 #include "../ramstream32_cpu_low_domain_worker_multistart.hpp"
 
