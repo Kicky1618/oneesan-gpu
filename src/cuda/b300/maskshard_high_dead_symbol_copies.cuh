@@ -39,6 +39,17 @@ static const std::array<int, 65> G_MS_HIGH_ASYNC_SMALL_INT = [] {
 }();
 #endif
 
+#ifdef MASKSHARD_HIGH_NBLOCK_ONCE
+#ifndef MASKSHARD_HIGH_ROW_BATCH_ASYNC
+#error "HIGH nblock-once optimization requires row-batch async worker lifetime"
+#endif
+#ifndef MASKSHARD_HIGH_PINNED_CONFIG
+#error "HIGH nblock-once optimization requires v0.62 fixed pinned FBlock shapes"
+#endif
+static thread_local bool G_MS_HIGH_MAIN_NBLOCK_SENT = false;
+static thread_local bool G_MS_HIGH_BLOCK_NBLOCK_SENT = false;
+#endif
+
 // The mask-shard HIGH kernels use FBlocks, D_F_MASK and precomputed storage/
 // descriptor tables. They do not call generic factor_rank/unrank helpers, so
 // the seven legacy GroupSpec symbols above are dead on this path. Restrict the
@@ -46,9 +57,15 @@ static const std::array<int, 65> G_MS_HIGH_ASYNC_SMALL_INT = [] {
 // use of the same symbols still goes through the real CUDA runtime call.
 //
 // v0.61 optionally queues the five retained HIGH config symbols asynchronously
-// on the same default stream as the HIGH kernels.  FBlock payloads are persistent
-// in v0.59.  The three scalar stack sources are redirected to immutable tables
+// on the same default stream as the HIGH kernels. FBlock payloads are persistent
+// in v0.59. The three scalar stack sources are redirected to immutable tables
 // so their lifetime also extends until the row-end synchronization.
+//
+// v0.63 observes that v0.62 fixes the HIGH FBlock cardinalities for every mask:
+// MAIN has 3*(HIGH_LUT_K+2) blocks and BLOCKED has HIGH_LUT_K+2. LOW work runs
+// on separate threads after each HIGH row, so each fresh HIGH row-worker only
+// needs to restore those two scalar symbols for its first job. All later jobs in
+// that worker can reuse the same values while still updating FBlocks and mask.
 template<class Symbol>
 static cudaError_t maskshard_high_filtered_memcpy_to_symbol(
     const char* name,
@@ -73,6 +90,19 @@ static cudaError_t maskshard_high_filtered_memcpy_to_symbol(
             const int v = *static_cast<const int*>(src);
             if (v < 0 || v >= int(G_MS_HIGH_ASYNC_SMALL_INT.size()))
                 return cudaErrorInvalidValue;
+#ifdef MASKSHARD_HIGH_NBLOCK_ONCE
+            if (std::strcmp(name, "D_F_MAIN_NBLOCKS") == 0) {
+                constexpr int expected = 3 * (HIGH_LUT_K + 2);
+                if (v != expected) return cudaErrorInvalidValue;
+                if (G_MS_HIGH_MAIN_NBLOCK_SENT) return cudaSuccess;
+                G_MS_HIGH_MAIN_NBLOCK_SENT = true;
+            } else {
+                constexpr int expected = HIGH_LUT_K + 2;
+                if (v != expected) return cudaErrorInvalidValue;
+                if (G_MS_HIGH_BLOCK_NBLOCK_SENT) return cudaSuccess;
+                G_MS_HIGH_BLOCK_NBLOCK_SENT = true;
+            }
+#endif
             stable_src = &G_MS_HIGH_ASYNC_SMALL_INT[std::size_t(v)];
         }
         return cudaMemcpyToSymbolAsync(
