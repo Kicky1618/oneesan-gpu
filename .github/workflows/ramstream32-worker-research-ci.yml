@@ -3,6 +3,7 @@ name: ramstream32 LOW worker research CI
 on:
   push:
     paths:
+      - 'src/cuda/gridfp/ramstream32_cpu_low_sparse_persistent.hpp'
       - 'src/cuda/gridfp/ramstream32_cpu_low_domain_worker_unique_coalesce.hpp'
       - 'src/cuda/gridfp/ramstream32_cpu_low_domain_worker_multistart.hpp'
       - 'src/cuda/gridfp/ramstream32_cpu_low_domain_worker_dense_page.hpp'
@@ -61,6 +62,7 @@ on:
       - '.github/workflows/ramstream32-worker-research-ci.yml'
   pull_request:
     paths:
+      - 'src/cuda/gridfp/ramstream32_cpu_low_sparse_persistent.hpp'
       - 'src/cuda/gridfp/ramstream32_cpu_low_domain_worker_unique_coalesce.hpp'
       - 'src/cuda/gridfp/ramstream32_cpu_low_domain_worker_multistart.hpp'
       - 'src/cuda/gridfp/ramstream32_cpu_low_domain_worker_dense_page.hpp'
