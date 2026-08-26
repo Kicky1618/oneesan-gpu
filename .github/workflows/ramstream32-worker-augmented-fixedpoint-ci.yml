@@ -1,0 +1,95 @@
+name: ramstream32 LOW worker augmented fixedpoint CI
+
+on:
+  push:
+    paths:
+      - 'src/cuda/gridfp/ramstream32_cpu_low_domain_worker_augmented_fixedpoint.hpp'
+      - 'src/cuda/gridfp/ramstream32_cpu_low_domain_worker_neutral_balance.hpp'
+      - 'src/cuda/gridfp/ramstream32_cpu_low_domain_worker_unique_fixedpoint.hpp'
+      - 'src/cuda/gridfp/ramstream32_cpu_low_domain_worker_unique_run.hpp'
+      - 'src/cuda/gridfp/ramstream32_cpu_low_domain_worker_unique_swap.hpp'
+      - 'src/cuda/gridfp/ramstream32_cpu_low_domain_worker_exact_workspace.hpp'
+      - 'src/cuda/gridfp/probes/ramstream32_cpu_low_worker_augmented_plan.cu'
+      - 'src/cuda/gridfp/probes/ramstream32_cpu_low_worker_augmented_selftest.cu'
+      - 'scripts/build/gridfp-ramstream32-cpu-low-worker-augmented-plan.sh'
+      - 'scripts/bench/ramstream32-cpu-low-worker-augmented-plan-sweep.sh'
+      - 'docs/ramstream32-cpu-low-worker-augmented-fixedpoint.md'
+      - '.github/workflows/ramstream32-worker-augmented-fixedpoint-ci.yml'
+  pull_request:
+    paths:
+      - 'src/cuda/gridfp/ramstream32_cpu_low_domain_worker_augmented_fixedpoint.hpp'
+      - 'src/cuda/gridfp/ramstream32_cpu_low_domain_worker_neutral_balance.hpp'
+      - 'src/cuda/gridfp/ramstream32_cpu_low_domain_worker_unique_fixedpoint.hpp'
+      - 'src/cuda/gridfp/ramstream32_cpu_low_domain_worker_unique_run.hpp'
+      - 'src/cuda/gridfp/ramstream32_cpu_low_domain_worker_unique_swap.hpp'
+      - 'src/cuda/gridfp/ramstream32_cpu_low_domain_worker_exact_workspace.hpp'
+      - 'src/cuda/gridfp/probes/ramstream32_cpu_low_worker_augmented_plan.cu'
+      - 'src/cuda/gridfp/probes/ramstream32_cpu_low_worker_augmented_selftest.cu'
+      - 'scripts/build/gridfp-ramstream32-cpu-low-worker-augmented-plan.sh'
+      - 'scripts/bench/ramstream32-cpu-low-worker-augmented-plan-sweep.sh'
+      - 'docs/ramstream32-cpu-low-worker-augmented-fixedpoint.md'
+      - '.github/workflows/ramstream32-worker-augmented-fixedpoint-ci.yml'
+  workflow_dispatch:
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    container: nvidia/cuda:12.8.1-devel-ubuntu22.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Check scripts and provenance
+        shell: bash
+        run: |
+          bash -n scripts/build/gridfp-ramstream32-cpu-low-worker-augmented-plan.sh
+          bash -n scripts/bench/ramstream32-cpu-low-worker-augmented-plan-sweep.sh
+          grep -Fq 'exact-neutral-augmented-v5.36-plan' src/cuda/gridfp/ramstream32_cpu_low_domain_worker_augmented_fixedpoint.hpp
+          grep -Fq 'exact-neutral-augmented-v5.36-plan' scripts/bench/ramstream32-cpu-low-worker-augmented-plan-sweep.sh
+          grep -Fq 'augmented_plateau_escape' scripts/bench/ramstream32-cpu-low-worker-augmented-plan-sweep.sh
+      - name: Compile W10 augmented probes
+        shell: bash
+        run: |
+          mkdir -p build
+          common=(-O3 -std=c++17 -arch=sm_80 -DTARGET_W=10 -DLOW_LUT_K=5 -DHIGH_LUT_K=4)
+          nvcc "${common[@]}" \
+            src/cuda/gridfp/probes/ramstream32_cpu_low_worker_augmented_plan.cu \
+            -o build/ramstream32_cpu_low_worker_augmented_plan
+          nvcc "${common[@]}" \
+            src/cuda/gridfp/probes/ramstream32_cpu_low_worker_augmented_selftest.cu \
+            -o build/ramstream32_cpu_low_worker_augmented_selftest
+      - name: Validate augmented structural plan
+        shell: bash
+        run: |
+          build/ramstream32_cpu_low_worker_augmented_plan 9 4 2 4 4 \
+            > /tmp/aug-plan.txt 2> /tmp/aug-plan.log
+          grep -Fq 'cpu_low_worker_augmented_plan OK' /tmp/aug-plan.txt
+          grep -Fq 'objective=exact-neutral-augmented-v5.36-plan' /tmp/aug-plan.txt
+          grep -Fq 'limits_clear=1' /tmp/aug-plan.txt
+          grep -Fq 'cpu_low_worker_augmented_fixedpoint objective=exact-neutral-augmented-v5.36-plan' /tmp/aug-plan.log
+          python3 - <<'PY'
+          fields = {}
+          for token in open('/tmp/aug-plan.txt').readline().split():
+              if '=' in token:
+                  k, v = token.split('=', 1)
+                  fields[k] = v
+          b = (int(fields['baseline_pages_2m']), int(fields['baseline_pages_4k']), int(fields['baseline_transitions']))
+          a = (int(fields['augmented_pages_2m']), int(fields['augmented_pages_4k']), int(fields['augmented_transitions']))
+          assert a <= b
+          assert int(fields['augmented_max_worker_cells']) <= int(fields['baseline_max_worker_cells'])
+          assert int(fields['augmented_rounds']) >= 1
+          PY
+      - name: Validate augmented two-generation recurrence
+        shell: bash
+        run: |
+          build/ramstream32_cpu_low_worker_augmented_selftest \
+            > /tmp/aug-selftest.txt 2> /tmp/aug-selftest.log
+          grep -Fq 'cpu-low-worker-augmented-selftest OK' /tmp/aug-selftest.txt
+          grep -Fq 'exact_generations=2' /tmp/aug-selftest.txt
+          grep -Fq 'cpu_low_worker_augmented_fixedpoint objective=exact-neutral-augmented-v5.36-plan' /tmp/aug-selftest.log
+      - name: Check documentation
+        shell: bash
+        run: |
+          d=docs/ramstream32-cpu-low-worker-augmented-fixedpoint.md
+          grep -Fq 'v5.36' "$d"
+          grep -Fq 'augmented_plateau_escape' "$d"
+          grep -Fq 'two' "$d"
+          grep -Fq 'research-only' "$d"
