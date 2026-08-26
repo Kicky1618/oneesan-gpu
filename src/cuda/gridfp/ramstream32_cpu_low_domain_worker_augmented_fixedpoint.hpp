@@ -44,6 +44,10 @@ static CpuLowWorkerBestExactStats cpu_low_apply_best_exact_fixedpoint(
     uint32_t max_swap = 4
 ) {
     CpuLowWorkerBestExactStats out;
+    if (!max_run || !max_swap) {
+        std::cerr << "cpu LOW augmented exact limits must be positive\n";
+        std::exit(307);
+    }
     CpuLowSparsePersistentPool rs(
         pool.workers, CPU_LOW_SCHEDULE_DOMAIN, pool.domain_size, true);
     CpuLowSparsePersistentPool sr(
@@ -144,6 +148,10 @@ static CpuLowWorkerAugmentedFixedPointStats cpu_low_apply_worker_augmented_fixed
 ) {
     CpuLowWorkerAugmentedFixedPointStats out;
     auto t0 = std::chrono::steady_clock::now();
+    if (!max_run || !max_swap || !max_rounds) {
+        std::cerr << "cpu LOW augmented fixedpoint limits must be positive\n";
+        std::exit(308);
+    }
     out.max_worker_cells_before = pool.sticky_worker_cells.empty() ? 0
         : *std::max_element(
             pool.sticky_worker_cells.begin(), pool.sticky_worker_cells.end());
