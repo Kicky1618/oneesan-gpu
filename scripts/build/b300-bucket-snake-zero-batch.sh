@@ -1,0 +1,14 @@
+#!/usr/bin/env bash
+set -euo pipefail
+source "$(dirname -- "${BASH_SOURCE[0]}")/../lib/common.sh"
+N="${N:-21}"; W=$((N + 1)); ARCH="${ARCH:-native}"
+LOW_LUT_K="${LOW_LUT_K:-$((W / 2))}"; HIGH_LUT_K="${HIGH_LUT_K:-$((W - LOW_LUT_K - 1))}"; PM_ACCUM="${PM_ACCUM:-0}"
+if (( LOW_LUT_K <= 0 || HIGH_LUT_K <= 0 || LOW_LUT_K + HIGH_LUT_K + 1 != W )); then echo "invalid factor split" >&2; exit 2; fi
+if [[ "$PM_ACCUM" != 0 && "$PM_ACCUM" != 1 ]]; then echo "PM_ACCUM must be 0 or 1" >&2; exit 2; fi
+SRC="$(repo_path src/cuda/b300/oneesan_cuda_gridfp_b300_bucket_snake_onepass_zero_batch.cu)"
+SUFFIX="_sync"; if [[ "$PM_ACCUM" == 1 ]]; then SUFFIX="${SUFFIX}_pm"; fi
+OUT="$(build_path "${OUT:-oneesan_cuda_gridfp_b300_bucket_snake_onepass_zero_batch${SUFFIX}_n${N}}")"
+TMPDIR="$ONEESAN_TMP_DIR" nvcc -O3 -std=c++17 -lineinfo -arch="$ARCH" \
+  -DTARGET_W="$W" -DLOW_LUT_K="$LOW_LUT_K" -DHIGH_LUT_K="$HIGH_LUT_K" -DGPU_DIRECT_PM_ACCUM="$PM_ACCUM" \
+  "$SRC" -o "$OUT"
+echo "built $OUT (closure_metadata=zero reverse=split54 window=direct transpose=sync pm_accum=$PM_ACCUM)"
