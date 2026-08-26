@@ -183,6 +183,10 @@ cpu_low_apply_domain_worker_unique_run_coalesce(
 
             ++stats.candidate_evaluations;
             uint64_t cells = range_cells(begin, end);
+            if (loads[size_t(src)] < cells) {
+                std::cerr << "cpu LOW run coalesce source load underflow\n";
+                std::exit(323);
+            }
             if (cells > domain_cap[size_t(d)]
                 || loads[size_t(dst)] > domain_cap[size_t(d)] - cells) {
                 ++stats.cap_rejections;
@@ -271,6 +275,10 @@ cpu_low_apply_domain_worker_unique_run_coalesce(
             std::exit(263);
         }
         transitions = uint64_t(next_transitions);
+        if (loads[size_t(best.src)] < best.cells) {
+            std::cerr << "cpu LOW run coalesce accepted source load underflow\n";
+            std::exit(324);
+        }
         loads[size_t(best.src)] -= best.cells;
         loads[size_t(best.dst)] += best.cells;
         int d = best.dst / pool.domain_size;
