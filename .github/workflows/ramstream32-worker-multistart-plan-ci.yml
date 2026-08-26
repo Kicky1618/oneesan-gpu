@@ -7,14 +7,19 @@ on:
       - 'src/cuda/gridfp/ramstream32_cpu_low_domain_worker_coalesce.hpp'
       - 'src/cuda/gridfp/ramstream32_cpu_low_domain_worker_unique_coalesce.hpp'
       - 'src/cuda/gridfp/ramstream32_cpu_low_domain_worker_multistart.hpp'
+      - 'src/cuda/gridfp/ramstream32_cpu_low_domain_worker_dense_page.hpp'
       - 'src/cuda/gridfp/probes/ramstream32_cpu_low_domain_worker_locality_selftest.cu'
       - 'src/cuda/gridfp/probes/ramstream32_cpu_low_domain_worker_multistart_selftest.cu'
       - 'src/cuda/gridfp/probes/ramstream32_cpu_low_domain_worker_multistart_plan.cu'
       - 'src/cuda/gridfp/probes/ramstream32_cpu_low_worker_flat_delta_selftest.cu'
+      - 'src/cuda/gridfp/probes/ramstream32_cpu_low_worker_dense_page_selftest.cu'
+      - 'src/cuda/gridfp/probes/ramstream32_cpu_low_worker_dense_page_plan.cu'
       - 'scripts/build/gridfp-ramstream32-cpu-low-domain-worker-multistart-plan.sh'
+      - 'scripts/build/gridfp-ramstream32-cpu-low-worker-dense-page-plan.sh'
       - 'scripts/bench/ramstream32-cpu-low-domain-worker-multistart-plan-sweep.sh'
       - 'docs/ramstream32-cpu-low-worker-multistart.md'
       - 'docs/ramstream32-cpu-low-worker-flat-delta.md'
+      - 'docs/ramstream32-cpu-low-worker-dense-page.md'
       - '.github/workflows/ramstream32-worker-multistart-plan-ci.yml'
   pull_request:
     paths:
@@ -22,14 +27,19 @@ on:
       - 'src/cuda/gridfp/ramstream32_cpu_low_domain_worker_coalesce.hpp'
       - 'src/cuda/gridfp/ramstream32_cpu_low_domain_worker_unique_coalesce.hpp'
       - 'src/cuda/gridfp/ramstream32_cpu_low_domain_worker_multistart.hpp'
+      - 'src/cuda/gridfp/ramstream32_cpu_low_domain_worker_dense_page.hpp'
       - 'src/cuda/gridfp/probes/ramstream32_cpu_low_domain_worker_locality_selftest.cu'
       - 'src/cuda/gridfp/probes/ramstream32_cpu_low_domain_worker_multistart_selftest.cu'
       - 'src/cuda/gridfp/probes/ramstream32_cpu_low_domain_worker_multistart_plan.cu'
       - 'src/cuda/gridfp/probes/ramstream32_cpu_low_worker_flat_delta_selftest.cu'
+      - 'src/cuda/gridfp/probes/ramstream32_cpu_low_worker_dense_page_selftest.cu'
+      - 'src/cuda/gridfp/probes/ramstream32_cpu_low_worker_dense_page_plan.cu'
       - 'scripts/build/gridfp-ramstream32-cpu-low-domain-worker-multistart-plan.sh'
+      - 'scripts/build/gridfp-ramstream32-cpu-low-worker-dense-page-plan.sh'
       - 'scripts/bench/ramstream32-cpu-low-domain-worker-multistart-plan-sweep.sh'
       - 'docs/ramstream32-cpu-low-worker-multistart.md'
       - 'docs/ramstream32-cpu-low-worker-flat-delta.md'
+      - 'docs/ramstream32-cpu-low-worker-dense-page.md'
       - '.github/workflows/ramstream32-worker-multistart-plan-ci.yml'
   workflow_dispatch:
 
@@ -43,6 +53,7 @@ jobs:
         shell: bash
         run: |
           bash -n scripts/build/gridfp-ramstream32-cpu-low-domain-worker-multistart-plan.sh
+          bash -n scripts/build/gridfp-ramstream32-cpu-low-worker-dense-page-plan.sh
           bash -n scripts/bench/ramstream32-cpu-low-domain-worker-multistart-plan-sweep.sh
           grep -Fq 'multistart-global-unique-worker-v5.28-plan' scripts/bench/ramstream32-cpu-low-domain-worker-multistart-plan-sweep.sh
           grep -Fq 'selected branch failed dominance contract' scripts/bench/ramstream32-cpu-low-domain-worker-multistart-plan-sweep.sh
@@ -50,7 +61,7 @@ jobs:
           grep -Fq '#ifndef RAMSTREAM_CPU_LOW_WORKER_LOCALITY_SELFTEST_NO_MAIN' src/cuda/gridfp/probes/ramstream32_cpu_low_domain_worker_locality_selftest.cu
           grep -Fq '#define RAMSTREAM_CPU_LOW_WORKER_LOCALITY_SELFTEST_NO_MAIN' src/cuda/gridfp/probes/ramstream32_cpu_low_domain_worker_multistart_selftest.cu
           ! grep -Fq '#define main ramstream_worker_locality_embedded_main' src/cuda/gridfp/probes/ramstream32_cpu_low_domain_worker_multistart_selftest.cu
-      - name: Compile W10 multistart probes
+      - name: Compile W10 multistart and dense-page probes
         shell: bash
         run: |
           mkdir -p build
@@ -59,12 +70,18 @@ jobs:
             src/cuda/gridfp/probes/ramstream32_cpu_low_worker_flat_delta_selftest.cu \
             -o build/ramstream32_cpu_low_worker_flat_delta_selftest
           nvcc "${common[@]}" \
+            src/cuda/gridfp/probes/ramstream32_cpu_low_worker_dense_page_selftest.cu \
+            -o build/ramstream32_cpu_low_worker_dense_page_selftest
+          nvcc "${common[@]}" \
+            src/cuda/gridfp/probes/ramstream32_cpu_low_worker_dense_page_plan.cu \
+            -o build/ramstream32_cpu_low_worker_dense_page_plan
+          nvcc "${common[@]}" \
             src/cuda/gridfp/probes/ramstream32_cpu_low_domain_worker_multistart_selftest.cu \
             -o build/ramstream32_cpu_low_domain_worker_multistart_selftest
           nvcc "${common[@]}" \
             src/cuda/gridfp/probes/ramstream32_cpu_low_domain_worker_multistart_plan.cu \
             -o build/ramstream32_cpu_low_domain_worker_multistart_plan
-      - name: Validate flat page delta algebra
+      - name: Validate flat and dense page algebra
         shell: bash
         run: |
           build/ramstream32_cpu_low_worker_flat_delta_selftest | tee /tmp/worker-flat-delta.txt
@@ -72,6 +89,29 @@ jobs:
           grep -Fq 'cancellation=1' /tmp/worker-flat-delta.txt
           grep -Fq 'double_remove=1' /tmp/worker-flat-delta.txt
           grep -Fq 'double_insert=1' /tmp/worker-flat-delta.txt
+          build/ramstream32_cpu_low_worker_dense_page_selftest | tee /tmp/worker-dense-page.txt
+          grep -Fq 'cpu-low-worker-dense-page-selftest OK' /tmp/worker-dense-page.txt
+          grep -Fq 'cancellation=1' /tmp/worker-dense-page.txt
+          grep -Fq 'duplicate_ref=1' /tmp/worker-dense-page.txt
+          grep -Fq 'dense_delta=1' /tmp/worker-dense-page.txt
+      - name: Validate W10 dense page plan
+        shell: bash
+        run: |
+          build/ramstream32_cpu_low_worker_dense_page_plan 9 > /tmp/dense-page-plan.txt
+          grep -Fq 'cpu_low_worker_dense_page_plan OK' /tmp/dense-page-plan.txt
+          grep -Fq 'objective=dense-page-id-substrate-v5.30-plan' /tmp/dense-page-plan.txt
+          grep -Fq 'universe_2m=' /tmp/dense-page-plan.txt
+          grep -Fq 'dense_total_index_mib=' /tmp/dense-page-plan.txt
+          python3 - <<'PY'
+          fields={}
+          for token in open('/tmp/dense-page-plan.txt').readline().split():
+              if '=' in token:
+                  k,v=token.split('=',1); fields[k]=v
+          assert int(fields['ordered_jobs']) > 0
+          assert int(fields['boundaries']) == int(fields['ordered_jobs']) - 1
+          assert float(fields['dense_signature_payload_mib']) <= float(fields['raw_signature_payload_mib'])
+          assert float(fields['dense_total_index_mib']) >= 0
+          PY
       - name: Validate selected exact recurrence
         shell: bash
         run: |
@@ -126,3 +166,7 @@ jobs:
           grep -Fq 'v5.29' "$f"
           grep -Fq 'flat-page-delta-v5.29' "$f"
           grep -Fq 'unordered_map' "$f"
+          g=docs/ramstream32-cpu-low-worker-dense-page.md
+          grep -Fq 'v5.30' "$g"
+          grep -Fq 'dense-page-id-substrate-v5.30-plan' "$g"
+          grep -Fq 'dense_total_index_mib' "$g"
