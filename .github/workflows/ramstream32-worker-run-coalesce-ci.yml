@@ -1,0 +1,74 @@
+name: ramstream32 LOW worker run coalesce CI
+
+on:
+  push:
+    paths:
+      - 'src/cuda/gridfp/ramstream32_cpu_low_domain_worker_unique_run_coalesce.hpp'
+      - 'src/cuda/gridfp/probes/ramstream32_cpu_low_worker_run_plan.cu'
+      - 'src/cuda/gridfp/probes/ramstream32_cpu_low_worker_run_selftest.cu'
+      - 'scripts/build/gridfp-ramstream32-cpu-low-worker-run-plan.sh'
+      - 'scripts/bench/ramstream32-cpu-low-worker-run-plan-sweep.sh'
+      - 'docs/ramstream32-cpu-low-worker-run-coalesce.md'
+      - '.github/workflows/ramstream32-worker-run-coalesce-ci.yml'
+  pull_request:
+    paths:
+      - 'src/cuda/gridfp/ramstream32_cpu_low_domain_worker_unique_run_coalesce.hpp'
+      - 'src/cuda/gridfp/probes/ramstream32_cpu_low_worker_run_plan.cu'
+      - 'src/cuda/gridfp/probes/ramstream32_cpu_low_worker_run_selftest.cu'
+      - 'scripts/build/gridfp-ramstream32-cpu-low-worker-run-plan.sh'
+      - 'scripts/bench/ramstream32-cpu-low-worker-run-plan-sweep.sh'
+      - 'docs/ramstream32-cpu-low-worker-run-coalesce.md'
+      - '.github/workflows/ramstream32-worker-run-coalesce-ci.yml'
+  workflow_dispatch:
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    container: nvidia/cuda:12.8.1-devel-ubuntu22.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Check scripts
+        shell: bash
+        run: |
+          bash -n scripts/build/gridfp-ramstream32-cpu-low-worker-run-plan.sh
+          bash -n scripts/bench/ramstream32-cpu-low-worker-run-plan-sweep.sh
+          grep -Fq 'bounded-run-global-unique-v5.32-plan' scripts/bench/ramstream32-cpu-low-worker-run-plan-sweep.sh
+          grep -Fq 'atomic_run_improvement' scripts/bench/ramstream32-cpu-low-worker-run-plan-sweep.sh
+          grep -Fq 'move_limit_hit' scripts/bench/ramstream32-cpu-low-worker-run-plan-sweep.sh
+      - name: Compile W10 run probes
+        shell: bash
+        run: |
+          mkdir -p build
+          common=(-O3 -std=c++17 -arch=sm_80 -DTARGET_W=10 -DLOW_LUT_K=5 -DHIGH_LUT_K=4)
+          nvcc "${common[@]}" \
+            src/cuda/gridfp/probes/ramstream32_cpu_low_worker_run_selftest.cu \
+            -o build/ramstream32_cpu_low_worker_run_selftest
+          nvcc "${common[@]}" \
+            src/cuda/gridfp/probes/ramstream32_cpu_low_worker_run_plan.cu \
+            -o build/ramstream32_cpu_low_worker_run_plan
+      - name: Validate bounded-run exact recurrence
+        shell: bash
+        run: |
+          build/ramstream32_cpu_low_worker_run_selftest \
+            > /tmp/run-selftest.txt 2> /tmp/run-selftest.log
+          grep -Fq 'cpu-low-worker-run-selftest OK' /tmp/run-selftest.txt
+          grep -Fq 'exact_generations=2' /tmp/run-selftest.txt
+          grep -Fq 'cpu_low_domain_worker_unique_run_coalesce objective=bounded-run-global-unique-v5.32-plan' /tmp/run-selftest.log
+      - name: Validate W10 run plans
+        shell: bash
+        run: |
+          for r in 1 2 4; do
+            build/ramstream32_cpu_low_worker_run_plan 9 4 2 "$r" \
+              > "/tmp/run-plan-$r.txt" 2> "/tmp/run-plan-$r.log"
+            grep -Fq 'cpu_low_worker_run_plan OK' "/tmp/run-plan-$r.txt"
+            grep -Fq 'objective=bounded-run-global-unique-v5.32-plan' "/tmp/run-plan-$r.txt"
+            grep -Fq "max_run=$r" "/tmp/run-plan-$r.txt"
+            grep -Fq 'move_limit_hit=0' "/tmp/run-plan-$r.txt"
+          done
+      - name: Check documentation
+        shell: bash
+        run: |
+          d=docs/ramstream32-cpu-low-worker-run-coalesce.md
+          grep -Fq 'v5.32' "$d"
+          grep -Fq 'atomic_run_improvement' "$d"
+          grep -Fq 'max_run_used' "$d"
