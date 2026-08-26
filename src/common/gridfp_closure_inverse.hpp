@@ -1,6 +1,7 @@
 #pragma once
 
 #include "gridfp_transition.hpp"
+#include "gridfp_transition_reverse.hpp"
 
 #include <cstdint>
 
@@ -13,13 +14,13 @@
 namespace oneesan::gridfp {
 
 // Enumerate ordinary (same active-side) closure preimages of a post-closure
-// partial frontier containing the active half plus the center symbol.  `p` is
+// partial frontier containing the active half plus the center symbol. `p` is
 // the pair's upper position in this partial coordinate system, so the pair is
-// (p-1,p), exactly as mpair().  The post-closure pair must be NN.
+// (p-1,p), exactly as mpair(). The post-closure pair must be NN.
 //
 // RL is the direct preimage. LL/RR additionally undo the remote mate relabel.
 // For LL, scanning left from p-2, a destination L is a valid remote candidate
-// whenever the intervening suffix is balanced and never went negative.  For
+// whenever the intervening suffix is balanced and never went negative. For
 // RR the symmetric statement holds scanning right with destination R.
 //
 // The routine enumerates topology candidates only. Callers still filter by
@@ -62,6 +63,23 @@ ONEESAN_CINV_HD int ordinary_closure_preimages_partial(
         else if (v == L) --bal;
         if (bal < 0) break;
     }
+    return n;
+}
+
+// Reverse-scan counterpart.  Horizontal reflection J conjugates the reverse
+// cell operator to the forward operator, hence the ordinary closure inverse is
+// exactly J^{-1} Pre_forward J.  Keeping this as a wrapper over the forward
+// enumerator avoids maintaining a second LL/RR balance-scan implementation.
+template<int MAX_OUT>
+ONEESAN_CINV_HD int ordinary_closure_preimages_partial_reverse(
+    MateID dest, int len, int p, MateID (&out)[MAX_OUT]
+) {
+    if (p <= 0 || p >= len) return 0;
+    MateID mirrored = mirror_mate(dest, len);
+    MateID tmp[MAX_OUT]{};
+    int n = ordinary_closure_preimages_partial(
+        mirrored, len, len - p, tmp);
+    for (int i = 0; i < n; ++i) out[i] = mirror_mate(tmp[i], len);
     return n;
 }
 
