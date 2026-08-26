@@ -185,13 +185,25 @@ cpu_low_apply_domain_worker_unique_swap_coalesce(
                         ++stats.candidate_evaluations;
                         size_t right_end = k + lb;
                         uint64_t right_cells = range_cells(k, right_end);
-                        uint64_t new_a = loads[size_t(a_owner)] - left_cells + right_cells;
-                        uint64_t new_b = loads[size_t(b_owner)] - right_cells + left_cells;
+                        uint64_t load_a = loads[size_t(a_owner)];
+                        uint64_t load_b = loads[size_t(b_owner)];
+                        if (load_a < left_cells || load_b < right_cells) {
+                            std::cerr << "cpu LOW swap coalesce source load underflow\n";
+                            std::exit(325);
+                        }
+                        uint64_t base_a = load_a - left_cells;
+                        uint64_t base_b = load_b - right_cells;
                         uint64_t cap = domain_cap[size_t(d)];
-                        if (new_a > cap || new_b > cap) {
+                        if (base_a > cap || base_b > cap) {
+                            std::cerr << "cpu LOW swap coalesce preexisting cap violation\n";
+                            std::exit(326);
+                        }
+                        if (right_cells > cap - base_a || left_cells > cap - base_b) {
                             ++stats.cap_rejections;
                             continue;
                         }
+                        uint64_t new_a = base_a + right_cells;
+                        uint64_t new_b = base_b + left_cells;
 
                         CpuLowWorkerSwapCandidate cand;
                         cand.valid = true;
@@ -247,6 +259,8 @@ cpu_low_apply_domain_worker_unique_swap_coalesce(
                                             || (left_begin == best.left_begin
                                                 && right_end < best.right_end)))));
                         if (take) best = std::move(cand);
+                        (void)new_a;
+                        (void)new_b;
                     }
                 }
                 k = b;
@@ -262,13 +276,25 @@ cpu_low_apply_domain_worker_unique_swap_coalesce(
             std::exit(277);
         }
         transitions = uint64_t(tr);
-        loads[size_t(best.left_owner)] =
-            loads[size_t(best.left_owner)] - best.left_cells + best.right_cells;
-        loads[size_t(best.right_owner)] =
-            loads[size_t(best.right_owner)] - best.right_cells + best.left_cells;
+        uint64_t load_a = loads[size_t(best.left_owner)];
+        uint64_t load_b = loads[size_t(best.right_owner)];
+        if (load_a < best.left_cells || load_b < best.right_cells) {
+            std::cerr << "cpu LOW swap coalesce accepted source load underflow\n";
+            std::exit(327);
+        }
+        uint64_t base_a = load_a - best.left_cells;
+        uint64_t base_b = load_b - best.right_cells;
         int d = best.left_owner / pool.domain_size;
         if (best.right_owner / pool.domain_size != d
-            || loads[size_t(best.left_owner)] > domain_cap[size_t(d)]
+            || base_a > domain_cap[size_t(d)] || base_b > domain_cap[size_t(d)]
+            || best.right_cells > domain_cap[size_t(d)] - base_a
+            || best.left_cells > domain_cap[size_t(d)] - base_b) {
+            std::cerr << "cpu LOW swap coalesce accepted cap/domain violation\n";
+            std::exit(328);
+        }
+        loads[size_t(best.left_owner)] = base_a + best.right_cells;
+        loads[size_t(best.right_owner)] = base_b + best.left_cells;
+        if (loads[size_t(best.left_owner)] > domain_cap[size_t(d)]
             || loads[size_t(best.right_owner)] > domain_cap[size_t(d)]) {
             std::cerr << "cpu LOW swap coalesce cap/domain violation\n";
             std::exit(278);
