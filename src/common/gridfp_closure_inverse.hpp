@@ -19,7 +19,6 @@ ONEESAN_CINV_HD int ordinary_closure_preimages_partial(
 ) {
     if (p <= 0 || p >= len || mpair(dest, p) != NN) return 0;
     int n = 0;
-
     if (n < MAX_OUT) out[n++] = msetpair(dest, p, RL);
 
     int bal = 0;
@@ -60,6 +59,42 @@ ONEESAN_CINV_HD int ordinary_closure_preimages_partial_reverse(
     int n = ordinary_closure_preimages_partial(mirrored, len, len - p, tmp);
     for (int i = 0; i < n; ++i) out[i] = mirror_mate(tmp[i], len);
     return n;
+}
+
+// LOW+center active side. Only an RR mate search can escape across the center
+// into HIGH. `dest` is the post-closure active partial word with pair NN.
+// Return 0 if RR finds its mate before the inactive boundary. Otherwise return
+// the boundary stack depth and reconstruct the unique active RR source.
+ONEESAN_CINV_HD int low_cross_preimage_partial(
+    MateID dest, int len, int p, MateID& source
+) {
+    if (p <= 0 || p >= len || mpair(dest, p) != NN) return 0;
+    int s = 1;
+    for (int q = p + 1; q < len; ++q) {
+        MateValue v = mget(dest, q);
+        if (v == L) --s;
+        else if (v == R) ++s;
+        if (!s) return 0;
+    }
+    source = msetpair(dest, p, RR);
+    return s;
+}
+
+// center+HIGH active side. Only an LL mate search can escape across the center
+// into LOW. Symmetric to low_cross_preimage_partial().
+ONEESAN_CINV_HD int high_cross_preimage_partial(
+    MateID dest, int len, int p, MateID& source
+) {
+    if (p <= 0 || p >= len || mpair(dest, p) != NN) return 0;
+    int s = 1;
+    for (int q = p - 2; q >= 0; --q) {
+        MateValue v = mget(dest, q);
+        if (v == L) ++s;
+        else if (v == R) --s;
+        if (!s) return 0;
+    }
+    source = msetpair(dest, p, LL);
+    return s;
 }
 
 } // namespace oneesan::gridfp
