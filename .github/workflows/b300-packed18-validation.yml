@@ -4,6 +4,7 @@ on:
   push:
     paths:
       - 'src/cuda/gridfp/ramstream32_bucket_orbit_closure_packed18.cuh'
+      - 'src/cuda/gridfp/ramstream32_bucket_forward_packed18_direct.hpp'
       - 'src/cuda/gridfp/ramstream32_bucket_orbit_closure_packed18_stream.cuh'
       - 'src/cuda/gridfp/ramstream32_bucket_orbit_closure_packed18_graph.cuh'
       - 'src/cuda/gridfp/probes/ramstream32_orbit_closure_packed18_plan.cu'
@@ -34,6 +35,7 @@ jobs:
           grep -Fq 'orbit-closure-packed18-plan OK W=10' /tmp/packed18-plan.txt
           grep -Fq 'forward_bytes_per_orbit=1' /tmp/packed18-plan.txt
           grep -Fq 'reverse_bytes_per_orbit=1.25' /tmp/packed18-plan.txt
+          grep -Fq 'direct_forward_match=1' /tmp/packed18-plan.txt
       - name: Compile W10 packed18 CUDA selftest
         shell: bash
         run: |

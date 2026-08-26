@@ -1,6 +1,7 @@
 #pragma once
 
 #include "ramstream32_bucket_orbit_closure_inline8_hybrid18.cuh"
+#include "ramstream32_bucket_forward_packed18_direct.hpp"
 #include "ramstream32_bucket_reverse_split18_direct.hpp"
 
 struct BucketForwardHybrid18Inline8Host{
@@ -28,7 +29,7 @@ static BucketForwardHybrid18Inline8Host build_bucket_forward_hybrid18_inline8(
     const StorageLayout&layout,BucketOrbitStreamsHost&bo,BucketFusedHost&bf
 ){
     BucketForwardHybrid18Inline8Host out;
-    out.attach=build_bucket_forward_orbit_closure_attach18(layout,bo,bf);
+    out.attach=build_bucket_forward_orbit_closure_attach18_direct(layout,bo,bf);
     out.inline8=build_bucket_forward_onepass_inline8(bf);
     return out;
 }

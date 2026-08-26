@@ -10,6 +10,7 @@ on:
       - 'src/cuda/gridfp/ramstream32_bucket_reverse_split18_direct.hpp'
       - 'src/cuda/gridfp/ramstream32_bucket_reverse_split18_stream.cuh'
       - 'src/cuda/gridfp/ramstream32_bucket_reverse_closure_only.cuh'
+      - 'src/cuda/gridfp/ramstream32_bucket_forward_packed18_direct.hpp'
       - 'src/cuda/gridfp/ramstream32_bucket_orbit_closure_hybrid18_graph.cuh'
       - 'src/cuda/gridfp/ramstream32_bucket_onepass_inline8.hpp'
       - 'src/cuda/gridfp/ramstream32_bucket_onepass_inline8_hybrid18_alias.cuh'
@@ -87,6 +88,7 @@ jobs:
           grep -Fq 'forward_build release_stage=lowdesc-loworbit ' /tmp/hybrid18-plan.txt
           grep -Fq 'forward_build release_stage=bucket-orbit-inputs ' /tmp/hybrid18-plan.txt
           grep -Fq 'forward_build release_stage=bucket-fused-inputs ' /tmp/hybrid18-plan.txt
+          grep -Fq 'bucket_forward_orbit_closure_attach18_direct ' /tmp/hybrid18-plan.txt
           grep -Fq 'reverse_build released_source_mib=' /tmp/hybrid18-plan.txt
           grep -Fq 'reverse_split18_direct ' /tmp/hybrid18-plan.txt
           grep -Fq 'exact_reserve=1 release_legacy=1' /tmp/hybrid18-plan.txt
@@ -110,6 +112,7 @@ jobs:
             src/cuda/b300/oneesan_cuda_gridfp_b300_bucket_snake_onepass_hybrid18_inline8_pipeline.cu \
             -o build/hybrid18_inline8_pipeline_w10
           build/hybrid18_inline8_pipeline_w10 9 4294967291 256 4 4 64 --plan-only 2>&1 | tee /tmp/hybrid18-inline8-plan.txt
+          grep -Fq 'bucket_forward_orbit_closure_attach18_direct ' /tmp/hybrid18-inline8-plan.txt
           grep -Fq 'bucket_forward_onepass_inline8 records=' /tmp/hybrid18-inline8-plan.txt
           grep -Fq 'bucket_reverse_onepass_inline8 records=' /tmp/hybrid18-inline8-plan.txt
           grep -Fq 'reverse_split18_direct ' /tmp/hybrid18-inline8-plan.txt

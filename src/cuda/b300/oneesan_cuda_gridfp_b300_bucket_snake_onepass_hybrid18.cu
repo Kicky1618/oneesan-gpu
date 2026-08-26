@@ -2,6 +2,7 @@
 #define BUCKET_SNAKE_REVERSE_FUSED 1
 #endif
 #include "../gridfp/ramstream32_bucket_orbit_closure_packed18.cuh"
+#include "../gridfp/ramstream32_bucket_forward_packed18_direct.hpp"
 #include "../gridfp/ramstream32_bucket_reverse_split18_alias.cuh"
 #include "../gridfp/ramstream32_bucket_reverse_closure_only.cuh"
 #include "../gridfp/ramstream32_reverse_build_release.hpp"
@@ -13,7 +14,7 @@
 #define BucketReverseOrbitClosureAttachHost ReverseSplit18Host
 #define BucketForwardOrbitClosureAttachDeviceTables BucketForwardOrbitClosureAttach18DeviceTables
 #define BucketReverseOrbitClosureAttachDeviceTables ReverseSplit18DeviceTables
-#define build_bucket_forward_orbit_closure_attach build_bucket_forward_orbit_closure_attach18
+#define build_bucket_forward_orbit_closure_attach build_bucket_forward_orbit_closure_attach18_direct
 #define build_bucket_reverse_orbit_closure_attach_checked build_reverse_split18_checked_direct
 #define bucket_launch_low_orbit_closure_fused bucket_launch_low_orbit_closure18
 #define bucket_launch_high_orbit_closure_fused bucket_launch_high_orbit_closure18
