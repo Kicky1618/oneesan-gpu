@@ -3,6 +3,7 @@ name: orbit closure fusion validation
 on:
   push:
     paths:
+      - 'src/cuda/gridfp/oneesan_cuda_gridfp_ramstream32_factorized_bidesc_compact.cu'
       - 'src/cuda/gridfp/ramstream32_bucket_fused.cuh'
       - 'src/cuda/gridfp/ramstream32_bucket_fused_pm.cuh'
       - 'src/cuda/gridfp/ramstream32_bucket_reverse_fused.cuh'
@@ -28,6 +29,7 @@ on:
       - '.github/workflows/orbit-closure-fusion-validation.yml'
   pull_request:
     paths:
+      - 'src/cuda/gridfp/oneesan_cuda_gridfp_ramstream32_factorized_bidesc_compact.cu'
       - 'src/cuda/gridfp/ramstream32_bucket_fused.cuh'
       - 'src/cuda/gridfp/ramstream32_bucket_fused_pm.cuh'
       - 'src/cuda/gridfp/ramstream32_bucket_reverse_fused.cuh'

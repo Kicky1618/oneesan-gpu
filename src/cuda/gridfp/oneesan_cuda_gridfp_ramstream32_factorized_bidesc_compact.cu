@@ -6,9 +6,12 @@
 #include <iostream>
 #include <vector>
 
+#pragma push_macro("main")
+#undef main
 #define RAMSTREAM_BIDESC_NO_MAIN
 #include "oneesan_cuda_gridfp_ramstream32_factorized_bidesc.cu"
 #undef RAMSTREAM_BIDESC_NO_MAIN
+#pragma pop_macro("main")
 
 #include "ramstream32_bidesc_compact.cuh"
 

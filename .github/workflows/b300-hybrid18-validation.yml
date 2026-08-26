@@ -3,6 +3,7 @@ name: B300 hybrid18 validation
 on:
   push:
     paths:
+      - 'src/cuda/gridfp/oneesan_cuda_gridfp_ramstream32_factorized_bidesc_compact.cu'
       - 'src/cuda/gridfp/ramstream32_bucket_reverse_split18.hpp'
       - 'src/cuda/gridfp/ramstream32_bucket_reverse_split18.cuh'
       - 'src/cuda/gridfp/ramstream32_bucket_reverse_split18_alias.cuh'
