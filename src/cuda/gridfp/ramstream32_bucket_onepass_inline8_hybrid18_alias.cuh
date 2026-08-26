@@ -15,15 +15,33 @@ struct BucketReverseHybrid18Inline8Host{
     size_t bytes()const{return split.bytes()+inline8.bytes();}
 };
 
-static void bucket_inline8_release_forward_legacy(BucketFusedHost&f){
-    std::vector<BucketFusedDst>().swap(f.low_dst);std::vector<BucketFusedDst>().swap(f.high_dst);
-    std::vector<uint32_t>().swap(f.low_local_src);std::vector<uint32_t>().swap(f.low_cross_op);
-    std::vector<uint32_t>().swap(f.high_local_src);std::vector<uint32_t>().swap(f.high_cross_op);
+static size_t bucket_inline8_forward_legacy_bytes(const BucketFusedHost&f){
+    return (f.low_dst.size()+f.high_dst.size())*sizeof(BucketFusedDst)
+        +(f.low_local_src.size()+f.low_cross_op.size()+f.high_local_src.size()+f.high_cross_op.size())*sizeof(uint32_t);
 }
-static void bucket_inline8_release_reverse_legacy(ReverseBucketFusedHost&f){
+static size_t bucket_inline8_reverse_source_bytes(const ReverseBucketFusedHost&f){
+    return (f.low_local_src.size()+f.low_cross_op.size()+f.high_local_src.size()+f.high_cross_op.size())*sizeof(uint32_t);
+}
+static size_t bucket_inline8_reverse_destination_bytes(const ReverseBucketFusedHost&f){
+    return (f.low_dst.size()+f.high_dst.size())*sizeof(BucketFusedDst);
+}
+static void bucket_inline8_release_forward_legacy(BucketFusedHost&f){
+    size_t n=bucket_inline8_forward_legacy_bytes(f);
     std::vector<BucketFusedDst>().swap(f.low_dst);std::vector<BucketFusedDst>().swap(f.high_dst);
     std::vector<uint32_t>().swap(f.low_local_src);std::vector<uint32_t>().swap(f.low_cross_op);
     std::vector<uint32_t>().swap(f.high_local_src);std::vector<uint32_t>().swap(f.high_cross_op);
+    std::cerr<<"inline8_release stage=forward-legacy released_mib="<<double(n)/double(1<<20)<<'\n';
+}
+static void bucket_inline8_release_reverse_sources(ReverseBucketFusedHost&f){
+    size_t n=bucket_inline8_reverse_source_bytes(f);
+    std::vector<uint32_t>().swap(f.low_local_src);std::vector<uint32_t>().swap(f.low_cross_op);
+    std::vector<uint32_t>().swap(f.high_local_src);std::vector<uint32_t>().swap(f.high_cross_op);
+    std::cerr<<"inline8_release stage=reverse-sources released_mib="<<double(n)/double(1<<20)<<'\n';
+}
+static void bucket_inline8_release_reverse_destinations(ReverseBucketFusedHost&f){
+    size_t n=bucket_inline8_reverse_destination_bytes(f);
+    std::vector<BucketFusedDst>().swap(f.low_dst);std::vector<BucketFusedDst>().swap(f.high_dst);
+    std::cerr<<"inline8_release stage=reverse-destinations released_mib="<<double(n)/double(1<<20)<<'\n';
 }
 static BucketForwardHybrid18Inline8Host build_bucket_forward_hybrid18_inline8(
     const StorageLayout&layout,BucketOrbitStreamsHost&bo,BucketFusedHost&bf
@@ -38,10 +56,13 @@ static BucketReverseHybrid18Inline8Host build_bucket_reverse_hybrid18_inline8_ch
     ReverseBucketAtomicHost&rb,ReverseBucketFusedHost&rf
 ){
     BucketReverseHybrid18Inline8Host out;
-    out.inline8=build_bucket_reverse_onepass_inline8(rf);
-    out.split=build_reverse_split18_direct_checked(layout,bo,bf,rb,rf,true);
+    validate_reverse_bucket_partner_blocks(layout,rb);
+    (void)validate_bucket_orbit_closure_fusion(layout,bo,bf,rb,rf);
     bucket_inline8_release_forward_legacy(bf);
-    bucket_inline8_release_reverse_legacy(rf);
+    out.inline8=build_bucket_reverse_onepass_inline8(rf);
+    bucket_inline8_release_reverse_sources(rf);
+    out.split=build_reverse_split18_direct_prevalidated(layout,rb,rf,true);
+    bucket_inline8_release_reverse_destinations(rf);
     return out;
 }
 

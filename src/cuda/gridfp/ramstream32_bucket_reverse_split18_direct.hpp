@@ -2,17 +2,13 @@
 
 #include "ramstream32_bucket_reverse_split18.hpp"
 
-// Build split18 directly from the legacy reverse orbit stream and fused
-// closure destinations. The old path first materialized a 32-bit attachment
-// entry for every orbit, then immediately converted it to an 18-bit
-// destination-block-local ordinal. Here lookup and localization are fused.
-static ReverseSplit18Host build_reverse_split18_direct_checked(
-    const StorageLayout&layout,const BucketOrbitStreamsHost&bo,const BucketFusedHost&bf,
-    ReverseBucketAtomicHost&rb,const ReverseBucketFusedHost&rf,bool release_legacy=false
+// Core split18 conversion after partner/fusion validation has already passed.
+// Keeping this separate lets compact backends release validation-only source
+// payloads before allocating the final split18 streams.
+static ReverseSplit18Host build_reverse_split18_direct_prevalidated(
+    const StorageLayout&layout,ReverseBucketAtomicHost&rb,const ReverseBucketFusedHost&rf,
+    bool release_legacy=false
 ){
-    validate_reverse_bucket_partner_blocks(layout,rb);
-    (void)validate_bucket_orbit_closure_fusion(layout,bo,bf,rb,rf);
-
     const size_t legacy_ops=rb.low_orbit.size()+rb.high_orbit.size();
     const size_t legacy_orbit_bytes=reverse_bucket_orbit_bytes(rb);
     const size_t legacy_total_bytes=rb.bytes();
@@ -132,4 +128,17 @@ static ReverseSplit18Host build_reverse_split18_direct_checked(
              <<" legacy_total_mib="<<double(legacy_total_bytes)/double(1<<20)
              <<" exact_reserve=1 release_legacy="<<int(release_legacy)<<'\n';
     return out;
+}
+
+// Build split18 directly from the legacy reverse orbit stream and fused
+// closure destinations. The checked entry point preserves the original
+// semantics: partner derivation and closure-source disjointness are validated
+// before conversion.
+static ReverseSplit18Host build_reverse_split18_direct_checked(
+    const StorageLayout&layout,const BucketOrbitStreamsHost&bo,const BucketFusedHost&bf,
+    ReverseBucketAtomicHost&rb,const ReverseBucketFusedHost&rf,bool release_legacy=false
+){
+    validate_reverse_bucket_partner_blocks(layout,rb);
+    (void)validate_bucket_orbit_closure_fusion(layout,bo,bf,rb,rf);
+    return build_reverse_split18_direct_prevalidated(layout,rb,rf,release_legacy);
 }
