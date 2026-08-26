@@ -50,6 +50,48 @@ static thread_local bool G_MS_HIGH_MAIN_NBLOCK_SENT = false;
 static thread_local bool G_MS_HIGH_BLOCK_NBLOCK_SENT = false;
 #endif
 
+#ifdef MASKSHARD_HIGH_FBLOCK_LAYOUT_DEDUP
+#ifndef MASKSHARD_HIGH_ROW_BATCH_ASYNC
+#error "HIGH FBlock layout dedup requires row-batch async worker lifetime"
+#endif
+#ifndef MASKSHARD_HIGH_PINNED_CONFIG
+#error "HIGH FBlock layout dedup requires persistent pinned FBlock sources"
+#endif
+static thread_local const void* G_MS_HIGH_LAST_MAIN_FBLOCKS = nullptr;
+static thread_local const void* G_MS_HIGH_LAST_BLOCK_FBLOCKS = nullptr;
+
+static bool maskshard_high_fblock_layout_redundant(
+    const char* name,
+    const void* src,
+    std::size_t count,
+    std::size_t offset,
+    cudaMemcpyKind kind
+) {
+    if (offset != 0 || kind != cudaMemcpyHostToDevice) return false;
+
+    const void** last = nullptr;
+    std::size_t expected = 0;
+    if (std::strcmp(name, "D_F_MAIN_BLOCKS") == 0) {
+        last = &G_MS_HIGH_LAST_MAIN_FBLOCKS;
+        expected = std::size_t(3 * (HIGH_LUT_K + 2)) * sizeof(FBlock);
+    } else if (std::strcmp(name, "D_F_BLOCK_BLOCKS") == 0) {
+        last = &G_MS_HIGH_LAST_BLOCK_FBLOCKS;
+        expected = std::size_t(HIGH_LUT_K + 2) * sizeof(FBlock);
+    } else {
+        return false;
+    }
+    if (count != expected) return false;
+
+    // v0.62 keeps every source array pinned and immutable through the whole
+    // solve, so remembering its pointer is safe until this row-worker exits.
+    // FBlock has an explicit pad byte and sizeof(FBlock)==24 in this backend,
+    // making bytewise comparison deterministic for the cached arrays.
+    if (*last && std::memcmp(*last, src, count) == 0) return true;
+    *last = src;
+    return false;
+}
+#endif
+
 // The mask-shard HIGH kernels use FBlocks, D_F_MASK and precomputed storage/
 // descriptor tables. They do not call generic factor_rank/unrank helpers, so
 // the seven legacy GroupSpec symbols above are dead on this path. Restrict the
@@ -64,8 +106,16 @@ static thread_local bool G_MS_HIGH_BLOCK_NBLOCK_SENT = false;
 // v0.63 observes that v0.62 fixes the HIGH FBlock cardinalities for every mask:
 // MAIN has 3*(HIGH_LUT_K+2) blocks and BLOCKED has HIGH_LUT_K+2. LOW work runs
 // on separate threads after each HIGH row, so each fresh HIGH row-worker only
-// needs to restore those two scalar symbols for its first job. All later jobs in
-// that worker can reuse the same values while still updating FBlocks and mask.
+// needs to restore those two scalar symbols for its first job.
+//
+// v0.64 exploits a stronger invariant without changing any kernel: for fixed
+// LOW_LUT_K the FBlock geometry depends only on the number of occupied LOW
+// positions. build_fullorbit_batch_high_jobs() sorts by total work, which is
+// monotone in that occupancy count for the n=27 target. A row-worker therefore
+// sees long runs of byte-identical pinned FBlock arrays. Skip an async constant
+// copy when its payload is identical to the last payload already queued on that
+// worker's default stream. The comparison remains correct even if scheduling
+// changes and layouts are not grouped; it merely loses some dedup opportunities.
 template<class Symbol>
 static cudaError_t maskshard_high_filtered_memcpy_to_symbol(
     const char* name,
@@ -80,6 +130,11 @@ static cudaError_t maskshard_high_filtered_memcpy_to_symbol(
     if (worker && maskshard_high_symbol_is_dead(name)) return cudaSuccess;
 #ifdef MASKSHARD_HIGH_ROW_BATCH_ASYNC
     if (worker) {
+#ifdef MASKSHARD_HIGH_FBLOCK_LAYOUT_DEDUP
+        if (maskshard_high_fblock_layout_redundant(
+                name, src, count, offset, kind))
+            return cudaSuccess;
+#endif
         const void* stable_src = src;
         if (std::strcmp(name, "D_F_MASK") == 0) {
             const std::uint32_t v = *static_cast<const std::uint32_t*>(src);
