@@ -112,6 +112,13 @@ static void cpu_low_audit_worker_exact_workspace(
                 std::cerr << "cpu LOW exact workspace order is not strict\n";
                 std::exit(315);
             }
+            // A LOW-window group fixes exactly the HIGH occupancy bits.  The
+            // group->mask mapping is therefore bijective (bit order may be
+            // reversed, but no two non-empty groups may share one mask).
+            if (p.mask == x.mask) {
+                std::cerr << "cpu LOW exact workspace duplicate occupancy mask\n";
+                std::exit(320);
+            }
         }
         if (x.cells > std::numeric_limits<uint64_t>::max() - total_cells) {
             std::cerr << "cpu LOW exact workspace cell sum overflow\n";
