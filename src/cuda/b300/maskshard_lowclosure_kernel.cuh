@@ -168,6 +168,10 @@ __global__ void maskshard_main_lowdesc_closure_cols_inplace_kernel(
 #include "maskshard_high_group_sync.cuh"
 #endif
 
+#ifdef MASKSHARD_HIGH_DEAD_SYMBOL_COPIES
+#include "maskshard_high_dead_symbol_copies.cuh"
+#endif
+
 #ifdef MASKSHARD_LOW_PAIR_SYNC
 #include "maskshard_low_pair_sync.cuh"
 #endif
