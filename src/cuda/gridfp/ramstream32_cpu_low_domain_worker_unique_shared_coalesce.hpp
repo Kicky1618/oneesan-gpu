@@ -142,6 +142,10 @@ cpu_low_apply_domain_worker_unique_shared_coalesce(
                 size_t i = (pass & 1) ? (seg.second - 1 - qq) : (seg.first + qq);
                 int src = owner[i];
                 uint64_t cells = ordered[i].cells;
+                if (loads[size_t(src)] < cells) {
+                    std::cerr << "cpu LOW shared unique source load underflow\n";
+                    std::exit(329);
+                }
 
                 int candidates[2] = {-1, -1};
                 int nc = 0;
@@ -166,7 +170,7 @@ cpu_low_apply_domain_worker_unique_shared_coalesce(
                         std::cerr << "cpu LOW shared unique crossed domain\n";
                         std::exit(246);
                     }
-                    if (loads[size_t(dst)] > cap - cells) {
+                    if (cells > cap || loads[size_t(dst)] > cap - cells) {
                         ++stats.cap_rejections;
                         continue;
                     }
@@ -235,6 +239,10 @@ cpu_low_apply_domain_worker_unique_shared_coalesce(
                         std::exit(248);
                     }
                     transitions = uint64_t(next_transitions);
+                    if (loads[size_t(src)] < cells) {
+                        std::cerr << "cpu LOW shared unique accepted source load underflow\n";
+                        std::exit(330);
+                    }
                     loads[size_t(src)] -= cells;
                     loads[size_t(best_dst)] += cells;
                     if (loads[size_t(best_dst)] > cap) {
