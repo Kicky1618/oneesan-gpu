@@ -129,13 +129,14 @@ static CpuLowWorkerNeutralBalanceStats cpu_low_apply_worker_neutral_balance(
             if(seg.first>=seg.second)continue;
             for(size_t i=seg.first;i<seg.second;++i){
                 int src=owner[i];uint64_t cells=ordered[i].cells;
+                if(loads[size_t(src)]<cells){std::cerr<<"cpu LOW neutral source load underflow\n";std::exit(321);}
                 int dsts[2]={-1,-1};int nd=0;
                 if(i>seg.first&&owner[i-1]!=src)dsts[nd++]=owner[i-1];
                 if(i+1<seg.second&&owner[i+1]!=src&&(nd==0||owner[i+1]!=dsts[0]))dsts[nd++]=owner[i+1];
                 for(int q=0;q<nd;++q){
                     int dst=dsts[q];++stats.candidate_evaluations;
                     if(dst/pool.domain_size!=d){std::cerr<<"cpu LOW neutral balance crossed domain\n";std::exit(292);}
-                    if(loads[size_t(dst)]>domain_cap[size_t(d)]-cells){++stats.cap_rejections;continue;}
+                    if(cells>domain_cap[size_t(d)]||loads[size_t(dst)]>domain_cap[size_t(d)]-cells){++stats.cap_rejections;continue;}
                     CpuLowWorkerDenseDelta d2,d4;int64_t td=0;
                     auto edge=[&](size_t b,int ol,int orr,int nl,int nr){
                         if(!b||b>=ordered.size())return;bool oa=ol!=orr,na=nl!=nr;if(oa==na)return;int s=na?1:-1;
@@ -162,6 +163,7 @@ static CpuLowWorkerNeutralBalanceStats cpu_low_apply_worker_neutral_balance(
         if(!best.valid)break;
         cpu_low_worker_dense_apply_delta(refs2m,unique2m,best.d2);cpu_low_worker_dense_apply_delta(refs4k,unique4k,best.d4);
         transitions=uint64_t(int64_t(transitions)+best.transition_delta);
+        if(loads[size_t(best.src)]<best.cells){std::cerr<<"cpu LOW neutral accepted source load underflow\n";std::exit(322);}
         loads[size_t(best.src)]-=best.cells;loads[size_t(best.dst)]+=best.cells;owner[best.pos]=best.dst;profile=std::move(best.profile);
         ++stats.accepted_moves;stats.moved_cells+=best.cells;
         if(stats.accepted_moves>=max_accepted){stats.move_limit_hit=true;break;}
