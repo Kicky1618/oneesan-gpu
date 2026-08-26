@@ -159,6 +159,15 @@ __global__ void maskshard_main_lowdesc_closure_cols_inplace_kernel(
 #include "maskshard_loworbit_rowdepth_warpdecode.cuh"
 #endif
 
+#if defined(MASKSHARD_HIGH_GROUP_SYNC) \
+    && (defined(MASKSHARD_LOW_PAIR_SYNC) || defined(MASKSHARD_LOW_GROUP_SYNC))
+#error "HIGH group sync interception is not combined with legacy LOW sync hooks"
+#endif
+
+#ifdef MASKSHARD_HIGH_GROUP_SYNC
+#include "maskshard_high_group_sync.cuh"
+#endif
+
 #ifdef MASKSHARD_LOW_PAIR_SYNC
 #include "maskshard_low_pair_sync.cuh"
 #endif
