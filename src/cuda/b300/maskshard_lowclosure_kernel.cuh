@@ -46,7 +46,7 @@ __global__ void maskshard_main_lowdesc_closure_cols_inplace_kernel(
                 else hi = mid;
             }
             bid = lo - 1;
-            local = task - prefix[bid];
+            local = uint32_t(row) - prefix[bid];
         }
         bid = __shfl_sync(active, bid, 0);
         const uint32_t local_lo = __shfl_sync(active, uint32_t(local), 0);
@@ -170,6 +170,10 @@ __global__ void maskshard_main_lowdesc_closure_cols_inplace_kernel(
 
 #ifdef MASKSHARD_HIGH_DEAD_SYMBOL_COPIES
 #include "maskshard_high_dead_symbol_copies.cuh"
+#endif
+
+#ifdef MASKSHARD_HIGH_FBLOCK_CACHE
+#include "maskshard_high_fblock_cache.cuh"
 #endif
 
 #ifdef MASKSHARD_LOW_PAIR_SYNC
