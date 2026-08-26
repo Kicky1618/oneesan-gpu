@@ -1,0 +1,73 @@
+name: ramstream32 LOW worker neutral plateau CI
+
+on:
+  push:
+    paths:
+      - 'src/cuda/gridfp/ramstream32_cpu_low_domain_worker_neutral_balance.hpp'
+      - 'src/cuda/gridfp/probes/ramstream32_cpu_low_worker_plateau_plan.cu'
+      - 'src/cuda/gridfp/probes/ramstream32_cpu_low_worker_plateau_selftest.cu'
+      - 'scripts/build/gridfp-ramstream32-cpu-low-worker-plateau-plan.sh'
+      - 'scripts/bench/ramstream32-cpu-low-worker-plateau-plan-sweep.sh'
+      - 'docs/ramstream32-cpu-low-worker-neutral-plateau.md'
+      - '.github/workflows/ramstream32-worker-neutral-plateau-ci.yml'
+  pull_request:
+    paths:
+      - 'src/cuda/gridfp/ramstream32_cpu_low_domain_worker_neutral_balance.hpp'
+      - 'src/cuda/gridfp/probes/ramstream32_cpu_low_worker_plateau_plan.cu'
+      - 'src/cuda/gridfp/probes/ramstream32_cpu_low_worker_plateau_selftest.cu'
+      - 'scripts/build/gridfp-ramstream32-cpu-low-worker-plateau-plan.sh'
+      - 'scripts/bench/ramstream32-cpu-low-worker-plateau-plan-sweep.sh'
+      - 'docs/ramstream32-cpu-low-worker-neutral-plateau.md'
+      - '.github/workflows/ramstream32-worker-neutral-plateau-ci.yml'
+  workflow_dispatch:
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    container: nvidia/cuda:12.8.1-devel-ubuntu22.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Check scripts
+        shell: bash
+        run: |
+          bash -n scripts/build/gridfp-ramstream32-cpu-low-worker-plateau-plan.sh
+          bash -n scripts/bench/ramstream32-cpu-low-worker-plateau-plan-sweep.sh
+          grep -Fq 'neutral-load-bridge-v5.35-plan' scripts/bench/ramstream32-cpu-low-worker-plateau-plan-sweep.sh
+          grep -Fq 'plateau_escape_improvement' scripts/bench/ramstream32-cpu-low-worker-plateau-plan-sweep.sh
+          grep -Fq 'load_profile_only' scripts/bench/ramstream32-cpu-low-worker-plateau-plan-sweep.sh
+      - name: Compile W10 plateau probes
+        shell: bash
+        run: |
+          mkdir -p build
+          common=(-O3 -std=c++17 -arch=sm_80 -DTARGET_W=10 -DLOW_LUT_K=5 -DHIGH_LUT_K=4)
+          nvcc "${common[@]}" \
+            src/cuda/gridfp/probes/ramstream32_cpu_low_worker_plateau_selftest.cu \
+            -o build/ramstream32_cpu_low_worker_plateau_selftest
+          nvcc "${common[@]}" \
+            src/cuda/gridfp/probes/ramstream32_cpu_low_worker_plateau_plan.cu \
+            -o build/ramstream32_cpu_low_worker_plateau_plan
+      - name: Validate neutral plateau recurrence
+        shell: bash
+        run: |
+          build/ramstream32_cpu_low_worker_plateau_selftest \
+            > /tmp/plateau-selftest.txt 2> /tmp/plateau-selftest.log
+          grep -Fq 'cpu-low-worker-plateau-selftest OK' /tmp/plateau-selftest.txt
+          grep -Fq 'exact_generations=2' /tmp/plateau-selftest.txt
+          grep -Fq 'cpu_low_worker_neutral_balance objective=exact-neutral-load-descent-v5.35-plan' /tmp/plateau-selftest.log
+      - name: Validate W10 plateau plan
+        shell: bash
+        run: |
+          build/ramstream32_cpu_low_worker_plateau_plan 9 4 2 4 4 \
+            > /tmp/plateau-plan.txt 2> /tmp/plateau-plan.log
+          grep -Fq 'cpu_low_worker_plateau_plan OK' /tmp/plateau-plan.txt
+          grep -Fq 'objective=neutral-load-bridge-v5.35-plan' /tmp/plateau-plan.txt
+          grep -Fq 'limits_clear=1' /tmp/plateau-plan.txt
+          grep -Fq 'neutral_accepted_moves=' /tmp/plateau-plan.txt
+          grep -Fq 'final_pages_2m=' /tmp/plateau-plan.txt
+      - name: Check documentation
+        shell: bash
+        run: |
+          d=docs/ramstream32-cpu-low-worker-neutral-plateau.md
+          grep -Fq 'v5.35' "$d"
+          grep -Fq 'plateau_escape_improvement' "$d"
+          grep -Fq 'descending load profile' "$d"
