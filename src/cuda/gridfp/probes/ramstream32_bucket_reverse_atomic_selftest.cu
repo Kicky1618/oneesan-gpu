@@ -1,6 +1,8 @@
+#pragma push_macro("main")
+#undef main
 #define main bucket_forward_reference_main
 #include "ramstream32_bucket_fused_selftest.cu"
-#undef main
+#pragma pop_macro("main")
 
 #include "../ramstream32_reverse_desc.hpp"
 #include "../ramstream32_reverse_orbit.hpp"

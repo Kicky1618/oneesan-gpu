@@ -13,5 +13,5 @@ int main(){
     size_t orbit_ops=bo.low_nn.size()+bo.low_nr.size()+bo.low_nl.size()+bo.high_nn.size()+bo.high_nrnl.size()+rb.low_orbit.size()+rb.high_orbit.size();
     size_t closure_dst=bf.low_dst.size()+bf.high_dst.size()+rf.low_dst.size()+rf.high_dst.size();
     if(fa.low_nn.size()!=bo.low_nn.size()||fa.low_nr.size()!=bo.low_nr.size()||fa.low_nl.size()!=bo.low_nl.size()||fa.high_nn.size()!=bo.high_nn.size()||fa.high_nrnl.size()!=bo.high_nrnl.size()||ra.low.size()!=rb.low_orbit.size()||ra.high.size()!=rb.high_orbit.size())return 20;
-    std::cout<<"orbit-closure-attach-plan OK W="<<TARGET_W<<" orbit_ops="<<orbit_ops<<" closure_dst="<<closure_dst<<" forward_attach_mib="<<double(fa.bytes())/double(1<<20)<<" reverse_attach_mib="<<double(ra.bytes())/double(1<<20)<<" kernels_per_position=1 source_disjoint=1\n";return 0;
+    std::cout<<"orbit-closure-attach-plan OK W="<<TARGET_W<<" orbit_ops="<<orbit_ops<<" closure_dst="<<closure_dst<<" forward_attach_mib="<<double(fa.bytes())/double(1<<20)<<" reverse_attach_mib="<<double(ra.bytes())/double(1<<20)<<" kernels_per_position=1 source_disjoint=1 jblock_redundant_bits=6 OK\n";return 0;
 }

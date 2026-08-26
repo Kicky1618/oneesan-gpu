@@ -1,6 +1,8 @@
+#pragma push_macro("main")
+#undef main
 #define main bucket_reverse_atomic_reference_main
 #include "ramstream32_bucket_reverse_atomic_selftest.cu"
-#undef main
+#pragma pop_macro("main")
 
 #include "../ramstream32_bucket_reverse_fused.cuh"
 #include "../ramstream32_bucket_reverse_fused_validate.hpp"

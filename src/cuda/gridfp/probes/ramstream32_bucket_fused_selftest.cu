@@ -1,6 +1,8 @@
+#pragma push_macro("main")
+#undef main
 #define main bucket_fused_reference_main
 #include "ramstream32_gpu_direct_gather_selftest.cu"
-#undef main
+#pragma pop_macro("main")
 
 #include "../ramstream32_gpu_direct_gather_cross.cuh"
 #include "../ramstream32_gpu_direct_fused.cuh"

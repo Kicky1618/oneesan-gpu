@@ -1,6 +1,8 @@
+#pragma push_macro("main")
+#undef main
 #define main reverse_split18_reference_main_unused
 #include "ramstream32_bucket_reverse_fused_selftest.cu"
-#undef main
+#pragma pop_macro("main")
 #include "../ramstream32_bucket_reverse_split18.cuh"
 #include "../ramstream32_bucket_orbit_closure_preflight.cuh"
 
