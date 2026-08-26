@@ -176,6 +176,10 @@ __global__ void maskshard_main_lowdesc_closure_cols_inplace_kernel(
 #include "maskshard_high_fblock_cache.cuh"
 #endif
 
+#ifdef MASKSHARD_HIGH_GROUP_SIZE_CACHE
+#include "maskshard_high_group_size_cache.cuh"
+#endif
+
 #ifdef MASKSHARD_LOW_PAIR_SYNC
 #include "maskshard_low_pair_sync.cuh"
 #endif
