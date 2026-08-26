@@ -20,10 +20,10 @@
 // The original compact-orbit host helper constructs two stack arrays and uses
 // synchronous cudaMemcpyToSymbol() for every HIGH job. That would both break
 // the source lifetime required by an asynchronous row batch and reintroduce a
-// host/device barrier between jobs. Precompute every unsaturated (mask, cap)
-// plan once, retain it for the process lifetime, and enqueue both constant
-// updates on stream 0. At full cap the compact kernel uses physical BLOCKED
-// order and reads neither plan array, so no plan copy is needed at all.
+// host/device barrier between jobs. Precompute every unsaturated plan once,
+// retain it for the process lifetime, and enqueue both constant updates on
+// stream 0. At full cap the compact kernel uses physical BLOCKED order and reads
+// neither plan array, so no plan copy is needed at all.
 struct MaskShardHighRowBatchPlan {
     std::array<Code, HIGH_LUT_K + 3> prefix{};
     std::array<std::uint16_t, HIGH_LUT_K + 2> low_count{};
@@ -34,8 +34,13 @@ struct MaskShardHighRowBatchPlanCache {
     static constexpr int FULL_CAP = TARGET_W / 2;
     static constexpr int CAP_STRIDE = FULL_CAP;
     static constexpr std::uint32_t NMASK = 1u << LOW_LUT_K;
+#ifdef MASKSHARD_HIGH_ROW_PLAN_CLASS_CACHE
+    static constexpr std::size_t PLAN_MASK_SLOTS = LOW_LUT_K + 1;
+#else
+    static constexpr std::size_t PLAN_MASK_SLOTS = NMASK;
+#endif
     static constexpr std::size_t PLAN_COUNT =
-        std::size_t(NMASK) * std::size_t(CAP_STRIDE);
+        PLAN_MASK_SLOTS * std::size_t(CAP_STRIDE);
 
 #ifdef MASKSHARD_HIGH_PINNED_CONFIG
     MaskShardHighRowBatchPlan* plan = nullptr;
@@ -44,23 +49,28 @@ struct MaskShardHighRowBatchPlanCache {
 #endif
     bool built = false;
 
+    static std::size_t mask_slot(std::uint32_t mask) {
+#ifdef MASKSHARD_HIGH_ROW_PLAN_CLASS_CACHE
+        std::size_t n = 0;
+        while (mask) {
+            mask &= mask - 1;
+            ++n;
+        }
+        return n;
+#else
+        return std::size_t(mask);
+#endif
+    }
+
     static std::size_t index(std::uint32_t mask, int cap) {
-        return std::size_t(mask) * CAP_STRIDE + std::size_t(cap);
+        return mask_slot(mask) * CAP_STRIDE + std::size_t(cap);
     }
 
     MaskShardHighRowBatchPlan& at(std::size_t i) {
-#ifdef MASKSHARD_HIGH_PINNED_CONFIG
         return plan[i];
-#else
-        return plan[i];
-#endif
     }
     const MaskShardHighRowBatchPlan& at(std::size_t i) const {
-#ifdef MASKSHARD_HIGH_PINNED_CONFIG
         return plan[i];
-#else
-        return plan[i];
-#endif
     }
 
     void allocate() {
@@ -83,6 +93,21 @@ struct MaskShardHighRowBatchPlanCache {
         auto& compact = maskshard_row_depth_orbit_compact_cache();
         compact.build();
         allocate();
+#ifdef MASKSHARD_HIGH_ROW_PLAN_CLASS_CACHE
+        // N positions are identity steps. Removing them leaves only k +/-
+        // transitions, so for fixed starting height and cap the active LOW
+        // count depends on k=popcount(mask), not on occupied positions. The
+        // HIGH active count is mask-independent, hence the complete prefix and
+        // low_count plan has only LOW_LUT_K+1 equivalence classes.
+        for (int k = 0; k <= LOW_LUT_K; ++k) {
+            const std::uint32_t mask = k ? ((std::uint32_t(1) << k) - 1u) : 0u;
+            for (int cap = 1; cap < FULL_CAP; ++cap) {
+                auto& p = at(index(mask, cap));
+                p.total = compact.make_job_plan(
+                    mask, cap, p.prefix, p.low_count);
+            }
+        }
+#else
         for (std::uint32_t mask = 0; mask < NMASK; ++mask) {
             for (int cap = 1; cap < FULL_CAP; ++cap) {
                 auto& p = at(index(mask, cap));
@@ -90,8 +115,11 @@ struct MaskShardHighRowBatchPlanCache {
                     mask, cap, p.prefix, p.low_count);
             }
         }
+#endif
         built = true;
-        std::cerr << "HIGH row-batch compact-plan cache entries=" << PLAN_COUNT
+        std::cerr << "HIGH row-batch compact-plan cache masks=" << NMASK
+                  << " mask_slots=" << PLAN_MASK_SLOTS
+                  << " entries=" << PLAN_COUNT
                   << " plan_bytes=" << sizeof(MaskShardHighRowBatchPlan)
                   << " host_mib="
                   << double(PLAN_COUNT * sizeof(MaskShardHighRowBatchPlan))
@@ -129,8 +157,10 @@ static Code maskshard_configure_row_depth_compact_group_row_batch_async(
         std::exit(367);
     }
     cap = std::max(0, std::min(cap, cache.FULL_CAP));
-    if (cap >= cache.FULL_CAP)
-        return G_MS_HIGH_GROUP_SIZE_CACHE.block_size[mask];
+    if (cap >= cache.FULL_CAP) {
+        const std::size_t slot = maskshard_high_group_size_slot(mask);
+        return G_MS_HIGH_GROUP_SIZE_CACHE.block_size[slot];
+    }
 
     const auto& p = cache.at(cache.index(mask, cap));
     ck(cudaMemcpyToSymbolAsync(
