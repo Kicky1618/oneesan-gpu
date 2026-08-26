@@ -121,6 +121,10 @@ on:
       - '.github/workflows/ramstream32-worker-research-ci.yml'
   workflow_dispatch:
 
+concurrency:
+  group: ramstream32-low-worker-research-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   validate:
     runs-on: ubuntu-latest
