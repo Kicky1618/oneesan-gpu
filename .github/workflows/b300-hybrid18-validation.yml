@@ -11,6 +11,10 @@ on:
       - 'src/cuda/gridfp/ramstream32_bucket_reverse_split18_stream.cuh'
       - 'src/cuda/gridfp/ramstream32_bucket_reverse_closure_only.cuh'
       - 'src/cuda/gridfp/ramstream32_bucket_orbit_closure_hybrid18_graph.cuh'
+      - 'src/cuda/gridfp/ramstream32_bucket_onepass_inline8.hpp'
+      - 'src/cuda/gridfp/ramstream32_bucket_onepass_inline8_hybrid18_alias.cuh'
+      - 'src/cuda/gridfp/ramstream32_bucket_orbit_closure_inline8_hybrid18.cuh'
+      - 'src/cuda/gridfp/ramstream32_bucket_orbit_closure_inline8_hybrid18_graph.cuh'
       - 'src/cuda/gridfp/ramstream32_reverse_build_release.hpp'
       - 'src/cuda/gridfp/ramstream32_forward_build_release.hpp'
       - 'src/cuda/b300/oneesan_cuda_gridfp_b300_bucket_snake_onepass.cu'
@@ -19,9 +23,12 @@ on:
       - 'src/cuda/gridfp/probes/ramstream32_reverse_split18_plan.cu'
       - 'src/cuda/gridfp/probes/ramstream32_reverse_split18_direct_plan.cu'
       - 'src/cuda/gridfp/probes/ramstream32_bucket_reverse_split18_selftest.cu'
+      - 'src/cuda/gridfp/probes/ramstream32_onepass_inline8_plan.cu'
       - 'src/cuda/b300/oneesan_cuda_gridfp_b300_bucket_snake_onepass_hybrid18*.cu'
       - 'scripts/build/b300-bucket-snake-hybrid18-graph-batch.sh'
+      - 'scripts/build/b300-bucket-snake-hybrid18-inline8-graph-batch.sh'
       - 'scripts/run/b300x8-bucket-snake-hybrid18-graph-exact.sh'
+      - 'scripts/run/b300x8-bucket-snake-hybrid18-inline8-graph-exact.sh'
       - '.github/workflows/b300-hybrid18-validation.yml'
   workflow_dispatch:
 
@@ -85,24 +92,47 @@ jobs:
           grep -Fq 'exact_reserve=1 release_legacy=1' /tmp/hybrid18-plan.txt
           grep -Fq 'kernels_per_position=1' /tmp/hybrid18-plan.txt
           grep -Fq 'transposes_per_residue=10' /tmp/hybrid18-plan.txt
-      - name: Compile W28 hybrid18 pipeline batch
+      - name: Compile and run W10 inline8 encoding plan
+        shell: bash
+        run: |
+          nvcc -O3 -std=c++17 -lineinfo -arch=sm_80 \
+            -DTARGET_W=10 -DLOW_LUT_K=5 -DHIGH_LUT_K=4 \
+            src/cuda/gridfp/probes/ramstream32_onepass_inline8_plan.cu \
+            -o build/onepass_inline8_plan_w10
+          build/onepass_inline8_plan_w10 | tee /tmp/inline8-plan.txt
+          grep -Fq 'onepass-inline8-plan OK W=10' /tmp/inline8-plan.txt
+          grep -Fq 'count_bits=4 source_bits=28 begin_bits=28' /tmp/inline8-plan.txt
+      - name: Compile and plan W10 inline8 hybrid18 pipeline
+        shell: bash
+        run: |
+          nvcc -O3 -std=c++17 -lineinfo -arch=sm_80 \
+            -DTARGET_W=10 -DLOW_LUT_K=5 -DHIGH_LUT_K=4 \
+            src/cuda/b300/oneesan_cuda_gridfp_b300_bucket_snake_onepass_hybrid18_inline8_pipeline.cu \
+            -o build/hybrid18_inline8_pipeline_w10
+          build/hybrid18_inline8_pipeline_w10 9 4294967291 256 4 4 64 --plan-only 2>&1 | tee /tmp/hybrid18-inline8-plan.txt
+          grep -Fq 'bucket_forward_onepass_inline8 records=' /tmp/hybrid18-inline8-plan.txt
+          grep -Fq 'bucket_reverse_onepass_inline8 records=' /tmp/hybrid18-inline8-plan.txt
+          grep -Fq 'reverse_split18_direct ' /tmp/hybrid18-inline8-plan.txt
+          grep -Fq 'kernels_per_position=1' /tmp/hybrid18-inline8-plan.txt
+          grep -Fq 'transposes_per_residue=10' /tmp/hybrid18-inline8-plan.txt
+      - name: Compile W28 inline8 hybrid18 pipeline batch
         shell: bash
         run: |
           nvcc -O3 -std=c++17 -lineinfo -arch=sm_80 \
             -DTARGET_W=28 -DLOW_LUT_K=14 -DHIGH_LUT_K=13 \
-            src/cuda/b300/oneesan_cuda_gridfp_b300_bucket_snake_onepass_hybrid18_batch_pipeline.cu \
-            -o build/hybrid18_batch_pipeline_w28
-      - name: Compile W28 hybrid18 graph pipeline batch
+            src/cuda/b300/oneesan_cuda_gridfp_b300_bucket_snake_onepass_hybrid18_inline8_batch_pipeline.cu \
+            -o build/hybrid18_inline8_batch_pipeline_w28
+      - name: Compile W28 inline8 hybrid18 graph pipeline batch
         shell: bash
         run: |
           nvcc -O3 -std=c++17 -lineinfo -arch=sm_80 \
             -DTARGET_W=28 -DLOW_LUT_K=14 -DHIGH_LUT_K=13 \
-            src/cuda/b300/oneesan_cuda_gridfp_b300_bucket_snake_onepass_hybrid18_graph_batch_pipeline.cu \
-            -o build/hybrid18_graph_pipeline_w28
-      - name: Compile W28 PM hybrid18 graph pipeline batch
+            src/cuda/b300/oneesan_cuda_gridfp_b300_bucket_snake_onepass_hybrid18_inline8_graph_batch_pipeline.cu \
+            -o build/hybrid18_inline8_graph_pipeline_w28
+      - name: Compile W28 PM inline8 hybrid18 graph pipeline batch
         shell: bash
         run: |
           nvcc -O3 -std=c++17 -lineinfo -arch=sm_80 \
             -DTARGET_W=28 -DLOW_LUT_K=14 -DHIGH_LUT_K=13 -DGPU_DIRECT_PM_ACCUM=1 \
-            src/cuda/b300/oneesan_cuda_gridfp_b300_bucket_snake_onepass_hybrid18_graph_batch_pipeline.cu \
-            -o build/hybrid18_graph_pipeline_pm_w28
+            src/cuda/b300/oneesan_cuda_gridfp_b300_bucket_snake_onepass_hybrid18_inline8_graph_batch_pipeline.cu \
+            -o build/hybrid18_inline8_graph_pipeline_pm_w28
