@@ -15,29 +15,26 @@ __device__ __forceinline__ bool bkcz_high_source_ref(MateID partial,int fixed_hs
 }
 
 #if GPU_DIRECT_PM_ACCUM
-__device__ __forceinline__ uint64_t bkcz_low_ordinary_raw(MateID d,int fixed_he,uint32_t hr){
-    if(mpair(d,LOW_LUT_K)!=NN)return 0;uint64_t s=0;MateID x=msetpair(d,LOW_LUT_K,RL);s+=bkci_low_source_value_u64(x,fixed_he,hr);int bal=0;for(int q=LOW_LUT_K-2;q>=0;--q){MateValue v=mget(d,q);if(bal==0&&v==L){x=msetpair(d,LOW_LUT_K,LL);x=mset(x,q,R);s+=bkci_low_source_value_u64(x,fixed_he,hr);}if(v==L)++bal;else if(v==R)--bal;if(bal<0)break;}return s;
+__device__ __forceinline__ uint64_t bkcz_low_ordinary_raw(MateID d,int fixed_he,uint32_t hr,int p){
+    if(mpair(d,p)!=NN)return 0;uint64_t s=0;MateID x=msetpair(d,p,RL);s+=bkci_low_source_value_u64(x,fixed_he,hr);int bal=0;for(int q=p-2;q>=0;--q){MateValue v=mget(d,q);if(bal==0&&v==L){x=msetpair(d,p,LL);x=mset(x,q,R);s+=bkci_low_source_value_u64(x,fixed_he,hr);}if(v==L)++bal;else if(v==R)--bal;if(bal<0)break;}bal=0;for(int q=p+1;q<LOW_LUT_K+1;++q){MateValue v=mget(d,q);if(bal==0&&v==R){x=msetpair(d,p,RR);x=mset(x,q,L);s+=bkci_low_source_value_u64(x,fixed_he,hr);}if(v==R)++bal;else if(v==L)--bal;if(bal<0)break;}return s;
 }
 __device__ __forceinline__ uint64_t bkcz_high_ordinary_raw(MateID d,int fixed_hs,uint32_t lr,int rel){
     if(mpair(d,rel)!=NN)return 0;uint64_t s=0;MateID x=msetpair(d,rel,RL);s+=bkci_high_source_value_u64(x,fixed_hs,lr);int bal=0;for(int q=rel+1;q<HIGH_LUT_K+1;++q){MateValue v=mget(d,q);if(bal==0&&v==R){x=msetpair(d,rel,RR);x=mset(x,q,L);s+=bkci_high_source_value_u64(x,fixed_hs,lr);}if(v==R)++bal;else if(v==L)--bal;if(bal<0)break;}bal=0;for(int q=rel-2;q>=0;--q){MateValue v=mget(d,q);if(bal==0&&v==L){x=msetpair(d,rel,LL);x=mset(x,q,R);s+=bkci_high_source_value_u64(x,fixed_hs,lr);}if(v==L)++bal;else if(v==R)--bal;if(bal<0)break;}return s;
 }
 #else
-__device__ __forceinline__ Count bkcz_low_ordinary(MateID d,int fixed_he,uint32_t hr){
-    if(mpair(d,LOW_LUT_K)!=NN)return 0;Count s=0;MateID x=msetpair(d,LOW_LUT_K,RL);s=gpu_direct_add(s,bkci_low_source_value(x,fixed_he,hr));int bal=0;for(int q=LOW_LUT_K-2;q>=0;--q){MateValue v=mget(d,q);if(bal==0&&v==L){x=msetpair(d,LOW_LUT_K,LL);x=mset(x,q,R);s=gpu_direct_add(s,bkci_low_source_value(x,fixed_he,hr));}if(v==L)++bal;else if(v==R)--bal;if(bal<0)break;}return s;
+__device__ __forceinline__ Count bkcz_low_ordinary(MateID d,int fixed_he,uint32_t hr,int p){
+    if(mpair(d,p)!=NN)return 0;Count s=0;MateID x=msetpair(d,p,RL);s=gpu_direct_add(s,bkci_low_source_value(x,fixed_he,hr));int bal=0;for(int q=p-2;q>=0;--q){MateValue v=mget(d,q);if(bal==0&&v==L){x=msetpair(d,p,LL);x=mset(x,q,R);s=gpu_direct_add(s,bkci_low_source_value(x,fixed_he,hr));}if(v==L)++bal;else if(v==R)--bal;if(bal<0)break;}bal=0;for(int q=p+1;q<LOW_LUT_K+1;++q){MateValue v=mget(d,q);if(bal==0&&v==R){x=msetpair(d,p,RR);x=mset(x,q,L);s=gpu_direct_add(s,bkci_low_source_value(x,fixed_he,hr));}if(v==R)++bal;else if(v==L)--bal;if(bal<0)break;}return s;
 }
 __device__ __forceinline__ Count bkcz_high_ordinary(MateID d,int fixed_hs,uint32_t lr,int rel){
     if(mpair(d,rel)!=NN)return 0;Count s=0;MateID x=msetpair(d,rel,RL);s=gpu_direct_add(s,bkci_high_source_value(x,fixed_hs,lr));int bal=0;for(int q=rel+1;q<HIGH_LUT_K+1;++q){MateValue v=mget(d,q);if(bal==0&&v==R){x=msetpair(d,rel,RR);x=mset(x,q,L);s=gpu_direct_add(s,bkci_high_source_value(x,fixed_hs,lr));}if(v==R)++bal;else if(v==L)--bal;if(bal<0)break;}bal=0;for(int q=rel-2;q>=0;--q){MateValue v=mget(d,q);if(bal==0&&v==L){x=msetpair(d,rel,LL);x=mset(x,q,R);s=gpu_direct_add(s,bkci_high_source_value(x,fixed_hs,lr));}if(v==L)++bal;else if(v==R)--bal;if(bal<0)break;}return s;
 }
 #endif
 
-// LOW local coordinate always places center at LOW_LUT_K, so ordinary remote
-// matches can only lie inside LOW to the left. RR to the right either closes at
-// center/active symbols or becomes the one CROSS candidate.
 __device__ __forceinline__ Count bkcz_low_extra_partial(MateID d,const BucketPhysicalBlock&db,uint32_t hr,int p){
 #if GPU_DIRECT_PM_ACCUM
-    uint64_t sum=bkcz_low_ordinary_raw(d,db.he,hr);
+    uint64_t sum=bkcz_low_ordinary_raw(d,db.he,hr,p);
 #else
-    Count sum=bkcz_low_ordinary(d,db.he,hr);
+    Count sum=bkcz_low_ordinary(d,db.he,hr,p);
 #endif
     MateID src=0;int depth=low_cross_preimage_partial(d,LOW_LUT_K+1,p,src);if(depth>0){uint32_t sl=0,sbid=0;int she=int(db.he)+2;if(bkcz_low_source_ref(src,she,sl,sbid)){uint32_t dc=D_BKF_HIGH_CODES[D_BKF_HIGH_CODE_OFF[size_t(D_BKF_FIXED_OWNER)*D_BKF_CODE_PITCH+db.he]+hr];
 #if GPU_DIRECT_PM_ACCUM
