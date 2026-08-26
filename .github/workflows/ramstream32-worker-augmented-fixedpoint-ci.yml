@@ -4,11 +4,6 @@ on:
   push:
     paths:
       - 'src/cuda/gridfp/ramstream32_cpu_low_domain_worker_augmented_fixedpoint.hpp'
-      - 'src/cuda/gridfp/ramstream32_cpu_low_domain_worker_neutral_balance.hpp'
-      - 'src/cuda/gridfp/ramstream32_cpu_low_domain_worker_unique_fixedpoint.hpp'
-      - 'src/cuda/gridfp/ramstream32_cpu_low_domain_worker_unique_run_coalesce.hpp'
-      - 'src/cuda/gridfp/ramstream32_cpu_low_domain_worker_unique_swap_coalesce.hpp'
-      - 'src/cuda/gridfp/ramstream32_cpu_low_domain_worker_exact_workspace.hpp'
       - 'src/cuda/gridfp/probes/ramstream32_cpu_low_worker_augmented_plan.cu'
       - 'src/cuda/gridfp/probes/ramstream32_cpu_low_worker_augmented_selftest.cu'
       - 'scripts/build/gridfp-ramstream32-cpu-low-worker-augmented-plan.sh'
@@ -18,11 +13,6 @@ on:
   pull_request:
     paths:
       - 'src/cuda/gridfp/ramstream32_cpu_low_domain_worker_augmented_fixedpoint.hpp'
-      - 'src/cuda/gridfp/ramstream32_cpu_low_domain_worker_neutral_balance.hpp'
-      - 'src/cuda/gridfp/ramstream32_cpu_low_domain_worker_unique_fixedpoint.hpp'
-      - 'src/cuda/gridfp/ramstream32_cpu_low_domain_worker_unique_run_coalesce.hpp'
-      - 'src/cuda/gridfp/ramstream32_cpu_low_domain_worker_unique_swap_coalesce.hpp'
-      - 'src/cuda/gridfp/ramstream32_cpu_low_domain_worker_exact_workspace.hpp'
       - 'src/cuda/gridfp/probes/ramstream32_cpu_low_worker_augmented_plan.cu'
       - 'src/cuda/gridfp/probes/ramstream32_cpu_low_worker_augmented_selftest.cu'
       - 'scripts/build/gridfp-ramstream32-cpu-low-worker-augmented-plan.sh'
