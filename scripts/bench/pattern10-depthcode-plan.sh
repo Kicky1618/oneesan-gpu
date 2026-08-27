@@ -15,8 +15,12 @@ TMPDIR="$ONEESAN_TMP_DIR" nvcc -O3 -std=c++17 -lineinfo -arch="$ARCH" \
 out="$($BIN)"
 printf '%s\n' "$out"
 grep -Fq "closure-pattern10-depthcode-plan OK W=$W" <<<"$out"
-if grep -Fq 'fits10=1' <<<"$out"; then
-  echo "pattern10-depthcode viable: per-context (pattern,depth) pairs fit in the orbit upper 10 bits" >&2
+if grep -Fq 'coarse_fits10=1' <<<"$out"; then
+  echo "pattern10-depthcode viable with coarse (side,p,height) context" >&2
+elif grep -Fq 'phase_fits10=1' <<<"$out"; then
+  echo "pattern10-depthcode viable with phase-separated context" >&2
+elif grep -Fq 'stream_fits10=1' <<<"$out"; then
+  echo "pattern10-depthcode viable with phase+stream context" >&2
 else
-  echo "pattern10-depthcode does not fit 10 bits in at least one context; use escape/nibble fallback" >&2
+  echo "pattern10-depthcode does not fit 10 bits even with phase+stream context; use escape/nibble fallback" >&2
 fi
