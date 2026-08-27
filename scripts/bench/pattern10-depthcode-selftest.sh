@@ -24,5 +24,7 @@ if grep -Fq "OK W=$W" <<<"$out"; then
   grep -Fq 'payload_masks=1' <<<"$out"
   grep -Fq 'high_ctx=thread,resolved,warp' <<<"$out"
   grep -Fq "decode_load=$DECODE_LOAD" <<<"$out"
+  grep -Fq 'warpctx_dynamic_smem=1' <<<"$out"
+  grep -Fq 'warpctx_smem_bytes_256=' <<<"$out"
 fi
-echo "pattern10-depthcode-selftest OK W=$W pm_accum=$PM_ACCUM high_ctx=thread,resolved,warp decode_load=$DECODE_LOAD" >&2
+echo "pattern10-depthcode-selftest OK W=$W pm_accum=$PM_ACCUM high_ctx=thread,resolved,warp decode_load=$DECODE_LOAD warpctx_dynamic_smem=1" >&2
