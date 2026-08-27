@@ -101,9 +101,9 @@ static bool maskshard_high_fblock_layout_redundant(
 // use of the same symbols still goes through the real CUDA runtime call.
 //
 // v0.61 optionally queues the five retained HIGH config symbols asynchronously
-// on the same default stream as the HIGH kernels. FBlock payloads are persistent
-// in v0.59. The three scalar stack sources are redirected to immutable tables
-// so their lifetime also extends until the row-end synchronization.
+// on the same stream as the HIGH kernels. FBlock payloads are persistent in
+// v0.59. The three scalar stack sources are redirected to immutable tables so
+// their lifetime also extends until the row-end synchronization.
 //
 // v0.63 observes that v0.62 fixes the HIGH FBlock cardinalities for every mask:
 // MAIN has 3*(HIGH_LUT_K+2) blocks and BLOCKED has HIGH_LUT_K+2. LOW work runs
@@ -116,8 +116,8 @@ static bool maskshard_high_fblock_layout_redundant(
 // monotone in that occupancy count for the n=27 target. A row-worker therefore
 // sees long runs of byte-identical pinned FBlock arrays. Skip an async constant
 // copy when its payload is identical to the last payload already queued on that
-// worker's default stream. The comparison remains correct even if scheduling
-// changes and layouts are not grouped; it merely loses some dedup opportunities.
+// worker's stream. The comparison remains correct even if scheduling changes
+// and layouts are not grouped; it merely loses some dedup opportunities.
 template<class Symbol>
 static cudaError_t maskshard_high_filtered_memcpy_to_symbol(
     const char* name,
@@ -162,8 +162,13 @@ static cudaError_t maskshard_high_filtered_memcpy_to_symbol(
 #endif
             stable_src = &G_MS_HIGH_ASYNC_SMALL_INT[std::size_t(v)];
         }
+#ifdef MASKSHARD_HIGH_PERTHREAD_STREAM
+        const cudaStream_t stream = maskshard_high_execution_stream();
+#else
+        const cudaStream_t stream = cudaStream_t(0);
+#endif
         return cudaMemcpyToSymbolAsync(
-            symbol, stable_src, count, offset, kind, cudaStream_t(0));
+            symbol, stable_src, count, offset, kind, stream);
     }
 #endif
     return cudaMemcpyToSymbol(symbol, src, count, offset, kind);
