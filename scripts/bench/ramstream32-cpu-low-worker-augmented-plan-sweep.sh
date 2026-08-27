@@ -48,6 +48,7 @@ if [[ "$PREFLIGHT_ONLY" == 1 ]]; then
   echo "workspace preflight n=$N" >&2
   line="$("$bin" "$N" --workspace-only 2> >(tee /dev/stderr) | tee "$out" | tail -n1)"
   [[ "$(field objective)" == exact-workspace-audit-v5.36-preflight ]] || exit 4
+  [[ "$(field workspace_builder)" == streaming-two-pass ]] || exit 4
   [[ "$(field workspace_audit_ok)" == 1 ]] || exit 4
   [[ "$(field workspace_audited_jobs)" =~ ^[1-9][0-9]*$ ]] || exit 4
   [[ "$(field workspace_audited_cells)" =~ ^[1-9][0-9]*$ ]] || exit 4
@@ -55,20 +56,23 @@ if [[ "$PREFLIGHT_ONLY" == 1 ]]; then
 commit=$(git rev-parse HEAD 2>/dev/null || echo unknown)
 n=$N
 objective=exact-workspace-audit-v5.36-preflight
+workspace_builder=$(field workspace_builder)
 authoritative_main_states=$(field authoritative_main_states)
 authoritative_blocked_states=$(field authoritative_blocked_states)
 workspace_audit_ok=$(field workspace_audit_ok)
 workspace_audited_jobs=$(field workspace_audited_jobs)
 workspace_audited_cells=$(field workspace_audited_cells)
 workspace_mib=$(field workspace_mib)
+workspace_reserved_mib=$(field workspace_reserved_mib)
 workspace_mask_index_mib=$(field workspace_mask_index_mib)
 workspace_dense_index_mib=$(field workspace_dense_index_mib)
+workspace_dense_reserved_mib=$(field workspace_dense_reserved_mib)
 workspace_transition_mib=$(field workspace_transition_mib)
 workspace_audit_s=$(field workspace_audit_s)
 workspace_build_s=$(field workspace_build_s)
 preflight_total_s=$(field preflight_total_s)
 EOF
-  echo "preflight_ok=1 n=$N main_states=$(field authoritative_main_states) blocked_states=$(field authoritative_blocked_states) workspace_jobs=$(field workspace_audited_jobs) workspace_cells=$(field workspace_audited_cells) workspace_mib=$(field workspace_mib) workspace_audit_s=$(field workspace_audit_s) workspace_build_s=$(field workspace_build_s) total_s=$(field preflight_total_s)"
+  echo "preflight_ok=1 n=$N builder=$(field workspace_builder) main_states=$(field authoritative_main_states) blocked_states=$(field authoritative_blocked_states) workspace_jobs=$(field workspace_audited_jobs) workspace_cells=$(field workspace_audited_cells) workspace_mib=$(field workspace_mib) workspace_reserved_mib=$(field workspace_reserved_mib) workspace_audit_s=$(field workspace_audit_s) workspace_build_s=$(field workspace_build_s) total_s=$(field preflight_total_s)"
   echo "result=$out"
   echo "metadata=$meta"
   exit 0
@@ -94,6 +98,7 @@ max_run=$MAX_RUN
 max_swap=$MAX_SWAP
 objective=exact-neutral-augmented-v5.36-plan
 workspace_audit=required
+workspace_builder=streaming-two-pass
 EOF
 printf 'workers\tdomain_size\tbaseline_pages_2m\tbaseline_pages_4k\tbaseline_transitions\tbaseline_max_worker_cells\taugmented_pages_2m\taugmented_pages_4k\taugmented_transitions\taugmented_max_worker_cells\tpages_2m_delta\tpages_4k_delta\ttransition_delta\taugmented_rounds\texact_schedule_changes\texact_primary_improvements\texact_profile_improvements\tneutral_moves\tneutral_candidates\taugmented_build_s\tworkspace_audited_jobs\tworkspace_audited_cells\tworkspace_mib\tworkspace_audit_s\tworkspace_build_s\traw\n' >"$out"
 
@@ -103,6 +108,7 @@ for cfg in "${configs[@]}"; do
   echo "augmented n=$N workers=$workers domain=$domain" >&2
   line="$("$bin" "$N" "$workers" "$domain" "$MAX_RUN" "$MAX_SWAP" 2> >(tee /dev/stderr) | tail -n1)"
   [[ "$(field objective)" == exact-neutral-augmented-v5.36-plan ]] || exit 4
+  [[ "$(field workspace_builder)" == streaming-two-pass ]] || exit 4
   [[ "$(field limits_clear)" == 1 ]] || exit 4
   [[ "$(field workspace_audit_ok)" == 1 ]] || exit 4
   printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \

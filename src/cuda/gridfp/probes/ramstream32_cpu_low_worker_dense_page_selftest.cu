@@ -3,8 +3,23 @@
 #undef RAMSTREAM_BIDESC_COMPACT_NO_MAIN
 #include "../ramstream32_cpu_low_domain_worker_dense_page.hpp"
 
+#include <algorithm>
 #include <iostream>
 #include <vector>
+
+static bool same_dense_index(
+    const CpuLowWorkerDensePageIndex& a,
+    const CpuLowWorkerDensePageIndex& b
+) {
+    if (a.universe_2m != b.universe_2m
+        || a.universe_4k != b.universe_4k
+        || a.boundary.size() != b.boundary.size()) return false;
+    for (size_t i = 0; i < a.boundary.size(); ++i) {
+        if (a.boundary[i].pages_2m != b.boundary[i].pages_2m
+            || a.boundary[i].pages_4k != b.boundary[i].pages_4k) return false;
+    }
+    return true;
+}
 
 int main() {
     std::vector<CpuLowDomainGlobalPageSignature> raw(3);
@@ -46,10 +61,43 @@ int main() {
     cpu_low_worker_dense_delta_normalize(twice);
     if (twice.entries != std::vector<std::pair<uint32_t,int>>({{1,2},{2,2}})) return 15;
     if (cpu_low_worker_dense_unique_after_delta(refs2, unique2, twice) != 2) return 16;
+    if (!index.bytes() || index.reserved_bytes() < index.bytes()) return 17;
 
-    if (!index.bytes()) return 17;
+    // Real W10 topology: prove the low-memory two-pass builder is an exact
+    // representation replacement for the legacy retain-all-raw builder.
+    build_full_dp();
+    G_FACTOR = build_factor_tables();
+    StorageFactorHost storage = build_storage_factor_tables(G_FACTOR);
+    StorageLayout layout = build_storage_layout(storage);
+    LowDescHost lowdesc = build_low_descriptors(storage, layout);
+    LowOrbitHost orbit = build_cpu_low_orbit(storage, layout, lowdesc);
+    CpuLowSparseHost sparse = build_cpu_low_sparse(storage, layout, lowdesc, orbit);
+    WindowPlan low_wp = make_direct2d_window(false);
+    auto jobs = make_cpu_low_jobs(TARGET_W, low_wp);
+
+    std::vector<CpuLowStaticJobCost> ordered;
+    ordered.reserve(jobs.size());
+    for (size_t i = 0; i < jobs.size(); ++i) {
+        if (!jobs[i].main_size && !jobs[i].block_size) continue;
+        ordered.push_back({i, jobs[i].mask, cpu_low_sparse_job_cells(jobs[i], sparse)});
+    }
+    std::sort(ordered.begin(), ordered.end(), [](const auto& a, const auto& b) {
+        if (a.mask != b.mask) return a.mask < b.mask;
+        return a.index < b.index;
+    });
+    CpuLowDomainPageMaskIndex mask_index = cpu_low_build_domain_page_mask_index();
+    auto legacy = cpu_low_build_worker_dense_page_index(
+        ordered, layout, storage, mask_index);
+    auto streamed = cpu_low_build_worker_dense_page_index_streaming(
+        ordered, layout, storage, mask_index);
+    if (!same_dense_index(legacy, streamed)) return 18;
+    if (streamed.reserved_bytes() < streamed.bytes()) return 19;
+
     std::cout << "cpu-low-worker-dense-page-selftest OK"
               << " universe_2m=3 universe_4k=3"
-              << " cancellation=1 duplicate_ref=1 dense_delta=1\n";
+              << " cancellation=1 duplicate_ref=1 dense_delta=1"
+              << " streaming_equivalence=1"
+              << " real_boundaries=" << streamed.boundary.size()
+              << '\n';
     return 0;
 }

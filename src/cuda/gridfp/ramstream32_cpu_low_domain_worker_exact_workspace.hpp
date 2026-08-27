@@ -43,6 +43,15 @@ struct CpuLowWorkerExactWorkspace {
             + dense.bytes()
             + transition_weight.size() * sizeof(uint32_t);
     }
+
+    size_t reserved_bytes() const {
+        return ordered.capacity() * sizeof(CpuLowStaticJobCost)
+            + ordered_pos.capacity() * sizeof(size_t)
+            + mask_index.first_nonempty.capacity() * sizeof(uint32_t)
+            + mask_index.next_nonempty.capacity() * sizeof(uint32_t)
+            + dense.reserved_bytes()
+            + transition_weight.capacity() * sizeof(uint32_t);
+    }
 };
 
 static bool cpu_low_exact_dense_ids_valid(
@@ -112,7 +121,7 @@ static void cpu_low_audit_worker_exact_workspace(
                 std::cerr << "cpu LOW exact workspace order is not strict\n";
                 std::exit(315);
             }
-            // A LOW-window group fixes exactly the HIGH occupancy bits.  The
+            // A LOW-window group fixes exactly the HIGH occupancy bits. The
             // group->mask mapping is therefore bijective (bit order may be
             // reversed, but no two non-empty groups may share one mask).
             if (p.mask == x.mask) {
@@ -155,6 +164,10 @@ static void cpu_low_audit_worker_exact_workspace(
             std::exit(319);
         }
     }
+    if (ws.reserved_bytes() < ws.bytes()) {
+        std::cerr << "cpu LOW exact workspace reserved-byte accounting invalid\n";
+        std::exit(321);
+    }
 
     ws.audited_jobs = nonempty_jobs;
     ws.audited_cells = total_cells;
@@ -196,7 +209,9 @@ static CpuLowWorkerExactWorkspace cpu_low_build_worker_exact_workspace(
     ws.mask_index = cpu_low_build_domain_page_mask_index();
     ws.mask_index_build_s = ram_seconds_since(mt0);
 
-    ws.dense = cpu_low_build_worker_dense_page_index(
+    // v5.31+ exact searches use the two-pass builder to avoid retaining raw
+    // boundary signatures and the duplicate 64-bit universe simultaneously.
+    ws.dense = cpu_low_build_worker_dense_page_index_streaming(
         ws.ordered, layout, storage, ws.mask_index);
     ws.dense_index_build_s = ws.dense.build_s;
 
@@ -223,7 +238,8 @@ static void cpu_low_validate_worker_exact_workspace(
         || ws.audited_jobs != ws.ordered.size()
         || ws.ordered_pos.size() != jobs.size()
         || ws.dense.boundary.size() != ws.ordered.size() + 1
-        || ws.transition_weight.size() != ws.ordered.size() + 1) {
+        || ws.transition_weight.size() != ws.ordered.size() + 1
+        || ws.reserved_bytes() < ws.bytes()) {
         std::cerr << "cpu LOW exact workspace provenance mismatch\n";
         std::exit(240);
     }

@@ -14,9 +14,9 @@
 // Research-only v5.30 dense page-ID substrate for exact worker-boundary search.
 //
 // v5.29 removed candidate-local unordered_maps, but persistent page reference
-// counts still use 64-bit page IDs in a hash table.  Every page that can appear
+// counts still use 64-bit page IDs in a hash table. Every page that can appear
 // in the search is already present in one of the ordered worker boundaries, so
-// we can enumerate that finite universe once, map it to dense uint32_t IDs, and
+// we enumerate that finite universe once, map it to dense uint32_t IDs, and
 // use ordinary vectors for persistent refcounts and candidate deltas.
 
 struct CpuLowWorkerDenseBoundarySignature {
@@ -30,12 +30,24 @@ struct CpuLowWorkerDensePageIndex {
     std::vector<CpuLowWorkerDenseBoundarySignature> boundary;
     double build_s = 0.0;
 
+    // Logical payload bytes, preserving the original v5.30 accounting.
     size_t bytes() const {
         size_t z = universe_2m.size() * sizeof(uint64_t)
             + universe_4k.size() * sizeof(uint64_t)
             + boundary.size() * sizeof(CpuLowWorkerDenseBoundarySignature);
         for (const auto& s : boundary)
             z += (s.pages_2m.size() + s.pages_4k.size()) * sizeof(uint32_t);
+        return z;
+    }
+
+    // Vector-owned capacity bytes. This is a better lower bound for retained
+    // heap storage than bytes(), especially after sort/unique compaction.
+    size_t reserved_bytes() const {
+        size_t z = universe_2m.capacity() * sizeof(uint64_t)
+            + universe_4k.capacity() * sizeof(uint64_t)
+            + boundary.capacity() * sizeof(CpuLowWorkerDenseBoundarySignature);
+        for (const auto& s : boundary)
+            z += (s.pages_2m.capacity() + s.pages_4k.capacity()) * sizeof(uint32_t);
         return z;
     }
 };
@@ -60,6 +72,31 @@ static uint32_t cpu_low_worker_dense_id(
     return uint32_t(id);
 }
 
+static void cpu_low_worker_dense_unique_compact(std::vector<uint64_t>& v) {
+    std::sort(v.begin(), v.end());
+    v.erase(std::unique(v.begin(), v.end()), v.end());
+    v.shrink_to_fit();
+}
+
+static void cpu_low_worker_dense_encode_signature(
+    CpuLowWorkerDenseBoundarySignature& dst,
+    const CpuLowDomainGlobalPageSignature& src,
+    const std::vector<uint64_t>& universe_2m,
+    const std::vector<uint64_t>& universe_4k
+) {
+    dst.pages_2m.reserve(src.pages_2m.size());
+    dst.pages_4k.reserve(src.pages_4k.size());
+    for (uint64_t p : src.pages_2m)
+        dst.pages_2m.push_back(cpu_low_worker_dense_id(universe_2m, p));
+    for (uint64_t p : src.pages_4k)
+        dst.pages_4k.push_back(cpu_low_worker_dense_id(universe_4k, p));
+    if (!std::is_sorted(dst.pages_2m.begin(), dst.pages_2m.end())
+        || !std::is_sorted(dst.pages_4k.begin(), dst.pages_4k.end())) {
+        std::cerr << "cpu LOW dense boundary signature lost sort order\n";
+        std::exit(216);
+    }
+}
+
 static CpuLowWorkerDensePageIndex cpu_low_build_worker_dense_page_index_from_raw(
     const std::vector<CpuLowDomainGlobalPageSignature>& raw
 ) {
@@ -73,29 +110,13 @@ static CpuLowWorkerDensePageIndex cpu_low_build_worker_dense_page_index_from_raw
         out.universe_4k.insert(
             out.universe_4k.end(), s.pages_4k.begin(), s.pages_4k.end());
     }
-    std::sort(out.universe_2m.begin(), out.universe_2m.end());
-    out.universe_2m.erase(
-        std::unique(out.universe_2m.begin(), out.universe_2m.end()),
-        out.universe_2m.end());
-    std::sort(out.universe_4k.begin(), out.universe_4k.end());
-    out.universe_4k.erase(
-        std::unique(out.universe_4k.begin(), out.universe_4k.end()),
-        out.universe_4k.end());
+    cpu_low_worker_dense_unique_compact(out.universe_2m);
+    cpu_low_worker_dense_unique_compact(out.universe_4k);
 
-    for (size_t k = 0; k < raw.size(); ++k) {
-        auto& d = out.boundary[k];
-        d.pages_2m.reserve(raw[k].pages_2m.size());
-        d.pages_4k.reserve(raw[k].pages_4k.size());
-        for (uint64_t p : raw[k].pages_2m)
-            d.pages_2m.push_back(cpu_low_worker_dense_id(out.universe_2m, p));
-        for (uint64_t p : raw[k].pages_4k)
-            d.pages_4k.push_back(cpu_low_worker_dense_id(out.universe_4k, p));
-        if (!std::is_sorted(d.pages_2m.begin(), d.pages_2m.end())
-            || !std::is_sorted(d.pages_4k.begin(), d.pages_4k.end())) {
-            std::cerr << "cpu LOW dense boundary signature lost sort order\n";
-            std::exit(216);
-        }
-    }
+    for (size_t k = 0; k < raw.size(); ++k)
+        cpu_low_worker_dense_encode_signature(
+            out.boundary[k], raw[k], out.universe_2m, out.universe_4k);
+
     out.build_s = ram_seconds_since(t0);
     return out;
 }
@@ -112,6 +133,45 @@ static CpuLowWorkerDensePageIndex cpu_low_build_worker_dense_page_index(
             layout, storage, mask_index, ordered[boundary].mask);
     }
     return cpu_low_build_worker_dense_page_index_from_raw(raw);
+}
+
+// Low-memory exact-workspace builder. The legacy v5.30 builder above retains
+// every raw boundary signature while also materializing a duplicate 64-bit
+// universe. For n=27 that transient duplication is undesirable. This version
+// performs two deterministic passes: pass 1 builds only the global universes;
+// after sort/unique compaction, pass 2 recomputes one boundary at a time and
+// immediately encodes it to uint32 dense IDs. Dense IDs and boundary order are
+// identical to the legacy builder; only construction time/memory trade off.
+static CpuLowWorkerDensePageIndex cpu_low_build_worker_dense_page_index_streaming(
+    const std::vector<CpuLowStaticJobCost>& ordered,
+    const StorageLayout& layout,
+    const StorageFactorHost& storage,
+    const CpuLowDomainPageMaskIndex& mask_index
+) {
+    CpuLowWorkerDensePageIndex out;
+    auto t0 = std::chrono::steady_clock::now();
+    out.boundary.resize(ordered.size() + 1);
+
+    for (size_t boundary = 1; boundary < ordered.size(); ++boundary) {
+        auto raw = cpu_low_domain_boundary_page_signature(
+            layout, storage, mask_index, ordered[boundary].mask);
+        out.universe_2m.insert(
+            out.universe_2m.end(), raw.pages_2m.begin(), raw.pages_2m.end());
+        out.universe_4k.insert(
+            out.universe_4k.end(), raw.pages_4k.begin(), raw.pages_4k.end());
+    }
+    cpu_low_worker_dense_unique_compact(out.universe_2m);
+    cpu_low_worker_dense_unique_compact(out.universe_4k);
+
+    for (size_t boundary = 1; boundary < ordered.size(); ++boundary) {
+        auto raw = cpu_low_domain_boundary_page_signature(
+            layout, storage, mask_index, ordered[boundary].mask);
+        cpu_low_worker_dense_encode_signature(
+            out.boundary[boundary], raw, out.universe_2m, out.universe_4k);
+    }
+
+    out.build_s = ram_seconds_since(t0);
+    return out;
 }
 
 static uint64_t cpu_low_worker_dense_ref_unique(

@@ -61,11 +61,13 @@ int main(int argc, char** argv) {
             (ws.mask_index.first_nonempty.size() + ws.mask_index.next_nonempty.size())
             * sizeof(uint32_t)) / double(1ULL << 20);
         double dense_index_mib = double(ws.dense.bytes()) / double(1ULL << 20);
+        double dense_reserved_mib = double(ws.dense.reserved_bytes()) / double(1ULL << 20);
         double transition_mib = double(ws.transition_weight.size() * sizeof(uint32_t))
             / double(1ULL << 20);
         std::cout << std::setprecision(12)
                   << "cpu_low_worker_workspace_preflight OK"
                   << " objective=exact-workspace-audit-v5.36-preflight"
+                  << " workspace_builder=streaming-two-pass"
                   << " n=" << n
                   << " low_lut_k=" << LOW_LUT_K
                   << " high_lut_k=" << HIGH_LUT_K
@@ -76,8 +78,10 @@ int main(int argc, char** argv) {
                   << " workspace_audited_jobs=" << ws.audited_jobs
                   << " workspace_audited_cells=" << ws.audited_cells
                   << " workspace_mib=" << double(ws.bytes()) / double(1ULL << 20)
+                  << " workspace_reserved_mib=" << double(ws.reserved_bytes()) / double(1ULL << 20)
                   << " workspace_mask_index_mib=" << mask_index_mib
                   << " workspace_dense_index_mib=" << dense_index_mib
+                  << " workspace_dense_reserved_mib=" << dense_reserved_mib
                   << " workspace_transition_mib=" << transition_mib
                   << " dense_pages_2m=" << ws.dense.universe_2m.size()
                   << " dense_pages_4k=" << ws.dense.universe_4k.size()
@@ -141,6 +145,7 @@ int main(int argc, char** argv) {
     std::cout << std::setprecision(12)
               << "cpu_low_worker_augmented_plan OK"
               << " objective=exact-neutral-augmented-v5.36-plan"
+              << " workspace_builder=streaming-two-pass"
               << " n=" << n
               << " workers=" << workers
               << " domain_size=" << domain
@@ -169,6 +174,7 @@ int main(int argc, char** argv) {
               << " workspace_audited_jobs=" << ws.audited_jobs
               << " workspace_audited_cells=" << ws.audited_cells
               << " workspace_mib=" << double(ws.bytes()) / double(1ULL << 20)
+              << " workspace_reserved_mib=" << double(ws.reserved_bytes()) / double(1ULL << 20)
               << " workspace_audit_s=" << ws.audit_s
               << " workspace_build_s=" << ws.build_s
               << " limits_clear=1\n";
