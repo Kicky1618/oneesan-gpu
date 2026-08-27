@@ -24,4 +24,6 @@ grep -Fq 'sparse_key_bits=26' <<<"$out"
 grep -Fq 'early_release_before_split54=1' <<<"$out"
 grep -Fq 'phase_base_kib=' <<<"$out"
 grep -Fq 'legacy_base_kib=' <<<"$out"
-echo "pattern10-depthcode-build-plan OK n=$N payload=predecoded sidecar=0 builder_passes=1 dense_bitset=0 sparse_key_bits=26 phase_key=compact early_release=1" >&2
+grep -Fq 'none_sentinel=1023' <<<"$out"
+grep -Fq 'decode_load_skipped_ops=' <<<"$out"
+echo "pattern10-depthcode-build-plan OK n=$N payload=predecoded sidecar=0 builder_passes=1 dense_bitset=0 sparse_key_bits=26 phase_key=compact early_release=1 none_sentinel=1023" >&2
