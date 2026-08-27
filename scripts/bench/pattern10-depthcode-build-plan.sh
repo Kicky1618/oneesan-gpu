@@ -20,6 +20,8 @@ grep -Fq 'decode_unrank=0' <<<"$out"
 grep -Fq 'temporary_depth_bytes=0' <<<"$out"
 grep -Fq 'builder_passes=1' <<<"$out"
 grep -Fq 'dense_context_bitset_bytes=0' <<<"$out"
-grep -Fq 'sparse_key_bits=28' <<<"$out"
+grep -Fq 'sparse_key_bits=26' <<<"$out"
 grep -Fq 'early_release_before_split54=1' <<<"$out"
-echo "pattern10-depthcode-build-plan OK n=$N payload=predecoded sidecar=0 builder_passes=1 dense_bitset=0 sparse_key_bits=28 early_release=1" >&2
+grep -Fq 'phase_base_kib=' <<<"$out"
+grep -Fq 'legacy_base_kib=' <<<"$out"
+echo "pattern10-depthcode-build-plan OK n=$N payload=predecoded sidecar=0 builder_passes=1 dense_bitset=0 sparse_key_bits=26 phase_key=compact early_release=1" >&2
