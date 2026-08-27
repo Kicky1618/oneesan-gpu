@@ -14,8 +14,8 @@ static void p10dc_run_low(
 }
 
 enum P10DCTestHighCtx { P10DC_TEST_THREAD=0, P10DC_TEST_RESOLVED=1, P10DC_TEST_WARP=2 };
-static void p10dc_launch_high_ctx(const StorageLayout&layout,bool rev,P10DCTestHighCtx ctx){
-    constexpr int threads=256;dim3 block(threads),grid(4,4,unsigned(layout.main_blocks.size()));const size_t warp_smem=p10dc_warpctx_smem_bytes(threads);
+static void p10dc_launch_high_ctx(const StorageLayout&layout,bool rev,P10DCTestHighCtx ctx,int threads=256){
+    dim3 block(threads),grid(4,4,unsigned(layout.main_blocks.size()));const size_t warp_smem=p10dc_warpctx_smem_bytes(threads);
     if(ctx==P10DC_TEST_THREAD){
         if(rev)bucket_launch_reverse_high_pattern10_depthcode(layout,threads,4,4);
         else bucket_launch_high_orbit_closure_pattern10_depthcode(layout,threads,4,4);
@@ -37,9 +37,9 @@ static void p10dc_launch_high_ctx(const StorageLayout&layout,bool rev,P10DCTestH
 }
 static void p10dc_run_high_ctx(
     BucketHostGrid&g,const StorageLayout&layout,const BucketPhysicalLayoutHost&phy,
-    BucketFusedDeviceTables&dt,bool rev,P10DCTestHighCtx ctx
+    BucketFusedDeviceTables&dt,bool rev,P10DCTestHighCtx ctx,int threads=256
 ){
-    for(uint32_t fixed=0;fixed<BUCKET_NGPU;++fixed){std::array<Count*,BUCKET_NGPU>d{};bkft_alloc_slots(fixed,phy,d);for(uint32_t s=0;s<BUCKET_NGPU;++s){auto const&v=g[s][fixed];if(!v.empty())ck(cudaMemcpy(d[s],v.data(),v.size()*sizeof(Count),cudaMemcpyHostToDevice),"p10dc high H2D");}dt.bind_owner(fixed,phy,d);p10dc_launch_high_ctx(layout,rev,ctx);ck(cudaDeviceSynchronize(),"p10dc high ctx sync");for(uint32_t s=0;s<BUCKET_NGPU;++s){auto&v=g[s][fixed];if(!v.empty())ck(cudaMemcpy(v.data(),d[s],v.size()*sizeof(Count),cudaMemcpyDeviceToHost),"p10dc high D2H");}bkft_free_slots(d);}
+    for(uint32_t fixed=0;fixed<BUCKET_NGPU;++fixed){std::array<Count*,BUCKET_NGPU>d{};bkft_alloc_slots(fixed,phy,d);for(uint32_t s=0;s<BUCKET_NGPU;++s){auto const&v=g[s][fixed];if(!v.empty())ck(cudaMemcpy(d[s],v.data(),v.size()*sizeof(Count),cudaMemcpyHostToDevice),"p10dc high H2D");}dt.bind_owner(fixed,phy,d);p10dc_launch_high_ctx(layout,rev,ctx,threads);ck(cudaDeviceSynchronize(),"p10dc high ctx sync");for(uint32_t s=0;s<BUCKET_NGPU;++s){auto&v=g[s][fixed];if(!v.empty())ck(cudaMemcpy(v.data(),d[s],v.size()*sizeof(Count),cudaMemcpyDeviceToHost),"p10dc high D2H");}bkft_free_slots(d);}
 }
 
 int main(){
@@ -61,5 +61,7 @@ int main(){
     g=bkft_make_grid(ms,bs,im,ib,storage,layout,owner,phy);p10dc_run_high_ctx(g,layout,phy,dt,true,P10DC_TEST_RESOLVED);if(!bkft_compare("pattern10-depthcode-reverse-high-resolved",g,ms,bs,rhm,rhb,storage,layout,owner,phy))return 15;
     g=bkft_make_grid(ms,bs,im,ib,storage,layout,owner,phy);p10dc_run_high_ctx(g,layout,phy,dt,false,P10DC_TEST_WARP);if(!bkft_compare("pattern10-depthcode-forward-high-warp",g,ms,bs,fhm,fhb,storage,layout,owner,phy))return 16;
     g=bkft_make_grid(ms,bs,im,ib,storage,layout,owner,phy);p10dc_run_high_ctx(g,layout,phy,dt,true,P10DC_TEST_WARP);if(!bkft_compare("pattern10-depthcode-reverse-high-warp",g,ms,bs,rhm,rhb,storage,layout,owner,phy))return 17;
-    std::cout<<"bucket-closure-pattern10-depthcode-selftest OK W="<<W<<" mode="<<rh.codebook.mode<<" codebook_bytes="<<rh.codebook.bytes()<<" sidecar_bytes_per_orbit=0 temporary_depth_bytes=0 decode_unrank=0 payload_masks=1 high_ctx=thread,resolved,warp decode_load="<<(P10DC_DECODE_LDG?"ldg":"global")<<" warpctx_dynamic_smem=1 warpctx_smem_bytes_256="<<p10dc_warpctx_smem_bytes(256)<<"\n";rdt.release();fdt.release();dt.release();return 0;
+    g=bkft_make_grid(ms,bs,im,ib,storage,layout,owner,phy);p10dc_run_high_ctx(g,layout,phy,dt,false,P10DC_TEST_WARP,65);if(!bkft_compare("pattern10-depthcode-forward-high-warp-partial",g,ms,bs,fhm,fhb,storage,layout,owner,phy))return 18;
+    g=bkft_make_grid(ms,bs,im,ib,storage,layout,owner,phy);p10dc_run_high_ctx(g,layout,phy,dt,true,P10DC_TEST_WARP,65);if(!bkft_compare("pattern10-depthcode-reverse-high-warp-partial",g,ms,bs,rhm,rhb,storage,layout,owner,phy))return 19;
+    std::cout<<"bucket-closure-pattern10-depthcode-selftest OK W="<<W<<" mode="<<rh.codebook.mode<<" codebook_bytes="<<rh.codebook.bytes()<<" sidecar_bytes_per_orbit=0 temporary_depth_bytes=0 decode_unrank=0 payload_masks=1 high_ctx=thread,resolved,warp decode_load="<<(P10DC_DECODE_LDG?"ldg":"global")<<" warpctx_dynamic_smem=1 warpctx_threads=256,65 warpctx_smem_bytes_256="<<p10dc_warpctx_smem_bytes(256)<<" warpctx_smem_bytes_65="<<p10dc_warpctx_smem_bytes(65)<<"\n";rdt.release();fdt.release();dt.release();return 0;
 }
