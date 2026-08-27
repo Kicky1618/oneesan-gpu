@@ -37,7 +37,8 @@ field(){ local key="$1" line="$2"; sed -nE "s/(^|.*[[:space:]])${key}=([^[:space
 
 printf 'backend\tkernel\tregisters\tstack_bytes\tspill_store_bytes\tspill_load_bytes\tsmem_bytes\tcmem0_bytes\n' >"$RESOURCES"
 build_one(){
-  local mode="$1" bin="$2" label="depthcode_${HIGH_CTX}_${mode}"
+  local mode="$1" bin="$2"
+  local label="depthcode_${HIGH_CTX}_${mode}"
   local bout="$LOGDIR/${label}.build.out" blog="$LOGDIR/${label}.ptxas.log"
   echo "=== build $label ===" >&2
   N="$N" OUT="$bin" HIGH_CTX="$HIGH_CTX" DEPTHCODE_DECODE_LOAD="$mode" TRANSPOSE_MODE="$TRANSPOSE_MODE" \
@@ -48,7 +49,8 @@ build_one(){
 
 printf 'decode_load\trepeat\tresidue\twall_s\tforward_high_s\tforward_low_s\treverse_low_s\treverse_high_s\ttranspose_s\tmetadata_mib_per_gpu\tforward_attach_mib\treverse_attach_mib\tbinary\n' >"$RESULT"
 run_one(){
-  local mode="$1" bin="$2" rep="$3" so="$LOGDIR/${mode}_r${rep}.out" se="$LOGDIR/${mode}_r${rep}.err"
+  local mode="$1" bin="$2" rep="$3"
+  local so="$LOGDIR/${mode}_r${rep}.out" se="$LOGDIR/${mode}_r${rep}.err"
   echo "=== run decode_load=$mode repeat=$rep/$REPEATS ===" >&2
   "$bin" "$N" "$TARGET_MIB" "$MAX_WINDOW" "$NGPU" "$MOD" >"$so" 2>"$se"
   local line detail plan residue wall fh fl rl rh ts meta fattach rattach
