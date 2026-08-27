@@ -15,13 +15,14 @@ PTXAS_VERBOSE="${PTXAS_VERBOSE:-0}"
 
 if (( LOW_LUT_K <= 0 || HIGH_LUT_K <= 0 || LOW_LUT_K + HIGH_LUT_K + 1 != W )); then echo "invalid factor split" >&2; exit 2; fi
 if (( LOW_LUT_K > 14 || HIGH_LUT_K > 14 )); then echo "pattern10 depthcode requires half widths <=14" >&2; exit 2; fi
-if [[ "$HIGH_CTX" != thread && "$HIGH_CTX" != resolved ]]; then echo "HIGH_CTX must be thread or resolved" >&2; exit 2; fi
+case "$HIGH_CTX" in thread|resolved|warp) ;; *) echo "HIGH_CTX must be thread, resolved, or warp" >&2; exit 2;; esac
 if [[ "$PM_ACCUM" != 0 && "$PM_ACCUM" != 1 ]]; then echo "PM_ACCUM must be 0 or 1" >&2; exit 2; fi
 if [[ "$TERNARY_KEY4" != 0 && "$TERNARY_KEY4" != 1 ]]; then echo "TERNARY_KEY4 must be 0 or 1" >&2; exit 2; fi
 if [[ "$PTXAS_VERBOSE" != 0 && "$PTXAS_VERBOSE" != 1 ]]; then echo "PTXAS_VERBOSE must be 0 or 1" >&2; exit 2; fi
 
 base="oneesan_cuda_gridfp_b300_bucket_snake_onepass_pattern10_depthcode"
 [[ "$HIGH_CTX" == resolved ]] && base="${base}_resolved"
+[[ "$HIGH_CTX" == warp ]] && base="${base}_warpctx"
 case "$TRANSPOSE_MODE" in
   sync) SRC_NAME="${base}_graph_batch.cu" ;;
   events) SRC_NAME="${base}_graph_batch_events.cu" ;;
