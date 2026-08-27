@@ -38,7 +38,8 @@ printf 'backend\tkernel\tregisters\tstack_bytes\tspill_store_bytes\tspill_load_b
   build_one depth4_lut_shared scripts/build/b300-bucket-snake-pattern10-depth4-graph-batch.sh P10_DECODE=lut HIGH_CTX=shared
   build_one depth4_lut_resolved scripts/build/b300-bucket-snake-pattern10-depth4-graph-batch.sh P10_DECODE=lut HIGH_CTX=resolved
   build_one depth4_lut_warp scripts/build/b300-bucket-snake-pattern10-depth4-graph-batch.sh P10_DECODE=lut HIGH_CTX=warp
-  build_one depthcode_payload scripts/build/b300-bucket-snake-pattern10-depthcode-graph-batch.sh
+  build_one depthcode_payload_thread scripts/build/b300-bucket-snake-pattern10-depthcode-graph-batch.sh HIGH_CTX=thread
+  build_one depthcode_payload_resolved scripts/build/b300-bucket-snake-pattern10-depthcode-graph-batch.sh HIGH_CTX=resolved
 } >>"$OUT"
 
 cat "$OUT"
