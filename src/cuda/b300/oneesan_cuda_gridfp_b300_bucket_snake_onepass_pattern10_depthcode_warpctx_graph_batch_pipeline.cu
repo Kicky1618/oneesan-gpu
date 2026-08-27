@@ -1,0 +1,2 @@
+#define BUCKET_TRANSPOSE_USE_PIPELINE 1
+#include "oneesan_cuda_gridfp_b300_bucket_snake_onepass_pattern10_depthcode_warpctx_graph_batch.cu"
