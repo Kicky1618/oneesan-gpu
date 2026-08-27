@@ -164,6 +164,10 @@ __global__ void maskshard_main_lowdesc_closure_cols_inplace_kernel(
 #error "HIGH group sync interception is not combined with legacy LOW sync hooks"
 #endif
 
+#ifdef MASKSHARD_HIGH_PERTHREAD_STREAM
+#include "maskshard_high_perthread_stream.cuh"
+#endif
+
 #ifdef MASKSHARD_HIGH_GROUP_SYNC
 #include "maskshard_high_group_sync.cuh"
 #endif
