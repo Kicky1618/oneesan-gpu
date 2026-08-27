@@ -19,10 +19,12 @@ mkdir -p "$(dirname "$OUT")" "$LOGDIR"
 
 build_one(){
   local ctx="$1"
+  local load="${2:-global}"
   local label="depthcode_payload_${ctx}"
+  [[ "$load" == ldg ]] && label="${label}_ldg"
   local log="$LOGDIR/${label}.ptxas.log"
   echo "=== ptxas build $label ===" >&2
-  N="$N" ARCH="$ARCH" TRANSPOSE_MODE="$TRANSPOSE_MODE" HIGH_CTX="$ctx" \
+  N="$N" ARCH="$ARCH" TRANSPOSE_MODE="$TRANSPOSE_MODE" HIGH_CTX="$ctx" DEPTHCODE_DECODE_LOAD="$load" \
     PM_ACCUM="$PM_ACCUM" TERNARY_KEY4="$TERNARY_KEY4" PTXAS_VERBOSE=1 \
     OUT="$ONEESAN_BUILD_DIR/ptxas_${label}_${TRANSPOSE_MODE}_n${N}" \
     bash "$ONEESAN_ROOT/scripts/build/b300-bucket-snake-pattern10-depthcode-graph-batch.sh" \
@@ -35,6 +37,7 @@ printf 'backend\tkernel\tregisters\tstack_bytes\tspill_store_bytes\tspill_load_b
   build_one thread
   build_one resolved
   build_one warp
+  build_one warp ldg
 } >>"$OUT"
 
 cat "$OUT"
@@ -43,7 +46,7 @@ import csv, sys
 rows=list(csv.DictReader(open(sys.argv[1]),delimiter='\t'))
 def ints(group,key):
     return [int(r[key]) for r in group if r[key] != 'NA']
-for backend in ('depthcode_payload_thread','depthcode_payload_resolved','depthcode_payload_warp'):
+for backend in ('depthcode_payload_thread','depthcode_payload_resolved','depthcode_payload_warp','depthcode_payload_warp_ldg'):
     all_rows=[r for r in rows if r['backend']==backend]
     high=[r for r in all_rows if 'high' in r['kernel'].lower()]
     if not high:
