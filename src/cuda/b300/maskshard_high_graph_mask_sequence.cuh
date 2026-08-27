@@ -3,6 +3,7 @@
 #include <array>
 #include <cstdint>
 #include <cstdlib>
+#include <cstring>
 #include <iostream>
 #include <thread>
 #include <vector>
@@ -21,6 +22,12 @@
 #endif
 #ifndef MASKSHARD_HIGH_CAP_LPT_SCHEDULE
 #error "HIGH graph mask sequence requires cap-aware HIGH scheduling"
+#endif
+#ifndef MASKSHARD_HIGH_PINNED_CONFIG
+#error "HIGH graph mask sequence identifies HIGH config from pinned FBlock source"
+#endif
+#ifndef MASKSHARD_HIGH_FBLOCK_CACHE
+#error "HIGH graph mask sequence requires persistent HIGH FBlock cache"
 #endif
 static_assert(LOW_LUT_K <= 16,
               "HIGH graph mask sequence stores LOW masks as uint16");
@@ -187,9 +194,11 @@ static cudaError_t maskshard_high_graph_mask_sequence_begin_capture(
 }
 
 // v0.58's wrapper remains the single implementation for all normal symbol
-// copies. Suppress only worker-side D_F_MASK: v0.79 restores it inside the graph
-// from the resident sequence. Main-thread setup and LOW config still use the
-// original constant symbol path.
+// copies. v0.79 identifies the HIGH config call from its pinned MAIN-FBlock
+// source address. LOW config runs on a different worker and uses non-HIGH FBlock
+// storage, so its D_F_MASK copy remains untouched.
+static thread_local bool G_MS_HIGH_GRAPH_MASK_CONFIG_SCOPE = false;
+
 template<class Symbol>
 static cudaError_t maskshard_high_graph_mask_sequence_memcpy_to_symbol(
     const char* name,
@@ -201,8 +210,21 @@ static cudaError_t maskshard_high_graph_mask_sequence_memcpy_to_symbol(
 ) {
     const bool worker =
         std::this_thread::get_id() != G_MS_HIGH_GROUP_SYNC_MAIN_THREAD;
-    if (worker && std::strcmp(name, "D_F_MASK") == 0)
-        return cudaSuccess;
+    if (worker && std::strcmp(name, "D_F_MAIN_BLOCKS") == 0) {
+        const std::uintptr_t p = reinterpret_cast<std::uintptr_t>(src);
+        const std::uintptr_t a = reinterpret_cast<std::uintptr_t>(
+            G_MS_HIGH_FBLOCK_PINNED_MAIN);
+        const std::uintptr_t z = a + MS_HIGH_FBLOCK_CACHE_SLOTS
+            * MS_HIGH_MAIN_BLOCKS_PER_MASK * sizeof(FBlock);
+        G_MS_HIGH_GRAPH_MASK_CONFIG_SCOPE = a && p >= a && p < z;
+    }
+    if (std::strcmp(name, "D_F_MASK") == 0) {
+        if (worker && G_MS_HIGH_GRAPH_MASK_CONFIG_SCOPE) {
+            G_MS_HIGH_GRAPH_MASK_CONFIG_SCOPE = false;
+            return cudaSuccess;
+        }
+        G_MS_HIGH_GRAPH_MASK_CONFIG_SCOPE = false;
+    }
     return maskshard_high_filtered_memcpy_to_symbol(
         name, symbol, src, count, offset, kind);
 }
