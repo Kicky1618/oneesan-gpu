@@ -17,36 +17,36 @@ __device__ __forceinline__ void bkcp10_decode_lut(
 }
 
 // Reuse the complete depth8 kernel body, replacing only Fibonacci unrank with
-// a direct (p,id)->(left_mask,right_mask) lookup.  All orbit algebra, depth8
-// metadata and bucket addressing remain byte-for-byte the same source path.
+// a direct (p,id)->(left_mask,right_mask) lookup. All orbit algebra, depth8
+// metadata and bucket addressing remain the same source path.
 #define closure_pattern10_decode bkcp10_decode_lut
 #include "ramstream32_bucket_orbit_closure_pattern10_depth8.cuh"
 #undef closure_pattern10_decode
 
-struct BucketForwardPattern10Depth8LutHost {
-    BucketForwardPattern10Depth8Host base;
+struct BucketForwardPattern10Depth8LutHost : BucketForwardPattern10Depth8Host {
     BucketPattern10DecodeLutHost lut;
-    size_t bytes() const { return base.bytes() + lut.bytes(); }
+    size_t bytes() const { return BucketForwardPattern10Depth8Host::bytes() + lut.bytes(); }
 };
 
 static BucketForwardPattern10Depth8LutHost build_bucket_forward_pattern10_depth8_lut_zero(
     const StorageLayout& layout, BucketOrbitStreamsHost& bo, BucketFusedHost& bf
 ) {
     BucketForwardPattern10Depth8LutHost out;
-    out.base = build_bucket_forward_pattern10_depth8_zero(layout, bo, bf);
+    static_cast<BucketForwardPattern10Depth8Host&>(out) =
+        build_bucket_forward_pattern10_depth8_zero(layout, bo, bf);
     out.lut = build_bucket_pattern10_decode_lut();
     return out;
 }
 
-struct BucketForwardPattern10Depth8LutDeviceTables {
-    BucketForwardPattern10Depth8DeviceTables base;
+struct BucketForwardPattern10Depth8LutDeviceTables : BucketForwardPattern10Depth8DeviceTables {
     BucketPattern10DecodeLutDeviceTables lut;
     void install(const BucketForwardPattern10Depth8LutHost& h) {
-        base.install(h.base);
+        BucketForwardPattern10Depth8DeviceTables::install(
+            static_cast<const BucketForwardPattern10Depth8Host&>(h));
         lut.install(h.lut);
     }
     void release() {
         lut.release();
-        base.release();
+        BucketForwardPattern10Depth8DeviceTables::release();
     }
 };
