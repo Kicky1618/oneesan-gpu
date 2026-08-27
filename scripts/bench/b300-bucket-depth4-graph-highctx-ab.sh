@@ -102,7 +102,7 @@ run_one() {
 printf 'decode\thigh_ctx\trepeat\tresidue\twall_s\tforward_high_s\tforward_low_s\treverse_low_s\treverse_high_s\ttranspose_s\tbinary\n' >"$RESULT"
 
 for decode in unrank lut; do
-  for ctx in thread shared warp; do
+  for ctx in thread shared resolved warp; do
     tag="${decode}_${ctx}"
     bin="$ONEESAN_BUILD_DIR/ab_depth4_${tag}_${TRANSPOSE_MODE}_n${N}"
     echo "=== build $tag ===" >&2
@@ -129,6 +129,7 @@ metrics = [
     "reverse_high_s",
     "transpose_s",
 ]
+contexts = ("thread", "shared", "resolved", "warp")
 
 with open(result_path, newline="") as f:
     rows = list(csv.DictReader(f, delimiter="\t"))
@@ -139,7 +140,7 @@ for row in rows:
 
 summary_rows = []
 for decode in ("unrank", "lut"):
-    for ctx in ("thread", "shared", "warp"):
+    for ctx in contexts:
         group = by_key[(decode, ctx)]
         out = {"decode": decode, "high_ctx": ctx, "repeats": str(len(group))}
         for metric in metrics:
@@ -155,15 +156,23 @@ with open(summary_path, "w", newline="") as f:
 
 lookup = {(row["decode"], row["high_ctx"]): row for row in summary_rows}
 for decode in ("unrank", "lut"):
-    base = float(lookup[(decode, "thread")]["wall_s"])
-    for ctx in ("shared", "warp"):
+    thread_wall = float(lookup[(decode, "thread")]["wall_s"])
+    shared_wall = float(lookup[(decode, "shared")]["wall_s"])
+    for ctx in ("shared", "resolved", "warp"):
         wall = float(lookup[(decode, ctx)]["wall_s"])
-        print(f"{decode}_{ctx}_speedup_vs_thread={base / wall:.6f}x")
+        print(f"{decode}_{ctx}_speedup_vs_thread={thread_wall / wall:.6f}x")
         for phase in ("forward_high_s", "reverse_high_s"):
             a = lookup[(decode, "thread")][phase]
             b = lookup[(decode, ctx)][phase]
             if a != "NA" and b != "NA":
                 print(f"{decode}_{ctx}_{phase}_speedup={float(a) / float(b):.6f}x")
+    resolved_wall = float(lookup[(decode, "resolved")]["wall_s"])
+    print(f"{decode}_resolved_speedup_vs_shared={shared_wall / resolved_wall:.6f}x")
+    for phase in ("forward_high_s", "reverse_high_s"):
+        a = lookup[(decode, "shared")][phase]
+        b = lookup[(decode, "resolved")][phase]
+        if a != "NA" and b != "NA":
+            print(f"{decode}_resolved_{phase}_speedup_vs_shared={float(a) / float(b):.6f}x")
 print(f"summary={summary_path}")
 PY
 
