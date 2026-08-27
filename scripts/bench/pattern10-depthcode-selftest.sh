@@ -20,5 +20,6 @@ if grep -Fq "OK W=$W" <<<"$out"; then
   grep -Fq 'temporary_depth_bytes=0' <<<"$out"
   grep -Fq 'decode_unrank=0' <<<"$out"
   grep -Fq 'payload_masks=1' <<<"$out"
+  grep -Fq 'high_ctx=thread,resolved,warp' <<<"$out"
 fi
-echo "pattern10-depthcode-selftest OK W=$W pm_accum=$PM_ACCUM" >&2
+echo "pattern10-depthcode-selftest OK W=$W pm_accum=$PM_ACCUM high_ctx=thread,resolved,warp" >&2
