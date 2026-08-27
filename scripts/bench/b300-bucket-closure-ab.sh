@@ -15,9 +15,9 @@ visible="$(nvidia-smi --query-gpu=index --format=csv,noheader | wc -l)"; if (( v
 
 field(){ local k="$1" line="$2"; sed -nE "s/(^|.*[[:space:]])${k}=([^[:space:]]+).*/\\2/p" <<<"$line" | tail -n1; }
 run_one(){
-  local tag="$1" build_script="$2" bin="$3"
+  local tag="$1" build_script="$2" bin="$3" high_ctx="${4:-thread}"
   echo "=== build $tag ===" >&2
-  N="$N" OUT="$bin" TRANSPOSE_MODE="$TRANSPOSE_MODE" PM_ACCUM="$PM_ACCUM" bash "$ONEESAN_ROOT/$build_script"
+  N="$N" OUT="$bin" TRANSPOSE_MODE="$TRANSPOSE_MODE" PM_ACCUM="$PM_ACCUM" HIGH_CTX="$high_ctx" bash "$ONEESAN_ROOT/$build_script"
   echo "=== run $tag ===" >&2
   local so="$LOGDIR/${tag}.out" se="$LOGDIR/${tag}.err"
   "$bin" "$N" "$TARGET_MIB" "$MAX_WINDOW" "$NGPU" "$MOD" >"$so" 2>"$se"
@@ -41,9 +41,12 @@ run_one zero_scan \
 run_one pattern10 \
   scripts/build/b300-bucket-snake-pattern10-batch.sh \
   "$ONEESAN_BUILD_DIR/ab_pattern10${SUFFIX}_n${N}"
-run_one pattern10_depth8 \
+run_one pattern10_depth8_thread \
   scripts/build/b300-bucket-snake-pattern10-depth8-batch.sh \
-  "$ONEESAN_BUILD_DIR/ab_pattern10_depth8${SUFFIX}_n${N}"
+  "$ONEESAN_BUILD_DIR/ab_pattern10_depth8_thread${SUFFIX}_n${N}" thread
+run_one pattern10_depth8_shared \
+  scripts/build/b300-bucket-snake-pattern10-depth8-batch.sh \
+  "$ONEESAN_BUILD_DIR/ab_pattern10_depth8_shared${SUFFIX}_n${N}" shared
 
 cat "$RESULT"
 echo "closure-ab OK n=$N modulus=$MOD expected=$EXPECT transpose=$TRANSPOSE_MODE pm_accum=$PM_ACCUM result=$RESULT" >&2
