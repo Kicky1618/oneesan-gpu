@@ -84,10 +84,13 @@ __device__ __forceinline__ BkczCrossAccum bkcz_cross_add(BkczCrossAccum a,Count 
 #endif
 
 // Changing one ternary digit R(1)->L(2) adds 3^pos to the direct-table key;
-// L(2)->R(1) subtracts it. Compute the destination key once instead of
-// rebuilding an O(K) base-3 key for every cross-preimage candidate.
+// L(2)->R(1) subtracts it. Occupancy is unchanged, so a valid preimage remains
+// on D_BKF_FIXED_OWNER. The flip also changes the factor boundary height by
+// exactly +2, which is the CROSS source-height invariant checked by
+// ramstream32_cross_height_delta_plan.cu. Therefore a valid direct-table entry
+// already has the required owner and height; only its owner-local rank is used.
 __device__ __forceinline__ BkczCrossAccum bkcz_sum_high_preimages_fast(
-    uint32_t dest_code,uint32_t depth,uint32_t source_he,uint32_t source_bid,uint32_t source_low_loc
+    uint32_t dest_code,uint32_t depth,uint32_t source_bid,uint32_t source_low_loc
 ){
     BkczCrossAccum sum=0;int s=int(depth);uint32_t low_slot=bkf_loc_owner(source_low_loc),low_rank=bkf_loc_rank(source_low_loc);BucketPhysicalBlock sb=bkf_low_main(low_slot,source_bid);
     uint32_t key=bkcz_ternary_key<HIGH_LUT_K>(dest_code),weight=1u;
@@ -96,7 +99,7 @@ __device__ __forceinline__ BkczCrossAccum bkcz_sum_high_preimages_fast(
         uint32_t v=(dest_code>>(2*pos))&3u;
         if(v==uint32_t(::L)){if(s==1)break;--s;}
         else if(v==uint32_t(R)){
-            if(s==1){uint32_t x=D_BKF_HIGH_DIRECT[key+weight];if(x!=BKF_DIRECT_INVALID&&bkf_direct_height(x)==source_he){uint32_t hl=bkf_direct_locator(x);if(bkf_loc_owner(hl)==D_BKF_FIXED_OWNER){uint32_t hr=bkf_loc_rank(hl);sum=bkcz_cross_add(sum,bkf_ptr(low_slot,sb.off+Code(hr)*sb.cols+low_rank)[0]);}}}
+            if(s==1){uint32_t x=D_BKF_HIGH_DIRECT[key+weight];if(x!=BKF_DIRECT_INVALID){uint32_t hr=bkf_loc_rank(x);sum=bkcz_cross_add(sum,bkf_ptr(low_slot,sb.off+Code(hr)*sb.cols+low_rank)[0]);}}
             ++s;
         }
         weight*=3u;
@@ -105,7 +108,7 @@ __device__ __forceinline__ BkczCrossAccum bkcz_sum_high_preimages_fast(
 }
 
 __device__ __forceinline__ BkczCrossAccum bkcz_sum_low_preimages_fast(
-    uint32_t dest_code,uint32_t depth,uint32_t source_hs,uint32_t source_bid,uint32_t source_high_loc
+    uint32_t dest_code,uint32_t depth,uint32_t source_bid,uint32_t source_high_loc
 ){
     BkczCrossAccum sum=0;int s=int(depth);uint32_t high_slot=bkf_loc_owner(source_high_loc),high_rank=bkf_loc_rank(source_high_loc);BucketPhysicalBlock sb=bkf_high_main(high_slot,source_bid);
     uint32_t key=bkcz_ternary_key<LOW_LUT_K>(dest_code),weight=bkcz_pow3_const(LOW_LUT_K-1);
@@ -114,7 +117,7 @@ __device__ __forceinline__ BkczCrossAccum bkcz_sum_low_preimages_fast(
         uint32_t v=(dest_code>>(2*pos))&3u;
         if(v==uint32_t(R)){if(s==1)break;--s;}
         else if(v==uint32_t(::L)){
-            if(s==1){uint32_t x=D_BKF_LOW_DIRECT[key-weight];if(x!=BKF_DIRECT_INVALID&&bkf_direct_height(x)==source_hs){uint32_t ll=bkf_direct_locator(x);if(bkf_loc_owner(ll)==D_BKF_FIXED_OWNER){uint32_t lr=bkf_loc_rank(ll);sum=bkcz_cross_add(sum,bkf_ptr(high_slot,sb.off+Code(high_rank)*sb.cols+lr)[0]);}}}
+            if(s==1){uint32_t x=D_BKF_LOW_DIRECT[key-weight];if(x!=BKF_DIRECT_INVALID){uint32_t lr=bkf_loc_rank(x);sum=bkcz_cross_add(sum,bkf_ptr(high_slot,sb.off+Code(high_rank)*sb.cols+lr)[0]);}}
             ++s;
         }
         if(pos)weight/=3u;
@@ -135,11 +138,11 @@ __device__ __forceinline__ Count bkcz_low_plan_sum(const BkczPlan&p,const Bucket
         sum=gpu_direct_add(sum,v);
 #endif
     }
-    if(p.cross_valid){uint32_t x=p.cross_src,sl=bkf_src_locator(x);BucketPhysicalBlock sb=bkf_low_main(bkf_loc_owner(sl),bkf_src_block(x));uint32_t dc=D_BKF_HIGH_CODES[D_BKF_HIGH_CODE_OFF[size_t(D_BKF_FIXED_OWNER)*D_BKF_CODE_PITCH+db.he]+hr];
+    if(p.cross_valid){uint32_t x=p.cross_src,sl=bkf_src_locator(x);uint32_t dc=D_BKF_HIGH_CODES[D_BKF_HIGH_CODE_OFF[size_t(D_BKF_FIXED_OWNER)*D_BKF_CODE_PITCH+db.he]+hr];
 #if GPU_DIRECT_PM_ACCUM
-        sum+=bkcz_sum_high_preimages_fast(dc,p.cross_depth,sb.he,bkf_src_block(x),sl);
+        sum+=bkcz_sum_high_preimages_fast(dc,p.cross_depth,bkf_src_block(x),sl);
 #else
-        sum=gpu_direct_add(sum,bkcz_sum_high_preimages_fast(dc,p.cross_depth,sb.he,bkf_src_block(x),sl));
+        sum=gpu_direct_add(sum,bkcz_sum_high_preimages_fast(dc,p.cross_depth,bkf_src_block(x),sl));
 #endif
     }
 #if GPU_DIRECT_PM_ACCUM
@@ -162,11 +165,11 @@ __device__ __forceinline__ Count bkcz_high_plan_sum(const BkczPlan&p,const Bucke
         sum=gpu_direct_add(sum,v);
 #endif
     }
-    if(p.cross_valid){uint32_t x=p.cross_src,sl=bkf_src_locator(x);BucketPhysicalBlock sb=bkf_high_main(bkf_loc_owner(sl),bkf_src_block(x));uint32_t dc=D_BKF_LOW_CODES[D_BKF_LOW_CODE_OFF[size_t(D_BKF_FIXED_OWNER)*D_BKF_CODE_PITCH+db.hs]+lr];
+    if(p.cross_valid){uint32_t x=p.cross_src,sl=bkf_src_locator(x);uint32_t dc=D_BKF_LOW_CODES[D_BKF_LOW_CODE_OFF[size_t(D_BKF_FIXED_OWNER)*D_BKF_CODE_PITCH+db.hs]+lr];
 #if GPU_DIRECT_PM_ACCUM
-        sum+=bkcz_sum_low_preimages_fast(dc,p.cross_depth,sb.hs,bkf_src_block(x),sl);
+        sum+=bkcz_sum_low_preimages_fast(dc,p.cross_depth,bkf_src_block(x),sl);
 #else
-        sum=gpu_direct_add(sum,bkcz_sum_low_preimages_fast(dc,p.cross_depth,sb.hs,bkf_src_block(x),sl));
+        sum=gpu_direct_add(sum,bkcz_sum_low_preimages_fast(dc,p.cross_depth,bkf_src_block(x),sl));
 #endif
     }
 #if GPU_DIRECT_PM_ACCUM
