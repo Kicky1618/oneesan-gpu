@@ -2,9 +2,6 @@ name: ramstream32 n27 workspace preflight
 
 on:
   workflow_dispatch:
-  push:
-    paths:
-      - '.github/workflows/ramstream32-n27-workspace-preflight.yml'
 
 permissions:
   contents: read
