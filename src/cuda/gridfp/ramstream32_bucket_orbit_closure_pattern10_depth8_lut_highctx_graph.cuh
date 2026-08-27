@@ -1,0 +1,4 @@
+#pragma once
+
+#include "ramstream32_bucket_orbit_closure_pattern10_depth8_lut_highctx.cuh"
+#include "ramstream32_bucket_orbit_closure_pattern10_depth8_highctx_graph.cuh"
