@@ -78,7 +78,7 @@ run_one() {
   if [[ -z "$summary" ]]; then
     summary="$(grep 'residue=' "$so" | tail -n1 || true)"
   fi
-  detail="$(grep 'snake_onepass_batch modulus=' "$se" | tail -n1 || true)"
+  detail="$(grep 'snake_onepass_graph_batch modulus=' "$se" | tail -n1 || true)"
 
   residue="$(field residue "$summary")"
   wall="$(field wall_s "$summary")"
