@@ -5,8 +5,10 @@
 #include <cstdint>
 #include <cstdlib>
 #include <cstring>
+#include <fstream>
 #include <iomanip>
 #include <iostream>
+#include <string>
 
 #define RAMSTREAM_BIDESC_COMPACT_NO_MAIN
 #include "../oneesan_cuda_gridfp_ramstream32_factorized_bidesc_compact.cu"
@@ -22,6 +24,25 @@ static uint64_t augmax(const CpuLowSparsePersistentPool& p) {
     return p.sticky_worker_cells.empty()
         ? 0
         : *std::max_element(p.sticky_worker_cells.begin(), p.sticky_worker_cells.end());
+}
+
+static uint64_t ramstream_proc_status_kib(const char* wanted) {
+#ifdef __linux__
+    std::ifstream in("/proc/self/status");
+    std::string key;
+    while (in >> key) {
+        if (key == wanted) {
+            uint64_t value = 0;
+            in >> value;
+            return value;
+        }
+        std::string rest;
+        std::getline(in, rest);
+    }
+#else
+    (void)wanted;
+#endif
+    return 0;
 }
 
 int main(int argc, char** argv) {
@@ -51,8 +72,14 @@ int main(int argc, char** argv) {
     WindowPlan low_wp = make_direct2d_window(false);
     auto jobs = make_cpu_low_jobs(n + 1, low_wp);
 
+    uint64_t rss_before_workspace_kib = workspace_only
+        ? ramstream_proc_status_kib("VmRSS:") : 0;
     CpuLowWorkerExactWorkspace ws = cpu_low_build_worker_exact_workspace(
         jobs, sparse, storage, layout);
+    uint64_t rss_after_workspace_kib = workspace_only
+        ? ramstream_proc_status_kib("VmRSS:") : 0;
+    uint64_t peak_rss_kib = workspace_only
+        ? ramstream_proc_status_kib("VmHWM:") : 0;
     if (!ws.structural_audit_ok || ws.audited_jobs == 0 || ws.audited_cells == 0)
         return 6;
 
@@ -83,6 +110,9 @@ int main(int argc, char** argv) {
                   << " workspace_dense_index_mib=" << dense_index_mib
                   << " workspace_dense_reserved_mib=" << dense_reserved_mib
                   << " workspace_transition_mib=" << transition_mib
+                  << " rss_before_workspace_kib=" << rss_before_workspace_kib
+                  << " rss_after_workspace_kib=" << rss_after_workspace_kib
+                  << " peak_rss_kib=" << peak_rss_kib
                   << " dense_pages_2m=" << ws.dense.universe_2m.size()
                   << " dense_pages_4k=" << ws.dense.universe_4k.size()
                   << " sparse_nn_ops=" << sparse.nn_orbit_ops.size()
