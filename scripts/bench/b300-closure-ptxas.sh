@@ -10,26 +10,26 @@ mkdir -p "$(dirname "$OUT")" "$LOGDIR"
 PARSER="$ONEESAN_ROOT/scripts/bench/parse-ptxas-resources.py"
 
 build_one(){
-  local label="$1" script="$2" extra_name="$3" extra_value="$4"
+  local label="$1" script="$2"; shift 2
   local log="$LOGDIR/${label}.ptxas.log"
   echo "=== ptxas build $label ===" >&2
-  if [[ -n "$extra_name" ]]; then
-    env N="$N" ARCH="$ARCH" TRANSPOSE_MODE="$TRANSPOSE_MODE" PM_ACCUM="$PM_ACCUM" TERNARY_KEY4="$TERNARY_KEY4" PTXAS_VERBOSE=1 \
-      "$extra_name=$extra_value" bash "$ONEESAN_ROOT/$script" >"$LOGDIR/${label}.out" 2>"$log"
-  else
-    env N="$N" ARCH="$ARCH" TRANSPOSE_MODE="$TRANSPOSE_MODE" PM_ACCUM="$PM_ACCUM" TERNARY_KEY4="$TERNARY_KEY4" PTXAS_VERBOSE=1 \
-      bash "$ONEESAN_ROOT/$script" >"$LOGDIR/${label}.out" 2>"$log"
-  fi
+  env N="$N" ARCH="$ARCH" TRANSPOSE_MODE="$TRANSPOSE_MODE" PM_ACCUM="$PM_ACCUM" TERNARY_KEY4="$TERNARY_KEY4" PTXAS_VERBOSE=1 \
+    "$@" bash "$ONEESAN_ROOT/$script" >"$LOGDIR/${label}.out" 2>"$log"
   python3 "$PARSER" "$log" --label "$label"
 }
 
 printf 'backend\tkernel\tregisters\tstack_bytes\tspill_store_bytes\tspill_load_bytes\tsmem_bytes\tcmem0_bytes\n' >"$OUT"
 {
-  build_one zero_thread scripts/build/b300-bucket-snake-zero-graph-batch.sh ZERO_HIGH_PLAN thread
-  build_one zero_shared scripts/build/b300-bucket-snake-zero-graph-batch.sh ZERO_HIGH_PLAN shared
-  build_one pattern10 scripts/build/b300-bucket-snake-pattern10-graph-batch.sh '' ''
-  build_one depth8_thread scripts/build/b300-bucket-snake-pattern10-depth8-graph-batch.sh HIGH_CTX thread
-  build_one depth8_shared scripts/build/b300-bucket-snake-pattern10-depth8-graph-batch.sh HIGH_CTX shared
+  build_one zero_thread scripts/build/b300-bucket-snake-zero-graph-batch.sh ZERO_HIGH_PLAN=thread
+  build_one zero_shared scripts/build/b300-bucket-snake-zero-graph-batch.sh ZERO_HIGH_PLAN=shared
+  build_one pattern10 scripts/build/b300-bucket-snake-pattern10-graph-batch.sh
+  build_one depth8_unrank_thread scripts/build/b300-bucket-snake-pattern10-depth8-graph-batch.sh P10_DECODE=unrank HIGH_CTX=thread
+  build_one depth8_unrank_shared scripts/build/b300-bucket-snake-pattern10-depth8-graph-batch.sh P10_DECODE=unrank HIGH_CTX=shared
+  build_one depth8_unrank_warp scripts/build/b300-bucket-snake-pattern10-depth8-graph-batch.sh P10_DECODE=unrank HIGH_CTX=warp
+  build_one depth8_lut_thread scripts/build/b300-bucket-snake-pattern10-depth8-graph-batch.sh P10_DECODE=lut HIGH_CTX=thread
+  build_one depth8_lut_shared scripts/build/b300-bucket-snake-pattern10-depth8-graph-batch.sh P10_DECODE=lut HIGH_CTX=shared
+  build_one depth4_unrank scripts/build/b300-bucket-snake-pattern10-depth4-graph-batch.sh P10_DECODE=unrank
+  build_one depth4_lut scripts/build/b300-bucket-snake-pattern10-depth4-graph-batch.sh P10_DECODE=lut
 } >>"$OUT"
 
 cat "$OUT"
