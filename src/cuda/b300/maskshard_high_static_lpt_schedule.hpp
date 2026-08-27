@@ -218,6 +218,69 @@ struct MaskShardHighCapLptState {
         return peak;
     }
 
+#ifdef MASKSHARD_HIGH_CAP_LPT_EXACT_CLOSURE_LANES
+    static std::uint64_t exact_closure_lane_work(
+        const std::vector<FBlock>& blocks,
+        const std::array<std::uint16_t, HIGH_LUT_K + 2>& low_count,
+        int cap
+    ) {
+        auto& hc = maskshard_highclosure_rowdepth_compact_cache();
+        if (!hc.built) {
+            std::cerr << "HIGH cap LPT exact closure lanes require compact cache\n";
+            std::exit(379);
+        }
+        if (blocks.size() >= std::size_t(hc.BLOCK_STRIDE)) {
+            std::cerr << "HIGH cap LPT exact closure block count overflow blocks="
+                      << blocks.size() << '\n';
+            std::exit(380);
+        }
+
+        std::uint64_t total = 0;
+        for (int pi = 0; pi < HIGH_LUT_K; ++pi) {
+            for (std::size_t bid = 0; bid < blocks.size(); ++bid) {
+                const FBlock& b = blocks[bid];
+                if (!b.stride) continue;
+                const int hs = int(b.hs);
+                if (hs < 0 || hs >= int(low_count.size())) {
+                    std::cerr << "HIGH cap LPT exact closure invalid hs=" << hs
+                              << " bid=" << bid << '\n';
+                    std::exit(381);
+                }
+                const std::uint64_t lc = low_count[std::size_t(hs)];
+                if (!lc) continue;
+                const std::uint64_t rows = hc.active_count[
+                    hc.count_index(pi, int(bid), cap)];
+                if (!rows) continue;
+#ifdef MASKSHARD_HIGH_CLOSURE_ROWPACK_THRESHOLD
+                const bool pack = b.stride
+                    < std::uint32_t(MASKSHARD_HIGH_CLOSURE_ROWPACK_THRESHOLD);
+#else
+                const bool pack = true;
+#endif
+                std::uint64_t lanes = 0;
+                if (pack) {
+                    if (rows > (std::numeric_limits<std::uint64_t>::max() - 31ULL) / lc) {
+                        std::cerr << "HIGH cap LPT exact packed closure overflow\n";
+                        std::exit(382);
+                    }
+                    const std::uint64_t items = rows * lc;
+                    lanes = ((items + 31ULL) >> 5) << 5;
+                } else {
+                    const std::uint64_t chunks = (lc + 31ULL) >> 5;
+                    if (rows > std::numeric_limits<std::uint64_t>::max() / chunks
+                        || rows * chunks > std::numeric_limits<std::uint64_t>::max() / 32ULL) {
+                        std::cerr << "HIGH cap LPT exact unpacked closure overflow\n";
+                        std::exit(383);
+                    }
+                    lanes = rows * chunks * 32ULL;
+                }
+                checked_add(total, lanes);
+            }
+        }
+        return total;
+    }
+#endif
+
     void prepare() {
         if (prepared) return;
         if (!jobs || ngpu < 1) {
@@ -241,6 +304,19 @@ struct MaskShardHighCapLptState {
         cap_capture_classes = 0;
         baseline_row_peak_work = 0;
         cap_row_peak_work = 0;
+
+#ifdef MASKSHARD_HIGH_CAP_LPT_EXACT_CLOSURE_LANES
+        // v0.71 proved HIGH closure FBlock geometry is invariant inside a LOW
+        // mask popcount class. Build only one representative block vector per
+        // class, then combine it with each job's exact row-depth LOW counts.
+        std::array<std::vector<FBlock>, LOW_LUT_K + 1> closure_blocks_by_class;
+        for (int k = 0; k <= LOW_LUT_K; ++k) {
+            const std::uint32_t mask = k
+                ? ((std::uint32_t(1) << k) - 1u) : 0u;
+            closure_blocks_by_class[std::size_t(k)] =
+                make_factor_main_blocks(true, mask);
+        }
+#endif
 
         std::vector<std::uint64_t> weight(jobs->size(), 0);
         for (int cap = 1; cap <= FULL_CAP; ++cap) {
@@ -269,6 +345,17 @@ struct MaskShardHighCapLptState {
                 }
                 checked_add(work,
                     std::uint64_t(orbit_tasks) * std::uint64_t(HIGH_LUT_K));
+#ifdef MASKSHARD_HIGH_CAP_LPT_EXACT_CLOSURE_LANES
+                const int pc = maskshard_high_cap_lpt_popcount(job.low_mask);
+                if (pc < 0 || pc > LOW_LUT_K) {
+                    std::cerr << "HIGH cap LPT exact closure invalid popcount="
+                              << pc << '\n';
+                    std::exit(384);
+                }
+                checked_add(work, exact_closure_lane_work(
+                    closure_blocks_by_class[std::size_t(pc)],
+                    orbit_low_count, cap));
+#else
                 for (int pi = 0; pi < HIGH_LUT_K; ++pi) {
                     const std::uint64_t warp_tasks =
                         maskshard_highclosure_rowdepth_compact_launch_tasks(
@@ -281,6 +368,7 @@ struct MaskShardHighCapLptState {
                     }
                     checked_add(work, warp_tasks * 32ULL);
                 }
+#endif
                 weight[q] = work;
             }
 
@@ -321,7 +409,13 @@ struct MaskShardHighCapLptState {
                   << " graph_classes_cap_lpt=" << cap_capture_classes
                   << " graph_class_delta="
                   << (std::int64_t(cap_capture_classes)
-                      - std::int64_t(baseline_capture_classes)) << '\n';
+                      - std::int64_t(baseline_capture_classes))
+#ifdef MASKSHARD_HIGH_CAP_LPT_EXACT_CLOSURE_LANES
+                  << " closure_work=exact_scheduled_lanes"
+#else
+                  << " closure_work=warp_tasks_x32"
+#endif
+                  << '\n';
     }
 };
 
