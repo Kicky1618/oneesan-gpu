@@ -6,8 +6,8 @@
 #include <array>
 #include <cstdint>
 
-__constant__ uint32_t* D_P10LUT_LOW = nullptr;
-__constant__ uint32_t* D_P10LUT_HIGH = nullptr;
+__constant__ uint32_t* D_P10LUT_LOW;
+__constant__ uint32_t* D_P10LUT_HIGH;
 __constant__ uint32_t D_P10LUT_LOW_OFF[LOW_LUT_K + 2];
 __constant__ uint32_t D_P10LUT_HIGH_OFF[HIGH_LUT_K + 2];
 
