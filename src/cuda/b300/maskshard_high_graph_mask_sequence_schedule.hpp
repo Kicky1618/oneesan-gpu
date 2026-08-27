@@ -60,7 +60,7 @@ maskshard_build_high_cap_lpt_schedule(
     auto state = std::make_shared<MaskShardHighCapLptState<Job>>();
     state->jobs = &jobs;
     state->ngpu = ngpu;
-    state->baseline = maskshard_build_high_static_lpt_schedule_v074(jobs, ngpu);
+    state->baseline = (maskshard_build_high_static_lpt_schedule)(jobs, ngpu);
 
     MaskShardHighCapLptSchedule<Job> out;
     out.state = state;
