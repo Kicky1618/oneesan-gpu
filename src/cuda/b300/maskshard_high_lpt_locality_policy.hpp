@@ -27,8 +27,8 @@ maskshard_build_high_lpt_from_weights_affinity_locality(
     MaskShardHighStaticLptSchedule out;
     out.jobs_by_gpu.resize(std::size_t(ngpu));
     out.work_by_gpu.assign(std::size_t(ngpu), 0);
-    std::vector<std::array<std::uint8_t, LOW_LUT_K + 1>> seen_class(
-        std::size_t(ngpu));
+    std::vector<std::array<std::uint8_t, LOW_LUT_K + 1>> seen_class{
+        std::size_t(ngpu)};
     for (auto& seen : seen_class) seen.fill(0);
 
     for (std::size_t q : order) {
