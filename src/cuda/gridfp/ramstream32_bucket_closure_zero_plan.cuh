@@ -23,20 +23,26 @@ struct BkczPlan{
     uint8_t local_n=0,cross_depth=0,cross_valid=0,pad=0;
 };
 
-__device__ __forceinline__ void bkcz_plan_add_low(BkczPlan&p,MateID x,int fixed_he){uint32_t loc=0,bid=0;if(bkcz_low_source_ref(x,fixed_he,loc,bid)){if(p.local_n>=BKCZ_MAX_LOCAL)return;p.local[p.local_n++]=bkf_src_pack(bid,loc);}}
-__device__ __forceinline__ void bkcz_plan_add_high(BkczPlan&p,MateID x,int fixed_hs){uint32_t loc=0,bid=0;if(bkcz_high_source_ref(x,fixed_hs,loc,bid)){if(p.local_n>=BKCZ_MAX_LOCAL)return;p.local[p.local_n++]=bkf_src_pack(bid,loc);}}
+// bkf_src_pack() is intentionally host-side because it reports malformed build
+// metadata through iostream/exit. Device plan builders only receive locators
+// and block ids from validated direct tables, so use a branch-free device pack.
+__device__ __forceinline__ uint32_t bkcz_src_pack_device(uint32_t bid,uint32_t loc){return loc|(bid<<BKF_SRC_BLOCK_SHIFT);}
+__device__ __forceinline__ void bkcz_plan_set_cross(BkczPlan&p,uint32_t bid,uint32_t loc,uint32_t depth){p.cross_src=bkcz_src_pack_device(bid,loc);p.cross_depth=uint8_t(depth);p.cross_valid=1;}
+
+__device__ __forceinline__ void bkcz_plan_add_low(BkczPlan&p,MateID x,int fixed_he){uint32_t loc=0,bid=0;if(bkcz_low_source_ref(x,fixed_he,loc,bid)){if(p.local_n>=BKCZ_MAX_LOCAL)return;p.local[p.local_n++]=bkcz_src_pack_device(bid,loc);}}
+__device__ __forceinline__ void bkcz_plan_add_high(BkczPlan&p,MateID x,int fixed_hs){uint32_t loc=0,bid=0;if(bkcz_high_source_ref(x,fixed_hs,loc,bid)){if(p.local_n>=BKCZ_MAX_LOCAL)return;p.local[p.local_n++]=bkcz_src_pack_device(bid,loc);}}
 
 __device__ __forceinline__ BkczPlan bkcz_build_low_plan(MateID d,int fixed_he,int p){
     BkczPlan z{};if(mpair(d,p)!=NN)return z;MateID x=msetpair(d,p,RL);bkcz_plan_add_low(z,x,fixed_he);
     int bal=0;for(int q=p-2;q>=0;--q){MateValue v=mget(d,q);if(bal==0&&v==L){x=msetpair(d,p,LL);x=mset(x,q,R);bkcz_plan_add_low(z,x,fixed_he);}if(v==L)++bal;else if(v==R)--bal;if(bal<0)break;}
     bal=0;bool cross_ok=true;for(int q=p+1;q<LOW_LUT_K+1;++q){MateValue v=mget(d,q);if(bal==0&&v==R){x=msetpair(d,p,RR);x=mset(x,q,L);bkcz_plan_add_low(z,x,fixed_he);}if(v==R)++bal;else if(v==L)--bal;if(bal<0){cross_ok=false;break;}}
-    if(cross_ok){int depth=bal+1;x=msetpair(d,p,RR);uint32_t loc=0,bid=0;if(bkcz_low_source_ref(x,fixed_he+2,loc,bid)){z.cross_src=bkf_src_pack(bid,loc);z.cross_depth=uint8_t(depth);z.cross_valid=1;}}return z;
+    if(cross_ok){uint32_t depth=uint32_t(bal+1);x=msetpair(d,p,RR);uint32_t loc=0,bid=0;if(bkcz_low_source_ref(x,fixed_he+2,loc,bid))bkcz_plan_set_cross(z,bid,loc,depth);}return z;
 }
 __device__ __forceinline__ BkczPlan bkcz_build_high_plan(MateID d,int fixed_hs,int rel){
     BkczPlan z{};if(mpair(d,rel)!=NN)return z;MateID x=msetpair(d,rel,RL);bkcz_plan_add_high(z,x,fixed_hs);
     int bal=0;for(int q=rel+1;q<HIGH_LUT_K+1;++q){MateValue v=mget(d,q);if(bal==0&&v==R){x=msetpair(d,rel,RR);x=mset(x,q,L);bkcz_plan_add_high(z,x,fixed_hs);}if(v==R)++bal;else if(v==L)--bal;if(bal<0)break;}
     bal=0;bool cross_ok=true;for(int q=rel-2;q>=0;--q){MateValue v=mget(d,q);if(bal==0&&v==L){x=msetpair(d,rel,LL);x=mset(x,q,R);bkcz_plan_add_high(z,x,fixed_hs);}if(v==L)++bal;else if(v==R)--bal;if(bal<0){cross_ok=false;break;}}
-    if(cross_ok){int depth=bal+1;x=msetpair(d,rel,LL);uint32_t loc=0,bid=0;if(bkcz_high_source_ref(x,fixed_hs+2,loc,bid)){z.cross_src=bkf_src_pack(bid,loc);z.cross_depth=uint8_t(depth);z.cross_valid=1;}}return z;
+    if(cross_ok){uint32_t depth=uint32_t(bal+1);x=msetpair(d,rel,LL);uint32_t loc=0,bid=0;if(bkcz_high_source_ref(x,fixed_hs+2,loc,bid))bkcz_plan_set_cross(z,bid,loc,depth);}return z;
 }
 
 __device__ __forceinline__ BkczPlan bkcz_forward_low_plan(uint32_t dest_loc,const BucketPhysicalBlock&db,int p){uint32_t dc=bkci_low_code(dest_loc,db.hs);MateID d=p==1?(MateID(dc)|(MateID(db.c)<<(2*LOW_LUT_K))):minsert(MateID(dc),p,N);return bkcz_build_low_plan(d,db.he,p);}
