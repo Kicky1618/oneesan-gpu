@@ -12,6 +12,20 @@
 #undef RAMSTREAM_BIDESC_COMPACT_NO_MAIN
 #include "../ramstream32_cpu_low_domain_worker_dense_page.hpp"
 
+static bool dense_page_plan_same_index(
+    const CpuLowWorkerDensePageIndex& a,
+    const CpuLowWorkerDensePageIndex& b
+) {
+    if (a.universe_2m != b.universe_2m
+        || a.universe_4k != b.universe_4k
+        || a.boundary.size() != b.boundary.size()) return false;
+    for (size_t k = 0; k < a.boundary.size(); ++k) {
+        if (a.boundary[k].pages_2m != b.boundary[k].pages_2m
+            || a.boundary[k].pages_4k != b.boundary[k].pages_4k) return false;
+    }
+    return true;
+}
+
 int main(int argc, char** argv) {
     int n = argc > 1 ? std::atoi(argv[1]) : TARGET_W - 1;
     if (n < 2 || n + 1 != TARGET_W || n + 1 > MAXW) return 1;
@@ -41,8 +55,15 @@ int main(int argc, char** argv) {
     auto mt0 = std::chrono::steady_clock::now();
     CpuLowDomainPageMaskIndex mask_index = cpu_low_build_domain_page_mask_index();
     double mask_index_build_s = ram_seconds_since(mt0);
-    CpuLowWorkerDensePageIndex dense = cpu_low_build_worker_dense_page_index(
+
+    CpuLowWorkerDensePageIndex legacy = cpu_low_build_worker_dense_page_index(
         ordered, layout, storage, mask_index);
+    CpuLowWorkerDensePageIndex dense = cpu_low_build_worker_dense_page_index_streaming(
+        ordered, layout, storage, mask_index);
+    if (!dense_page_plan_same_index(legacy, dense)) {
+        std::cerr << "dense page builder index mismatch\n";
+        return 5;
+    }
 
     uint64_t entries2 = 0, entries4 = 0;
     uint64_t max_boundary2 = 0, max_boundary4 = 0;
@@ -67,6 +88,9 @@ int main(int argc, char** argv) {
     if (entries4 && dense.universe_4k.empty()) return 3;
     if (dense.boundary.size() != ordered.size() + 1) return 4;
 
+    double streaming_vs_legacy = legacy.build_s > 0.0
+        ? dense.build_s / legacy.build_s : 0.0;
+
     std::cout << std::setprecision(12)
               << "cpu_low_worker_dense_page_plan OK"
               << " objective=dense-page-id-substrate-v5.30-plan"
@@ -90,8 +114,15 @@ int main(int argc, char** argv) {
               << double(dense_ref_bytes) / double(1 << 20)
               << " dense_total_index_mib="
               << double(dense.bytes()) / double(1 << 20)
+              << " legacy_reserved_mib="
+              << double(legacy.reserved_bytes()) / double(1 << 20)
+              << " streaming_reserved_mib="
+              << double(dense.reserved_bytes()) / double(1 << 20)
               << " mask_index_build_s=" << mask_index_build_s
+              << " legacy_dense_build_s=" << legacy.build_s
+              << " streaming_dense_build_s=" << dense.build_s
+              << " streaming_vs_legacy_time_ratio=" << streaming_vs_legacy
               << " dense_build_s=" << dense.build_s
-              << '\n';
+              << " identical_index=1\n";
     return 0;
 }
