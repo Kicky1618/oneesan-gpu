@@ -107,6 +107,7 @@ printf 'high_ctx\ttranspose_mode\tternary_key4\tresidue\twall_s\tforward_high_s\
 for mode in sync events pipeline; do
   run_one "$mode" thread
   run_one "$mode" shared
+  run_one "$mode" resolved
   run_one "$mode" warp
 done
 
