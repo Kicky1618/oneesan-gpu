@@ -21,9 +21,9 @@
 // synchronous cudaMemcpyToSymbol() for every HIGH job. That would both break
 // the source lifetime required by an asynchronous row batch and reintroduce a
 // host/device barrier between jobs. Precompute every unsaturated plan once,
-// retain it for the process lifetime, and enqueue both constant updates on
-// stream 0. At full cap the compact kernel uses physical BLOCKED order and reads
-// neither plan array, so no plan copy is needed at all.
+// retain it for the process lifetime, and enqueue both constant updates on the
+// HIGH execution stream. At full cap the compact kernel uses physical BLOCKED
+// order and reads neither plan array, so no plan copy is needed at all.
 struct MaskShardHighRowBatchPlan {
     std::array<Code, HIGH_LUT_K + 3> prefix{};
     std::array<std::uint16_t, HIGH_LUT_K + 2> low_count{};
@@ -177,20 +177,26 @@ static Code maskshard_configure_row_depth_compact_group_row_batch_async(
 #ifdef MASKSHARD_HIGH_ROW_PLAN_COPY_DEDUP
     // Every DP row creates fresh worker threads, hence this starts null for the
     // row. Jobs are globally sorted by work/popcount, so a worker sees long runs
-    // of the same class plan. Stream 0 already contains the previous plan copy
-    // before all kernels that consume it; skipping an identical pointer is safe.
+    // of the same class plan. The worker stream already contains the previous
+    // plan copy before all kernels that consume it; skipping an identical
+    // pointer is safe.
     if (G_MS_HIGH_LAST_ROW_BATCH_PLAN == &p) return p.total;
     G_MS_HIGH_LAST_ROW_BATCH_PLAN = &p;
+#endif
+#ifdef MASKSHARD_HIGH_PERTHREAD_STREAM
+    const cudaStream_t stream = maskshard_high_execution_stream();
+#else
+    const cudaStream_t stream = cudaStream_t(0);
 #endif
     ck(cudaMemcpyToSymbolAsync(
            D_MS_ROW_DEPTH_COMPACT_TASK_PREFIX,
            p.prefix.data(), sizeof(p.prefix), 0,
-           cudaMemcpyHostToDevice, cudaStream_t(0)),
+           cudaMemcpyHostToDevice, stream),
        "HIGH row-batch compact task prefix");
     ck(cudaMemcpyToSymbolAsync(
            D_MS_ROW_DEPTH_COMPACT_JOB_LOW_COUNT,
            p.low_count.data(), sizeof(p.low_count), 0,
-           cudaMemcpyHostToDevice, cudaStream_t(0)),
+           cudaMemcpyHostToDevice, stream),
        "HIGH row-batch compact LOW counts");
     return p.total;
 }
