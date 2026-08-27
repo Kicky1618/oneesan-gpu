@@ -14,16 +14,18 @@ HIGH_CTX="${HIGH_CTX:-warp}"
 TRANSPOSE_MODE="${TRANSPOSE_MODE:-pipeline}"
 PM_ACCUM="${PM_ACCUM:-0}"
 TERNARY_KEY4="${TERNARY_KEY4:-1}"
+BUCKET_THREADS="${BUCKET_THREADS:-256}"
 REPEATS="${REPEATS:-3}"
-PREFIX="${PREFIX:-$ONEESAN_ROOT/work/b300_depthcode_decode_load_ab_n${N}_${HIGH_CTX}_${TRANSPOSE_MODE}_pm${PM_ACCUM}_key4${TERNARY_KEY4}}"
+PREFIX="${PREFIX:-$ONEESAN_ROOT/work/b300_depthcode_decode_load_ab_n${N}_${HIGH_CTX}_${TRANSPOSE_MODE}_pm${PM_ACCUM}_key4${TERNARY_KEY4}_t${BUCKET_THREADS}}"
 RESULT="${RESULT:-${PREFIX}.tsv}"
 SUMMARY="${SUMMARY:-${PREFIX}_summary.tsv}"
 RESOURCES="${RESOURCES:-${PREFIX}_ptxas.tsv}"
 LOGDIR="${LOGDIR:-${PREFIX}_logs}"
 PARSER="$ONEESAN_ROOT/scripts/bench/parse-ptxas-resources.py"
 
-case "$HIGH_CTX" in thread|resolved|warp) ;; *) echo "HIGH_CTX must be thread, resolved, or warp" >&2; exit 2;; esac
+case "$HIGH_CTX" in thread|resolved|warp|warpstriped) ;; *) echo "HIGH_CTX must be thread, resolved, warp, or warpstriped" >&2; exit 2;; esac
 case "$TRANSPOSE_MODE" in sync|events|pipeline) ;; *) echo "TRANSPOSE_MODE must be sync, events, or pipeline" >&2; exit 2;; esac
+if [[ "$HIGH_CTX" == warpstriped ]] && (( BUCKET_THREADS < 32 || BUCKET_THREADS > 1024 || BUCKET_THREADS % 32 != 0 )); then echo "warpstriped requires BUCKET_THREADS multiple of 32 in [32,1024]" >&2; exit 2; fi
 if (( NGPU != 8 )); then echo "depthcode decode-load A/B requires NGPU=8" >&2; exit 2; fi
 if (( REPEATS < 1 )); then echo "REPEATS must be >=1" >&2; exit 2; fi
 if [[ "$PM_ACCUM" != 0 && "$PM_ACCUM" != 1 ]]; then echo "PM_ACCUM must be 0 or 1" >&2; exit 2; fi
@@ -52,7 +54,7 @@ run_one(){
   local mode="$1" bin="$2" rep="$3"
   local so="$LOGDIR/${mode}_r${rep}.out" se="$LOGDIR/${mode}_r${rep}.err"
   echo "=== run decode_load=$mode repeat=$rep/$REPEATS ===" >&2
-  "$bin" "$N" "$TARGET_MIB" "$MAX_WINDOW" "$NGPU" "$MOD" >"$so" 2>"$se"
+  BUCKET_THREADS="$BUCKET_THREADS" "$bin" "$N" "$TARGET_MIB" "$MAX_WINDOW" "$NGPU" "$MOD" >"$so" 2>"$se"
   local line detail plan builder residue wall fh fl rl rh ts meta fattach rattach rewritten none skipped sentinel skipfrac
   line="$(grep '^residue=' "$so" | tail -n1 || true)"; [[ -n "$line" ]] || { echo "$mode missing residue line" >&2; exit 3; }
   residue="$(field residue "$line")"; wall="$(field wall_s "$line")"; [[ "$residue" == "$EXPECT" ]] || { echo "$mode residue mismatch got=$residue expected=$EXPECT" >&2; exit 4; }
@@ -105,4 +107,4 @@ print(f"decode_load_skipped_ops={q['global']['decode_load_skipped_ops']}")
 print(f"summary={dst}")
 PY
 cat "$RESOURCES"
-echo "depthcode-decode-load-ab OK n=$N high_ctx=$HIGH_CTX repeats=$REPEATS transpose=$TRANSPOSE_MODE result=$RESULT resources=$RESOURCES" >&2
+echo "depthcode-decode-load-ab OK n=$N high_ctx=$HIGH_CTX repeats=$REPEATS threads=$BUCKET_THREADS transpose=$TRANSPOSE_MODE result=$RESULT resources=$RESOURCES" >&2
