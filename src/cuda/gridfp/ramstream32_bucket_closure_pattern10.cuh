@@ -53,8 +53,14 @@ static void build_reverse_split54_pattern10(
 }
 
 __device__ __forceinline__ BkczPlan bkcp10_build_low_plan(MateID d,int fixed_he,int p,uint16_t id){
-    using namespace oneesan::gridfp;BkczPlan z{};if(id==CLOSURE_PATTERN10_NONE||mpair(d,p)!=NN)return z;MateID x=msetpair(d,p,RL);bkcz_plan_add_low(z,x,fixed_he);uint16_t lm=0,rm=0;closure_pattern10_decode(id,LOW_LUT_K+1,p,lm,rm);for(int i=0;i<p-1;++i)if((lm>>i)&1u){int q=p-2-i;x=msetpair(d,p,LL);x=mset(x,q,R);bkcz_plan_add_low(z,x,fixed_he);}for(int i=0;i<LOW_LUT_K-p;++i)if((rm>>i)&1u){int q=p+1+i;x=msetpair(d,p,RR);x=mset(x,q,L);bkcz_plan_add_low(z,x,fixed_he);}int depth=low_cross_preimage_partial(d,LOW_LUT_K+1,p,x);if(depth>0){uint32_t loc=0,bid=0;if(bkcz_low_source_ref(x,fixed_he+2,loc,bid)){z.cross_src=bkf_src_pack(bid,loc);z.cross_depth=uint8_t(depth);z.cross_valid=1;}}return z;
+    using namespace oneesan::gridfp;BkczPlan z{};if(id==CLOSURE_PATTERN10_NONE||mpair(d,p)!=NN)return z;MateID x=msetpair(d,p,RL);bkcz_plan_add_low(z,x,fixed_he);uint16_t lm=0,rm=0;closure_pattern10_decode(id,LOW_LUT_K+1,p,lm,rm);
+    while(lm){int i=__ffs(int(lm))-1;lm=uint16_t(lm&(lm-1));int q=p-2-i;x=msetpair(d,p,LL);x=mset(x,q,R);bkcz_plan_add_low(z,x,fixed_he);}
+    while(rm){int i=__ffs(int(rm))-1;rm=uint16_t(rm&(rm-1));int q=p+1+i;x=msetpair(d,p,RR);x=mset(x,q,L);bkcz_plan_add_low(z,x,fixed_he);}
+    int depth=low_cross_preimage_partial(d,LOW_LUT_K+1,p,x);if(depth>0){uint32_t loc=0,bid=0;if(bkcz_low_source_ref(x,fixed_he+2,loc,bid)){z.cross_src=bkf_src_pack(bid,loc);z.cross_depth=uint8_t(depth);z.cross_valid=1;}}return z;
 }
 __device__ __forceinline__ BkczPlan bkcp10_build_high_plan(MateID d,int fixed_hs,int rel,uint16_t id){
-    using namespace oneesan::gridfp;BkczPlan z{};if(id==CLOSURE_PATTERN10_NONE||mpair(d,rel)!=NN)return z;MateID x=msetpair(d,rel,RL);bkcz_plan_add_high(z,x,fixed_hs);uint16_t lm=0,rm=0;closure_pattern10_decode(id,HIGH_LUT_K+1,rel,lm,rm);for(int i=0;i<rel-1;++i)if((lm>>i)&1u){int q=rel-2-i;x=msetpair(d,rel,LL);x=mset(x,q,R);bkcz_plan_add_high(z,x,fixed_hs);}for(int i=0;i<HIGH_LUT_K-rel;++i)if((rm>>i)&1u){int q=rel+1+i;x=msetpair(d,rel,RR);x=mset(x,q,L);bkcz_plan_add_high(z,x,fixed_hs);}int depth=high_cross_preimage_partial(d,HIGH_LUT_K+1,rel,x);if(depth>0){uint32_t loc=0,bid=0;if(bkcz_high_source_ref(x,fixed_hs+2,loc,bid)){z.cross_src=bkf_src_pack(bid,loc);z.cross_depth=uint8_t(depth);z.cross_valid=1;}}return z;
+    using namespace oneesan::gridfp;BkczPlan z{};if(id==CLOSURE_PATTERN10_NONE||mpair(d,rel)!=NN)return z;MateID x=msetpair(d,rel,RL);bkcz_plan_add_high(z,x,fixed_hs);uint16_t lm=0,rm=0;closure_pattern10_decode(id,HIGH_LUT_K+1,rel,lm,rm);
+    while(lm){int i=__ffs(int(lm))-1;lm=uint16_t(lm&(lm-1));int q=rel-2-i;x=msetpair(d,rel,LL);x=mset(x,q,R);bkcz_plan_add_high(z,x,fixed_hs);}
+    while(rm){int i=__ffs(int(rm))-1;rm=uint16_t(rm&(rm-1));int q=rel+1+i;x=msetpair(d,rel,RR);x=mset(x,q,L);bkcz_plan_add_high(z,x,fixed_hs);}
+    int depth=high_cross_preimage_partial(d,HIGH_LUT_K+1,rel,x);if(depth>0){uint32_t loc=0,bid=0;if(bkcz_high_source_ref(x,fixed_hs+2,loc,bid)){z.cross_src=bkf_src_pack(bid,loc);z.cross_depth=uint8_t(depth);z.cross_valid=1;}}return z;
 }
