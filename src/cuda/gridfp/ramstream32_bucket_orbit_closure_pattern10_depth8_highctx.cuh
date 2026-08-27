@@ -2,6 +2,11 @@
 
 #include "ramstream32_bucket_orbit_closure_pattern10_depth8.cuh"
 
+#ifndef P10D8_HIGH_DEPTH_LOAD
+#define P10D8_HIGH_DEPTH_LOAD(ptr,q) ((ptr)[(q)])
+#define P10D8_HIGH_DEPTH_LOAD_LOCAL 1
+#endif
+
 // HIGH-window kernels map one orbit operation to blockIdx.y and spread its LOW
 // columns across threadIdx.x.  All x-threads therefore used to reload/decode
 // the same orbit word and three BucketPhysicalBlocks.  Hoist that invariant
@@ -20,7 +25,7 @@ __global__ void bucket_high_orbit_closure_pattern10_depth8_highctx_kernel(int p)
     if(threadIdx.x==0){uint32_t na=D_BKF_HIGH_NN_OFF[oi],nb=D_BKF_HIGH_NN_OFF[oi+1],ra=D_BKF_HIGH_NRNL_OFF[oi],rb=D_BKF_HIGH_NRNL_OFF[oi+1];c.n0=nb-na;c.n1=ra;c.total=c.n0+(rb-ra);}__syncthreads();
     for(uint32_t k=blockIdx.y;k<c.total;k+=gridDim.y){
         if(threadIdx.x==0){
-            c.valid=0;bool nn=k<c.n0;uint32_t qi=nn?(D_BKF_HIGH_NN_OFF[oi]+k):(c.n1+k-c.n0);BucketOrbitOp op=nn?D_BKF_HIGH_NN[qi]:D_BKF_HIGH_NRNL[qi];uint8_t dep=nn?D_P10D8_F_HIGH_NN[qi]:D_P10D8_F_HIGH_NRNL[qi];uint32_t sl=bkf_orbit_src(op),jl=bkf_orbit_partner(op),dl=bkf_orbit_drop(op);c.ss=bkf_loc_owner(sl);c.js=bkf_loc_owner(jl);c.ds=bkf_loc_owner(dl);c.xb=bkf_high_main(c.ss,bid);
+            c.valid=0;bool nn=k<c.n0;uint32_t qi=nn?(D_BKF_HIGH_NN_OFF[oi]+k):(c.n1+k-c.n0);BucketOrbitOp op=nn?D_BKF_HIGH_NN[qi]:D_BKF_HIGH_NRNL[qi];uint8_t dep=nn?P10D8_HIGH_DEPTH_LOAD(D_P10D8_F_HIGH_NN,qi):P10D8_HIGH_DEPTH_LOAD(D_P10D8_F_HIGH_NRNL,qi);uint32_t sl=bkf_orbit_src(op),jl=bkf_orbit_partner(op),dl=bkf_orbit_drop(op);c.ss=bkf_loc_owner(sl);c.js=bkf_loc_owner(jl);c.ds=bkf_loc_owner(dl);c.xb=bkf_high_main(c.ss,bid);
             if(c.xb.valid&&c.xb.rows&&c.xb.cols){uint32_t jbid=bid;if(p==LOW_LUT_K+1){uint32_t center=nn?uint32_t(R):uint32_t(N);int he=int(c.xb.hs)+(center==uint32_t(R)?1:0);jbid=uint32_t(3*he+int(center));}c.jb=bkf_high_main(c.js,jbid);c.db=bkf_high_block(c.ds,uint32_t(c.xb.hs));c.sr=bkf_loc_rank(sl);c.jr=bkf_loc_rank(jl);c.dr=bkf_loc_rank(dl);c.kind=uint8_t(nn?CPU_ORBIT_NN:CPU_ORBIT_NR);c.plan=bkcpd8_forward_high(bkcp10_id(op),dep,dl,c.db,p);c.valid=1;}
         }
         __syncthreads();
@@ -34,7 +39,7 @@ __global__ void bucket_reverse_high_pattern10_depth8_highctx_kernel(int p){
     if(threadIdx.x==0){uint32_t na=D_RS54_HIGH_NN_OFF[oi],nb=D_RS54_HIGH_NN_OFF[oi+1],ra=D_RS54_HIGH_NR_OFF[oi],rb=D_RS54_HIGH_NR_OFF[oi+1],la=D_RS54_HIGH_NL_OFF[oi],lb=D_RS54_HIGH_NL_OFF[oi+1];c.n0=nb-na;c.n1=rb-ra;c.total=c.n0+c.n1+(lb-la);}__syncthreads();
     for(uint32_t k=blockIdx.y;k<c.total;k+=gridDim.y){
         if(threadIdx.x==0){
-            c.valid=0;uint32_t qi=0,kind=0;BucketOrbitOp op;uint8_t dep;if(k<c.n0){kind=CPU_ORBIT_NN;qi=D_RS54_HIGH_NN_OFF[oi]+k;op=D_RS54_HIGH_NN[qi];dep=D_P10D8_R_HIGH_NN[qi];}else if(k<c.n0+c.n1){kind=CPU_ORBIT_NR;qi=D_RS54_HIGH_NR_OFF[oi]+k-c.n0;op=D_RS54_HIGH_NR[qi];dep=D_P10D8_R_HIGH_NR[qi];}else{kind=CPU_ORBIT_NL;qi=D_RS54_HIGH_NL_OFF[oi]+k-c.n0-c.n1;op=D_RS54_HIGH_NL[qi];dep=D_P10D8_R_HIGH_NL[qi];}uint32_t sl=bkf_orbit_src(op),jl=bkf_orbit_partner(op),dl=bkf_orbit_drop(op);c.ss=bkf_loc_owner(sl);c.js=bkf_loc_owner(jl);c.ds=bkf_loc_owner(dl);c.xb=bkf_high_main(c.ss,bid);
+            c.valid=0;uint32_t qi=0,kind=0;BucketOrbitOp op;uint8_t dep;if(k<c.n0){kind=CPU_ORBIT_NN;qi=D_RS54_HIGH_NN_OFF[oi]+k;op=D_RS54_HIGH_NN[qi];dep=P10D8_HIGH_DEPTH_LOAD(D_P10D8_R_HIGH_NN,qi);}else if(k<c.n0+c.n1){kind=CPU_ORBIT_NR;qi=D_RS54_HIGH_NR_OFF[oi]+k-c.n0;op=D_RS54_HIGH_NR[qi];dep=P10D8_HIGH_DEPTH_LOAD(D_P10D8_R_HIGH_NR,qi);}else{kind=CPU_ORBIT_NL;qi=D_RS54_HIGH_NL_OFF[oi]+k-c.n0-c.n1;op=D_RS54_HIGH_NL[qi];dep=P10D8_HIGH_DEPTH_LOAD(D_P10D8_R_HIGH_NL,qi);}uint32_t sl=bkf_orbit_src(op),jl=bkf_orbit_partner(op),dl=bkf_orbit_drop(op);c.ss=bkf_loc_owner(sl);c.js=bkf_loc_owner(jl);c.ds=bkf_loc_owner(dl);c.xb=bkf_high_main(c.ss,bid);
             if(c.xb.valid&&c.xb.rows&&c.xb.cols){c.jb=bkf_high_main(c.js,bkcp10_reverse_high_jblock(bid,c.xb,p,kind));c.db=bkf_high_block(c.ds,uint32_t(c.xb.hs));c.sr=bkf_loc_rank(sl);c.jr=bkf_loc_rank(jl);c.dr=bkf_loc_rank(dl);c.kind=uint8_t(kind);c.plan=edge?bkcpd8_reverse_high(bkcp10_id(op),dep,sl,c.xb,p,true):bkcpd8_reverse_high(bkcp10_id(op),dep,dl,c.db,p,false);c.valid=1;}
         }
         __syncthreads();
@@ -45,3 +50,8 @@ __global__ void bucket_reverse_high_pattern10_depth8_highctx_kernel(int p){
 
 static void bucket_launch_high_orbit_closure_pattern10_depth8_highctx(const StorageLayout&layout,int threads=256,int gx=16,int gy=8){dim3 block(threads),grid(gx,gy,unsigned(layout.main_blocks.size()));for(int p=TARGET_W-1;p>=LOW_LUT_K+1;--p){bucket_high_orbit_closure_pattern10_depth8_highctx_kernel<<<grid,block>>>(p);ck(cudaGetLastError(),"bucket high pattern10 depth8 highctx");}}
 static void bucket_launch_reverse_high_pattern10_depth8_highctx(const StorageLayout&layout,int threads=256,int gx=16,int gy=8){dim3 block(threads),grid(gx,gy,unsigned(layout.main_blocks.size()));for(int p=LOW_LUT_K+1;p<TARGET_W;++p){bucket_reverse_high_pattern10_depth8_highctx_kernel<<<grid,block>>>(p);ck(cudaGetLastError(),"bucket reverse high pattern10 depth8 highctx");}}
+
+#ifdef P10D8_HIGH_DEPTH_LOAD_LOCAL
+#undef P10D8_HIGH_DEPTH_LOAD
+#undef P10D8_HIGH_DEPTH_LOAD_LOCAL
+#endif
