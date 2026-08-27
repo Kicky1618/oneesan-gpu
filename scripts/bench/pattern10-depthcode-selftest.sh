@@ -22,9 +22,11 @@ if grep -Fq "OK W=$W" <<<"$out"; then
   grep -Fq 'temporary_depth_bytes=0' <<<"$out"
   grep -Fq 'decode_unrank=0' <<<"$out"
   grep -Fq 'payload_masks=1' <<<"$out"
-  grep -Fq 'high_ctx=thread,resolved,warp' <<<"$out"
+  grep -Fq 'high_ctx=thread,resolved,warp,warpstriped' <<<"$out"
   grep -Fq "decode_load=$DECODE_LOAD" <<<"$out"
   grep -Fq 'warpctx_dynamic_smem=1' <<<"$out"
   grep -Fq 'warpctx_smem_bytes_256=' <<<"$out"
+  grep -Fq 'warpstriped_threads=256' <<<"$out"
+  grep -Fq 'warpstriped_full_warp_required=1' <<<"$out"
 fi
-echo "pattern10-depthcode-selftest OK W=$W pm_accum=$PM_ACCUM high_ctx=thread,resolved,warp decode_load=$DECODE_LOAD warpctx_dynamic_smem=1" >&2
+echo "pattern10-depthcode-selftest OK W=$W pm_accum=$PM_ACCUM high_ctx=thread,resolved,warp,warpstriped decode_load=$DECODE_LOAD warpctx_dynamic_smem=1" >&2
