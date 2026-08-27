@@ -40,6 +40,27 @@ __device__ __forceinline__ BkczPlan bkcz_reverse_low_plan(uint32_t dest_loc,cons
 __device__ __forceinline__ BkczPlan bkcz_reverse_high_plan(uint32_t dest_loc,const BucketPhysicalBlock&db,int p,bool edge){uint32_t dc=bkci_high_code(dest_loc,db.he);int rel=p-LOW_LUT_K;MateID d=edge?(MateID(db.c)|(MateID(dc)<<2)):blocked_exclude_reverse(MateID(dc),HIGH_LUT_K+1,rel);return bkcz_build_high_plan(d,db.hs,rel);}
 
 static constexpr uint32_t bkcz_pow3_const(int n){return n<=0?1u:3u*bkcz_pow3_const(n-1);}
+
+// Factor codes contain only N/R/L, packed as base-4 digits 0/1/2. Convert four
+// symbols at a time: a 4-symbol chunk contributes d0+3*d1+9*d2+27*d3, and
+// successive chunks are separated by 3^4=81. W=28 therefore needs only four
+// unrolled chunk iterations for either 13/14-symbol factor instead of 13/14
+// serial multiply-add steps in gdx_ternary_key(). Bits above K are zero in all
+// StorageFactorHost codes, so the final partial chunk needs no mask.
+template<int K>
+__host__ __device__ __forceinline__ uint32_t bkcz_ternary_key4_legal(uint32_t code){
+    static_assert(K>0&&K<=16,"chunked ternary key expects a 32-bit legal factor code");
+    uint32_t key=0,weight=1u;
+#pragma unroll
+    for(int pos=0;pos<K;pos+=4){
+        uint32_t x=code>>(2*pos);
+        uint32_t chunk=(x&3u)+3u*((x>>2)&3u)+9u*((x>>4)&3u)+27u*((x>>6)&3u);
+        key+=chunk*weight;
+        weight*=81u;
+    }
+    return key;
+}
+
 #if GPU_DIRECT_PM_ACCUM
 using BkczCrossAccum=uint64_t;
 __device__ __forceinline__ BkczCrossAccum bkcz_cross_add(BkczCrossAccum a,Count b){return a+uint64_t(b);}
@@ -55,7 +76,7 @@ __device__ __forceinline__ BkczCrossAccum bkcz_sum_high_preimages_fast(
     uint32_t dest_code,uint32_t depth,uint32_t source_he,uint32_t source_bid,uint32_t source_low_loc
 ){
     BkczCrossAccum sum=0;int s=int(depth);uint32_t low_slot=bkf_loc_owner(source_low_loc),low_rank=bkf_loc_rank(source_low_loc);BucketPhysicalBlock sb=bkf_low_main(low_slot,source_bid);
-    uint32_t key=gdx_ternary_key<HIGH_LUT_K>(dest_code),weight=1u;
+    uint32_t key=bkcz_ternary_key4_legal<HIGH_LUT_K>(dest_code),weight=1u;
 #pragma unroll
     for(int pos=0;pos<HIGH_LUT_K;++pos){
         uint32_t v=(dest_code>>(2*pos))&3u;
@@ -73,7 +94,7 @@ __device__ __forceinline__ BkczCrossAccum bkcz_sum_low_preimages_fast(
     uint32_t dest_code,uint32_t depth,uint32_t source_hs,uint32_t source_bid,uint32_t source_high_loc
 ){
     BkczCrossAccum sum=0;int s=int(depth);uint32_t high_slot=bkf_loc_owner(source_high_loc),high_rank=bkf_loc_rank(source_high_loc);BucketPhysicalBlock sb=bkf_high_main(high_slot,source_bid);
-    uint32_t key=gdx_ternary_key<LOW_LUT_K>(dest_code),weight=bkcz_pow3_const(LOW_LUT_K-1);
+    uint32_t key=bkcz_ternary_key4_legal<LOW_LUT_K>(dest_code),weight=bkcz_pow3_const(LOW_LUT_K-1);
 #pragma unroll
     for(int pos=LOW_LUT_K-1;pos>=0;--pos){
         uint32_t v=(dest_code>>(2*pos))&3u;
