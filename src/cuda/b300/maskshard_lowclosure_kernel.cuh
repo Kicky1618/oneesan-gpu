@@ -184,6 +184,10 @@ __global__ void maskshard_main_lowdesc_closure_cols_inplace_kernel(
 #include "maskshard_high_row_batch_async.cuh"
 #endif
 
+#ifdef MASKSHARD_HIGH_RELEASE_COMPACT_COUNTS
+#include "maskshard_high_release_compact_counts.cuh"
+#endif
+
 #ifdef MASKSHARD_LOW_PAIR_SYNC
 #include "maskshard_low_pair_sync.cuh"
 #endif
