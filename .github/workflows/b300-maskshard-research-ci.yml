@@ -89,6 +89,9 @@ jobs:
           g++ -O3 -std=c++17 -Wall -Wextra -Werror \
             src/cpp/probes/factor_high_cuda_graph.cpp \
             -o build/factor_high_cuda_graph
+          g++ -O3 -std=c++17 -Wall -Wextra -Werror \
+            src/cpp/probes/factor_high_stream_end_sync.cpp \
+            -o build/factor_high_stream_end_sync
           python3 -m py_compile \
             scripts/bench/b300_maskshard_highgroupsync_ab.py \
             scripts/bench/b300_maskshard_highdeadcopies_ab.py \
@@ -105,7 +108,8 @@ jobs:
             scripts/bench/b300_maskshard_highreleasecounts_ab.py \
             scripts/bench/b300_maskshard_highperthreadstream_ab.py \
             scripts/bench/b300_maskshard_highclosureclass_ab.py \
-            scripts/bench/b300_maskshard_highgraph_ab.py
+            scripts/bench/b300_maskshard_highgraph_ab.py \
+            scripts/bench/b300_maskshard_highstreamsync_ab.py
       - name: Run structural smoke tests
         shell: bash
         run: |
@@ -130,6 +134,7 @@ jobs:
           build/factor_high_perthread_stream 28 14 13
           build/factor_highclosure_launch_class_cache 28 14 13
           build/factor_high_cuda_graph 28 14 13 8
+          build/factor_high_stream_end_sync 28 14 13 8
 
   cuda-compile:
     if: ${{ github.event_name == 'workflow_dispatch' && inputs.full_cuda }}
@@ -144,7 +149,7 @@ jobs:
           - {width: 28, low: 14, high: 13}
     steps:
       - uses: actions/checkout@v4
-      - name: Compile latest HIGH CUDA-Graph backend
+      - name: Compile latest HIGH stream-end-sync backend
         shell: bash
         run: |
           set -euo pipefail
@@ -153,5 +158,5 @@ jobs:
             -DTARGET_W=${{ matrix.width }} \
             -DLOW_LUT_K=${{ matrix.low }} \
             -DHIGH_LUT_K=${{ matrix.high }} \
-            src/cuda/b300/oneesan_b300_maskshard_v072_highgraph.cu \
-            -o build/maskshard_v072_w${{ matrix.width }}
+            src/cuda/b300/oneesan_b300_maskshard_v073_highstreamsync.cu \
+            -o build/maskshard_v073_w${{ matrix.width }}

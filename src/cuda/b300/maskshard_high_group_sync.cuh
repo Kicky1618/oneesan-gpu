@@ -11,6 +11,11 @@
 #ifndef MASKSHARD_LOW_MASKBATCH_CUDA_GRAPH
 #error "automatic HIGH sync hook currently requires CUDA-Graph LOW backend"
 #endif
+#ifdef MASKSHARD_HIGH_STREAM_END_SYNC
+#ifndef MASKSHARD_HIGH_PERTHREAD_STREAM
+#error "HIGH stream-end sync requires the per-thread HIGH execution stream"
+#endif
+#endif
 
 // One HIGH job queues:
 //   gather, then HIGH_LUT_K * (orbit, closure), then scatter.
@@ -20,14 +25,20 @@
 // v0.57 keeps one wait after the final scatter of every job. v0.61 optionally
 // extends the same invariant across the whole HIGH row: constant updates are
 // enqueued on the same stream, scratch is reused in stream order, and a
-// thread-local destructor performs exactly one device wait when that row's HIGH
-// worker exits. std::thread::join() therefore still establishes completion
-// before the LOW phase starts.
+// thread-local destructor performs exactly one wait when that row's HIGH worker
+// exits. std::thread::join() therefore still establishes completion before the
+// LOW phase starts.
 //
 // v0.72 may replay a captured graph instead of passing through the historical
 // 2*HIGH_LUT_K+2 synchronize call sites. Such a replay calls
 // maskshard_high_row_batch_mark_touched() directly; the phase counter remains
-// zero and the same thread-local destructor supplies the row-end device wait.
+// zero and the same thread-local destructor supplies the row-end wait.
+//
+// v0.73 narrows that final wait from device-wide to the dedicated per-thread
+// HIGH stream. All HIGH config copies and kernels have been on that stream since
+// v0.70, and LOW workers are not created until this HIGH worker has been joined,
+// so the dependency boundary is unchanged while unrelated device work no longer
+// needs to be included in the synchronization scope.
 static const std::thread::id G_MS_HIGH_GROUP_SYNC_MAIN_THREAD =
     std::this_thread::get_id();
 static thread_local std::uint32_t G_MS_HIGH_GROUP_SYNC_PHASE = 0;
@@ -42,12 +53,22 @@ struct MaskShardHighRowBatchFinalSync {
                       << G_MS_HIGH_GROUP_SYNC_PHASE << '\n';
             std::abort();
         }
+#ifdef MASKSHARD_HIGH_STREAM_END_SYNC
+        const cudaError_t e =
+            cudaStreamSynchronize(maskshard_high_execution_stream());
+        if (e != cudaSuccess) {
+            std::cerr << "HIGH row-batch final stream sync: "
+                      << cudaGetErrorString(e) << '\n';
+            std::abort();
+        }
+#else
         const cudaError_t e = cudaDeviceSynchronize();
         if (e != cudaSuccess) {
             std::cerr << "HIGH row-batch final sync: "
                       << cudaGetErrorString(e) << '\n';
             std::abort();
         }
+#endif
     }
 };
 static thread_local MaskShardHighRowBatchFinalSync G_MS_HIGH_ROW_BATCH_FINAL_SYNC{};
