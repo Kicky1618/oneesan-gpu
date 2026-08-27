@@ -61,5 +61,5 @@ int main(){
     g=bkft_make_grid(ms,bs,im,ib,storage,layout,owner,phy);p10dc_run_high_ctx(g,layout,phy,dt,true,P10DC_TEST_RESOLVED);if(!bkft_compare("pattern10-depthcode-reverse-high-resolved",g,ms,bs,rhm,rhb,storage,layout,owner,phy))return 15;
     g=bkft_make_grid(ms,bs,im,ib,storage,layout,owner,phy);p10dc_run_high_ctx(g,layout,phy,dt,false,P10DC_TEST_WARP);if(!bkft_compare("pattern10-depthcode-forward-high-warp",g,ms,bs,fhm,fhb,storage,layout,owner,phy))return 16;
     g=bkft_make_grid(ms,bs,im,ib,storage,layout,owner,phy);p10dc_run_high_ctx(g,layout,phy,dt,true,P10DC_TEST_WARP);if(!bkft_compare("pattern10-depthcode-reverse-high-warp",g,ms,bs,rhm,rhb,storage,layout,owner,phy))return 17;
-    std::cout<<"bucket-closure-pattern10-depthcode-selftest OK W="<<W<<" mode="<<rh.codebook.mode<<" codebook_bytes="<<rh.codebook.bytes()<<" sidecar_bytes_per_orbit=0 temporary_depth_bytes=0 decode_unrank=0 payload_masks=1 high_ctx=thread,resolved,warp\n";rdt.release();fdt.release();dt.release();return 0;
+    std::cout<<"bucket-closure-pattern10-depthcode-selftest OK W="<<W<<" mode="<<rh.codebook.mode<<" codebook_bytes="<<rh.codebook.bytes()<<" sidecar_bytes_per_orbit=0 temporary_depth_bytes=0 decode_unrank=0 payload_masks=1 high_ctx=thread,resolved,warp decode_load="<<(P10DC_DECODE_LDG?"ldg":"global")<<"\n";rdt.release();fdt.release();dt.release();return 0;
 }
