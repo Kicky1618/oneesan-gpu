@@ -51,6 +51,9 @@ jobs:
           grep -Fq 'preflight_ok=1 n=27 builder=streaming-two-pass' \
             work/n27-workspace-preflight/runner.log
           grep -R -Fq 'workspace_audit_ok=1' work/n27-workspace-preflight
+          grep -R -Fq 'rss_before_workspace_kib=' work/n27-workspace-preflight
+          grep -R -Fq 'rss_after_workspace_kib=' work/n27-workspace-preflight
+          grep -R -Fq 'peak_rss_kib=' work/n27-workspace-preflight
 
       - name: Upload n27 preflight result
         uses: actions/upload-artifact@v4
