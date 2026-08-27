@@ -1,7 +1,9 @@
 #pragma once
 
 #include "ramstream32_bucket_closure_pattern10.cuh"
+#include "ramstream32_bucket_reverse_split54.cuh"
 
+#include <algorithm>
 #include <cstdint>
 #include <cstdlib>
 #include <iostream>
