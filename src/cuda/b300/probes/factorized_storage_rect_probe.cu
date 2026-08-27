@@ -33,6 +33,10 @@ struct StorageRect {
     Code rows = 0;
     Code global_stride = 0;
     Code width = 0;
+    // Number of LOW entries in one logical factorized row.  For fixed HIGH
+    // occupancy the transfer rectangle is flattened to rows=1, so this field
+    // is needed to recover (HIGH-local-rank, LOW-all-rank) in the validator.
+    Code factor_stride = 0;
     uint8_t he = 0;
     uint8_t hs = 0;
     uint8_t c = 0;
@@ -65,6 +69,7 @@ static std::vector<StorageRect> storage_rects(
 
         StorageRect r;
         r.local = fb.off;
+        r.factor_stride = fb.stride;
         r.he = fb.he;
         r.hs = fb.hs;
         r.c = fb.c;
@@ -86,9 +91,11 @@ static std::vector<StorageRect> storage_rects(
             r.global = sb.off + col0;
             r.global_stride = sb.cols;
         }
-        if (!r.rows || !r.width || r.rows * r.width != fb.end - fb.off) {
+        if (!r.rows || !r.width || !r.factor_stride
+            || r.rows * r.width != fb.end - fb.off) {
             std::cerr << "invalid rectangle geometry i=" << i
                       << " rows=" << r.rows << " width=" << r.width
+                      << " factor_stride=" << r.factor_stride
                       << " block=" << (fb.end - fb.off) << "\n";
             std::exit(72);
         }
@@ -97,17 +104,37 @@ static std::vector<StorageRect> storage_rects(
     return out;
 }
 
+static void logical_factor_coordinate(
+    const StorageRect& r,
+    Code transfer_row,
+    Code transfer_col,
+    bool fix_low,
+    Code& factor_row,
+    Code& factor_col
+) {
+    if (fix_low) {
+        factor_row = transfer_row;
+        factor_col = transfer_col;
+        return;
+    }
+    Code flat = transfer_row * r.width + transfer_col;
+    factor_row = flat / r.factor_stride;
+    factor_col = flat % r.factor_stride;
+}
+
 static MateID main_mate_from_rect(
     const StorageRect& r,
-    Code row,
-    Code col,
+    Code transfer_row,
+    Code transfer_col,
     bool fix_low,
     uint32_t mask,
     const StorageFactorHost& storage
 ) {
     constexpr int L = LOW_LUT_K;
-    constexpr int H = HIGH_LUT_K;
     constexpr int S = StorageFactorHost::S;
+
+    Code row = 0, col = 0;
+    logical_factor_coordinate(r, transfer_row, transfer_col, fix_low, row, col);
 
     uint32_t hc = 0, lc = 0;
     if (fix_low) {
@@ -126,14 +153,17 @@ static MateID main_mate_from_rect(
 
 static MateID block_mate_from_rect(
     const StorageRect& r,
-    Code row,
-    Code col,
+    Code transfer_row,
+    Code transfer_col,
     bool fix_low,
     uint32_t mask,
     const StorageFactorHost& storage
 ) {
     constexpr int L = LOW_LUT_K;
     constexpr int S = StorageFactorHost::S;
+
+    Code row = 0, col = 0;
+    logical_factor_coordinate(r, transfer_row, transfer_col, fix_low, row, col);
 
     uint32_t hc = 0, lc = 0;
     if (fix_low) {
@@ -196,7 +226,8 @@ static void validate_rects(
                               << " local=" << local << " global=" << global
                               << " want=" << want << " he=" << int(r.he)
                               << " hs=" << int(r.hs) << " c=" << int(r.c)
-                              << " row=" << row << " col=" << col << "\n";
+                              << " transfer_row=" << row
+                              << " transfer_col=" << col << "\n";
                     std::exit(74);
                 }
             }
