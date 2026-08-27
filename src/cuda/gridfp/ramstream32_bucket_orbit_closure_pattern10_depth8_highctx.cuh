@@ -16,10 +16,10 @@ static_assert(P10D8_HIGHCTX_RESOLVE==0||P10D8_HIGHCTX_RESOLVE==1,
 // columns across threadIdx.x. All x-threads share the same orbit/addressing
 // context and closure plan, so thread 0 constructs them once per operation.
 //
-// In resolved mode thread 0 also turns every local closure source into a row
-// base pointer. The hot x-threads then load base[lr] directly instead of
-// repeating locator decode, physical-block lookup and slot-pointer arithmetic
-// for every source in every column.
+// In resolved mode thread 0 also turns the three update rows and every local
+// closure source into base pointers. Hot x-threads then only add lr, avoiding
+// repeated locator decode, physical-block lookup, slot selection and row
+// multiply/adds for every column.
 struct P10D8HighCtx {
     BucketPhysicalBlock xb{},jb{},db{};
     BkczPlan plan{};
@@ -27,6 +27,9 @@ struct P10D8HighCtx {
     uint32_t n0=0,n1=0,total=0;
     uint8_t kind=0,valid=0,pad0=0,pad1=0;
 #if P10D8_HIGHCTX_RESOLVE
+    Count* ip_base=nullptr;
+    Count* jp_base=nullptr;
+    Count* dp_base=nullptr;
     Count* local_base[BKCZ_MAX_LOCAL]{};
     Count* cross_base=nullptr;
     uint8_t local_n=0;
@@ -35,6 +38,9 @@ struct P10D8HighCtx {
 
 #if P10D8_HIGHCTX_RESOLVE
 __device__ __forceinline__ void p10d8_highctx_resolve_plan(P10D8HighCtx& c){
+    c.ip_base=bkf_ptr(c.ss,c.xb.off+Code(c.sr)*c.xb.cols);
+    c.jp_base=bkf_ptr(c.js,c.jb.off+Code(c.jr)*c.jb.cols);
+    c.dp_base=bkf_ptr(c.ds,c.db.off+Code(c.dr)*c.db.cols);
     uint32_t n=bkcz_plan_local_n(c.plan);c.local_n=uint8_t(n);
 #pragma unroll
     for(uint32_t i=0;i<BKCZ_MAX_LOCAL;++i){
@@ -95,10 +101,16 @@ __device__ __forceinline__ Count p10d8_highctx_plan_sum(
     return sum;
 #endif
 }
+__device__ __forceinline__ Count* p10d8_highctx_ip(const P10D8HighCtx&c,uint32_t lr){return c.ip_base+lr;}
+__device__ __forceinline__ Count* p10d8_highctx_jp(const P10D8HighCtx&c,uint32_t lr){return c.jp_base+lr;}
+__device__ __forceinline__ Count* p10d8_highctx_dp(const P10D8HighCtx&c,uint32_t lr){return c.dp_base+lr;}
 #else
 __device__ __forceinline__ Count p10d8_highctx_plan_sum(
     const P10D8HighCtx& c,const BucketPhysicalBlock& db,uint32_t lr
 ){return bkcz_high_plan_sum(c.plan,db,lr);}
+__device__ __forceinline__ Count* p10d8_highctx_ip(const P10D8HighCtx&c,uint32_t lr){return bkf_ptr(c.ss,c.xb.off+Code(c.sr)*c.xb.cols+lr);}
+__device__ __forceinline__ Count* p10d8_highctx_jp(const P10D8HighCtx&c,uint32_t lr){return bkf_ptr(c.js,c.jb.off+Code(c.jr)*c.jb.cols+lr);}
+__device__ __forceinline__ Count* p10d8_highctx_dp(const P10D8HighCtx&c,uint32_t lr){return bkf_ptr(c.ds,c.db.off+Code(c.dr)*c.db.cols+lr);}
 #endif
 
 __global__ void bucket_high_orbit_closure_pattern10_depth8_highctx_kernel(int p){
@@ -114,7 +126,7 @@ __global__ void bucket_high_orbit_closure_pattern10_depth8_highctx_kernel(int p)
                 c.valid=1;}
         }
         __syncthreads();
-        if(c.valid){for(uint32_t lr=uint32_t(blockIdx.x)*blockDim.x+threadIdx.x;lr<c.xb.cols;lr+=uint32_t(gridDim.x)*blockDim.x){Count*ip=bkf_ptr(c.ss,c.xb.off+Code(c.sr)*c.xb.cols+lr),*jp=bkf_ptr(c.js,c.jb.off+Code(c.jr)*c.jb.cols+lr),*dp=bkf_ptr(c.ds,c.db.off+Code(c.dr)*c.db.cols+lr);Count x=*ip,old=*dp,extra=p10d8_highctx_plan_sum(c,c.db,lr);if(c.kind==CPU_ORBIT_NN){*jp=gpu_direct_add(*jp,x);*ip=gpu_direct_add(x,old);*dp=extra;}else{Count y=*jp;*ip=gpu_direct_add(gpu_direct_add(x,y),old);*dp=gpu_direct_add(x,extra);}}}
+        if(c.valid){for(uint32_t lr=uint32_t(blockIdx.x)*blockDim.x+threadIdx.x;lr<c.xb.cols;lr+=uint32_t(gridDim.x)*blockDim.x){Count*ip=p10d8_highctx_ip(c,lr),*jp=p10d8_highctx_jp(c,lr),*dp=p10d8_highctx_dp(c,lr);Count x=*ip,old=*dp,extra=p10d8_highctx_plan_sum(c,c.db,lr);if(c.kind==CPU_ORBIT_NN){*jp=gpu_direct_add(*jp,x);*ip=gpu_direct_add(x,old);*dp=extra;}else{Count y=*jp;*ip=gpu_direct_add(gpu_direct_add(x,y),old);*dp=gpu_direct_add(x,extra);}}}
         __syncthreads();
     }
 }
@@ -132,7 +144,7 @@ __global__ void bucket_reverse_high_pattern10_depth8_highctx_kernel(int p){
                 c.valid=1;}
         }
         __syncthreads();
-        if(c.valid){for(uint32_t lr=uint32_t(blockIdx.x)*blockDim.x+threadIdx.x;lr<c.xb.cols;lr+=uint32_t(gridDim.x)*blockDim.x){Count*ip=bkf_ptr(c.ss,c.xb.off+Code(c.sr)*c.xb.cols+lr),*jp=bkf_ptr(c.js,c.jb.off+Code(c.jr)*c.jb.cols+lr),*dp=bkf_ptr(c.ds,c.db.off+Code(c.dr)*c.db.cols+lr);Count x=*ip,old=*dp,extra=p10d8_highctx_plan_sum(c,edge?c.xb:c.db,lr);if(c.kind==CPU_ORBIT_NN){*jp=gpu_direct_add(*jp,x);*ip=gpu_direct_add(gpu_direct_add(x,old),edge?extra:0);*dp=edge?0:extra;}else{Count y=*jp;*ip=gpu_direct_add(gpu_direct_add(x,y),old);if(edge){*jp=gpu_direct_add(x,y);*dp=0;}else *dp=gpu_direct_add(x,extra);}}}
+        if(c.valid){for(uint32_t lr=uint32_t(blockIdx.x)*blockDim.x+threadIdx.x;lr<c.xb.cols;lr+=uint32_t(gridDim.x)*blockDim.x){Count*ip=p10d8_highctx_ip(c,lr),*jp=p10d8_highctx_jp(c,lr),*dp=p10d8_highctx_dp(c,lr);Count x=*ip,old=*dp,extra=p10d8_highctx_plan_sum(c,edge?c.xb:c.db,lr);if(c.kind==CPU_ORBIT_NN){*jp=gpu_direct_add(*jp,x);*ip=gpu_direct_add(gpu_direct_add(x,old),edge?extra:0);*dp=edge?0:extra;}else{Count y=*jp;*ip=gpu_direct_add(gpu_direct_add(x,y),old);if(edge){*jp=gpu_direct_add(x,y);*dp=0;}else *dp=gpu_direct_add(x,extra);}}}
         __syncthreads();
     }
 }
