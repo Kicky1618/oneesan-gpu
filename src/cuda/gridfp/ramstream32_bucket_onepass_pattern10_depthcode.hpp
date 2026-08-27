@@ -12,10 +12,11 @@
 #include <vector>
 
 // Re-encode (pattern10, CROSS depth4) into the already-free upper 10 bits of
-// each 64-bit orbit word.  A host-only all-legal-factor-state proof
+// each 64-bit orbit word. A host-only all-legal-factor-state proof
 // (gridfp_pattern10_depthcode_bound.cpp) establishes that W=28 needs at most
-// 718 pairs in any (phase,side,p,height) context, so phase mode is sufficient
-// without first materializing a byte/nibble depth sidecar.
+// 718 pairs in any (phase,side,p,height) context, so phase mode is sufficient.
+// The device codebook stores decoded {left mask,right mask,depth,valid}; no
+// per-orbit depth sidecar and no runtime Fibonacci unrank are required.
 enum P10DepthCodeMode : uint32_t { P10DC_COARSE=0, P10DC_PHASE=1, P10DC_STREAM=2 };
 static constexpr uint32_t P10DC_STREAMS=4;
 static constexpr uint32_t P10DC_HDIM=TARGET_W+1;
@@ -23,6 +24,13 @@ static constexpr uint32_t P10DC_KEY_COUNT=2u*2u*P10DC_STREAMS*uint32_t(TARGET_W)
 static constexpr uint32_t P10DC_INVALID_BASE=0xffffffffu;
 static constexpr uint32_t P10DC_PAIR_COUNT=1u<<14;
 static constexpr uint32_t P10DC_WORDS=P10DC_PAIR_COUNT/64u;
+static constexpr uint32_t P10DC_MASK_BITS=13;
+static constexpr uint32_t P10DC_MASK_MASK=(1u<<P10DC_MASK_BITS)-1u;
+static constexpr uint32_t P10DC_RM_SHIFT=P10DC_MASK_BITS;
+static constexpr uint32_t P10DC_DEPTH_SHIFT=2u*P10DC_MASK_BITS;
+static constexpr uint32_t P10DC_VALID_SHIFT=P10DC_DEPTH_SHIFT+4u;
+static_assert(P10DC_VALID_SHIFT<32);
+static_assert(LOW_LUT_K<=14&&HIGH_LUT_K<=14);
 
 #if defined(__CUDACC__)
 #define P10DC_HD __host__ __device__ __forceinline__
@@ -34,6 +42,10 @@ P10DC_HD uint32_t p10dc_key(bool rev,bool high,uint32_t sid,int p,uint32_t h,uin
     uint32_t s=mode>=P10DC_STREAM?(sid&3u):0u;
     return ((((r*2u+uint32_t(high))*P10DC_STREAMS+s)*uint32_t(TARGET_W)+uint32_t(p))*P10DC_HDIM+h);
 }
+P10DC_HD uint16_t p10dc_payload_lm(uint32_t x){return uint16_t(x&P10DC_MASK_MASK);}
+P10DC_HD uint16_t p10dc_payload_rm(uint32_t x){return uint16_t((x>>P10DC_RM_SHIFT)&P10DC_MASK_MASK);}
+P10DC_HD uint8_t p10dc_payload_depth(uint32_t x){return uint8_t((x>>P10DC_DEPTH_SHIFT)&15u);}
+P10DC_HD bool p10dc_payload_valid(uint32_t x){return ((x>>P10DC_VALID_SHIFT)&1u)!=0;}
 #undef P10DC_HD
 
 struct P10DepthCodeBits {
@@ -45,8 +57,8 @@ struct P10DepthCodeBits {
 struct P10DepthCodeBookHost {
     uint32_t mode=P10DC_PHASE;
     std::vector<uint32_t> base;
-    std::vector<uint16_t> decode;
-    size_t bytes()const{return base.size()*sizeof(uint32_t)+decode.size()*sizeof(uint16_t);}
+    std::vector<uint32_t> decode;
+    size_t bytes()const{return base.size()*sizeof(uint32_t)+decode.size()*sizeof(uint32_t);}
 };
 struct BucketForwardPattern10DepthCodeHost { size_t bytes()const{return 0;} };
 struct BucketReversePattern10DepthCodeHost {
@@ -70,6 +82,19 @@ static uint16_t p10dc_high_pair_host(MateID d,int rel,bool active,const char*wha
     if(!active)return uint16_t(CLOSURE_PATTERN10_NONE<<4);
     uint16_t id=closure_pattern10_encode(d,HIGH_LUT_K+1,rel);MateID source=0;int dep=high_cross_preimage_partial(d,HIGH_LUT_K+1,rel,source);
     if(dep<0||dep>15){std::cerr<<"depthcode HIGH overflow "<<what<<" rel="<<rel<<" depth="<<dep<<'\n';std::exit(592);}if(id==CLOSURE_PATTERN10_NONE)dep=0;return uint16_t((id<<4)|uint16_t(dep));
+}
+
+static uint32_t p10dc_payload_host(uint16_t pair,bool high,int p){
+    using namespace oneesan::gridfp;
+    uint16_t id=uint16_t(pair>>4);uint8_t depth=uint8_t(pair&15u);
+    if(id==CLOSURE_PATTERN10_NONE)return 0;
+    int rel=high?p-LOW_LUT_K:p;int len=(high?HIGH_LUT_K:LOW_LUT_K)+1;
+    uint16_t lm=0,rm=0;closure_pattern10_decode(id,len,rel,lm,rm);
+    if((uint32_t(lm)&~P10DC_MASK_MASK)||(uint32_t(rm)&~P10DC_MASK_MASK)){std::cerr<<"depthcode decoded mask overflow high="<<high<<" p="<<p<<" lm="<<lm<<" rm="<<rm<<'\n';std::exit(593);}
+    return uint32_t(lm)|(uint32_t(rm)<<P10DC_RM_SHIFT)|(uint32_t(depth)<<P10DC_DEPTH_SHIFT)|(1u<<P10DC_VALID_SHIFT);
+}
+static void p10dc_decode_key_host(uint32_t k,bool&rev,bool&high,int&p,uint32_t&h){
+    h=k%P10DC_HDIM;k/=P10DC_HDIM;p=int(k%uint32_t(TARGET_W));k/=uint32_t(TARGET_W);k/=P10DC_STREAMS;high=(k&1u)!=0;k>>=1;rev=(k&1u)!=0;
 }
 
 struct P10DepthCodeEntryView {
@@ -113,16 +138,17 @@ static P10DepthCodeBookHost p10dc_build_and_rewrite_direct(
     constexpr uint32_t mode=P10DC_PHASE;
     std::vector<P10DepthCodeBits> ctx(P10DC_KEY_COUNT);
     uint64_t visited=0;
-    p10dc_for_each_entry_direct(layout,bo,rs,bf,[&](P10DepthCodeEntryView e){uint32_t k=p10dc_key(e.rev,e.high,e.sid,e.p,e.h,mode);if(k>=ctx.size()){std::cerr<<"depthcode key overflow k="<<k<<'\n';std::exit(593);}ctx[k].add(e.pair);++visited;});
-    uint32_t max_pairs=0;size_t used_contexts=0,total_pairs=0;for(const auto&c:ctx)if(c.count){++used_contexts;total_pairs+=c.count;max_pairs=std::max<uint32_t>(max_pairs,c.count);}if(max_pairs>1024){std::cerr<<"phase depthcode bound violated max_pairs="<<max_pairs<<"; run gridfp_pattern10_depthcode_bound probe\n";std::exit(594);}
+    p10dc_for_each_entry_direct(layout,bo,rs,bf,[&](P10DepthCodeEntryView e){uint32_t k=p10dc_key(e.rev,e.high,e.sid,e.p,e.h,mode);if(k>=ctx.size()){std::cerr<<"depthcode key overflow k="<<k<<'\n';std::exit(594);}ctx[k].add(e.pair);++visited;});
+    uint32_t max_pairs=0;size_t used_contexts=0,total_pairs=0;for(const auto&c:ctx)if(c.count){++used_contexts;total_pairs+=c.count;max_pairs=std::max<uint32_t>(max_pairs,c.count);}if(max_pairs>1024){std::cerr<<"phase depthcode bound violated max_pairs="<<max_pairs<<"; run gridfp_pattern10_depthcode_bound probe\n";std::exit(595);}
 
-    P10DepthCodeBookHost out;out.mode=mode;out.base.assign(P10DC_KEY_COUNT,P10DC_INVALID_BASE);out.decode.reserve(total_pairs);
-    for(uint32_t k=0;k<ctx.size();++k){const auto&c=ctx[k];if(!c.count)continue;out.base[k]=uint32_t(out.decode.size());for(uint32_t w=0;w<P10DC_WORDS;++w){uint64_t x=c.bits[w];while(x){uint32_t b=uint32_t(__builtin_ctzll(x));out.decode.push_back(uint16_t((w<<6)+b));x&=x-1;}}if(out.decode.size()-out.base[k]!=c.count)std::exit(595);}
+    P10DepthCodeBookHost out;out.mode=mode;out.base.assign(P10DC_KEY_COUNT,P10DC_INVALID_BASE);out.decode.reserve(total_pairs);std::vector<uint16_t> pairs;pairs.reserve(total_pairs);
+    for(uint32_t k=0;k<ctx.size();++k){const auto&c=ctx[k];if(!c.count)continue;out.base[k]=uint32_t(pairs.size());bool rev=false,high=false;int p=0;uint32_t h=0;p10dc_decode_key_host(k,rev,high,p,h);(void)rev;(void)h;for(uint32_t w=0;w<P10DC_WORDS;++w){uint64_t x=c.bits[w];while(x){uint32_t b=uint32_t(__builtin_ctzll(x));uint16_t pair=uint16_t((w<<6)+b);pairs.push_back(pair);out.decode.push_back(p10dc_payload_host(pair,high,p));x&=x-1;}}if(pairs.size()-out.base[k]!=c.count)std::exit(596);}
 
     uint64_t rewritten=0;
-    p10dc_for_each_entry_direct(layout,bo,rs,bf,[&](P10DepthCodeEntryView e){uint32_t k=p10dc_key(e.rev,e.high,e.sid,e.p,e.h,mode),b=out.base[k];if(b==P10DC_INVALID_BASE)std::exit(596);uint32_t n=ctx[k].count;auto first=out.decode.begin()+b,last=first+n,it=std::lower_bound(first,last,e.pair);if(it==last||*it!=e.pair)std::exit(597);uint32_t code=uint32_t(it-first);if(code>1023)std::exit(598);*e.op=bkcp10_set(*e.op,uint16_t(code));if(out.decode[b+code]!=e.pair)std::exit(599);++rewritten;});
-    if(rewritten!=visited)std::exit(600);
-    std::cerr<<"pattern10_depthcode direct_build=1 selected_mode="<<mode<<" contexts="<<used_contexts<<" total_pairs="<<total_pairs<<" max_pairs="<<max_pairs<<" rewritten_ops="<<rewritten<<" codebook_mib="<<double(out.bytes())/double(1<<20)<<" sidecar_bytes_per_orbit=0 temporary_depth_bytes=0\n";
+    p10dc_for_each_entry_direct(layout,bo,rs,bf,[&](P10DepthCodeEntryView e){uint32_t k=p10dc_key(e.rev,e.high,e.sid,e.p,e.h,mode),b=out.base[k];if(b==P10DC_INVALID_BASE)std::exit(597);uint32_t n=ctx[k].count;auto first=pairs.begin()+b,last=first+n,it=std::lower_bound(first,last,e.pair);if(it==last||*it!=e.pair)std::exit(598);uint32_t code=uint32_t(it-first);if(code>1023)std::exit(599);*e.op=bkcp10_set(*e.op,uint16_t(code));if(pairs[b+code]!=e.pair)std::exit(600);++rewritten;});
+    if(rewritten!=visited||pairs.size()!=out.decode.size())std::exit(601);
+    std::vector<uint16_t>().swap(pairs);
+    std::cerr<<"pattern10_depthcode direct_build=1 selected_mode="<<mode<<" contexts="<<used_contexts<<" total_pairs="<<total_pairs<<" max_pairs="<<max_pairs<<" rewritten_ops="<<rewritten<<" codebook_mib="<<double(out.bytes())/double(1<<20)<<" sidecar_bytes_per_orbit=0 temporary_depth_bytes=0 decode_payload_masks=1 decode_unrank=0\n";
     return out;
 }
 
