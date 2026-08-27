@@ -14,4 +14,8 @@ out="$($BIN)"
 printf '%s\n' "$out"
 grep -Fq "pattern10-depthcode-build-plan OK W=$W" <<<"$out"
 grep -Fq 'sidecar_bytes_per_orbit=0' <<<"$out"
-echo "pattern10-depthcode-build-plan OK n=$N" >&2
+grep -Fq 'payload_exact=1' <<<"$out"
+grep -Fq 'decode_payload_masks=1' <<<"$out"
+grep -Fq 'decode_unrank=0' <<<"$out"
+grep -Fq 'temporary_depth_bytes=0' <<<"$out"
+echo "pattern10-depthcode-build-plan OK n=$N payload=predecoded sidecar=0" >&2
