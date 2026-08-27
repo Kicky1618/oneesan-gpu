@@ -10,6 +10,7 @@ TARGET_MIB="${TARGET_MIB:-16384}"
 MAX_WINDOW="${MAX_WINDOW:-14}"
 PM_ACCUM="${PM_ACCUM:-0}"
 TERNARY_KEY4="${TERNARY_KEY4:-1}"
+PTXAS_VERBOSE="${PTXAS_VERBOSE:-0}"
 RESULT="${RESULT:-$ONEESAN_ROOT/work/b300_bucket_depth8_graph_highctx_ab_n${N}.tsv}"
 LOGDIR="${LOGDIR:-$ONEESAN_ROOT/work/b300_bucket_depth8_graph_highctx_ab_n${N}_logs}"
 
@@ -19,6 +20,10 @@ if [[ "$PM_ACCUM" != 0 && "$PM_ACCUM" != 1 ]]; then
 fi
 if [[ "$TERNARY_KEY4" != 0 && "$TERNARY_KEY4" != 1 ]]; then
   echo "TERNARY_KEY4 must be 0 or 1" >&2
+  exit 2
+fi
+if [[ "$PTXAS_VERBOSE" != 0 && "$PTXAS_VERBOSE" != 1 ]]; then
+  echo "PTXAS_VERBOSE must be 0 or 1" >&2
   exit 2
 fi
 if (( NGPU != 8 )); then
@@ -62,6 +67,7 @@ run_one() {
   TRANSPOSE_MODE="$mode" \
   PM_ACCUM="$PM_ACCUM" \
   TERNARY_KEY4="$TERNARY_KEY4" \
+  PTXAS_VERBOSE="$PTXAS_VERBOSE" \
     bash "$ONEESAN_ROOT/scripts/build/b300-bucket-snake-pattern10-depth8-graph-batch.sh"
 
   echo "=== run $tag ===" >&2
@@ -101,6 +107,7 @@ printf 'high_ctx\ttranspose_mode\tternary_key4\tresidue\twall_s\tforward_high_s\
 for mode in sync events pipeline; do
   run_one "$mode" thread
   run_one "$mode" shared
+  run_one "$mode" warp
 done
 
 cat "$RESULT"
