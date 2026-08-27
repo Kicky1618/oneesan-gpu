@@ -25,6 +25,13 @@
 #include "maskshard_loworbit.cuh"
 #include "maskshard_lowclosure_kernel.cuh"
 
+#ifdef MASKSHARD_HIGH_PERTHREAD_STREAM
+#define MASKSHARD_HIGH_LAUNCH(grid, block) \
+    grid, block, 0, maskshard_high_execution_stream()
+#else
+#define MASKSHARD_HIGH_LAUNCH(grid, block) grid, block
+#endif
+
 #if defined(MASKSHARD_BLOCK_ORBIT_ROW_CAP_LAUNCH) && !defined(MASKSHARD_BLOCK_ORBIT_TIGHT_LAUNCH)
 #error "row-capped BLOCKED orbit launch requires tight BLOCKED-domain launch"
 #endif
@@ -320,9 +327,13 @@ static void process_fullorbit_batch_high_job(
 #endif
 
     auto t = std::chrono::steady_clock::now();
-    if (job.main_n) maskshard_high_main_io_kernel<false><<<bm, threads>>>(w.a, job.main_n);
+    if (job.main_n)
+        maskshard_high_main_io_kernel<false><<<MASKSHARD_HIGH_LAUNCH(bm, threads)>>>(
+            w.a, job.main_n);
 #ifndef MASKSHARD_LAZY_ZERO_BLOCK_INIT
-    if (job.block_n) maskshard_high_block_io_kernel<false><<<bd, threads>>>(w.d, job.block_n);
+    if (job.block_n)
+        maskshard_high_block_io_kernel<false><<<MASKSHARD_HIGH_LAUNCH(bd, threads)>>>(
+            w.d, job.block_n);
 #endif
     ck(cudaGetLastError(), "fullorbit-batch high gather");
     ck(cudaDeviceSynchronize(), "fullorbit-batch high gather sync");
@@ -332,10 +343,14 @@ static void process_fullorbit_batch_high_job(
         t = std::chrono::steady_clock::now();
 #ifdef MASKSHARD_BLOCK_ORBIT_TIGHT_LAUNCH
         if (bd_orbit)
-            maskshard_main_block_highorbit_kernel<<<bd_orbit, threads>>>(w.a, w.d, job.main_n, p);
+            maskshard_main_block_highorbit_kernel<<<
+                MASKSHARD_HIGH_LAUNCH(bd_orbit, threads)>>>(
+                w.a, w.d, job.main_n, p);
 #else
         if (job.main_n)
-            maskshard_main_block_highorbit_kernel<<<bm, threads>>>(w.a, w.d, job.main_n, p);
+            maskshard_main_block_highorbit_kernel<<<
+                MASKSHARD_HIGH_LAUNCH(bm, threads)>>>(
+                w.a, w.d, job.main_n, p);
 #endif
         ck(cudaGetLastError(), "fullorbit-batch high orbit");
         ck(cudaDeviceSynchronize(), "fullorbit-batch high orbit sync");
@@ -363,11 +378,13 @@ static void process_fullorbit_batch_high_job(
                 (closure_rows + Code(warps_per_block) - 1) / Code(warps_per_block)))
             : 0;
         if (bc)
-            maskshard_main_highdesc_closure_inplace_kernel<<<bc, threads>>>(
+            maskshard_main_highdesc_closure_inplace_kernel<<<
+                MASKSHARD_HIGH_LAUNCH(bc, threads)>>>(
                 w.a, w.d, job.main_n, p);
 #else
         if (job.main_n)
-            maskshard_main_highdesc_closure_inplace_kernel<<<bm, threads>>>(
+            maskshard_main_highdesc_closure_inplace_kernel<<<
+                MASKSHARD_HIGH_LAUNCH(bm, threads)>>>(
                 w.a, w.d, job.main_n, p);
 #endif
         ck(cudaGetLastError(), "fullorbit-batch high closure");
@@ -376,8 +393,12 @@ static void process_fullorbit_batch_high_job(
     }
 
     t = std::chrono::steady_clock::now();
-    if (job.main_n) maskshard_high_main_io_kernel<true><<<bm, threads>>>(w.a, job.main_n);
-    if (job.block_n) maskshard_high_block_io_kernel<true><<<bd, threads>>>(w.d, job.block_n);
+    if (job.main_n)
+        maskshard_high_main_io_kernel<true><<<MASKSHARD_HIGH_LAUNCH(bm, threads)>>>(
+            w.a, job.main_n);
+    if (job.block_n)
+        maskshard_high_block_io_kernel<true><<<MASKSHARD_HIGH_LAUNCH(bd, threads)>>>(
+            w.d, job.block_n);
     ck(cudaGetLastError(), "fullorbit-batch high scatter");
     ck(cudaDeviceSynchronize(), "fullorbit-batch high scatter sync");
     w.high_io_s += ram_seconds_since(t);
