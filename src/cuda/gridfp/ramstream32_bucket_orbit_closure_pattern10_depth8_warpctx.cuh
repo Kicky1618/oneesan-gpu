@@ -1,5 +1,9 @@
 #pragma once
 
+#ifndef P10D8_HIGH_DEPTH_LOAD
+#define P10D8_HIGH_DEPTH_LOAD(ptr,q) ((ptr)[(q)])
+#define P10D8_WARPCTX_HIGH_DEPTH_LOAD_LOCAL 1
+#endif
 #include "ramstream32_bucket_orbit_closure_pattern10_depth8_highctx.cuh"
 
 // Middle ground between the original per-thread HIGH setup and the block-wide
@@ -43,7 +47,9 @@ __global__ void bucket_high_orbit_closure_pattern10_depth8_warpctx_kernel(int p)
             bool nn = k < c.n0;
             uint32_t qi = nn ? (D_BKF_HIGH_NN_OFF[oi] + k) : (c.n1 + k - c.n0);
             BucketOrbitOp op = nn ? D_BKF_HIGH_NN[qi] : D_BKF_HIGH_NRNL[qi];
-            uint8_t dep = nn ? D_P10D8_F_HIGH_NN[qi] : D_P10D8_F_HIGH_NRNL[qi];
+            uint8_t dep = nn
+                ? P10D8_HIGH_DEPTH_LOAD(D_P10D8_F_HIGH_NN, qi)
+                : P10D8_HIGH_DEPTH_LOAD(D_P10D8_F_HIGH_NRNL, qi);
             uint32_t sl = bkf_orbit_src(op);
             uint32_t jl = bkf_orbit_partner(op);
             uint32_t dl = bkf_orbit_drop(op);
@@ -145,17 +151,17 @@ __global__ void bucket_reverse_high_pattern10_depth8_warpctx_kernel(int p) {
                 kind = CPU_ORBIT_NN;
                 qi = D_RS54_HIGH_NN_OFF[oi] + k;
                 op = D_RS54_HIGH_NN[qi];
-                dep = D_P10D8_R_HIGH_NN[qi];
+                dep = P10D8_HIGH_DEPTH_LOAD(D_P10D8_R_HIGH_NN, qi);
             } else if (k < c.n0 + c.n1) {
                 kind = CPU_ORBIT_NR;
                 qi = D_RS54_HIGH_NR_OFF[oi] + k - c.n0;
                 op = D_RS54_HIGH_NR[qi];
-                dep = D_P10D8_R_HIGH_NR[qi];
+                dep = P10D8_HIGH_DEPTH_LOAD(D_P10D8_R_HIGH_NR, qi);
             } else {
                 kind = CPU_ORBIT_NL;
                 qi = D_RS54_HIGH_NL_OFF[oi] + k - c.n0 - c.n1;
                 op = D_RS54_HIGH_NL[qi];
-                dep = D_P10D8_R_HIGH_NL[qi];
+                dep = P10D8_HIGH_DEPTH_LOAD(D_P10D8_R_HIGH_NL, qi);
             }
 
             uint32_t sl = bkf_orbit_src(op);
@@ -238,3 +244,8 @@ static void bucket_launch_reverse_high_pattern10_depth8_warpctx(
         ck(cudaGetLastError(), "bucket reverse high pattern10 depth8 warpctx");
     }
 }
+
+#ifdef P10D8_WARPCTX_HIGH_DEPTH_LOAD_LOCAL
+#undef P10D8_HIGH_DEPTH_LOAD
+#undef P10D8_WARPCTX_HIGH_DEPTH_LOAD_LOCAL
+#endif
