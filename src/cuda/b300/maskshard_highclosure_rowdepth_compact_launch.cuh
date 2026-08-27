@@ -13,21 +13,91 @@
 #error "exact HIGH closure launch requires v0.22 compact task mapping"
 #endif
 
-// v0.23: host-only exact task-count table for the v0.22 kernel.  No new GPU
-// metadata is required.  The table is indexed by fixed LOW occupancy mask,
-// HIGH position and row-depth cap and stores the exact number of warp tasks
-// before the 65,535-CTA cap is applied.
+// v0.23: host-only exact task-count table for the v0.22 kernel. No new GPU
+// metadata is required. The table stores the exact number of warp tasks before
+// the 65,535-CTA cap is applied.
+//
+// v0.71 optionally quotients the LOW occupancy-mask dimension by popcount. For
+// fixed popcount, N positions are identity steps; deleting them leaves the same
+// ordered +/- transition sequence. Therefore the LOW active count at each
+// boundary height/cap is identical. v0.65 already established that FBlock
+// geometry is also identical, while HIGH closure active-row counts are
+// mask-independent. The complete launch count is thus a popcount-class value.
 struct MaskShardHighClosureRowDepthCompactLaunchCache {
     static constexpr int FULL_CAP = (TARGET_W + 1) / 2;
     static constexpr int CAP_STRIDE = FULL_CAP + 1;
     static constexpr std::uint32_t NMASK = 1u << LOW_LUT_K;
+#ifdef MASKSHARD_HIGH_CLOSURE_LAUNCH_CLASS_CACHE
+    static constexpr std::size_t MASK_SLOTS = LOW_LUT_K + 1;
+#else
+    static constexpr std::size_t MASK_SLOTS = NMASK;
+#endif
 
     std::vector<std::uint32_t> task_count;
     bool built = false;
 
+    static std::size_t mask_slot(std::uint32_t mask) {
+#ifdef MASKSHARD_HIGH_CLOSURE_LAUNCH_CLASS_CACHE
+        std::size_t n = 0;
+        while (mask) {
+            mask &= mask - 1;
+            ++n;
+        }
+        return n;
+#else
+        return std::size_t(mask);
+#endif
+    }
+
     static std::size_t index(std::uint32_t mask, int pi, int cap) {
-        return (std::size_t(mask) * HIGH_LUT_K + std::size_t(pi)) * CAP_STRIDE
+        return (mask_slot(mask) * HIGH_LUT_K + std::size_t(pi)) * CAP_STRIDE
              + std::size_t(cap);
+    }
+
+    void build_one_mask(
+        std::uint32_t mask,
+        MaskShardHighClosureRowDepthCompactCache& hc,
+        MaskShardRowDepthOrbitCompactCache& low
+    ) {
+        const auto blocks = make_factor_main_blocks(true, mask);
+        for (int cap = 1; cap <= FULL_CAP; ++cap) {
+            std::vector<std::uint16_t> low_active(blocks.size(), 0u);
+            for (std::size_t bid = 0; bid < blocks.size(); ++bid) {
+                const FBlock& b = blocks[bid];
+                if (!b.stride) continue;
+                low_active[bid] = low.low_count[
+                    MaskShardRowDepthOrbitCompactCache::low_count_index(
+                        mask, int(b.hs), cap)];
+            }
+            for (int pi = 0; pi < HIGH_LUT_K; ++pi) {
+                std::uint64_t tasks = 0;
+                for (std::size_t bid = 0; bid < blocks.size(); ++bid) {
+                    const FBlock& b = blocks[bid];
+                    const std::uint32_t lc = low_active[bid];
+                    if (!b.stride || !lc) continue;
+                    const std::uint32_t rows = hc.active_count[
+                        MaskShardHighClosureRowDepthCompactCache::count_index(
+                            pi, int(bid), cap)];
+                    if (!rows) continue;
+#ifdef MASKSHARD_HIGH_CLOSURE_ROWPACK_THRESHOLD
+                    const bool pack = b.stride
+                        < std::uint32_t(MASKSHARD_HIGH_CLOSURE_ROWPACK_THRESHOLD);
+#else
+                    const bool pack = true;
+#endif
+                    tasks += pack
+                        ? (std::uint64_t(rows) * lc + 31ULL) >> 5
+                        : std::uint64_t(rows);
+                }
+                if (tasks > 0xffffffffULL) {
+                    std::cerr << "HIGH closure exact launch task overflow mask="
+                              << mask << " pi=" << pi << " cap=" << cap
+                              << " tasks=" << tasks << '\n';
+                    std::exit(291);
+                }
+                task_count[index(mask, pi, cap)] = std::uint32_t(tasks);
+            }
+        }
     }
 
     void build() {
@@ -39,52 +109,21 @@ struct MaskShardHighClosureRowDepthCompactLaunchCache {
             std::exit(290);
         }
 
-        task_count.assign(
-            std::size_t(NMASK) * HIGH_LUT_K * CAP_STRIDE, 0u);
-        for (std::uint32_t mask = 0; mask < NMASK; ++mask) {
-            const auto blocks = make_factor_main_blocks(true, mask);
-            for (int cap = 1; cap <= FULL_CAP; ++cap) {
-                std::vector<std::uint16_t> low_active(blocks.size(), 0u);
-                for (std::size_t bid = 0; bid < blocks.size(); ++bid) {
-                    const FBlock& b = blocks[bid];
-                    if (!b.stride) continue;
-                    low_active[bid] = low.low_count[
-                        MaskShardRowDepthOrbitCompactCache::low_count_index(
-                            mask, int(b.hs), cap)];
-                }
-                for (int pi = 0; pi < HIGH_LUT_K; ++pi) {
-                    std::uint64_t tasks = 0;
-                    for (std::size_t bid = 0; bid < blocks.size(); ++bid) {
-                        const FBlock& b = blocks[bid];
-                        const std::uint32_t lc = low_active[bid];
-                        if (!b.stride || !lc) continue;
-                        const std::uint32_t rows = hc.active_count[
-                            MaskShardHighClosureRowDepthCompactCache::count_index(
-                                pi, int(bid), cap)];
-                        if (!rows) continue;
-#ifdef MASKSHARD_HIGH_CLOSURE_ROWPACK_THRESHOLD
-                        const bool pack = b.stride
-                            < std::uint32_t(MASKSHARD_HIGH_CLOSURE_ROWPACK_THRESHOLD);
-#else
-                        const bool pack = true;
-#endif
-                        tasks += pack
-                            ? (std::uint64_t(rows) * lc + 31ULL) >> 5
-                            : std::uint64_t(rows);
-                    }
-                    if (tasks > 0xffffffffULL) {
-                        std::cerr << "HIGH closure exact launch task overflow mask="
-                                  << mask << " pi=" << pi << " cap=" << cap
-                                  << " tasks=" << tasks << '\n';
-                        std::exit(291);
-                    }
-                    task_count[index(mask, pi, cap)] = std::uint32_t(tasks);
-                }
-            }
+        task_count.assign(MASK_SLOTS * HIGH_LUT_K * CAP_STRIDE, 0u);
+#ifdef MASKSHARD_HIGH_CLOSURE_LAUNCH_CLASS_CACHE
+        for (int k = 0; k <= LOW_LUT_K; ++k) {
+            const std::uint32_t mask = k
+                ? ((std::uint32_t(1) << k) - 1u) : 0u;
+            build_one_mask(mask, hc, low);
         }
+#else
+        for (std::uint32_t mask = 0; mask < NMASK; ++mask)
+            build_one_mask(mask, hc, low);
+#endif
         built = true;
-        std::cerr << "HIGH closure exact launch host table entries="
-                  << task_count.size() << " mib="
+        std::cerr << "HIGH closure exact launch host table masks=" << NMASK
+                  << " mask_slots=" << MASK_SLOTS
+                  << " entries=" << task_count.size() << " mib="
                   << double(task_count.size() * sizeof(std::uint32_t))
                        / double(1ULL << 20) << '\n';
     }
