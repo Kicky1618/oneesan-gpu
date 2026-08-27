@@ -34,5 +34,5 @@ int main(){
     g=bkft_make_grid(ms,bs,im,ib,storage,layout,owner,phy);p10dc_run_high(g,layout,phy,dt,false);if(!bkft_compare("pattern10-depthcode-forward-high",g,ms,bs,fhm,fhb,storage,layout,owner,phy))return 11;
     g=bkft_make_grid(ms,bs,im,ib,storage,layout,owner,phy);p10dc_run_low(g,layout,phy,dt,true);if(!bkft_compare("pattern10-depthcode-reverse-low",g,ms,bs,rlm,rlb,storage,layout,owner,phy))return 12;
     g=bkft_make_grid(ms,bs,im,ib,storage,layout,owner,phy);p10dc_run_high(g,layout,phy,dt,true);if(!bkft_compare("pattern10-depthcode-reverse-high",g,ms,bs,rhm,rhb,storage,layout,owner,phy))return 13;
-    std::cout<<"bucket-closure-pattern10-depthcode-selftest OK W="<<W<<" mode="<<rh.codebook.mode<<" codebook_bytes="<<rh.codebook.bytes()<<" sidecar_bytes_per_orbit=0\n";rdt.release();fdt.release();dt.release();return 0;
+    std::cout<<"bucket-closure-pattern10-depthcode-selftest OK W="<<W<<" mode="<<rh.codebook.mode<<" codebook_bytes="<<rh.codebook.bytes()<<" sidecar_bytes_per_orbit=0 temporary_depth_bytes=0 decode_unrank=0 payload_masks=1\n";rdt.release();fdt.release();dt.release();return 0;
 }
