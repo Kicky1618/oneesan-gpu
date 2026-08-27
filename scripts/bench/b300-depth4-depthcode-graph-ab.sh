@@ -37,12 +37,12 @@ build_backend(){
       N="$N" OUT="$bin" P10_DECODE=lut HIGH_CTX=resolved TRANSPOSE_MODE="$TRANSPOSE_MODE" \
         PM_ACCUM="$PM_ACCUM" TERNARY_KEY4="$TERNARY_KEY4" \
         bash "$ONEESAN_ROOT/scripts/build/b300-bucket-snake-pattern10-depth4-graph-batch.sh" ;;
-    depthcode_pair)
-      N="$N" OUT="$bin" DEPTHCODE_DECODE=pair TRANSPOSE_MODE="$TRANSPOSE_MODE" \
+    depthcode_payload_thread)
+      N="$N" OUT="$bin" HIGH_CTX=thread TRANSPOSE_MODE="$TRANSPOSE_MODE" \
         PM_ACCUM="$PM_ACCUM" TERNARY_KEY4="$TERNARY_KEY4" \
         bash "$ONEESAN_ROOT/scripts/build/b300-bucket-snake-pattern10-depthcode-graph-batch.sh" ;;
-    depthcode_predecoded)
-      N="$N" OUT="$bin" DEPTHCODE_DECODE=predecoded TRANSPOSE_MODE="$TRANSPOSE_MODE" \
+    depthcode_payload_resolved)
+      N="$N" OUT="$bin" HIGH_CTX=resolved TRANSPOSE_MODE="$TRANSPOSE_MODE" \
         PM_ACCUM="$PM_ACCUM" TERNARY_KEY4="$TERNARY_KEY4" \
         bash "$ONEESAN_ROOT/scripts/build/b300-bucket-snake-pattern10-depthcode-graph-batch.sh" ;;
     *) echo "unknown backend $backend" >&2; exit 2;;
@@ -70,7 +70,8 @@ run_one(){
 }
 
 printf 'backend\trepeat\tresidue\twall_s\tforward_high_s\tforward_low_s\treverse_low_s\treverse_high_s\ttranspose_s\tmetadata_mib_per_gpu\tforward_attach_mib\treverse_attach_mib\tbinary\n' >"$RESULT"
-for backend in depth4_lut_resolved depthcode_pair depthcode_predecoded; do
+BACKENDS=(depth4_lut_resolved depthcode_payload_thread depthcode_payload_resolved)
+for backend in "${BACKENDS[@]}"; do
   bin="$ONEESAN_BUILD_DIR/ab_${backend}_${TRANSPOSE_MODE}_n${N}"
   echo "=== build $backend ===" >&2
   build_backend "$backend" "$bin"
@@ -82,12 +83,12 @@ python3 - "$RESULT" "$SUMMARY" <<'PY'
 import csv, statistics, sys
 src,dst=sys.argv[1:]
 metrics=("wall_s","forward_high_s","forward_low_s","reverse_low_s","reverse_high_s","transpose_s")
-backends=("depth4_lut_resolved","depthcode_pair","depthcode_predecoded")
+backends=("depth4_lut_resolved","depthcode_payload_thread","depthcode_payload_resolved")
 with open(src,newline="") as f: rows=list(csv.DictReader(f,delimiter="\t"))
-by={b:[r for r in rows if r["backend"]==b] for b in backends}
 out=[]
 for b in backends:
-    g=by[b]; row={"backend":b,"repeats":str(len(g))}
+    g=[r for r in rows if r["backend"]==b]
+    row={"backend":b,"repeats":str(len(g))}
     for m in metrics:
         xs=[float(r[m]) for r in g if r[m]!="NA"]
         row[m]=f"{statistics.median(xs):.9f}" if xs else "NA"
@@ -99,11 +100,12 @@ with open(dst,"w",newline="") as f:
     w=csv.DictWriter(f,fieldnames=fields,delimiter="\t"); w.writeheader(); w.writerows(out)
 q={r["backend"]:r for r in out}
 def ratio(a,b,m):
-    if q[a][m]!="NA" and q[b][m]!="NA": print(f"{b}_{m}_speedup_vs_{a}={float(q[a][m])/float(q[b][m]):.6f}x")
+    if q[a][m]!="NA" and q[b][m]!="NA":
+        print(f"{b}_{m}_speedup_vs_{a}={float(q[a][m])/float(q[b][m]):.6f}x")
 for m in ("wall_s","forward_high_s","forward_low_s","reverse_low_s","reverse_high_s"):
-    ratio("depth4_lut_resolved","depthcode_pair",m)
-    ratio("depthcode_pair","depthcode_predecoded",m)
-    ratio("depth4_lut_resolved","depthcode_predecoded",m)
+    ratio("depth4_lut_resolved","depthcode_payload_thread",m)
+    ratio("depthcode_payload_thread","depthcode_payload_resolved",m)
+    ratio("depth4_lut_resolved","depthcode_payload_resolved",m)
 print(f"summary={dst}")
 PY
 
