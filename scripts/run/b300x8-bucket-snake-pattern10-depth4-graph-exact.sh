@@ -8,7 +8,7 @@ BUCKET_TRANSPOSE_CHUNK_MIB="${BUCKET_TRANSPOSE_CHUNK_MIB:-1024}"; BUCKET_RESERVE
 case "$TRANSPOSE_MODE" in sync|events|pipeline) ;; *) echo "TRANSPOSE_MODE must be sync, events, or pipeline" >&2; exit 2;; esac
 if [[ "$PM_ACCUM" != 0 && "$PM_ACCUM" != 1 ]]; then echo "PM_ACCUM must be 0 or 1" >&2; exit 2; fi
 if [[ "$P10_DECODE" != unrank && "$P10_DECODE" != lut ]]; then echo "P10_DECODE must be unrank or lut" >&2; exit 2; fi
-if [[ "$HIGH_CTX" != thread && "$HIGH_CTX" != shared && "$HIGH_CTX" != warp ]]; then echo "HIGH_CTX must be thread, shared, or warp" >&2; exit 2; fi
+if [[ "$HIGH_CTX" != thread && "$HIGH_CTX" != shared && "$HIGH_CTX" != resolved && "$HIGH_CTX" != warp ]]; then echo "HIGH_CTX must be thread, shared, resolved, or warp" >&2; exit 2; fi
 if [[ "$TERNARY_KEY4" != 0 && "$TERNARY_KEY4" != 1 ]]; then echo "TERNARY_KEY4 must be 0 or 1" >&2; exit 2; fi
 SUFFIX="_${P10_DECODE}_${HIGH_CTX}_${TRANSPOSE_MODE}"; if [[ "$PM_ACCUM" == 1 ]]; then SUFFIX="${SUFFIX}_pm"; fi; if [[ "$TERNARY_KEY4" == 0 ]]; then SUFFIX="${SUFFIX}_keyscalar"; fi
 BIN="${BIN:-$ONEESAN_BUILD_DIR/oneesan_cuda_gridfp_b300_bucket_snake_onepass_pattern10_depth4_graph_batch${SUFFIX}_n${N}}"
