@@ -44,17 +44,22 @@ rows=list(csv.DictReader(open(sys.argv[1]),delimiter='\t'))
 def ints(group,key):
     return [int(r[key]) for r in group if r[key] != 'NA']
 for backend in ('depthcode_payload_thread','depthcode_payload_resolved','depthcode_payload_warp'):
-    high=[r for r in rows if r['backend']==backend and 'high' in r['kernel'].lower()]
+    all_rows=[r for r in rows if r['backend']==backend]
+    high=[r for r in all_rows if 'high' in r['kernel'].lower()]
     if not high:
         continue
     regs=ints(high,'registers')
     smem=ints(high,'smem_bytes')
     stores=ints(high,'spill_store_bytes')
     loads=ints(high,'spill_load_bytes')
+    cmem=ints(all_rows,'cmem0_bytes')
     print(f'{backend}_high_max_registers={max(regs) if regs else "NA"}')
     print(f'{backend}_high_max_smem_bytes={max(smem) if smem else "NA"}')
     print(f'{backend}_high_spill_store_bytes={sum(stores) if stores else "NA"}')
     print(f'{backend}_high_spill_load_bytes={sum(loads) if loads else "NA"}')
+    print(f'{backend}_max_cmem0_bytes={max(cmem) if cmem else "NA"}')
+    if cmem and max(cmem) >= 60*1024:
+        print(f'{backend}_cmem0_headroom_warning=1')
 PY
 
 echo "depthcode-highctx-ptxas OK n=$N arch=$ARCH transpose=$TRANSPOSE_MODE result=$OUT logs=$LOGDIR" >&2
