@@ -24,7 +24,7 @@ so that
 W_n^d -> W_{n-2}^{d-2} + 2 W_{n-2}^d + W_{n-2}^{d+2}.
 ```
 
-For odd `d`, the finite beta=0 basis transform used by the probe is
+For odd `d`, the finite beta=0 basis transform is
 
 ```text
 A <- A + partial_d(C) + Q_d(D)
@@ -46,167 +46,251 @@ G'(n,d)
 H = [0 1; 1 0].
 ```
 
-The probe independently builds the beta=0 Gram form by overlaying pairs of link states. A component is accepted only when it contains one defect from each side; a closed component therefore contributes zero.
-
-Local compilation used:
-
-```bash
-g++ -std=c++20 -O2 -Wall -Wextra \
-  src/cpp/probes/odd_tl_gram_factorization_probe.cpp \
-  -o odd_tl_gram_factorization_probe
-```
-
-The tested implementation matched explicit Gram contraction for every odd sector
+The explicit-Gram probe matched this factorization for every odd sector
 
 ```text
 n = 1,3,5,...,13
 1 <= d <= n, d odd
 ```
 
-with four independent random vector pairs per sector modulo `4294967291`.
+with four random vector pairs per sector modulo `4294967291`.
 
-This probe is deliberately independent of the Grid-FP codec. It fixes the signs/orientation of `partial`, `J`, `Q`, and the `-(d+3)/(d+1)` canonical weight before CUDA work starts.
+## 2. Integer-only normalization for CUDA
 
-## 2. Why factorized-authoritative storage matters
+The rational coefficients of `Q_d` share the denominator
 
-The existing B300 file
+```text
+s = (d+1)/2.
+```
+
+`src/cpp/probes/odd_tl_integer_normalization_probe.cpp` uses the coordinate
+
+```text
+Ahat = s * A'
+```
+
+so the local transform becomes
+
+```text
+Ahat <- s*A + s*partial_d(C) + Qtilde_d(D)
+B'   <- B + partial_{d+2}(D)
+C'   <- C + J_{d+2}(D)
+D'   <- D
+```
+
+where every transform coefficient is a signed small integer. The canonical Gram recursion changes only by giving the A child the scalar `1/s^2`; the D child retains `-(s+1)/s`.
+
+The integer-normalized transform has been independently checked against the explicit Gram form. This is the CUDA form: modular inverses move into the final leaf weights instead of appearing in trillions of transform contributions.
+
+For W=28, the one-transform-per-occupancy-sector workload is
+
+```text
+2,659,582,660,624 cross-sector sparse contributions
+  692,722,353,416 A-coordinate small-integer rescalings
+-----------------------------------------------
+3,352,305,014,040 transform arithmetic sites
+```
+
+plus `192,859,753,310` weighted leaf products after pairing reflected occupancy sectors. The earlier 2.852e12 estimate omitted the A-coordinate rescalings required by the integer normalization.
+
+## 3. Static gather-stage compiler
+
+`src/cpp/probes/odd_tl_transform_compiler_probe.cpp` compiles the recursive integer transform into breadth-by-depth stages.
+
+At each recursion depth:
+
+```text
+phase 1: update A and B, reading old C,D
+barrier
+phase 2: update C, reading D
+barrier
+next recursion depth
+```
+
+Child ranges are disjoint, so all nodes at the same depth can execute concurrently. No global or shared-memory atomic is required.
+
+Each sparse edge needs only
+
+```text
+22 bits : absolute source index (D_27 = 2,674,440 < 2^22)
+ 5 bits : signed coefficient in [-14,14]
+```
+
+so one contribution fits in a uint32. The transform compiler checks a CPU executor of this staged representation against the recursive transform.
+
+The sum of cross-edge tables for one copy of every odd width through 27 is about 50.98 million edges, or about 194.5 MiB at four bytes per edge. This is small relative to B300 HBM and avoids generating topology maps on device.
+
+## 4. Canonical Gram becomes a weighted involution
+
+`src/cpp/probes/odd_tl_partner_weight_probe.cpp` recursively flattens the normalized canonical Gram to
+
+```text
+partner[i]
+weight[i]
+```
+
+with
+
+```text
+partner[partner[i]] == i
+weight[partner[i]] == weight[i].
+```
+
+The contraction is therefore
+
+```text
+sum_i weight[i] * x[i] * y[partner[i]].
+```
+
+There are only `3,707,851` dense one-defect states in total over occupied widths 1,3,...,27, so a uint32 partner table is about 14.14 MiB. The partner table is modulus-independent; only the weight table must be regenerated for each CRT prime.
+
+## 5. Reflection and factor-to-TL maps
+
+The existing point-symmetry probe represents a topology by a pairing signature. Converting a signature to the dense TL ballot word is simple:
+
+- signature labels run high-to-low;
+- TL terminals run low-to-high;
+- a terminal is `U` iff it is the defect or its partner occurs later in low-to-high order.
+
+An independent exhaustive Motzkin-state check through W=8 found `compat(signature_a, signature_b)` identical to the beta=0 TL Gram for every topology pair.
+
+`src/cpp/probes/midpoint_factor_map_probe.cpp` compiles dense TL rank to factorized segment coordinates. For a state with `kH` occupied HIGH terminals, center occupancy `c`, and `kL` occupied LOW terminals, one coordinate fits in 26 bits:
+
+```text
+10 bits : LOW mask-local topology rank
+10 bits : HIGH mask-local topology rank
+ 2 bits : center symbol N/R/L
+ 4 bits : HIGH ending height
+```
+
+The maximum HIGH/LOW segment-local rank is below 1024.
+
+There are 210 valid `(kH,c,kL)` tuples and
+
+```text
+16,878,801
+```
+
+factor-map entries in total, so a uint32 table is about 64.4 MiB. Dense reflection needs another `3,707,851` uint32 ranks, about 14.14 MiB.
+
+The exact physical occupancy positions do not affect mask-local topology rank; only the occupied counts and boundary heights matter. Actual mask-dependent all-ranks are recovered from the existing `*_mask_codes` and `*_packed_rank` tables.
+
+## 6. LOW14/HIGH13 reflection pairing
+
+`src/cpp/probes/midpoint_group_pairing_probe.cpp` records the exact coarse-group relation.
+
+Let `h` be the reflected/right HIGH13 occupancy. The corresponding left LOW14 group is
+
+```text
+L = reverse13(h) | (b << 13),  b in {0,1}.
+```
+
+For a left HIGH13 occupancy `H` and left center occupancy `c`, the reflected state has
+
+```text
+right HIGH13 = h
+right center = b
+right LOW14  = reverse13(H) | (c << 13).
+```
+
+For fixed left `L` and `H`, exactly one value of `c` makes the full occupancy odd. Hence one CTA corresponds naturally to one exact odd occupancy sector.
+
+There are `2^27` odd masks and no reflection-fixed odd mask at even width 28, so the join uses exactly `2^26 = 67,108,864` unordered occupancy pairs and multiplies the accumulated bilinear form by two.
+
+## 7. Existing canonical B300 backend can host the first midpoint kernel
+
+The production experimental file
 
 ```text
 src/cuda/b300/oneesan_cuda_gridfp_b300_hbm32_factorized_batch.cu
 ```
 
-uses factorized ordering only inside scratch groups. The authoritative HBM arrays are still in canonical Motzkin rank order; group I/O reconstructs a `MateID` and calls `factor_global_rank_*()` before loading/storing the sharded arrays.
+already gathers LOW14- or HIGH13-fixed groups into the same factorized scratch layout required by the midpoint kernel. Its authoritative HBM remains canonical Motzkin-rank order, but that is no longer a blocker for the first implementation.
 
-The RAM backend already contains a better authoritative layout in
+A low-risk first path is:
+
+```text
+for each HIGH13 group h:
+    gather reflected/right HIGH13 group once
+
+    for b in {0,1}:
+        L = reverse13(h) | (b<<13)
+        gather left LOW14 group L
+
+        process exact HIGH masks H in batches:
+            choose the unique center occupancy c giving odd total occupancy
+            skip unless S < reverse28(S)
+            pack left exact sector into TL rank
+            pack reflected right sector into TL rank
+            integer odd-TL transform both vectors
+            weighted-involution dot
+```
+
+The right HIGH13 group is reused for the two LOW14 groups differing only at position 13. Across all groups, every authoritative state is needed only once as one side of an unordered reflected occupancy pair.
+
+This route changes no DP transition or authoritative state numbering. It can establish the real midpoint speedup before committing to a storage-layout migration.
+
+## 8. Factorized-authoritative storage remains the second optimization
+
+The existing RAM backend already has occupancy-major authoritative storage in
 
 ```text
 src/cuda/gridfp/ramstream32_factorized_storage.hpp
 ```
 
-For each fixed intermediate height it orders both segment code lists by
+and `src/cpp/probes/factorized_storage_geometry_probe.cpp` gives the W=28 geometry:
 
 ```text
-(occupancy mask, rank inside that occupancy mask).
-```
-
-The main state is then stored as row-major HIGH x LOW rectangles for each `(high_end_height, center_symbol)` block.
-
-For a fixed HIGH occupancy group, every factor block becomes one consecutive authoritative interval. For a fixed LOW occupancy group, every HIGH row contributes one consecutive LOW slice. No per-state canonical rank is required.
-
-## 3. W=28 storage geometry
-
-`src/cpp/probes/factorized_storage_geometry_probe.cpp` recomputes the W=28 geometry without CUDA or the existing codec implementation.
-
-Expected output is:
-
-```text
-W=28 H=13 center=1 L=14
 main_states=385719506620
-high_all_codes=787333 low_all_codes=1201917
-LOW14 groups=16384 max_states=961466716 max_row_runs=1171380 total_row_runs=17867517828 avg_run=21.588 warp_row_eff=50.672%
-HIGH13 groups=8192 max_states=1471935235 max_fblock_runs=22 total_fblock_runs=106495 best_owner_weighted=30.849%
-mask_begin_mib=2.812 removable_canonical_prefix_mib=12.014 net_metadata_delta_mib=-9.201
+LOW14 avg contiguous run=21.588 uint32
+LOW14 one-warp/row lane efficiency=50.672%
+HIGH13 max nonempty factor blocks/group=22
+HIGH13 owner-aware local-HBM weighted fraction=30.849%
 ```
 
-The state partitions are checked against the known W=28 main-state count.
-
-Interpretation:
-
-- HIGH13 group I/O is extremely regular: at most 22 consecutive main-state ranges per group.
-- LOW14 group I/O is row-sliced. The state-weighted average consecutive run is 21.588 uint32 values.
-- A naive one-warp-per-row kernel uses about 50.7% of lane slots. This is acceptable for a first implementation but leaves room for a packed-row kernel.
-- If HIGH13 groups are scheduled on the GPU owning the largest fraction of their factorized ranges, the weighted local-HBM fraction is about 30.85%, versus 12.5% for random assignment over eight GPUs.
-- Storage occupancy-start metadata is smaller than the canonical HIGH prefix-base tables it makes unnecessary, so factorized-authoritative layout does not create a new large GPU-memory cost.
-
-## 4. Proposed B300 storage-major I/O
-
-Do not precompute one `PeerInterval` per LOW row: W=28 has about 17.9 billion such rows across all LOW14 groups.
-
-Use a compact rectangle descriptor instead:
+`src/cuda/b300/probes/factorized_storage_rect_probe.cu` validates the compact descriptor proposed for a future B300 storage-major backend:
 
 ```cpp
-struct StorageRect {
-    uint64_t global;
-    uint64_t local;
-    uint32_t rows;
-    uint32_t global_stride;
-    uint32_t width;
-};
+(global base, local base, rows, global stride, width)
 ```
 
-There are only O(H) descriptors per group.
+A LOW-fixed FBlock is one strided rectangle; it must not be expanded into billions of per-row `PeerInterval` records. A HIGH-fixed FBlock is one contiguous rectangle.
 
-### Fixed HIGH
+Storage-major HBM can remove per-state canonical rank/unrank from group I/O, but it is now deliberately postponed until the canonical-HBM midpoint kernel is measured.
 
-`width == global_stride`, so each nonempty factor block is one fully consecutive range. Reuse the existing interval-copy path or a simple linear peer-copy kernel.
+## 9. Midpoint CTA classes
 
-### Fixed LOW
-
-Each row is
+For an exact occupancy width `m`, the two uint32 vectors require
 
 ```text
-auth[global + row * global_stride ... + width)
-    <->
-scratch[local + row * width ... + width).
+m=17 :   37.98 KiB
+m=19 :  131.22 KiB
+m=21 :  459.27 KiB
+m=23 :    1.59 MiB
+m=25 :    5.67 MiB
+m=27 :   20.40 MiB
 ```
 
-A first CUDA implementation can assign one warp to one row. The shard owner should be computed once per row, not once per state. A later version can pack short rows using precomputed fast-divide/magic constants.
-
-When a Mate cache fits, construct the `MateID` during storage gather from the already known row/column coordinates rather than calling a general rank/unrank routine:
-
-- fixed LOW: HIGH all-rank is the row; LOW mask-local rank is the column;
-- fixed HIGH: HIGH mask-local rank is the row; LOW all-rank is the column.
-
-This makes Mate generation a few table lookups and bit shifts.
-
-## 5. Authoritative factor tables can be reused, not duplicated
-
-The scratch factor codec currently packs
+The intended hierarchy is therefore:
 
 ```text
-(all-rank << segment_bits) | mask-local-rank
+m <= 19 : one CTA, ordinary shared memory
+m = 21  : small thread-block cluster / DSM
+m = 23  : up to an 8-block cluster / DSM
+m >= 25 : global-memory fallback (very small state fraction)
 ```
 
-inside `*_packed_rank`.
+A fixed LOW group has fixed `kL`. HIGH masks can be batched by popcount; adjacent HIGH-popcount classes produce the same odd `m`, reducing the number of distinct shared-memory launch sizes.
 
-For storage-major authoritative layout, replace `all-rank` by the occupancy-major storage rank while preserving the same mask-local rank. Replace `*_all_codes` by the corresponding occupancy-major list. The local factor codec remains a bijection and its factor blocks now line up directly with authoritative rectangles.
+## 10. Current implementation order
 
-Therefore the 1-GiB LOW packed-rank table is not duplicated. It is replaced in place.
-
-The canonical `high_main_base` / `high_block_base` arrays are no longer needed once authoritative HBM is storage-major.
-
-## 6. Midpoint contraction
-
-For point-symmetry MITM, stop after 14 completed rows. The existing CPU point-symmetry probe already joins the main half-DP vector at a row boundary; deferred/blocked states are not part of the midpoint vector.
-
-For each exact full-frontier occupancy mask `S` and its reflected mask `R(S)`:
-
-1. read the corresponding factorized storage rectangles;
-2. map `(factor rectangle coordinates)` to the dense one-defect TL rank;
-3. apply the sparse odd-TL transform to both vectors;
-4. contract with the recursively generated weighted involution;
-5. reduce to one residue scalar.
-
-The transform never changes occupancy, so exact occupancy sectors are independent.
-
-The earlier operation-count estimate for W=28 is about
-
-```text
-2.660e12 sparse transform contributions
-+ 1.929e11 weighted leaf products
-= 2.852e12 primitive join operations / residue.
-```
-
-This is to be compared with 14 additional rows of the full Grid-FP sweep, not with an explicit meander adjacency matrix.
-
-## 7. Implementation order
-
-1. Keep the production source unchanged.
-2. Add a storage-major derivative of the experimental B300 factorized backend.
-3. Replace canonical group gather/scatter with HIGH interval and LOW rectangle I/O.
-4. Validate residues on small widths / one GPU against the canonical backend.
-5. Validate multi-GPU sharding and peer I/O.
-6. Add the odd-TL midpoint kernel.
-7. Only after correctness is fixed, add owner-aware HIGH scheduling and DSM specializations for large occupancy sectors.
+1. Keep production sources unchanged.
+2. Use `point_symmetry_mitm_odd_tl.cpp` to connect actual half-DP vectors to the odd-TL join and compare against both explicit meander join and full DP.
+3. Use the integer-normalized stage compiler and weighted involution as the CUDA table source.
+4. Implement the midpoint kernel on the existing canonical-authoritative B300 factorized backend.
+5. Stop after 14 rows for W=28 and compare residues against the full 28-row solver.
+6. Measure midpoint group-gather time separately from TL transform time.
+7. Only if canonical group I/O is material, switch authoritative HBM to the storage-major rectangle layout.
+8. Then add owner-aware HIGH scheduling and DSM specializations.
 
 Do not run broad GitHub Actions matrices for this branch; use targeted local/B300 regression runs.
