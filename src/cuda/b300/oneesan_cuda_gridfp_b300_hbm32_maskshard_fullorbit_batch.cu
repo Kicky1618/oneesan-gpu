@@ -32,6 +32,26 @@
 #define MASKSHARD_HIGH_LAUNCH(grid, block) grid, block
 #endif
 
+#ifdef MASKSHARD_HIGH_CUDA_GRAPH
+#ifndef MASKSHARD_HIGH_PERTHREAD_STREAM
+#error "HIGH CUDA Graph requires v0.70 per-thread execution stream"
+#endif
+#ifndef MASKSHARD_HIGH_ROW_BATCH_ASYNC
+#error "HIGH CUDA Graph requires asynchronous row-batch lifetime"
+#endif
+#ifndef MASKSHARD_HIGH_CLOSURE_LAUNCH_CLASS_CACHE
+#error "HIGH CUDA Graph requires v0.71 class-invariant closure geometry"
+#endif
+#ifndef MASKSHARD_ROW_DEPTH_ORBIT_COMPACT
+#error "HIGH CUDA Graph currently targets exact compact HIGH orbit"
+#endif
+#ifndef MASKSHARD_HIGH_CLOSURE_ROW_DEPTH_COMPACT_LAUNCH
+#error "HIGH CUDA Graph currently targets exact compact HIGH closure launch"
+#endif
+static_assert((TARGET_W & 1) == 0,
+              "HIGH CUDA Graph key currently assumes equal orbit/closure full caps");
+#endif
+
 #if defined(MASKSHARD_BLOCK_ORBIT_ROW_CAP_LAUNCH) && !defined(MASKSHARD_BLOCK_ORBIT_TIGHT_LAUNCH)
 #error "row-capped BLOCKED orbit launch requires tight BLOCKED-domain launch"
 #endif
@@ -120,6 +140,14 @@ struct FullOrbitBatchWorker {
     double low_closure_s = 0.0;
     uint64_t high_groups = 0;
     uint64_t low_groups = 0;
+#ifdef MASKSHARD_HIGH_CUDA_GRAPH
+    static constexpr int HIGH_GRAPH_CAPS = TARGET_W / 2;
+    static constexpr std::size_t HIGH_GRAPH_SLOTS =
+        std::size_t(LOW_LUT_K + 1) * std::size_t(HIGH_GRAPH_CAPS);
+    std::array<cudaGraphExec_t, HIGH_GRAPH_SLOTS> high_graph_exec{};
+    uint64_t high_graph_captures = 0;
+    uint64_t high_graph_launches = 0;
+#endif
 
     static size_t aligned(size_t x) { return (x + 255) & ~size_t(255); }
     void init(int device) { dev = device; }
@@ -127,12 +155,22 @@ struct FullOrbitBatchWorker {
         high_io_s = high_orbit_s = high_closure_s = 0.0;
         low_orbit_s = low_closure_s = 0.0;
         high_groups = low_groups = 0;
+#ifdef MASKSHARD_HIGH_CUDA_GRAPH
+        high_graph_captures = high_graph_launches = 0;
+#endif
     }
     void ensure(Code main_n, Code block_n) {
         const size_t mb = aligned(size_t(main_n) * sizeof(Count));
         const size_t db = aligned(size_t(block_n) * sizeof(Count));
         const size_t need = mb + db;
         if (need > cap) {
+#ifdef MASKSHARD_HIGH_CUDA_GRAPH
+            for (const auto& e : high_graph_exec) if (e) {
+                std::cerr << "fullorbit-batch graph scratch would move after capture need="
+                          << need << " cap=" << cap << '\n';
+                std::exit(213);
+            }
+#endif
             if (arena) ck(cudaFree(arena), "fullorbit-batch worker free arena");
             cap = need;
             ck(cudaMalloc(&arena, cap), "fullorbit-batch HIGH scratch");
@@ -140,8 +178,25 @@ struct FullOrbitBatchWorker {
         a = reinterpret_cast<Count*>(arena);
         d = reinterpret_cast<Count*>(arena + mb);
     }
+#ifdef MASKSHARD_HIGH_CUDA_GRAPH
+    static std::size_t high_graph_index(std::uint32_t mask, int zero_based_row) {
+        std::size_t occ = 0;
+        while (mask) {
+            mask &= mask - 1;
+            ++occ;
+        }
+        const int cap = std::min(zero_based_row + 1, HIGH_GRAPH_CAPS);
+        return occ * HIGH_GRAPH_CAPS + std::size_t(cap - 1);
+    }
+#endif
     void release() {
         if (dev >= 0) cudaSetDevice(dev);
+#ifdef MASKSHARD_HIGH_CUDA_GRAPH
+        for (auto& e : high_graph_exec) {
+            if (e) cudaGraphExecDestroy(e);
+            e = nullptr;
+        }
+#endif
         if (arena) cudaFree(arena);
         arena = nullptr;
         cap = 0;
@@ -324,6 +379,97 @@ static void process_fullorbit_batch_high_job(
 #endif
 #ifdef MASKSHARD_HIGH_CLOSURE_ROWS
     const int warps_per_block = (threads + 31) / 32;
+#endif
+
+#ifdef MASKSHARD_HIGH_CUDA_GRAPH
+    const cudaStream_t graph_stream = maskshard_high_execution_stream();
+    const std::size_t graph_ix =
+        FullOrbitBatchWorker::high_graph_index(job.low_mask, zero_based_row);
+    cudaGraphExec_t& graph_exec = w.high_graph_exec[graph_ix];
+
+    auto enqueue_graph_kernels = [&] {
+        if (job.main_n)
+            maskshard_high_main_io_kernel<false><<<
+                MASKSHARD_HIGH_LAUNCH(bm, threads)>>>(w.a, job.main_n);
+#ifndef MASKSHARD_LAZY_ZERO_BLOCK_INIT
+        if (job.block_n)
+            maskshard_high_block_io_kernel<false><<<
+                MASKSHARD_HIGH_LAUNCH(bd, threads)>>>(w.d, job.block_n);
+#endif
+        for (int p = TARGET_W - 1; p >= LOW_LUT_K + 1; --p) {
+#ifdef MASKSHARD_BLOCK_ORBIT_TIGHT_LAUNCH
+            if (bd_orbit)
+                maskshard_main_block_highorbit_kernel<<<
+                    MASKSHARD_HIGH_LAUNCH(bd_orbit, threads)>>>(
+                    w.a, w.d, job.main_n, p);
+#else
+            if (job.main_n)
+                maskshard_main_block_highorbit_kernel<<<
+                    MASKSHARD_HIGH_LAUNCH(bm, threads)>>>(
+                    w.a, w.d, job.main_n, p);
+#endif
+            const std::uint32_t pi = std::uint32_t((TARGET_W - 1) - p);
+            const int closure_cap = std::min(
+                zero_based_row + 1, (TARGET_W + 1) / 2);
+            const Code closure_rows =
+                maskshard_highclosure_rowdepth_compact_launch_tasks(
+                    job.low_mask, int(pi), closure_cap);
+            if (closure_cap == (TARGET_W + 1) / 2
+                && closure_rows != job.closure_rows[size_t(pi)]) {
+                std::cerr << "fullorbit-batch graph closure full-cap mismatch mask="
+                          << job.low_mask << " pi=" << pi
+                          << " got=" << closure_rows
+                          << " expected=" << job.closure_rows[size_t(pi)] << '\n';
+                std::exit(214);
+            }
+            const int bc = closure_rows
+                ? int(std::min<Code>(65535,
+                    (closure_rows + Code(warps_per_block) - 1)
+                        / Code(warps_per_block)))
+                : 0;
+            if (bc)
+                maskshard_main_highdesc_closure_inplace_kernel<<<
+                    MASKSHARD_HIGH_LAUNCH(bc, threads)>>>(
+                    w.a, w.d, job.main_n, p);
+        }
+        if (job.main_n)
+            maskshard_high_main_io_kernel<true><<<
+                MASKSHARD_HIGH_LAUNCH(bm, threads)>>>(w.a, job.main_n);
+        if (job.block_n)
+            maskshard_high_block_io_kernel<true><<<
+                MASKSHARD_HIGH_LAUNCH(bd, threads)>>>(w.d, job.block_n);
+    };
+
+    if (!graph_exec) {
+        // The class/mask config for this first job was enqueued before capture.
+        // Finish it (and any earlier HIGH graph) so capture has no external
+        // dependency. This one-time cost is paid at most 210 times/GPU for n=27.
+        ck(cudaStreamSynchronize(graph_stream),
+           "fullorbit-batch HIGH graph pre-capture sync");
+        cudaGraph_t graph = nullptr;
+        ck(cudaStreamBeginCapture(
+               graph_stream, cudaStreamCaptureModeThreadLocal),
+           "fullorbit-batch HIGH graph begin capture");
+        enqueue_graph_kernels();
+        ck(cudaGetLastError(), "fullorbit-batch HIGH graph captured launch");
+        ck(cudaStreamEndCapture(graph_stream, &graph),
+           "fullorbit-batch HIGH graph end capture");
+        if (!graph) {
+            std::cerr << "fullorbit-batch HIGH graph capture returned null\n";
+            std::exit(215);
+        }
+        ck(cudaGraphInstantiate(&graph_exec, graph, nullptr, nullptr, 0),
+           "fullorbit-batch HIGH graph instantiate");
+        ck(cudaGraphDestroy(graph), "fullorbit-batch HIGH graph destroy source");
+        ++w.high_graph_captures;
+    }
+
+    maskshard_high_row_batch_mark_touched();
+    ck(cudaGraphLaunch(graph_exec, graph_stream),
+       "fullorbit-batch HIGH graph launch");
+    ++w.high_graph_launches;
+    ++w.high_groups;
+    return;
 #endif
 
     auto t = std::chrono::steady_clock::now();
@@ -600,6 +746,28 @@ int main(int argc, char** argv) {
 #ifdef MASKSHARD_HIGH_CLOSURE_ROW_DEPTH_COMPACT
     maskshard_prepare_highclosure_rowdepth_compact(high_desc, ngpu);
 #endif
+#ifdef MASKSHARD_HIGH_CUDA_GRAPH
+    if (!high_jobs.empty()) {
+        const FullOrbitBatchHighJob* reserve_job = &high_jobs.front();
+        std::size_t reserve_bytes = 0;
+        for (const auto& job : high_jobs) {
+            const std::size_t need =
+                FullOrbitBatchWorker::aligned(size_t(job.main_n) * sizeof(Count))
+              + FullOrbitBatchWorker::aligned(size_t(job.block_n) * sizeof(Count));
+            if (need > reserve_bytes) {
+                reserve_bytes = need;
+                reserve_job = &job;
+            }
+        }
+        for (int d = 0; d < ngpu; ++d) {
+            ck(cudaSetDevice(d), "fullorbit-batch graph scratch reserve device");
+            workers[d].ensure(reserve_job->main_n, reserve_job->block_n);
+        }
+        std::cerr << "fullorbit-batch HIGH graph scratch preallocated bytes="
+                  << reserve_bytes << " graph_slots_per_gpu="
+                  << FullOrbitBatchWorker::HIGH_GRAPH_SLOTS << '\n';
+    }
+#endif
     std::vector<std::vector<FullOrbitBatchLowJob>> low_jobs(ngpu);
     for (uint32_t mask = 0; mask < shard.masks; ++mask) {
         FullOrbitBatchLowJob job;
@@ -720,6 +888,9 @@ int main(int argc, char** argv) {
         double low_orbit = 0, low_closure = 0;
         uint64_t high_groups_done = 0, low_groups_done = 0;
         size_t max_scratch = 0;
+#ifdef MASKSHARD_HIGH_CUDA_GRAPH
+        uint64_t high_graph_captures = 0, high_graph_launches = 0;
+#endif
         for (const auto& w : workers) {
             high_io += w.high_io_s;
             high_orbit += w.high_orbit_s;
@@ -729,6 +900,10 @@ int main(int argc, char** argv) {
             high_groups_done += w.high_groups;
             low_groups_done += w.low_groups;
             max_scratch = std::max(max_scratch, w.cap);
+#ifdef MASKSHARD_HIGH_CUDA_GRAPH
+            high_graph_captures += w.high_graph_captures;
+            high_graph_launches += w.high_graph_launches;
+#endif
         }
 
         std::cout << "backend=b300-factorized-maskshard-v0.4-fullorbit-batch"
@@ -751,6 +926,10 @@ int main(int argc, char** argv) {
                   << " high_groups=" << high_groups_done
                   << " low_groups=" << low_groups_done
                   << " max_scratch_gib=" << double(max_scratch) / double(1ULL << 30)
+#ifdef MASKSHARD_HIGH_CUDA_GRAPH
+                  << " high_graph_captures=" << high_graph_captures
+                  << " high_graph_launches=" << high_graph_launches
+#endif
                   << '\n';
     }
 
