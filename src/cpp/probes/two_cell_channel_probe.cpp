@@ -2,6 +2,7 @@
 #include <array>
 #include <cassert>
 #include <cstdint>
+#include <cstdlib>
 #include <iostream>
 #include <map>
 #include <set>
@@ -22,11 +23,14 @@
 //
 //     C_i(Nq) == A_i(LRq)  mod ker(T_{i+1}).
 //
-// The resulting two-cell channel has dimension
+// The canonical rank layout is therefore
 //
-//     M_{W-1} + M_{W-2} - M_{W-3},
+//     [ A_i(M_{W-1}) ][ C_i(M_{W-2}) with w[i] != N ],
 //
-// and the reduced transition has source fan-out at most three, with
+// of size M_{W-1} + M_{W-2} - M_{W-3}. The second block is position
+// dependent, but the total size is not.
+//
+// The reduced transition has source fan-out at most three, with
 //
 //     n1 = 2 M_{W-2} - M_{W-3},
 //     n2 = M_{W-1} - 2 M_{W-2} + M_{W-3},
@@ -37,7 +41,10 @@
 //   2. the quotient relation above;
 //   3. the channel dimension/fan-out/nnz formulae and unit coefficients;
 //   4. delayed exactness: after one reduced step, applying the following full
-//      T gives exactly the same full vector as two consecutive full T steps.
+//      T gives exactly the same full vector as two consecutive full T steps;
+//   5. the explicit A/C rank layout is a bijection;
+//   6. a destination-oriented CSR preimage table reproduces the same reduced
+//      step as the forward source scatter for every tested width/position.
 //
 // Default max width is 12. Width 14 is still a quick CPU check on a desktop.
 
@@ -46,6 +53,7 @@ namespace {
 constexpr char N = 'N', R = 'R', L = 'L';
 using Word = std::string;
 using Vec = std::map<Word, int64_t>;
+using Rank = std::uint64_t;
 
 struct Key {
     char type; // 'A' or 'C'
@@ -149,14 +157,12 @@ std::vector<Word> apply_T_basis(const Word& w, int i) {
     auto partner = [&](int x) { return x == s.root ? -1 : s.mate[x]; };
 
     if (!a && !b) {
-        // vacancy and cup
         out.push_back(w);
         LinkState t = s;
         t.mate[i] = i + 1;
         t.mate[i + 1] = i;
         out.push_back(encode(t));
     } else if (a && !b) {
-        // straight and turn
         out.push_back(w);
         LinkState t = s;
         const int p = partner(i);
@@ -171,7 +177,6 @@ std::vector<Word> apply_T_basis(const Word& w, int i) {
         }
         out.push_back(encode(t));
     } else if (!a && b) {
-        // turn and straight
         LinkState t = s;
         const int p = partner(i + 1);
         if (i + 1 == s.root) {
@@ -186,9 +191,8 @@ std::vector<Word> apply_T_basis(const Word& w, int i) {
         out.push_back(encode(t));
         out.push_back(w);
     } else {
-        // cap; an already paired adjacent LR creates a beta=0 loop.
         const int p = partner(i), q = partner(i + 1);
-        if (p == i + 1 && q == i) return out;
+        if (p == i + 1 && q == i) return out; // beta=0 loop
 
         LinkState t = s;
         if (i == s.root) {
@@ -294,9 +298,6 @@ Vec E_raw(const CVec& c, int i) {
 Key project_key(const Key& k, int i, int W) {
     if (k.type == 'A') return k;
     assert(k.type == 'C');
-
-    // Quotient for the next forward cell (i+1,i+2):
-    // C_i(Nq) and A_i(LRq) have the same image under T_{i+1}.
     if (i <= W - 3 && k.w[i] == N) {
         const Word a = k.w.substr(0, i) + Word() + L + R + k.w.substr(i + 1);
         assert(static_cast<int>(a.size()) == W - 1 && valid_word(a));
@@ -320,13 +321,100 @@ std::vector<Key> q_basis(int W, int i, const std::vector<std::vector<Word>>& wor
 }
 
 CVec K_basis(const Key& src, int W, int i) {
-    // Q_i -> Q_{i+1}: P_{i+1} R_{i+1} E_i.
     CVec raw;
     for (auto const& [w, a] : E_raw_basis(src, i)) {
         const CVec r = R_raw_basis(w, i + 1);
         for (auto const& [k, b] : r) add(raw, k, a * b);
     }
     return project(raw, i + 1, W);
+}
+
+struct ReducedLayout {
+    std::vector<Key> key;
+    std::map<Key, Rank> rank;
+    Rank a_size = 0;
+
+    Rank size() const { return static_cast<Rank>(key.size()); }
+};
+
+ReducedLayout make_layout(int W, int i, const std::vector<std::vector<Word>>& words) {
+    ReducedLayout out;
+    out.key.reserve(words[W - 1].size() + words[W - 2].size());
+
+    for (auto const& w : words[W - 1]) out.key.push_back({'A', w});
+    out.a_size = out.size();
+    for (auto const& w : words[W - 2])
+        if (i > W - 3 || w[i] != N) out.key.push_back({'C', w});
+
+    for (Rank r = 0; r < out.size(); ++r) {
+        if (!out.rank.emplace(out.key[r], r).second) std::abort();
+        if ((r < out.a_size) != (out.key[r].type == 'A')) std::abort();
+    }
+    return out;
+}
+
+struct PreimageCSR {
+    std::vector<Rank> offset; // destination -> [offset[d], offset[d+1])
+    std::vector<Rank> source;
+};
+
+PreimageCSR build_preimage_csr(
+    const ReducedLayout& src,
+    const ReducedLayout& dst,
+    int W,
+    int i
+) {
+    std::vector<std::vector<Rank>> incoming(static_cast<std::size_t>(dst.size()));
+    for (Rank s = 0; s < src.size(); ++s) {
+        const CVec col = K_basis(src.key[s], W, i);
+        for (auto const& [k, c] : col) {
+            if (c != 1) std::abort();
+            const auto it = dst.rank.find(k);
+            if (it == dst.rank.end()) std::abort();
+            incoming[it->second].push_back(s);
+        }
+    }
+
+    PreimageCSR out;
+    out.offset.resize(static_cast<std::size_t>(dst.size()) + 1);
+    for (Rank d = 0; d < dst.size(); ++d) {
+        out.offset[d] = static_cast<Rank>(out.source.size());
+        auto& v = incoming[d];
+        if (!std::is_sorted(v.begin(), v.end())) std::abort();
+        out.source.insert(out.source.end(), v.begin(), v.end());
+    }
+    out.offset[dst.size()] = static_cast<Rank>(out.source.size());
+    return out;
+}
+
+std::vector<std::uint64_t> scatter_step(
+    const ReducedLayout& src,
+    const ReducedLayout& dst,
+    int W,
+    int i,
+    const std::vector<std::uint64_t>& value
+) {
+    std::vector<std::uint64_t> out(static_cast<std::size_t>(dst.size()));
+    for (Rank s = 0; s < src.size(); ++s) {
+        for (auto const& [k, c] : K_basis(src.key[s], W, i)) {
+            assert(c == 1);
+            const auto it = dst.rank.find(k);
+            assert(it != dst.rank.end());
+            out[it->second] += value[s];
+        }
+    }
+    return out;
+}
+
+std::vector<std::uint64_t> gather_step(
+    const PreimageCSR& pre,
+    const std::vector<std::uint64_t>& value
+) {
+    std::vector<std::uint64_t> out(pre.offset.size() - 1);
+    for (Rank d = 0; d + 1 < pre.offset.size(); ++d)
+        for (Rank j = pre.offset[d]; j < pre.offset[d + 1]; ++j)
+            out[d] += value[pre.source[j]];
+    return out;
 }
 
 [[noreturn]] void fail(const std::string& s) {
@@ -357,7 +445,6 @@ int main(int argc, char** argv) {
         const uint64_t expect_n3 = m2 - m3;
         const uint64_t expect_nnz = 2 * m1 + m2 - 2 * m3;
 
-        // 1. Exact local rank factorization T_i = E_i R_i.
         for (int i = 0; i < W - 1; ++i) {
             for (auto const& w : words[W]) {
                 Vec direct;
@@ -369,6 +456,7 @@ int main(int argc, char** argv) {
         }
 
         uint64_t worst_indeg = 0;
+        uint64_t worst_preimage_bytes = 0;
         for (int i = 0; i <= W - 4; ++i) {
             const auto qb = q_basis(W, i, words);
             const auto qn = q_basis(W, i + 1, words);
@@ -376,7 +464,18 @@ int main(int argc, char** argv) {
                 fail("dimension formula W=" + std::to_string(W));
             const std::set<Key> qnset(qn.begin(), qn.end());
 
-            // 2. Every eliminated C direction is killed by the next cell.
+            const ReducedLayout src_layout = make_layout(W, i, words);
+            const ReducedLayout dst_layout = make_layout(W, i + 1, words);
+            if (src_layout.size() != expect_dim || dst_layout.size() != expect_dim)
+                fail("rank layout dimension W=" + std::to_string(W));
+            if (src_layout.a_size != m1 || dst_layout.a_size != m1)
+                fail("A span W=" + std::to_string(W));
+            if (src_layout.key != qb || dst_layout.key != qn)
+                fail("rank layout order W=" + std::to_string(W));
+            for (Rank r = 0; r < src_layout.size(); ++r)
+                if (src_layout.rank.at(src_layout.key[r]) != r)
+                    fail("rank roundtrip W=" + std::to_string(W));
+
             for (auto const& u : words[W - 2]) {
                 if (u[i] != N) continue;
                 const Key c{'C', u};
@@ -403,9 +502,6 @@ int main(int argc, char** argv) {
                     ++indeg[dst];
                 }
 
-                // 3/4. One reduced step may change the representative by a
-                // kernel vector of T_{i+2}; after applying T_{i+2}, the full
-                // vectors must therefore agree exactly.
                 const Vec actual = apply_T(apply_T(E_raw_basis(src, i), i + 1), i + 2);
                 Vec rep;
                 for (auto const& [dst, c] : col)
@@ -418,17 +514,36 @@ int main(int argc, char** argv) {
             if (fan[1] != expect_n1 || fan[2] != expect_n2 || fan[3] != expect_n3 || nnz != expect_nnz)
                 fail("fanout/nnz formula W=" + std::to_string(W) + " i=" + std::to_string(i));
             for (auto const& [k, d] : indeg) worst_indeg = std::max(worst_indeg, d);
+
+            const PreimageCSR pre = build_preimage_csr(src_layout, dst_layout, W, i);
+            if (pre.source.size() != expect_nnz || pre.offset.size() != expect_dim + 1)
+                fail("preimage CSR size W=" + std::to_string(W) + " i=" + std::to_string(i));
+            for (Rank d = 0; d < dst_layout.size(); ++d)
+                worst_indeg = std::max(worst_indeg, pre.offset[d + 1] - pre.offset[d]);
+
+            std::vector<std::uint64_t> value(static_cast<std::size_t>(src_layout.size()));
+            for (Rank s = 0; s < src_layout.size(); ++s)
+                value[s] = 1 + ((s * 0x9e3779b97f4a7c15ULL) ^ (Rank(W) << 32) ^ Rank(i));
+            if (scatter_step(src_layout, dst_layout, W, i, value) != gather_step(pre, value))
+                fail("scatter/gather mismatch W=" + std::to_string(W) + " i=" + std::to_string(i));
+
+            const uint64_t bytes =
+                uint64_t(pre.offset.size() + pre.source.size()) * sizeof(Rank);
+            worst_preimage_bytes = std::max(worst_preimage_bytes, bytes);
         }
 
         std::cout << "W=" << W
                   << " M=" << MW
                   << " reduced=" << expect_dim
+                  << " A=" << m1
+                  << " C=" << (m2 - m3)
                   << " n1=" << expect_n1
                   << " n2=" << expect_n2
                   << " n3=" << expect_n3
                   << " nnz=" << expect_nnz
                   << " avg=" << double(expect_nnz) / double(expect_dim)
                   << " max_indeg=" << worst_indeg
+                  << " preimage_kib=" << double(worst_preimage_bytes) / 1024.0
                   << " OK\n";
     }
 
