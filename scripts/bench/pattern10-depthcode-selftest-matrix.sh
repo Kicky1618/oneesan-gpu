@@ -13,4 +13,4 @@ for pm in 0 1; do
   done
 done
 
-echo "pattern10-depthcode-selftest-matrix OK W=$W pm_accum=0,1 decode_load=global,ldg high_ctx=thread,resolved,warp" >&2
+echo "pattern10-depthcode-selftest-matrix OK W=$W pm_accum=0,1 decode_load=global,ldg high_ctx=thread,resolved,warp,warpstriped" >&2
