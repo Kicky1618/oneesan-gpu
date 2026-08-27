@@ -1,0 +1,55 @@
+name: B300 HIGH cap LPT v0.75 research
+
+on:
+  workflow_dispatch:
+    inputs:
+      full_cuda:
+        description: 'Compile v0.75 CUDA backend for W=10,22,28'
+        required: false
+        type: boolean
+        default: false
+
+jobs:
+  structural:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build and run cap-LPT probes
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p build
+          g++ -O3 -std=c++17 -Wall -Wextra -Werror \
+            src/cpp/probes/factor_high_static_lpt_schedule.cpp \
+            -o build/factor_high_static_lpt_schedule
+          build/factor_high_static_lpt_schedule 28 14 8
+          g++ -O3 -std=c++17 -Wall -Wextra -Werror \
+            src/cpp/probes/factor_high_cap_lpt_schedule.cpp \
+            -o build/factor_high_cap_lpt_schedule
+          build/factor_high_cap_lpt_schedule
+          python3 -m py_compile scripts/bench/b300_maskshard_highcaplpt_ab.py
+
+  cuda-compile:
+    if: ${{ inputs.full_cuda }}
+    runs-on: ubuntu-latest
+    container: nvidia/cuda:12.8.1-devel-ubuntu22.04
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - {width: 10, low: 5, high: 4}
+          - {width: 22, low: 11, high: 10}
+          - {width: 28, low: 14, high: 13}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Compile v0.75 cap-LPT backend
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p build
+          nvcc -O3 -std=c++17 -lineinfo -arch=sm_80 \
+            -DTARGET_W=${{ matrix.width }} \
+            -DLOW_LUT_K=${{ matrix.low }} \
+            -DHIGH_LUT_K=${{ matrix.high }} \
+            src/cuda/b300/oneesan_b300_maskshard_v075_highcaplpt.cu \
+            -o build/maskshard_v075_w${{ matrix.width }}
