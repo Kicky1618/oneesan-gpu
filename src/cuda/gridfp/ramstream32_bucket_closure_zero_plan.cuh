@@ -2,6 +2,11 @@
 
 #include "ramstream32_bucket_closure_zero.cuh"
 
+#ifndef BKCZ_TERNARY_KEY4
+#define BKCZ_TERNARY_KEY4 1
+#endif
+static_assert(BKCZ_TERNARY_KEY4==0||BKCZ_TERNARY_KEY4==1,"BKCZ_TERNARY_KEY4 must be 0 or 1");
+
 // LL/RR remote-candidate positions form no-adjacent masks on each side of the
 // NN pair. For an active factor of K symbols plus center, ordinary sources are
 // one implicit RL source plus at most ceil(K/2) remote LL/RR sources. This is
@@ -61,6 +66,15 @@ __host__ __device__ __forceinline__ uint32_t bkcz_ternary_key4_legal(uint32_t co
     return key;
 }
 
+template<int K>
+__device__ __forceinline__ uint32_t bkcz_ternary_key(uint32_t code){
+#if BKCZ_TERNARY_KEY4
+    return bkcz_ternary_key4_legal<K>(code);
+#else
+    return gdx_ternary_key<K>(code);
+#endif
+}
+
 #if GPU_DIRECT_PM_ACCUM
 using BkczCrossAccum=uint64_t;
 __device__ __forceinline__ BkczCrossAccum bkcz_cross_add(BkczCrossAccum a,Count b){return a+uint64_t(b);}
@@ -76,7 +90,7 @@ __device__ __forceinline__ BkczCrossAccum bkcz_sum_high_preimages_fast(
     uint32_t dest_code,uint32_t depth,uint32_t source_he,uint32_t source_bid,uint32_t source_low_loc
 ){
     BkczCrossAccum sum=0;int s=int(depth);uint32_t low_slot=bkf_loc_owner(source_low_loc),low_rank=bkf_loc_rank(source_low_loc);BucketPhysicalBlock sb=bkf_low_main(low_slot,source_bid);
-    uint32_t key=bkcz_ternary_key4_legal<HIGH_LUT_K>(dest_code),weight=1u;
+    uint32_t key=bkcz_ternary_key<HIGH_LUT_K>(dest_code),weight=1u;
 #pragma unroll
     for(int pos=0;pos<HIGH_LUT_K;++pos){
         uint32_t v=(dest_code>>(2*pos))&3u;
@@ -94,7 +108,7 @@ __device__ __forceinline__ BkczCrossAccum bkcz_sum_low_preimages_fast(
     uint32_t dest_code,uint32_t depth,uint32_t source_hs,uint32_t source_bid,uint32_t source_high_loc
 ){
     BkczCrossAccum sum=0;int s=int(depth);uint32_t high_slot=bkf_loc_owner(source_high_loc),high_rank=bkf_loc_rank(source_high_loc);BucketPhysicalBlock sb=bkf_high_main(high_slot,source_bid);
-    uint32_t key=bkcz_ternary_key4_legal<LOW_LUT_K>(dest_code),weight=bkcz_pow3_const(LOW_LUT_K-1);
+    uint32_t key=bkcz_ternary_key<LOW_LUT_K>(dest_code),weight=bkcz_pow3_const(LOW_LUT_K-1);
 #pragma unroll
     for(int pos=LOW_LUT_K-1;pos>=0;--pos){
         uint32_t v=(dest_code>>(2*pos))&3u;
