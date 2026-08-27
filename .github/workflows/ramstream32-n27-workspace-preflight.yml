@@ -1,0 +1,45 @@
+name: ramstream32 n27 workspace preflight
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  preflight:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    container: nvidia/cuda:12.8.1-devel-ubuntu22.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build n27 workspace preflight
+        shell: bash
+        run: |
+          N=27 ARCH=sm_80 \
+            bash scripts/build/gridfp-ramstream32-cpu-low-worker-augmented-plan.sh
+
+      - name: Run n27 exact workspace audit
+        shell: bash
+        run: |
+          rm -rf work/n27-workspace-preflight
+          mkdir -p work/n27-workspace-preflight
+          N=27 \
+          ARCH=sm_80 \
+          BUILD=0 \
+          PREFLIGHT_ONLY=1 \
+          OUT_DIR="$PWD/work/n27-workspace-preflight" \
+            bash scripts/bench/ramstream32-cpu-low-worker-augmented-plan-sweep.sh \
+            | tee work/n27-workspace-preflight/runner.log
+          grep -Fq 'preflight_ok=1 n=27 builder=streaming-two-pass' \
+            work/n27-workspace-preflight/runner.log
+          grep -R -Fq 'workspace_audit_ok=1' work/n27-workspace-preflight
+
+      - name: Upload n27 preflight result
+        uses: actions/upload-artifact@v4
+        with:
+          name: ramstream32-n27-workspace-preflight
+          path: work/n27-workspace-preflight/
+          if-no-files-found: error
+          retention-days: 14
