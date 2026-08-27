@@ -32,7 +32,8 @@ __device__ __forceinline__ uint32_t p10dc_decode_payload(uint32_t i){
 #endif
 }
 __device__ __forceinline__ uint32_t p10dc_payload(BucketOrbitOp op,bool rev,bool high,uint32_t sid,int p,uint32_t h){
-    uint32_t k=p10dc_key(rev,high,sid,p,h,P10DC_PHASE);uint32_t b=D_P10DC_BASE[k];return p10dc_decode_payload(b+uint32_t(bkcp10_id(op)));
+    uint32_t code=uint32_t(bkcp10_id(op));if(code==uint32_t(oneesan::gridfp::CLOSURE_PATTERN10_NONE))return 0;
+    uint32_t k=p10dc_key(rev,high,sid,p,h,P10DC_PHASE);uint32_t b=D_P10DC_BASE[k];return p10dc_decode_payload(b+code);
 }
 
 __device__ __forceinline__ BkczPlan p10dc_build_low_plan(MateID d,int fixed_he,int p,uint32_t payload){
