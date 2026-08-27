@@ -4,23 +4,24 @@ source "$(dirname -- "${BASH_SOURCE[0]}")/../lib/common.sh"
 
 N="${1:-27}"; if (( $# > 0 )); then shift; fi
 NGPU="${NGPU:-8}"; TARGET_MIB="${TARGET_MIB:-16384}"; MAX_WINDOW="${MAX_WINDOW:-14}"
-TRANSPOSE_MODE="${TRANSPOSE_MODE:-pipeline}"; PM_ACCUM="${PM_ACCUM:-0}"; TERNARY_KEY4="${TERNARY_KEY4:-1}"
+TRANSPOSE_MODE="${TRANSPOSE_MODE:-pipeline}"; HIGH_CTX="${HIGH_CTX:-thread}"; PM_ACCUM="${PM_ACCUM:-0}"; TERNARY_KEY4="${TERNARY_KEY4:-1}"
 BUCKET_TRANSPOSE_CHUNK_MIB="${BUCKET_TRANSPOSE_CHUNK_MIB:-1024}"; BUCKET_RESERVE_MIB="${BUCKET_RESERVE_MIB:-8192}"
 case "$TRANSPOSE_MODE" in sync|events|pipeline) ;; *) echo "TRANSPOSE_MODE must be sync, events, or pipeline" >&2; exit 2;; esac
+if [[ "$HIGH_CTX" != thread && "$HIGH_CTX" != resolved ]]; then echo "HIGH_CTX must be thread or resolved" >&2; exit 2; fi
 if [[ "$PM_ACCUM" != 0 && "$PM_ACCUM" != 1 ]]; then echo "PM_ACCUM must be 0 or 1" >&2; exit 2; fi
 if [[ "$TERNARY_KEY4" != 0 && "$TERNARY_KEY4" != 1 ]]; then echo "TERNARY_KEY4 must be 0 or 1" >&2; exit 2; fi
 if (( NGPU != 8 )); then echo "pattern10 depthcode graph backend currently requires NGPU=8" >&2; exit 2; fi
 
-SUFFIX="_payload_${TRANSPOSE_MODE}"; [[ "$PM_ACCUM" == 1 ]] && SUFFIX="${SUFFIX}_pm"; [[ "$TERNARY_KEY4" == 0 ]] && SUFFIX="${SUFFIX}_keyscalar"
+SUFFIX="_payload_${HIGH_CTX}_${TRANSPOSE_MODE}"; [[ "$PM_ACCUM" == 1 ]] && SUFFIX="${SUFFIX}_pm"; [[ "$TERNARY_KEY4" == 0 ]] && SUFFIX="${SUFFIX}_keyscalar"
 BIN="${BIN:-$ONEESAN_BUILD_DIR/oneesan_cuda_gridfp_b300_bucket_snake_onepass_pattern10_depthcode_graph_batch${SUFFIX}_n${N}}"
-WORK_TAG="pattern10_depthcode_graph_payload_${TRANSPOSE_MODE}"; [[ "$PM_ACCUM" == 1 ]] && WORK_TAG="${WORK_TAG}_pm"; if [[ "$TERNARY_KEY4" == 0 ]]; then WORK_TAG="${WORK_TAG}_keyscalar"; else WORK_TAG="${WORK_TAG}_key4"; fi
+WORK_TAG="pattern10_depthcode_graph_payload_${HIGH_CTX}_${TRANSPOSE_MODE}"; [[ "$PM_ACCUM" == 1 ]] && WORK_TAG="${WORK_TAG}_pm"; if [[ "$TERNARY_KEY4" == 0 ]]; then WORK_TAG="${WORK_TAG}_keyscalar"; else WORK_TAG="${WORK_TAG}_key4"; fi
 WORK_DIR="${WORK_DIR:-$ONEESAN_ROOT/work/b300_bucket_snake_${WORK_TAG}_exact_n${N}}"
 
 if ! command -v nvidia-smi >/dev/null; then echo "nvidia-smi not found" >&2; exit 2; fi
 visible="$(nvidia-smi --query-gpu=index --format=csv,noheader | wc -l)"; if (( visible < NGPU )); then echo "requested $NGPU GPUs, but only $visible are visible" >&2; exit 2; fi
 if [[ ! -x "$BIN" ]]; then
-  echo "$BIN not found; building pattern10 depthcode Graph batch n=$N decode=payload transpose=$TRANSPOSE_MODE pm=$PM_ACCUM ternary_key4=$TERNARY_KEY4" >&2
-  N="$N" OUT="$BIN" TRANSPOSE_MODE="$TRANSPOSE_MODE" PM_ACCUM="$PM_ACCUM" TERNARY_KEY4="$TERNARY_KEY4" bash "$ONEESAN_ROOT/scripts/build/b300-bucket-snake-pattern10-depthcode-graph-batch.sh"
+  echo "$BIN not found; building pattern10 depthcode Graph batch n=$N decode=payload high_ctx=$HIGH_CTX transpose=$TRANSPOSE_MODE pm=$PM_ACCUM ternary_key4=$TERNARY_KEY4" >&2
+  N="$N" OUT="$BIN" HIGH_CTX="$HIGH_CTX" TRANSPOSE_MODE="$TRANSPOSE_MODE" PM_ACCUM="$PM_ACCUM" TERNARY_KEY4="$TERNARY_KEY4" bash "$ONEESAN_ROOT/scripts/build/b300-bucket-snake-pattern10-depthcode-graph-batch.sh"
 fi
 
 export BUCKET_TRANSPOSE_CHUNK_MIB BUCKET_RESERVE_MIB
