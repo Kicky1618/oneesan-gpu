@@ -24,6 +24,7 @@ suffix="_${TRANSPOSE_MODE}"
 if [[ "$PM_ACCUM" == 1 ]]; then suffix="${suffix}_pm"; fi
 inline_bin="$ONEESAN_BUILD_DIR/bench_hybrid18_inline8_graph_batch${suffix}_n${N}"
 zero_bin="$ONEESAN_BUILD_DIR/bench_zero_graph_batch${suffix}_n${N}"
+pattern_bin="$ONEESAN_BUILD_DIR/bench_pattern10_graph_batch${suffix}_n${N}"
 
 build_one(){
   local kind="$1" out="$2" script="$3"
@@ -34,6 +35,7 @@ build_one(){
 }
 build_one inline8 "$inline_bin" scripts/build/b300-bucket-snake-hybrid18-inline8-graph-batch.sh
 build_one zero "$zero_bin" scripts/build/b300-bucket-snake-zero-graph-batch.sh
+build_one pattern10 "$pattern_bin" scripts/build/b300-bucket-snake-pattern10-graph-batch.sh
 
 export BUCKET_TRANSPOSE_CHUNK_MIB BUCKET_RESERVE_MIB
 TMP="$(mktemp -d)"; trap 'rm -rf "$TMP"' EXIT
@@ -42,28 +44,41 @@ run_one(){
   local name="$1" bin="$2" out="$TMP/$1.out" err="$TMP/$1.err"
   echo "=== $name n=$N p=$PRIME transpose=$TRANSPOSE_MODE pm=$PM_ACCUM ===" >&2
   "$bin" "$N" "$TARGET_MIB" "$MAX_WINDOW" "$NGPU" "$PRIME" > >(tee "$out") 2> >(tee "$err" >&2)
-  local line residue wall meta fatt ratt
+  local line residue wall prep meta need fatt ratt
   line="$(grep -E '^residue=[0-9]+ modulus=[0-9]+ wall_s=' "$out" | tail -n1 || true)"
   [[ -n "$line" ]] || { echo "$name produced no residue line" >&2; exit 3; }
   residue="$(sed -nE 's/^residue=([0-9]+).*/\1/p' <<<"$line")"
   wall="$(sed -nE 's/.*wall_s=([^ ]+).*/\1/p' <<<"$line")"
+  prep="$(sed -nE 's/.*prepare_s=([^ ]+).*/\1/p' "$err" | tail -n1)"
   meta="$(sed -nE 's/.*metadata_mib_per_gpu=([^ ]+).*/\1/p' "$err" | tail -n1)"
+  need="$(sed -nE 's/.*max_device_need_gib=([^ ]+).*/\1/p' "$err" | tail -n1)"
   fatt="$(sed -nE 's/.*forward_attach_mib=([^ ]+).*/\1/p' "$err" | tail -n1)"
   ratt="$(sed -nE 's/.*reverse_attach_mib=([^ ]+).*/\1/p' "$err" | tail -n1)"
-  printf '%s\t%s\t%s\t%s\t%s\n' "$residue" "$wall" "${meta:-NA}" "${fatt:-NA}" "${ratt:-NA}" > "$TMP/$1.result"
+  printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\n' "$residue" "$wall" "${prep:-NA}" "${meta:-NA}" "${need:-NA}" "${fatt:-NA}" "${ratt:-NA}" > "$TMP/$1.result"
 }
 
 run_one inline8 "$inline_bin"
 run_one zero "$zero_bin"
-IFS=$'\t' read -r ir iw im ifa ira < "$TMP/inline8.result"
-IFS=$'\t' read -r zr zw zm zfa zra < "$TMP/zero.result"
-if [[ "$ir" != "$zr" ]]; then
-  echo "residue mismatch: inline8=$ir zero=$zr mod $PRIME" >&2
+run_one pattern10 "$pattern_bin"
+IFS=$'\t' read -r ir iw ip im ineed ifa ira < "$TMP/inline8.result"
+IFS=$'\t' read -r zr zw zp zm zneed zfa zra < "$TMP/zero.result"
+IFS=$'\t' read -r pr pw pp pm pneed pfa pra < "$TMP/pattern10.result"
+if [[ "$ir" != "$zr" || "$ir" != "$pr" ]]; then
+  echo "residue mismatch: inline8=$ir zero=$zr pattern10=$pr mod $PRIME" >&2
   exit 4
 fi
-ratio="$(awk -v a="$iw" -v b="$zw" 'BEGIN{if(b==0)print "inf";else printf "%.6f",a/b}')"
-mem_delta="$(awk -v a="$im" -v b="$zm" 'BEGIN{if(a=="NA"||b=="NA")print "NA";else printf "%.3f",a-b}')"
-printf 'backend\twall_s\tmetadata_mib_per_gpu\tforward_attach_mib\treverse_attach_mib\tresidue\n'
-printf 'inline8\t%s\t%s\t%s\t%s\t%s\n' "$iw" "$im" "$ifa" "$ira" "$ir"
-printf 'zero\t%s\t%s\t%s\t%s\t%s\n' "$zw" "$zm" "$zfa" "$zra" "$zr"
-printf 'zero_speedup_vs_inline8=%sx metadata_saved_mib_per_gpu=%s\n' "$ratio" "$mem_delta"
+
+ratio(){ awk -v a="$1" -v b="$2" 'BEGIN{if(b==0)print "inf";else printf "%.6f",a/b}'; }
+delta(){ awk -v a="$1" -v b="$2" 'BEGIN{if(a=="NA"||b=="NA")print "NA";else printf "%.3f",a-b}'; }
+total(){ awk -v a="$1" -v b="$2" 'BEGIN{if(a=="NA"||b=="NA")print "NA";else printf "%.6f",a+b}'; }
+
+iit="$(total "$ip" "$iw")"; zt="$(total "$zp" "$zw")"; pt="$(total "$pp" "$pw")"
+zsi="$(ratio "$iw" "$zw")"; psi="$(ratio "$iw" "$pw")"; psz="$(ratio "$zw" "$pw")"
+zmem="$(delta "$im" "$zm")"; pmem="$(delta "$im" "$pm")"
+
+printf 'backend\tprepare_s\twall_s\tfirst_residue_s\tmetadata_mib_per_gpu\tmax_device_need_gib\tforward_attach_mib\treverse_attach_mib\tresidue\n'
+printf 'inline8\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' "$ip" "$iw" "$iit" "$im" "$ineed" "$ifa" "$ira" "$ir"
+printf 'zero\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' "$zp" "$zw" "$zt" "$zm" "$zneed" "$zfa" "$zra" "$zr"
+printf 'pattern10\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' "$pp" "$pw" "$pt" "$pm" "$pneed" "$pfa" "$pra" "$pr"
+printf 'zero_speedup_vs_inline8=%sx pattern10_speedup_vs_inline8=%sx pattern10_speedup_vs_zero=%sx\n' "$zsi" "$psi" "$psz"
+printf 'zero_metadata_saved_mib_per_gpu=%s pattern10_metadata_saved_mib_per_gpu=%s\n' "$zmem" "$pmem"
