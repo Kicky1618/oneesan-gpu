@@ -15,22 +15,32 @@ static_assert(BKCZ_TERNARY_KEY4==0||BKCZ_TERNARY_KEY4==1,"BKCZ_TERNARY_KEY4 must
 static constexpr int BKCZ_MAX_FACTOR=(LOW_LUT_K>HIGH_LUT_K?LOW_LUT_K:HIGH_LUT_K);
 static constexpr int BKCZ_MAX_LOCAL=1+(BKCZ_MAX_FACTOR+1)/2;
 static_assert(BKCZ_MAX_LOCAL>0,"zero-closure source plan requires non-empty factors");
-static_assert(BKCZ_MAX_LOCAL<=255,"zero-closure local_n no longer fits uint8_t");
-static_assert(BKCZ_MAX_FACTOR<=14||BKCZ_MAX_LOCAL<=16,"unexpected closure plan growth");
+static_assert(BKCZ_MAX_LOCAL<=15,"packed zero-closure local_n requires four bits");
+static_assert(BKCZ_MAX_FACTOR<=14||BKCZ_MAX_LOCAL<=15,"unexpected closure plan growth");
+
+static constexpr int BKCZ_META_DEPTH_SHIFT=BKF_CROSS_DEPTH_SHIFT;
+static constexpr int BKCZ_META_LOCAL_N_SHIFT=BKCZ_META_DEPTH_SHIFT+4;
+static constexpr uint32_t BKCZ_META_SRC_MASK=(1u<<BKCZ_META_DEPTH_SHIFT)-1u;
+static constexpr uint32_t BKCZ_META_LOCAL_N_MASK=0xfu<<BKCZ_META_LOCAL_N_SHIFT;
+static_assert(BKCZ_META_DEPTH_SHIFT==24&&BKCZ_META_LOCAL_N_SHIFT==28,"BkczPlan packed metadata assumes 18-bit locator + 6-bit block");
+
 struct BkczPlan{
     uint32_t local[BKCZ_MAX_LOCAL];
-    uint32_t cross_src=0;
-    uint8_t local_n=0,cross_depth=0,cross_valid=0,pad=0;
+    // bits 23..0: cross source (18-bit locator + 6-bit main-block id)
+    // bits 27..24: cross depth; zero means no cross source
+    // bits 31..28: local source count
+    uint32_t meta=0;
 };
+static_assert(sizeof(BkczPlan)==sizeof(uint32_t)*(BKCZ_MAX_LOCAL+1),"BkczPlan packing regression");
 
-// bkf_src_pack() is intentionally host-side because it reports malformed build
-// metadata through iostream/exit. Device plan builders only receive locators
-// and block ids from validated direct tables, so use a branch-free device pack.
 __device__ __forceinline__ uint32_t bkcz_src_pack_device(uint32_t bid,uint32_t loc){return loc|(bid<<BKF_SRC_BLOCK_SHIFT);}
-__device__ __forceinline__ void bkcz_plan_set_cross(BkczPlan&p,uint32_t bid,uint32_t loc,uint32_t depth){p.cross_src=bkcz_src_pack_device(bid,loc);p.cross_depth=uint8_t(depth);p.cross_valid=1;}
+__device__ __forceinline__ uint32_t bkcz_plan_local_n(const BkczPlan&p){return (p.meta>>BKCZ_META_LOCAL_N_SHIFT)&0xfu;}
+__device__ __forceinline__ uint32_t bkcz_plan_cross_src(const BkczPlan&p){return p.meta&BKCZ_META_SRC_MASK;}
+__device__ __forceinline__ uint32_t bkcz_plan_cross_depth(const BkczPlan&p){return (p.meta>>BKCZ_META_DEPTH_SHIFT)&BKF_CROSS_DEPTH_MASK;}
+__device__ __forceinline__ void bkcz_plan_set_cross(BkczPlan&p,uint32_t bid,uint32_t loc,uint32_t depth){p.meta=(p.meta&BKCZ_META_LOCAL_N_MASK)|bkcz_src_pack_device(bid,loc)|(depth<<BKCZ_META_DEPTH_SHIFT);}
 
-__device__ __forceinline__ void bkcz_plan_add_low(BkczPlan&p,MateID x,int fixed_he){uint32_t loc=0,bid=0;if(bkcz_low_source_ref(x,fixed_he,loc,bid)){if(p.local_n>=BKCZ_MAX_LOCAL)return;p.local[p.local_n++]=bkcz_src_pack_device(bid,loc);}}
-__device__ __forceinline__ void bkcz_plan_add_high(BkczPlan&p,MateID x,int fixed_hs){uint32_t loc=0,bid=0;if(bkcz_high_source_ref(x,fixed_hs,loc,bid)){if(p.local_n>=BKCZ_MAX_LOCAL)return;p.local[p.local_n++]=bkcz_src_pack_device(bid,loc);}}
+__device__ __forceinline__ void bkcz_plan_add_low(BkczPlan&p,MateID x,int fixed_he){uint32_t loc=0,bid=0;if(bkcz_low_source_ref(x,fixed_he,loc,bid)){uint32_t n=bkcz_plan_local_n(p);if(n>=BKCZ_MAX_LOCAL)return;p.local[n]=bkcz_src_pack_device(bid,loc);p.meta=(p.meta&~BKCZ_META_LOCAL_N_MASK)|((n+1u)<<BKCZ_META_LOCAL_N_SHIFT);}}
+__device__ __forceinline__ void bkcz_plan_add_high(BkczPlan&p,MateID x,int fixed_hs){uint32_t loc=0,bid=0;if(bkcz_high_source_ref(x,fixed_hs,loc,bid)){uint32_t n=bkcz_plan_local_n(p);if(n>=BKCZ_MAX_LOCAL)return;p.local[n]=bkcz_src_pack_device(bid,loc);p.meta=(p.meta&~BKCZ_META_LOCAL_N_MASK)|((n+1u)<<BKCZ_META_LOCAL_N_SHIFT);}}
 
 __device__ __forceinline__ BkczPlan bkcz_build_low_plan(MateID d,int fixed_he,int p){
     BkczPlan z{};if(mpair(d,p)!=NN)return z;MateID x=msetpair(d,p,RL);bkcz_plan_add_low(z,x,fixed_he);
@@ -137,18 +147,20 @@ __device__ __forceinline__ Count bkcz_low_plan_sum(const BkczPlan&p,const Bucket
 #else
     Count sum=0;
 #endif
-    for(uint32_t i=0;i<p.local_n;++i){uint32_t x=p.local[i],sl=bkf_src_locator(x),ss=bkf_loc_owner(sl);BucketPhysicalBlock sb=bkf_low_main(ss,bkf_src_block(x));Count v=bkf_ptr(ss,sb.off+Code(hr)*sb.cols+bkf_loc_rank(sl))[0];
+    uint32_t local_n=bkcz_plan_local_n(p);
+    for(uint32_t i=0;i<local_n;++i){uint32_t x=p.local[i],sl=bkf_src_locator(x),ss=bkf_loc_owner(sl);BucketPhysicalBlock sb=bkf_low_main(ss,bkf_src_block(x));Count v=bkf_ptr(ss,sb.off+Code(hr)*sb.cols+bkf_loc_rank(sl))[0];
 #if GPU_DIRECT_PM_ACCUM
         sum+=uint64_t(v);
 #else
         sum=gpu_direct_add(sum,v);
 #endif
     }
-    if(p.cross_valid){uint32_t x=p.cross_src,sl=bkf_src_locator(x);uint32_t dc=D_BKF_HIGH_CODES[D_BKF_HIGH_CODE_OFF[size_t(D_BKF_FIXED_OWNER)*D_BKF_CODE_PITCH+db.he]+hr];
+    uint32_t cross_depth=bkcz_plan_cross_depth(p);
+    if(cross_depth){uint32_t x=bkcz_plan_cross_src(p),sl=bkf_src_locator(x);uint32_t dc=D_BKF_HIGH_CODES[D_BKF_HIGH_CODE_OFF[size_t(D_BKF_FIXED_OWNER)*D_BKF_CODE_PITCH+db.he]+hr];
 #if GPU_DIRECT_PM_ACCUM
-        sum+=bkcz_sum_high_preimages_fast(dc,p.cross_depth,bkf_src_block(x),sl);
+        sum+=bkcz_sum_high_preimages_fast(dc,cross_depth,bkf_src_block(x),sl);
 #else
-        sum=gpu_direct_add(sum,bkcz_sum_high_preimages_fast(dc,p.cross_depth,bkf_src_block(x),sl));
+        sum=gpu_direct_add(sum,bkcz_sum_high_preimages_fast(dc,cross_depth,bkf_src_block(x),sl));
 #endif
     }
 #if GPU_DIRECT_PM_ACCUM
@@ -164,18 +176,20 @@ __device__ __forceinline__ Count bkcz_high_plan_sum(const BkczPlan&p,const Bucke
 #else
     Count sum=0;
 #endif
-    for(uint32_t i=0;i<p.local_n;++i){uint32_t x=p.local[i],sl=bkf_src_locator(x),ss=bkf_loc_owner(sl);BucketPhysicalBlock sb=bkf_high_main(ss,bkf_src_block(x));Count v=bkf_ptr(ss,sb.off+Code(bkf_loc_rank(sl))*sb.cols+lr)[0];
+    uint32_t local_n=bkcz_plan_local_n(p);
+    for(uint32_t i=0;i<local_n;++i){uint32_t x=p.local[i],sl=bkf_src_locator(x),ss=bkf_loc_owner(sl);BucketPhysicalBlock sb=bkf_high_main(ss,bkf_src_block(x));Count v=bkf_ptr(ss,sb.off+Code(bkf_loc_rank(sl))*sb.cols+lr)[0];
 #if GPU_DIRECT_PM_ACCUM
         sum+=uint64_t(v);
 #else
         sum=gpu_direct_add(sum,v);
 #endif
     }
-    if(p.cross_valid){uint32_t x=p.cross_src,sl=bkf_src_locator(x);uint32_t dc=D_BKF_LOW_CODES[D_BKF_LOW_CODE_OFF[size_t(D_BKF_FIXED_OWNER)*D_BKF_CODE_PITCH+db.hs]+lr];
+    uint32_t cross_depth=bkcz_plan_cross_depth(p);
+    if(cross_depth){uint32_t x=bkcz_plan_cross_src(p),sl=bkf_src_locator(x);uint32_t dc=D_BKF_LOW_CODES[D_BKF_LOW_CODE_OFF[size_t(D_BKF_FIXED_OWNER)*D_BKF_CODE_PITCH+db.hs]+lr];
 #if GPU_DIRECT_PM_ACCUM
-        sum+=bkcz_sum_low_preimages_fast(dc,p.cross_depth,bkf_src_block(x),sl);
+        sum+=bkcz_sum_low_preimages_fast(dc,cross_depth,bkf_src_block(x),sl);
 #else
-        sum=gpu_direct_add(sum,bkcz_sum_low_preimages_fast(dc,p.cross_depth,bkf_src_block(x),sl));
+        sum=gpu_direct_add(sum,bkcz_sum_low_preimages_fast(dc,cross_depth,bkf_src_block(x),sl));
 #endif
     }
 #if GPU_DIRECT_PM_ACCUM
