@@ -7,6 +7,7 @@ on:
       - 'src/cuda/gridfp/ramstream32_cpu_low_sparse.hpp'
       - 'src/cuda/gridfp/ramstream32_cpu_low_sparse_persistent.hpp'
       - 'src/cuda/gridfp/ramstream32_cpu_low_domain_page.hpp'
+      - 'src/cuda/gridfp/ramstream32_cpu_low_domain_page_index.hpp'
       - 'src/cuda/gridfp/ramstream32_cpu_low_direct.hpp'
       - 'src/cuda/gridfp/ramstream32_cpu_low_inplace.hpp'
       - 'src/cuda/gridfp/ramstream32_cpu_high.hpp'
@@ -26,6 +27,7 @@ on:
       - 'src/cuda/gridfp/ramstream32_cpu_low_sparse.hpp'
       - 'src/cuda/gridfp/ramstream32_cpu_low_sparse_persistent.hpp'
       - 'src/cuda/gridfp/ramstream32_cpu_low_domain_page.hpp'
+      - 'src/cuda/gridfp/ramstream32_cpu_low_domain_page_index.hpp'
       - 'src/cuda/gridfp/ramstream32_cpu_low_direct.hpp'
       - 'src/cuda/gridfp/ramstream32_cpu_low_inplace.hpp'
       - 'src/cuda/gridfp/ramstream32_cpu_high.hpp'
@@ -40,6 +42,10 @@ on:
       - 'scripts/build/gridfp-ramstream32-cpu-high-cost-plan.sh'
       - '.github/workflows/ramstream32-sparse-ci.yml'
   workflow_dispatch:
+
+concurrency:
+  group: ramstream32-sparse-${{ github.ref }}
+  cancel-in-progress: true
 
 jobs:
   sparse:
