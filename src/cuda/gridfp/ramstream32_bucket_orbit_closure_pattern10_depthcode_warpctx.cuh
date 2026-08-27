@@ -5,16 +5,20 @@
 // Warp-private variant of the resolved HIGH context. Lane 0 resolves the orbit,
 // destination rows and closure-source rows once per warp. The warp then consumes
 // a private shared-memory slot, replacing block-wide barriers with __syncwarp().
-// This intentionally keeps the same logical column mapping as the 256-thread
-// kernels: all warps process the same orbit, but different threadIdx.x columns.
-static constexpr int P10DC_WARPCTX_MAX_WARPS = 32;
+// Allocate only the number of warp contexts required by the actual launch width.
+static inline size_t p10dc_warpctx_smem_bytes(int threads) {
+    return threads > 0 ? size_t((threads + 31) / 32) * sizeof(P10DCHighResolvedCtx) : 0;
+}
+static_assert(alignof(P10DCHighResolvedCtx) <= alignof(unsigned long long),
+              "warpctx dynamic shared storage alignment is insufficient");
 
 __global__ void bucket_high_orbit_closure_pattern10_depthcode_warpctx_kernel(int p) {
     uint32_t bid = blockIdx.z;
     if (bid >= D_BKF_MAIN_NBLOCKS) return;
     uint32_t pi = uint32_t((TARGET_W - 1) - p);
     uint32_t oi = uint32_t(size_t(pi) * D_BKF_HIGH_PITCH + bid);
-    __shared__ P10DCHighResolvedCtx warp_ctx[P10DC_WARPCTX_MAX_WARPS];
+    extern __shared__ unsigned long long warp_ctx_storage[];
+    auto* warp_ctx = reinterpret_cast<P10DCHighResolvedCtx*>(warp_ctx_storage);
 
     const uint32_t lane = uint32_t(threadIdx.x) & 31u;
     const uint32_t warp = uint32_t(threadIdx.x) >> 5;
@@ -97,7 +101,8 @@ __global__ void bucket_reverse_high_pattern10_depthcode_warpctx_kernel(int p) {
     uint32_t pi = uint32_t(p - (LOW_LUT_K + 1));
     uint32_t oi = uint32_t(size_t(pi) * D_RS54_PITCH + bid);
     const bool edge = p == TARGET_W - 1;
-    __shared__ P10DCHighResolvedCtx warp_ctx[P10DC_WARPCTX_MAX_WARPS];
+    extern __shared__ unsigned long long warp_ctx_storage[];
+    auto* warp_ctx = reinterpret_cast<P10DCHighResolvedCtx*>(warp_ctx_storage);
 
     const uint32_t lane = uint32_t(threadIdx.x) & 31u;
     const uint32_t warp = uint32_t(threadIdx.x) >> 5;
