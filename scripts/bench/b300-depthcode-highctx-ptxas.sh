@@ -38,6 +38,8 @@ printf 'backend\tkernel\tregisters\tstack_bytes\tspill_store_bytes\tspill_load_b
   build_one resolved
   build_one warp
   build_one warp ldg
+  build_one warpstriped
+  build_one warpstriped ldg
 } >>"$OUT"
 
 cat "$OUT"
@@ -46,7 +48,10 @@ import csv, sys
 rows=list(csv.DictReader(open(sys.argv[1]),delimiter='\t'))
 def ints(group,key):
     return [int(r[key]) for r in group if r[key] != 'NA']
-for backend in ('depthcode_payload_thread','depthcode_payload_resolved','depthcode_payload_warp','depthcode_payload_warp_ldg'):
+for backend in (
+    'depthcode_payload_thread','depthcode_payload_resolved',
+    'depthcode_payload_warp','depthcode_payload_warp_ldg',
+    'depthcode_payload_warpstriped','depthcode_payload_warpstriped_ldg'):
     all_rows=[r for r in rows if r['backend']==backend]
     high=[r for r in all_rows if 'high' in r['kernel'].lower()]
     if not high:
@@ -57,12 +62,13 @@ for backend in ('depthcode_payload_thread','depthcode_payload_resolved','depthco
     loads=ints(high,'spill_load_bytes')
     cmem=ints(all_rows,'cmem0_bytes')
     print(f'{backend}_high_max_registers={max(regs) if regs else "NA"}')
-    print(f'{backend}_high_max_smem_bytes={max(smem) if smem else "NA"}')
+    print(f'{backend}_high_max_static_smem_bytes={max(smem) if smem else "NA"}')
     print(f'{backend}_high_spill_store_bytes={sum(stores) if stores else "NA"}')
     print(f'{backend}_high_spill_load_bytes={sum(loads) if loads else "NA"}')
     print(f'{backend}_max_cmem0_bytes={max(cmem) if cmem else "NA"}')
     if cmem and max(cmem) >= 60*1024:
         print(f'{backend}_cmem0_headroom_warning=1')
+print('warp_dynamic_smem_note=warp and warpstriped allocate one P10DCHighResolvedCtx per runtime warp; ptxas smem above is static only')
 PY
 
 echo "depthcode-highctx-ptxas OK n=$N arch=$ARCH transpose=$TRANSPOSE_MODE result=$OUT logs=$LOGDIR" >&2
