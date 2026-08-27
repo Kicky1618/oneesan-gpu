@@ -24,6 +24,9 @@
 #include "maskshard_highorbit.cuh"
 #include "maskshard_loworbit.cuh"
 #include "maskshard_lowclosure_kernel.cuh"
+#ifdef MASKSHARD_HIGH_STATIC_LPT_SCHEDULE
+#include "maskshard_high_static_lpt_schedule.hpp"
+#endif
 
 #ifdef MASKSHARD_HIGH_PERTHREAD_STREAM
 #define MASKSHARD_HIGH_LAUNCH(grid, block) \
@@ -743,6 +746,14 @@ int main(int argc, char** argv) {
     const FullOrbitBatchAddress ia = fullorbit_batch_main_address_host(init, storage, layout, shard);
     const FullOrbitBatchAddress oa = fullorbit_batch_main_address_host(MateID(R), storage, layout, shard);
     const auto high_jobs = build_fullorbit_batch_high_jobs(&high_desc);
+#ifdef MASKSHARD_HIGH_STATIC_LPT_SCHEDULE
+    const auto high_schedule =
+        maskshard_build_high_static_lpt_schedule(high_jobs, ngpu);
+    std::cerr << "fullorbit-batch HIGH static LPT jobs=" << high_jobs.size()
+              << " total_work=" << high_schedule.total_work
+              << " min_gpu_work=" << high_schedule.min_work
+              << " max_gpu_work=" << high_schedule.max_work << '\n';
+#endif
 #ifdef MASKSHARD_HIGH_CLOSURE_ROW_DEPTH_COMPACT
     maskshard_prepare_highclosure_rowdepth_compact(high_desc, ngpu);
 #endif
@@ -851,9 +862,20 @@ int main(int argc, char** argv) {
                 maskshard_set_row_depth_fblock_io_row(row);
             }
 #endif
-            std::atomic<size_t> next_high{0};
             std::vector<std::thread> ts;
             ts.reserve(ngpu);
+#ifdef MASKSHARD_HIGH_STATIC_LPT_SCHEDULE
+            for (int d = 0; d < ngpu; ++d) {
+                ts.emplace_back([&, d] {
+                    for (const std::size_t q :
+                         high_schedule.jobs_by_gpu[std::size_t(d)]) {
+                        process_fullorbit_batch_high_job(
+                            workers[d], high_jobs[q], threads, row);
+                    }
+                });
+            }
+#else
+            std::atomic<size_t> next_high{0};
             for (int d = 0; d < ngpu; ++d) {
                 ts.emplace_back([&, d] {
                     for (;;) {
@@ -864,6 +886,7 @@ int main(int argc, char** argv) {
                     }
                 });
             }
+#endif
             for (auto& t : ts) t.join();
 
             ts.clear();
