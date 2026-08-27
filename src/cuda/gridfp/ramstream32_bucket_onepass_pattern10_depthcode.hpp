@@ -24,6 +24,7 @@ static constexpr uint32_t P10DC_KEY_COUNT=2u*2u*uint32_t(TARGET_W)*P10DC_HDIM;
 static constexpr uint32_t P10DC_INVALID_BASE=0xffffffffu;
 static constexpr uint32_t P10DC_PAIR_BITS=14;
 static constexpr uint32_t P10DC_PAIR_COUNT=1u<<P10DC_PAIR_BITS;
+static constexpr uint16_t P10DC_NONE_PAIR=uint16_t(oneesan::gridfp::CLOSURE_PATTERN10_NONE<<4);
 static constexpr uint32_t P10DC_CONTEXT_BITS=12;
 static constexpr uint32_t P10DC_MASK_BITS=13;
 static constexpr uint32_t P10DC_MASK_MASK=(1u<<P10DC_MASK_BITS)-1u;
@@ -69,13 +70,13 @@ static BucketForwardPattern10DepthCodeHost build_bucket_forward_pattern10_depthc
 
 static uint16_t p10dc_low_pair_host(MateID d,int p,bool active,const char*what){
     using namespace oneesan::gridfp;
-    if(!active)return uint16_t(CLOSURE_PATTERN10_NONE<<4);
+    if(!active)return P10DC_NONE_PAIR;
     uint16_t id=closure_pattern10_encode(d,LOW_LUT_K+1,p);MateID source=0;int dep=low_cross_preimage_partial(d,LOW_LUT_K+1,p,source);
     if(dep<0||dep>15){std::cerr<<"depthcode LOW overflow "<<what<<" p="<<p<<" depth="<<dep<<'\n';std::exit(591);}if(id==CLOSURE_PATTERN10_NONE)dep=0;return uint16_t((id<<4)|uint16_t(dep));
 }
 static uint16_t p10dc_high_pair_host(MateID d,int rel,bool active,const char*what){
     using namespace oneesan::gridfp;
-    if(!active)return uint16_t(CLOSURE_PATTERN10_NONE<<4);
+    if(!active)return P10DC_NONE_PAIR;
     uint16_t id=closure_pattern10_encode(d,HIGH_LUT_K+1,rel);MateID source=0;int dep=high_cross_preimage_partial(d,HIGH_LUT_K+1,rel,source);
     if(dep<0||dep>15){std::cerr<<"depthcode HIGH overflow "<<what<<" rel="<<rel<<" depth="<<dep<<'\n';std::exit(592);}if(id==CLOSURE_PATTERN10_NONE)dep=0;return uint16_t((id<<4)|uint16_t(dep));
 }
@@ -106,7 +107,7 @@ static void p10dc_for_each_entry_direct(
 ){
     size_t lp=size_t(bo.low_nblocks)+1,hp=size_t(bo.high_nblocks)+1;
     for(int p=LOW_LUT_K;p>=1;--p){uint32_t pi=uint32_t(LOW_LUT_K-p);for(uint32_t bid=0;bid<bo.low_nblocks;++bid){const auto&xb=layout.main_blocks[bid];if(!xb.valid)continue;const auto&db=p==1?xb:layout.block_blocks[xb.he];
-        auto scan=[&](auto&ops,const auto&off,uint32_t sid,bool active,const char*what){for(uint32_t q=off[size_t(pi)*lp+bid];q<off[size_t(pi)*lp+bid+1];++q){uint16_t pair=uint16_t(oneesan::gridfp::CLOSURE_PATTERN10_NONE<<4);if(active){uint32_t loc=p==1?bkf_orbit_src(ops[q]):bkf_orbit_drop(ops[q]),dc=bkcp10_low_code_host(bf,loc,db.hs);MateID d=p==1?(MateID(dc)|(MateID(db.c)<<(2*LOW_LUT_K))):minsert(MateID(dc),p,N);pair=p10dc_low_pair_host(d,p,true,what);}fn(P10DepthCodeEntryView{&ops[q],pair,false,false,sid,p,uint32_t(xb.he)});}};
+        auto scan=[&](auto&ops,const auto&off,uint32_t sid,bool active,const char*what){for(uint32_t q=off[size_t(pi)*lp+bid];q<off[size_t(pi)*lp+bid+1];++q){uint16_t pair=P10DC_NONE_PAIR;if(active){uint32_t loc=p==1?bkf_orbit_src(ops[q]):bkf_orbit_drop(ops[q]),dc=bkcp10_low_code_host(bf,loc,db.hs);MateID d=p==1?(MateID(dc)|(MateID(db.c)<<(2*LOW_LUT_K))):minsert(MateID(dc),p,N);pair=p10dc_low_pair_host(d,p,true,what);}fn(P10DepthCodeEntryView{&ops[q],pair,false,false,sid,p,uint32_t(xb.he)});}};
         scan(bo.low_nn,bo.low_nn_off,0,true,"forward-low-nn");scan(bo.low_nr,bo.low_nr_off,1,p!=1,"forward-low-nr");scan(bo.low_nl,bo.low_nl_off,2,p!=1,"forward-low-nl");
     }}
     for(int p=TARGET_W-1;p>=LOW_LUT_K+1;--p){uint32_t pi=uint32_t((TARGET_W-1)-p);int rel=p-LOW_LUT_K;for(uint32_t bid=0;bid<bo.high_nblocks;++bid){const auto&xb=layout.main_blocks[bid];if(!xb.valid)continue;const auto&db=layout.block_blocks[xb.hs];
@@ -119,7 +120,7 @@ static void p10dc_for_each_entry_direct(
         scan(rs.low.nn,rs.low.nn_off,0,"reverse-low-nn");scan(rs.low.nr,rs.low.nr_off,1,"reverse-low-nr");scan(rs.low.nl,rs.low.nl_off,2,"reverse-low-nl");
     }}
     for(int p=LOW_LUT_K+1;p<TARGET_W;++p){uint32_t pi=uint32_t(p-(LOW_LUT_K+1));int rel=p-LOW_LUT_K;bool edge=p==TARGET_W-1;for(uint32_t bid=0;bid<rs.nblocks;++bid){const auto&xb=layout.main_blocks[bid];if(!xb.valid)continue;const auto&db=edge?xb:layout.block_blocks[xb.hs];
-        auto scan=[&](auto&ops,const auto&off,uint32_t sid,bool nn,const char*what){for(uint32_t q=off[size_t(pi)*rp+bid];q<off[size_t(pi)*rp+bid+1];++q){bool active=!edge||nn;uint16_t pair=uint16_t(oneesan::gridfp::CLOSURE_PATTERN10_NONE<<4);if(active){uint32_t loc=edge?bkf_orbit_src(ops[q]):bkf_orbit_drop(ops[q]),dc=bkcp10_high_code_host(bf,loc,db.he);MateID d=edge?(MateID(db.c)|(MateID(dc)<<2)):blocked_exclude_reverse(MateID(dc),HIGH_LUT_K+1,rel);pair=p10dc_high_pair_host(d,rel,true,what);}fn(P10DepthCodeEntryView{&ops[q],pair,true,true,sid,p,uint32_t(xb.hs)});}};
+        auto scan=[&](auto&ops,const auto&off,uint32_t sid,bool nn,const char*what){for(uint32_t q=off[size_t(pi)*rp+bid];q<off[size_t(pi)*rp+bid+1];++q){bool active=!edge||nn;uint16_t pair=P10DC_NONE_PAIR;if(active){uint32_t loc=edge?bkf_orbit_src(ops[q]):bkf_orbit_drop(ops[q]),dc=bkcp10_high_code_host(bf,loc,db.he);MateID d=edge?(MateID(db.c)|(MateID(dc)<<2)):blocked_exclude_reverse(MateID(dc),HIGH_LUT_K+1,rel);pair=p10dc_high_pair_host(d,rel,true,what);}fn(P10DepthCodeEntryView{&ops[q],pair,true,true,sid,p,uint32_t(xb.hs)});}};
         scan(rs.high.nn,rs.high.nn_off,0,true,"reverse-high-nn");scan(rs.high.nr,rs.high.nr_off,1,false,"reverse-high-nr");scan(rs.high.nl,rs.high.nl_off,2,false,"reverse-high-nl");
     }}
 }
@@ -131,9 +132,10 @@ static P10DepthCodeBookHost p10dc_build_and_rewrite_direct(
     constexpr uint32_t mode=P10DC_PHASE;
     std::unordered_map<uint32_t,uint16_t> code_of;
     std::vector<std::vector<uint32_t>> payloads(P10DC_KEY_COUNT);
-    uint64_t visited=0,unique_pairs=0;
+    uint64_t visited=0,unique_pairs=0,none_ops=0;
 
     p10dc_for_each_entry_direct(layout,bo,rs,bf,[&](P10DepthCodeEntryView e){
+        if(e.pair==P10DC_NONE_PAIR){*e.op=bkcp10_set(*e.op,oneesan::gridfp::CLOSURE_PATTERN10_NONE);++visited;++none_ops;return;}
         uint32_t k=p10dc_key(e.rev,e.high,e.sid,e.p,e.h,mode);
         if(k>=P10DC_KEY_COUNT||e.pair>=P10DC_PAIR_COUNT){std::cerr<<"depthcode sparse key overflow context="<<k<<" pair="<<e.pair<<'\n';std::exit(594);}
         uint32_t dict_key=(k<<P10DC_PAIR_BITS)|uint32_t(e.pair);
@@ -141,7 +143,7 @@ static P10DepthCodeBookHost p10dc_build_and_rewrite_direct(
         uint16_t code=0;
         auto& pv=payloads[k];
         if(inserted){
-            if(pv.size()>=1024){std::cerr<<"phase depthcode bound violated context="<<k<<" codes="<<(pv.size()+1)<<"; run gridfp_pattern10_depthcode_bound probe\n";std::exit(595);}
+            if(pv.size()>=size_t(oneesan::gridfp::CLOSURE_PATTERN10_NONE)){std::cerr<<"phase depthcode bound violated context="<<k<<" codes="<<(pv.size()+1)<<"; run gridfp_pattern10_depthcode_bound probe\n";std::exit(595);}
             code=uint16_t(pv.size());it->second=code;pv.push_back(p10dc_payload_host(e.pair,e.high,e.p));++unique_pairs;
         }else{
             code=it->second;if(size_t(code)>=pv.size()){std::cerr<<"depthcode sparse dictionary corrupt context="<<k<<" code="<<code<<" size="<<pv.size()<<'\n';std::exit(596);}
@@ -154,7 +156,7 @@ static P10DepthCodeBookHost p10dc_build_and_rewrite_direct(
     for(uint32_t k=0;k<P10DC_KEY_COUNT;++k){auto& pv=payloads[k];if(pv.empty())continue;++used_contexts;max_pairs=std::max<uint32_t>(max_pairs,uint32_t(pv.size()));out.base[k]=uint32_t(out.decode.size());out.decode.insert(out.decode.end(),pv.begin(),pv.end());}
     if(out.decode.size()!=size_t(unique_pairs)||code_of.size()!=size_t(unique_pairs)){std::cerr<<"depthcode sparse flatten mismatch decode="<<out.decode.size()<<" map="<<code_of.size()<<" unique="<<unique_pairs<<'\n';std::exit(597);}
     std::unordered_map<uint32_t,uint16_t>().swap(code_of);std::vector<std::vector<uint32_t>>().swap(payloads);
-    std::cerr<<"pattern10_depthcode direct_build=1 selected_mode="<<mode<<" contexts="<<used_contexts<<" total_pairs="<<unique_pairs<<" max_pairs="<<max_pairs<<" rewritten_ops="<<visited<<" codebook_mib="<<double(out.bytes())/double(1<<20)<<" base_kib="<<double(P10DC_KEY_COUNT*sizeof(uint32_t))/1024.0<<" sidecar_bytes_per_orbit=0 temporary_depth_bytes=0 decode_payload_masks=1 decode_unrank=0 builder_passes=1 dense_context_bitset_bytes=0 sparse_key_bits="<<(P10DC_CONTEXT_BITS+P10DC_PAIR_BITS)<<" sparse_entries="<<unique_pairs<<"\n";
+    std::cerr<<"pattern10_depthcode direct_build=1 selected_mode="<<mode<<" contexts="<<used_contexts<<" total_pairs="<<unique_pairs<<" max_pairs="<<max_pairs<<" rewritten_ops="<<visited<<" none_ops="<<none_ops<<" decode_load_skipped_ops="<<none_ops<<" codebook_mib="<<double(out.bytes())/double(1<<20)<<" base_kib="<<double(P10DC_KEY_COUNT*sizeof(uint32_t))/1024.0<<" sidecar_bytes_per_orbit=0 temporary_depth_bytes=0 decode_payload_masks=1 decode_unrank=0 builder_passes=1 dense_context_bitset_bytes=0 sparse_key_bits="<<(P10DC_CONTEXT_BITS+P10DC_PAIR_BITS)<<" sparse_entries="<<unique_pairs<<" none_sentinel="<<oneesan::gridfp::CLOSURE_PATTERN10_NONE<<"\n";
     return out;
 }
 
