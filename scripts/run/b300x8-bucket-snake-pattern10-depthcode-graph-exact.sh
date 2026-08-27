@@ -9,6 +9,7 @@ NGPU="${NGPU:-8}"
 TARGET_MIB="${TARGET_MIB:-16384}"
 MAX_WINDOW="${MAX_WINDOW:-14}"
 TRANSPOSE_MODE="${TRANSPOSE_MODE:-pipeline}"
+DEPTHCODE_DECODE="${DEPTHCODE_DECODE:-pair}"
 PM_ACCUM="${PM_ACCUM:-0}"
 TERNARY_KEY4="${TERNARY_KEY4:-1}"
 BUCKET_TRANSPOSE_CHUNK_MIB="${BUCKET_TRANSPOSE_CHUNK_MIB:-1024}"
@@ -18,6 +19,10 @@ case "$TRANSPOSE_MODE" in
   sync|events|pipeline) ;;
   *) echo "TRANSPOSE_MODE must be sync, events, or pipeline" >&2; exit 2 ;;
 esac
+if [[ "$DEPTHCODE_DECODE" != pair && "$DEPTHCODE_DECODE" != predecoded ]]; then
+  echo "DEPTHCODE_DECODE must be pair or predecoded" >&2
+  exit 2
+fi
 if [[ "$PM_ACCUM" != 0 && "$PM_ACCUM" != 1 ]]; then
   echo "PM_ACCUM must be 0 or 1" >&2
   exit 2
@@ -27,11 +32,11 @@ if [[ "$TERNARY_KEY4" != 0 && "$TERNARY_KEY4" != 1 ]]; then
   exit 2
 fi
 
-SUFFIX="_${TRANSPOSE_MODE}"
+SUFFIX="_${DEPTHCODE_DECODE}_${TRANSPOSE_MODE}"
 [[ "$PM_ACCUM" == 1 ]] && SUFFIX="${SUFFIX}_pm"
 [[ "$TERNARY_KEY4" == 0 ]] && SUFFIX="${SUFFIX}_keyscalar"
 BIN="${BIN:-$ONEESAN_BUILD_DIR/oneesan_cuda_gridfp_b300_bucket_snake_onepass_pattern10_depthcode_graph_batch${SUFFIX}_n${N}}"
-WORK_TAG="pattern10_depthcode_graph_${TRANSPOSE_MODE}"
+WORK_TAG="pattern10_depthcode_graph_${DEPTHCODE_DECODE}_${TRANSPOSE_MODE}"
 [[ "$PM_ACCUM" == 1 ]] && WORK_TAG="${WORK_TAG}_pm"
 if [[ "$TERNARY_KEY4" == 0 ]]; then WORK_TAG="${WORK_TAG}_keyscalar"; else WORK_TAG="${WORK_TAG}_key4"; fi
 WORK_DIR="${WORK_DIR:-$ONEESAN_ROOT/work/b300_bucket_snake_${WORK_TAG}_exact_n${N}}"
@@ -51,8 +56,8 @@ if (( visible < NGPU )); then
 fi
 
 if [[ ! -x "$BIN" ]]; then
-  echo "$BIN not found; building pattern10 depthcode Graph batch n=$N transpose=$TRANSPOSE_MODE pm=$PM_ACCUM ternary_key4=$TERNARY_KEY4" >&2
-  N="$N" OUT="$BIN" TRANSPOSE_MODE="$TRANSPOSE_MODE" PM_ACCUM="$PM_ACCUM" TERNARY_KEY4="$TERNARY_KEY4" \
+  echo "$BIN not found; building pattern10 depthcode Graph batch n=$N decode=$DEPTHCODE_DECODE transpose=$TRANSPOSE_MODE pm=$PM_ACCUM ternary_key4=$TERNARY_KEY4" >&2
+  N="$N" OUT="$BIN" DEPTHCODE_DECODE="$DEPTHCODE_DECODE" TRANSPOSE_MODE="$TRANSPOSE_MODE" PM_ACCUM="$PM_ACCUM" TERNARY_KEY4="$TERNARY_KEY4" \
     bash "$ONEESAN_ROOT/scripts/build/b300-bucket-snake-pattern10-depthcode-graph-batch.sh"
 fi
 
