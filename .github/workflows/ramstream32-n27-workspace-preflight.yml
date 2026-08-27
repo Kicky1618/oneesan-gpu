@@ -18,13 +18,29 @@ jobs:
         shell: bash
         run: |
           N=27 ARCH=sm_80 \
+            bash scripts/build/gridfp-ramstream32-cpu-low-worker-dense-page-plan.sh
+          N=27 ARCH=sm_80 \
             bash scripts/build/gridfp-ramstream32-cpu-low-worker-augmented-plan.sh
 
-      - name: Run n27 exact workspace audit
+      - name: Compare n27 dense workspace builders
         shell: bash
         run: |
           rm -rf work/n27-workspace-preflight
           mkdir -p work/n27-workspace-preflight
+          build/ramstream32_cpu_low_worker_dense_page_plan_n27 27 \
+            2>&1 | tee work/n27-workspace-preflight/dense-builder-compare.log
+          grep -Fq 'cpu_low_worker_dense_page_plan OK' \
+            work/n27-workspace-preflight/dense-builder-compare.log
+          grep -Fq 'identical_index=1' \
+            work/n27-workspace-preflight/dense-builder-compare.log
+          grep -Fq 'legacy_dense_build_s=' \
+            work/n27-workspace-preflight/dense-builder-compare.log
+          grep -Fq 'streaming_dense_build_s=' \
+            work/n27-workspace-preflight/dense-builder-compare.log
+
+      - name: Run n27 exact workspace audit
+        shell: bash
+        run: |
           N=27 \
           ARCH=sm_80 \
           BUILD=0 \
