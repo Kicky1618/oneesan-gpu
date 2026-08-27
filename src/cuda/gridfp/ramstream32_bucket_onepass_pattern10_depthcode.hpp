@@ -18,12 +18,13 @@
 // The device codebook stores decoded {left mask,right mask,depth,valid}; no
 // per-orbit depth sidecar and no runtime Fibonacci unrank are required.
 enum P10DepthCodeMode : uint32_t { P10DC_COARSE=0, P10DC_PHASE=1, P10DC_STREAM=2 };
-static constexpr uint32_t P10DC_STREAMS=4;
+static constexpr uint32_t P10DC_LEGACY_STREAMS=4;
 static constexpr uint32_t P10DC_HDIM=TARGET_W+1;
-static constexpr uint32_t P10DC_KEY_COUNT=2u*2u*P10DC_STREAMS*uint32_t(TARGET_W)*P10DC_HDIM;
+static constexpr uint32_t P10DC_KEY_COUNT=2u*2u*uint32_t(TARGET_W)*P10DC_HDIM;
 static constexpr uint32_t P10DC_INVALID_BASE=0xffffffffu;
 static constexpr uint32_t P10DC_PAIR_BITS=14;
 static constexpr uint32_t P10DC_PAIR_COUNT=1u<<P10DC_PAIR_BITS;
+static constexpr uint32_t P10DC_CONTEXT_BITS=12;
 static constexpr uint32_t P10DC_MASK_BITS=13;
 static constexpr uint32_t P10DC_MASK_MASK=(1u<<P10DC_MASK_BITS)-1u;
 static constexpr uint32_t P10DC_RM_SHIFT=P10DC_MASK_BITS;
@@ -32,7 +33,7 @@ static constexpr uint32_t P10DC_VALID_SHIFT=P10DC_DEPTH_SHIFT+4u;
 static_assert(P10DC_VALID_SHIFT<32);
 static_assert(LOW_LUT_K<=14&&HIGH_LUT_K<=14);
 static_assert(TARGET_W==LOW_LUT_K+HIGH_LUT_K+1);
-static_assert(P10DC_KEY_COUNT<(1u<<14),"depthcode sparse key assumes context fits 14 bits");
+static_assert(P10DC_KEY_COUNT<(1u<<P10DC_CONTEXT_BITS),"depthcode phase context exceeds packed sparse key");
 
 #if defined(__CUDACC__)
 #define P10DC_HD __host__ __device__ __forceinline__
@@ -40,9 +41,8 @@ static_assert(P10DC_KEY_COUNT<(1u<<14),"depthcode sparse key assumes context fit
 #define P10DC_HD inline
 #endif
 P10DC_HD uint32_t p10dc_key(bool rev,bool high,uint32_t sid,int p,uint32_t h,uint32_t mode){
-    uint32_t r=mode>=P10DC_PHASE?uint32_t(rev):0u;
-    uint32_t s=mode>=P10DC_STREAM?(sid&3u):0u;
-    return ((((r*2u+uint32_t(high))*P10DC_STREAMS+s)*uint32_t(TARGET_W)+uint32_t(p))*P10DC_HDIM+h);
+    (void)sid;(void)mode;
+    return (((uint32_t(rev)*2u+uint32_t(high))*uint32_t(TARGET_W)+uint32_t(p))*P10DC_HDIM+h);
 }
 P10DC_HD uint16_t p10dc_payload_lm(uint32_t x){return uint16_t(x&P10DC_MASK_MASK);}
 P10DC_HD uint16_t p10dc_payload_rm(uint32_t x){return uint16_t((x>>P10DC_RM_SHIFT)&P10DC_MASK_MASK);}
@@ -154,7 +154,7 @@ static P10DepthCodeBookHost p10dc_build_and_rewrite_direct(
     for(uint32_t k=0;k<P10DC_KEY_COUNT;++k){auto& pv=payloads[k];if(pv.empty())continue;++used_contexts;max_pairs=std::max<uint32_t>(max_pairs,uint32_t(pv.size()));out.base[k]=uint32_t(out.decode.size());out.decode.insert(out.decode.end(),pv.begin(),pv.end());}
     if(out.decode.size()!=size_t(unique_pairs)||code_of.size()!=size_t(unique_pairs)){std::cerr<<"depthcode sparse flatten mismatch decode="<<out.decode.size()<<" map="<<code_of.size()<<" unique="<<unique_pairs<<'\n';std::exit(597);}
     std::unordered_map<uint32_t,uint16_t>().swap(code_of);std::vector<std::vector<uint32_t>>().swap(payloads);
-    std::cerr<<"pattern10_depthcode direct_build=1 selected_mode="<<mode<<" contexts="<<used_contexts<<" total_pairs="<<unique_pairs<<" max_pairs="<<max_pairs<<" rewritten_ops="<<visited<<" codebook_mib="<<double(out.bytes())/double(1<<20)<<" sidecar_bytes_per_orbit=0 temporary_depth_bytes=0 decode_payload_masks=1 decode_unrank=0 builder_passes=1 dense_context_bitset_bytes=0 sparse_key_bits=28 sparse_entries="<<unique_pairs<<"\n";
+    std::cerr<<"pattern10_depthcode direct_build=1 selected_mode="<<mode<<" contexts="<<used_contexts<<" total_pairs="<<unique_pairs<<" max_pairs="<<max_pairs<<" rewritten_ops="<<visited<<" codebook_mib="<<double(out.bytes())/double(1<<20)<<" base_kib="<<double(P10DC_KEY_COUNT*sizeof(uint32_t))/1024.0<<" sidecar_bytes_per_orbit=0 temporary_depth_bytes=0 decode_payload_masks=1 decode_unrank=0 builder_passes=1 dense_context_bitset_bytes=0 sparse_key_bits="<<(P10DC_CONTEXT_BITS+P10DC_PAIR_BITS)<<" sparse_entries="<<unique_pairs<<"\n";
     return out;
 }
 
