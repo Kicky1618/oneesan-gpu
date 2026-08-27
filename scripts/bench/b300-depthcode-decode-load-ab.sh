@@ -47,20 +47,29 @@ build_one(){
   python3 "$PARSER" "$blog" --label "$label" >>"$RESOURCES"
 }
 
-printf 'decode_load\trepeat\tresidue\twall_s\tforward_high_s\tforward_low_s\treverse_low_s\treverse_high_s\ttranspose_s\tmetadata_mib_per_gpu\tforward_attach_mib\treverse_attach_mib\tbinary\n' >"$RESULT"
+printf 'decode_load\trepeat\tresidue\twall_s\tforward_high_s\tforward_low_s\treverse_low_s\treverse_high_s\ttranspose_s\trewritten_ops\tnone_ops\tdecode_load_skipped_ops\tdecode_load_skip_fraction\tmetadata_mib_per_gpu\tforward_attach_mib\treverse_attach_mib\tbinary\n' >"$RESULT"
 run_one(){
   local mode="$1" bin="$2" rep="$3"
   local so="$LOGDIR/${mode}_r${rep}.out" se="$LOGDIR/${mode}_r${rep}.err"
   echo "=== run decode_load=$mode repeat=$rep/$REPEATS ===" >&2
   "$bin" "$N" "$TARGET_MIB" "$MAX_WINDOW" "$NGPU" "$MOD" >"$so" 2>"$se"
-  local line detail plan residue wall fh fl rl rh ts meta fattach rattach
+  local line detail plan builder residue wall fh fl rl rh ts meta fattach rattach rewritten none skipped sentinel skipfrac
   line="$(grep '^residue=' "$so" | tail -n1 || true)"; [[ -n "$line" ]] || { echo "$mode missing residue line" >&2; exit 3; }
   residue="$(field residue "$line")"; wall="$(field wall_s "$line")"; [[ "$residue" == "$EXPECT" ]] || { echo "$mode residue mismatch got=$residue expected=$EXPECT" >&2; exit 4; }
   detail="$(grep 'snake_onepass_graph_batch modulus=' "$se" | tail -n1 || true)"
   plan="$(grep 'backend=gridfp-b300-bucket-snake-onepass-graph-batch' "$se" | tail -n1 || true)"
+  builder="$(grep 'pattern10_depthcode direct_build=1' "$se" | tail -n1 || true)"; [[ -n "$builder" ]] || { echo "$mode missing depthcode builder stats" >&2; exit 5; }
+  sentinel="$(field none_sentinel "$builder")"; [[ "$sentinel" == 1023 ]] || { echo "$mode invalid none sentinel ${sentinel:-missing}" >&2; exit 6; }
   fh="$(field forward_high_s "$detail")"; fl="$(field forward_low_s "$detail")"; rl="$(field reverse_low_s "$detail")"; rh="$(field reverse_high_s "$detail")"; ts="$(field transpose_s "$detail")"
   meta="$(field metadata_mib_per_gpu "$plan")"; fattach="$(field forward_attach_mib "$plan")"; rattach="$(field reverse_attach_mib "$plan")"
-  printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' "$mode" "$rep" "$residue" "${wall:-NA}" "${fh:-NA}" "${fl:-NA}" "${rl:-NA}" "${rh:-NA}" "${ts:-NA}" "${meta:-NA}" "${fattach:-NA}" "${rattach:-NA}" "$bin" >>"$RESULT"
+  rewritten="$(field rewritten_ops "$builder")"; none="$(field none_ops "$builder")"; skipped="$(field decode_load_skipped_ops "$builder")"
+  [[ -n "$rewritten" && -n "$none" && -n "$skipped" && "$none" == "$skipped" ]] || { echo "$mode invalid skip stats rewritten=$rewritten none=$none skipped=$skipped" >&2; exit 7; }
+  skipfrac="$(python3 - "$rewritten" "$skipped" <<'PY'
+import sys
+n=int(sys.argv[1]); s=int(sys.argv[2]); print(f"{(s/n if n else 0.0):.9f}")
+PY
+)"
+  printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' "$mode" "$rep" "$residue" "${wall:-NA}" "${fh:-NA}" "${fl:-NA}" "${rl:-NA}" "${rh:-NA}" "${ts:-NA}" "$rewritten" "$none" "$skipped" "$skipfrac" "${meta:-NA}" "${fattach:-NA}" "${rattach:-NA}" "$bin" >>"$RESULT"
 }
 
 for mode in global ldg; do
@@ -82,15 +91,17 @@ for mode in ("global","ldg"):
     for m in metrics:
         xs=[float(r[m]) for r in g if r[m]!="NA"]
         row[m]=f"{statistics.median(xs):.9f}" if xs else "NA"
-    for m in ("metadata_mib_per_gpu","forward_attach_mib","reverse_attach_mib"):
+    for m in ("rewritten_ops","none_ops","decode_load_skipped_ops","decode_load_skip_fraction","metadata_mib_per_gpu","forward_attach_mib","reverse_attach_mib"):
         row[m]=next((r[m] for r in g if r[m]!="NA"),"NA")
     out.append(row)
-fields=("decode_load","repeats",*metrics,"metadata_mib_per_gpu","forward_attach_mib","reverse_attach_mib")
+fields=("decode_load","repeats",*metrics,"rewritten_ops","none_ops","decode_load_skipped_ops","decode_load_skip_fraction","metadata_mib_per_gpu","forward_attach_mib","reverse_attach_mib")
 with open(dst,"w",newline="") as f:
     w=csv.DictWriter(f,fieldnames=fields,delimiter="\t"); w.writeheader(); w.writerows(out)
 q={r["decode_load"]:r for r in out}
 for m in ("wall_s","forward_high_s","forward_low_s","reverse_low_s","reverse_high_s"):
     if q["global"][m]!="NA" and q["ldg"][m]!="NA": print(f"ldg_{m}_speedup_vs_global={float(q['global'][m])/float(q['ldg'][m]):.6f}x")
+print(f"decode_load_skip_fraction={q['global']['decode_load_skip_fraction']}")
+print(f"decode_load_skipped_ops={q['global']['decode_load_skipped_ops']}")
 print(f"summary={dst}")
 PY
 cat "$RESOURCES"
