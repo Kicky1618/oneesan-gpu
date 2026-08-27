@@ -4,7 +4,14 @@ source "$(dirname -- "${BASH_SOURCE[0]}")/../lib/common.sh"
 
 N="${N:-21}"
 MOD="${MOD:-4294967291}"
-EXPECT="${EXPECT:-998035516}"
+if [[ -z "${EXPECT+x}" ]]; then
+  if [[ "$N" == 21 && "$MOD" == 4294967291 ]]; then
+    EXPECT=998035516
+  else
+    echo "EXPECT must be set when N/MOD differ from the n=21 reference" >&2
+    exit 2
+  fi
+fi
 NGPU="${NGPU:-8}"
 TARGET_MIB="${TARGET_MIB:-16384}"
 MAX_WINDOW="${MAX_WINDOW:-14}"
@@ -45,6 +52,10 @@ build_backend(){
       N="$N" OUT="$bin" HIGH_CTX=resolved TRANSPOSE_MODE="$TRANSPOSE_MODE" \
         PM_ACCUM="$PM_ACCUM" TERNARY_KEY4="$TERNARY_KEY4" \
         bash "$ONEESAN_ROOT/scripts/build/b300-bucket-snake-pattern10-depthcode-graph-batch.sh" ;;
+    depthcode_payload_warp)
+      N="$N" OUT="$bin" HIGH_CTX=warp TRANSPOSE_MODE="$TRANSPOSE_MODE" \
+        PM_ACCUM="$PM_ACCUM" TERNARY_KEY4="$TERNARY_KEY4" \
+        bash "$ONEESAN_ROOT/scripts/build/b300-bucket-snake-pattern10-depthcode-graph-batch.sh" ;;
     *) echo "unknown backend $backend" >&2; exit 2;;
   esac
 }
@@ -70,7 +81,7 @@ run_one(){
 }
 
 printf 'backend\trepeat\tresidue\twall_s\tforward_high_s\tforward_low_s\treverse_low_s\treverse_high_s\ttranspose_s\tmetadata_mib_per_gpu\tforward_attach_mib\treverse_attach_mib\tbinary\n' >"$RESULT"
-BACKENDS=(depth4_lut_resolved depthcode_payload_thread depthcode_payload_resolved)
+BACKENDS=(depth4_lut_resolved depthcode_payload_thread depthcode_payload_resolved depthcode_payload_warp)
 for backend in "${BACKENDS[@]}"; do
   bin="$ONEESAN_BUILD_DIR/ab_${backend}_${TRANSPOSE_MODE}_n${N}"
   echo "=== build $backend ===" >&2
@@ -83,7 +94,7 @@ python3 - "$RESULT" "$SUMMARY" <<'PY'
 import csv, statistics, sys
 src,dst=sys.argv[1:]
 metrics=("wall_s","forward_high_s","forward_low_s","reverse_low_s","reverse_high_s","transpose_s")
-backends=("depth4_lut_resolved","depthcode_payload_thread","depthcode_payload_resolved")
+backends=("depth4_lut_resolved","depthcode_payload_thread","depthcode_payload_resolved","depthcode_payload_warp")
 with open(src,newline="") as f: rows=list(csv.DictReader(f,delimiter="\t"))
 out=[]
 for b in backends:
@@ -105,7 +116,9 @@ def ratio(a,b,m):
 for m in ("wall_s","forward_high_s","forward_low_s","reverse_low_s","reverse_high_s"):
     ratio("depth4_lut_resolved","depthcode_payload_thread",m)
     ratio("depthcode_payload_thread","depthcode_payload_resolved",m)
-    ratio("depth4_lut_resolved","depthcode_payload_resolved",m)
+    ratio("depthcode_payload_resolved","depthcode_payload_warp",m)
+    ratio("depthcode_payload_thread","depthcode_payload_warp",m)
+    ratio("depth4_lut_resolved","depthcode_payload_warp",m)
 print(f"summary={dst}")
 PY
 
