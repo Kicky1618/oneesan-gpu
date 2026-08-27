@@ -18,4 +18,6 @@ grep -Fq 'payload_exact=1' <<<"$out"
 grep -Fq 'decode_payload_masks=1' <<<"$out"
 grep -Fq 'decode_unrank=0' <<<"$out"
 grep -Fq 'temporary_depth_bytes=0' <<<"$out"
-echo "pattern10-depthcode-build-plan OK n=$N payload=predecoded sidecar=0" >&2
+grep -Fq 'builder_passes=1' <<<"$out"
+grep -Fq 'dense_context_bitset_bytes=0' <<<"$out"
+echo "pattern10-depthcode-build-plan OK n=$N payload=predecoded sidecar=0 builder_passes=1 dense_bitset=0" >&2
