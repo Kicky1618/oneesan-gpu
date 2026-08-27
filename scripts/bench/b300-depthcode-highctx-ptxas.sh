@@ -41,16 +41,20 @@ cat "$OUT"
 python3 - "$OUT" <<'PY'
 import csv, sys
 rows=list(csv.DictReader(open(sys.argv[1]),delimiter='\t'))
+def ints(group,key):
+    return [int(r[key]) for r in group if r[key] != 'NA']
 for backend in ('depthcode_payload_thread','depthcode_payload_resolved','depthcode_payload_warp'):
     high=[r for r in rows if r['backend']==backend and 'high' in r['kernel'].lower()]
     if not high:
         continue
-    max_regs=max(int(r['registers']) for r in high)
-    max_smem=max(int(r['smem_bytes']) for r in high)
-    spill=sum(int(r['spill_store_bytes'])+int(r['spill_load_bytes']) for r in high)
-    print(f'{backend}_high_max_registers={max_regs}')
-    print(f'{backend}_high_max_smem_bytes={max_smem}')
-    print(f'{backend}_high_spill_bytes={spill}')
+    regs=ints(high,'registers')
+    smem=ints(high,'smem_bytes')
+    stores=ints(high,'spill_store_bytes')
+    loads=ints(high,'spill_load_bytes')
+    print(f'{backend}_high_max_registers={max(regs) if regs else "NA"}')
+    print(f'{backend}_high_max_smem_bytes={max(smem) if smem else "NA"}')
+    print(f'{backend}_high_spill_store_bytes={sum(stores) if stores else "NA"}')
+    print(f'{backend}_high_spill_load_bytes={sum(loads) if loads else "NA"}')
 PY
 
 echo "depthcode-highctx-ptxas OK n=$N arch=$ARCH transpose=$TRANSPOSE_MODE result=$OUT logs=$LOGDIR" >&2
