@@ -128,7 +128,7 @@ std::vector<Key> inverse_project(const Key& dst, int j, int W) {
     if (dst.type == 'A' && j <= W - 3 && j + 1 < static_cast<int>(dst.w.size()) &&
         dst.w[j] == L && dst.w[j + 1] == R) {
         const Key c{'C', dst.w.substr(0, j) + N + dst.w.substr(j + 2)};
-        if (project_key(c, j, W) != dst) std::abort();
+        if (!(project_key(c, j, W) == dst)) std::abort();
         out.push_back(c);
     }
     return out;
