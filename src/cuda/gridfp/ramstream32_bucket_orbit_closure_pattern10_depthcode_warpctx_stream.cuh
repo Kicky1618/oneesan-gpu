@@ -18,8 +18,9 @@ static void bucket_enqueue_high_orbit_closure_pattern10_depthcode_warpctx(
     int threads = 256, int gx = 16, int gy = 8
 ) {
     dim3 block(threads), grid(gx, gy, unsigned(layout.main_blocks.size()));
+    const size_t smem = p10dc_warpctx_smem_bytes(threads);
     for (int p = TARGET_W - 1; p >= LOW_LUT_K + 1; --p) {
-        bucket_high_orbit_closure_pattern10_depthcode_warpctx_kernel<<<grid, block, 0, stream>>>(p);
+        bucket_high_orbit_closure_pattern10_depthcode_warpctx_kernel<<<grid, block, smem, stream>>>(p);
         ck(cudaGetLastError(), "bucket high pattern10 depthcode warpctx stream");
     }
 }
@@ -40,8 +41,9 @@ static void bucket_enqueue_reverse_high_pattern10_depthcode_warpctx(
     int threads = 256, int gx = 16, int gy = 8
 ) {
     dim3 block(threads), grid(gx, gy, unsigned(layout.main_blocks.size()));
+    const size_t smem = p10dc_warpctx_smem_bytes(threads);
     for (int p = LOW_LUT_K + 1; p < TARGET_W; ++p) {
-        bucket_reverse_high_pattern10_depthcode_warpctx_kernel<<<grid, block, 0, stream>>>(p);
+        bucket_reverse_high_pattern10_depthcode_warpctx_kernel<<<grid, block, smem, stream>>>(p);
         ck(cudaGetLastError(), "bucket reverse high pattern10 depthcode warpctx stream");
     }
 }
