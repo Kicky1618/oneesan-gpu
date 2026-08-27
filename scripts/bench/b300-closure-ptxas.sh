@@ -25,14 +25,18 @@ printf 'backend\tkernel\tregisters\tstack_bytes\tspill_store_bytes\tspill_load_b
   build_one pattern10 scripts/build/b300-bucket-snake-pattern10-graph-batch.sh
   build_one depth8_unrank_thread scripts/build/b300-bucket-snake-pattern10-depth8-graph-batch.sh P10_DECODE=unrank HIGH_CTX=thread
   build_one depth8_unrank_shared scripts/build/b300-bucket-snake-pattern10-depth8-graph-batch.sh P10_DECODE=unrank HIGH_CTX=shared
+  build_one depth8_unrank_resolved scripts/build/b300-bucket-snake-pattern10-depth8-graph-batch.sh P10_DECODE=unrank HIGH_CTX=resolved
   build_one depth8_unrank_warp scripts/build/b300-bucket-snake-pattern10-depth8-graph-batch.sh P10_DECODE=unrank HIGH_CTX=warp
   build_one depth8_lut_thread scripts/build/b300-bucket-snake-pattern10-depth8-graph-batch.sh P10_DECODE=lut HIGH_CTX=thread
   build_one depth8_lut_shared scripts/build/b300-bucket-snake-pattern10-depth8-graph-batch.sh P10_DECODE=lut HIGH_CTX=shared
+  build_one depth8_lut_resolved scripts/build/b300-bucket-snake-pattern10-depth8-graph-batch.sh P10_DECODE=lut HIGH_CTX=resolved
   build_one depth4_unrank_thread scripts/build/b300-bucket-snake-pattern10-depth4-graph-batch.sh P10_DECODE=unrank HIGH_CTX=thread
   build_one depth4_unrank_shared scripts/build/b300-bucket-snake-pattern10-depth4-graph-batch.sh P10_DECODE=unrank HIGH_CTX=shared
+  build_one depth4_unrank_resolved scripts/build/b300-bucket-snake-pattern10-depth4-graph-batch.sh P10_DECODE=unrank HIGH_CTX=resolved
   build_one depth4_unrank_warp scripts/build/b300-bucket-snake-pattern10-depth4-graph-batch.sh P10_DECODE=unrank HIGH_CTX=warp
   build_one depth4_lut_thread scripts/build/b300-bucket-snake-pattern10-depth4-graph-batch.sh P10_DECODE=lut HIGH_CTX=thread
   build_one depth4_lut_shared scripts/build/b300-bucket-snake-pattern10-depth4-graph-batch.sh P10_DECODE=lut HIGH_CTX=shared
+  build_one depth4_lut_resolved scripts/build/b300-bucket-snake-pattern10-depth4-graph-batch.sh P10_DECODE=lut HIGH_CTX=resolved
   build_one depth4_lut_warp scripts/build/b300-bucket-snake-pattern10-depth4-graph-batch.sh P10_DECODE=lut HIGH_CTX=warp
 } >>"$OUT"
 
