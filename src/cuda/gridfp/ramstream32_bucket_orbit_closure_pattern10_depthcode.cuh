@@ -3,6 +3,10 @@
 #include "ramstream32_bucket_onepass_pattern10_depthcode.hpp"
 #include "ramstream32_bucket_closure_zero_plan.cuh"
 
+#ifndef P10DC_DECODE_LDG
+#define P10DC_DECODE_LDG 0
+#endif
+static_assert(P10DC_DECODE_LDG==0||P10DC_DECODE_LDG==1,"P10DC_DECODE_LDG must be 0 or 1");
 static_assert(P10DC_KEY_COUNT*sizeof(uint32_t)<=16u*1024u,"depthcode phase base table must stay small enough for constant memory");
 __constant__ uint32_t D_P10DC_BASE[P10DC_KEY_COUNT];
 __constant__ uint32_t* D_P10DC_DECODE;
@@ -20,8 +24,15 @@ struct BucketReversePattern10DepthCodeDeviceTables {
     void release(){codebook.release();split.release();}
 };
 
+__device__ __forceinline__ uint32_t p10dc_decode_payload(uint32_t i){
+#if P10DC_DECODE_LDG
+    return __ldg(D_P10DC_DECODE+i);
+#else
+    return D_P10DC_DECODE[i];
+#endif
+}
 __device__ __forceinline__ uint32_t p10dc_payload(BucketOrbitOp op,bool rev,bool high,uint32_t sid,int p,uint32_t h){
-    uint32_t k=p10dc_key(rev,high,sid,p,h,P10DC_PHASE);uint32_t b=D_P10DC_BASE[k];return D_P10DC_DECODE[b+uint32_t(bkcp10_id(op))];
+    uint32_t k=p10dc_key(rev,high,sid,p,h,P10DC_PHASE);uint32_t b=D_P10DC_BASE[k];return p10dc_decode_payload(b+uint32_t(bkcp10_id(op)));
 }
 
 __device__ __forceinline__ BkczPlan p10dc_build_low_plan(MateID d,int fixed_he,int p,uint32_t payload){
