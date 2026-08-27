@@ -7,7 +7,7 @@ NGPU="${NGPU:-8}"; TARGET_MIB="${TARGET_MIB:-16384}"; MAX_WINDOW="${MAX_WINDOW:-
 TRANSPOSE_MODE="${TRANSPOSE_MODE:-pipeline}"; HIGH_CTX="${HIGH_CTX:-thread}"; PM_ACCUM="${PM_ACCUM:-0}"; TERNARY_KEY4="${TERNARY_KEY4:-1}"
 BUCKET_TRANSPOSE_CHUNK_MIB="${BUCKET_TRANSPOSE_CHUNK_MIB:-1024}"; BUCKET_RESERVE_MIB="${BUCKET_RESERVE_MIB:-8192}"
 case "$TRANSPOSE_MODE" in sync|events|pipeline) ;; *) echo "TRANSPOSE_MODE must be sync, events, or pipeline" >&2; exit 2;; esac
-if [[ "$HIGH_CTX" != thread && "$HIGH_CTX" != resolved ]]; then echo "HIGH_CTX must be thread or resolved" >&2; exit 2; fi
+case "$HIGH_CTX" in thread|resolved|warp) ;; *) echo "HIGH_CTX must be thread, resolved, or warp" >&2; exit 2;; esac
 if [[ "$PM_ACCUM" != 0 && "$PM_ACCUM" != 1 ]]; then echo "PM_ACCUM must be 0 or 1" >&2; exit 2; fi
 if [[ "$TERNARY_KEY4" != 0 && "$TERNARY_KEY4" != 1 ]]; then echo "TERNARY_KEY4 must be 0 or 1" >&2; exit 2; fi
 if (( NGPU != 8 )); then echo "pattern10 depthcode graph backend currently requires NGPU=8" >&2; exit 2; fi
