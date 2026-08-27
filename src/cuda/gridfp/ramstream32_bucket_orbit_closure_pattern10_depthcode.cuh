@@ -3,15 +3,15 @@
 #include "ramstream32_bucket_onepass_pattern10_depthcode.hpp"
 #include "ramstream32_bucket_closure_zero_plan.cuh"
 
-__constant__ uint32_t* D_P10DC_BASE;
+static_assert(P10DC_KEY_COUNT*sizeof(uint32_t)<=16u*1024u,"depthcode phase base table must stay small enough for constant memory");
+__constant__ uint32_t D_P10DC_BASE[P10DC_KEY_COUNT];
 __constant__ uint32_t* D_P10DC_DECODE;
-__constant__ uint32_t D_P10DC_MODE;
 
 struct P10DepthCodeDeviceTables {
-    uint32_t* base=nullptr;uint32_t* decode=nullptr;
+    uint32_t* decode=nullptr;
     template<class T>static void cp(T*&d,const std::vector<T>&s,const char*w){if(s.empty())return;ck(cudaMalloc(&d,s.size()*sizeof(T)),w);ck(cudaMemcpy(d,s.data(),s.size()*sizeof(T),cudaMemcpyHostToDevice),w);}
-    void install(const P10DepthCodeBookHost&h){cp(base,h.base,"p10dc base");cp(decode,h.decode,"p10dc decode payload");ck(cudaMemcpyToSymbol(D_P10DC_BASE,&base,sizeof(base)),"p10dc base ptr");ck(cudaMemcpyToSymbol(D_P10DC_DECODE,&decode,sizeof(decode)),"p10dc decode ptr");uint32_t mode=h.mode;ck(cudaMemcpyToSymbol(D_P10DC_MODE,&mode,sizeof(mode)),"p10dc mode");}
-    void release(){cudaFree(base);cudaFree(decode);base=nullptr;decode=nullptr;}
+    void install(const P10DepthCodeBookHost&h){if(h.base.size()!=P10DC_KEY_COUNT){std::cerr<<"p10dc compact base size mismatch got="<<h.base.size()<<" expected="<<P10DC_KEY_COUNT<<'\n';std::exit(604);}cp(decode,h.decode,"p10dc decode payload");ck(cudaMemcpyToSymbol(D_P10DC_BASE,h.base.data(),h.base.size()*sizeof(uint32_t)),"p10dc constant base");ck(cudaMemcpyToSymbol(D_P10DC_DECODE,&decode,sizeof(decode)),"p10dc decode ptr");}
+    void release(){cudaFree(decode);decode=nullptr;}
 };
 struct BucketForwardPattern10DepthCodeDeviceTables { void install(const BucketForwardPattern10DepthCodeHost&){} void release(){} };
 struct BucketReversePattern10DepthCodeDeviceTables {
@@ -21,7 +21,7 @@ struct BucketReversePattern10DepthCodeDeviceTables {
 };
 
 __device__ __forceinline__ uint32_t p10dc_payload(BucketOrbitOp op,bool rev,bool high,uint32_t sid,int p,uint32_t h){
-    uint32_t k=p10dc_key(rev,high,sid,p,h,D_P10DC_MODE);uint32_t b=D_P10DC_BASE[k];return D_P10DC_DECODE[b+uint32_t(bkcp10_id(op))];
+    uint32_t k=p10dc_key(rev,high,sid,p,h,P10DC_PHASE);uint32_t b=D_P10DC_BASE[k];return D_P10DC_DECODE[b+uint32_t(bkcp10_id(op))];
 }
 
 __device__ __forceinline__ BkczPlan p10dc_build_low_plan(MateID d,int fixed_he,int p,uint32_t payload){
