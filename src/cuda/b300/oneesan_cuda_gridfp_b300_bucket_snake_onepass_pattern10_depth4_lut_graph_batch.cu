@@ -2,7 +2,13 @@
 #define BUCKET_SNAKE_REVERSE_FUSED 1
 #endif
 #include "../gridfp/ramstream32_bucket_orbit_closure_pattern10_depth4_lut.cuh"
+#if P10D4_HIGH_CTX_SHARED
+#define P10D8_HIGH_DEPTH_LOAD(ptr,q) uint8_t((((ptr)[uint32_t(q)>>1])>>((uint32_t(q)&1u)*4u))&0xfu)
+#include "../gridfp/ramstream32_bucket_orbit_closure_pattern10_depth8_highctx_graph.cuh"
+#undef P10D8_HIGH_DEPTH_LOAD
+#else
 #include "../gridfp/ramstream32_bucket_orbit_closure_pattern10_depth8_graph.cuh"
+#endif
 #include "../gridfp/ramstream32_reverse_build_release.hpp"
 
 #define BSN_REVERSE_FUSED_TABLES_TYPE ReverseBucketZeroTables
@@ -14,7 +20,12 @@
 #define BucketReverseOrbitClosureAttachDeviceTables BucketReversePattern10Depth4DeviceTables
 #define build_bucket_forward_orbit_closure_attach build_bucket_forward_pattern10_depth4_lut_zero
 #define build_bucket_reverse_orbit_closure_attach_checked build_bucket_reverse_pattern10_depth4_zero_checked
+#if P10D4_HIGH_CTX_SHARED
+#define BucketOnePassGraphs BucketPattern10Depth8HighCtxGraphs
+#define bucket_onepass_graph_sync_devices bucket_pattern10_depth8_highctx_graph_sync_devices
+#else
 #define BucketOnePassGraphs BucketPattern10Depth8Graphs
 #define bucket_onepass_graph_sync_devices bucket_pattern10_depth8_graph_sync_devices
+#endif
 
 #include "oneesan_cuda_gridfp_b300_bucket_snake_onepass_graph_batch.cu"
