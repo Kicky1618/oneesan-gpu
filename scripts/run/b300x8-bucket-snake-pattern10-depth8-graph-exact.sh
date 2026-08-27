@@ -5,7 +5,7 @@ N="${1:-27}"; if (( $# > 0 )); then shift; fi
 NGPU="${NGPU:-8}"; TARGET_MIB="${TARGET_MIB:-16384}"; MAX_WINDOW="${MAX_WINDOW:-14}"
 TRANSPOSE_MODE="${TRANSPOSE_MODE:-pipeline}"; PM_ACCUM="${PM_ACCUM:-0}"; HIGH_CTX="${HIGH_CTX:-thread}"; TERNARY_KEY4="${TERNARY_KEY4:-1}"
 BUCKET_TRANSPOSE_CHUNK_MIB="${BUCKET_TRANSPOSE_CHUNK_MIB:-1024}"; BUCKET_RESERVE_MIB="${BUCKET_RESERVE_MIB:-8192}"
-if [[ "$HIGH_CTX" != thread && "$HIGH_CTX" != shared ]]; then echo "HIGH_CTX must be thread or shared" >&2; exit 2; fi
+if [[ "$HIGH_CTX" != thread && "$HIGH_CTX" != shared && "$HIGH_CTX" != warp ]]; then echo "HIGH_CTX must be thread, shared, or warp" >&2; exit 2; fi
 if [[ "$TERNARY_KEY4" != 0 && "$TERNARY_KEY4" != 1 ]]; then echo "TERNARY_KEY4 must be 0 or 1" >&2; exit 2; fi
 SUFFIX="_${HIGH_CTX}_${TRANSPOSE_MODE}"; if [[ "$PM_ACCUM" == 1 ]]; then SUFFIX="${SUFFIX}_pm"; fi; if [[ "$TERNARY_KEY4" == 0 ]]; then SUFFIX="${SUFFIX}_keyscalar"; fi
 BIN="${BIN:-$ONEESAN_BUILD_DIR/oneesan_cuda_gridfp_b300_bucket_snake_onepass_pattern10_depth8_graph_batch${SUFFIX}_n${N}}"
