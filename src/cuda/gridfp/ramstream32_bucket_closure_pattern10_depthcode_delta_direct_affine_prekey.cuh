@@ -26,13 +26,14 @@ __device__ __forceinline__ Count p10dc_direct_resolved_high_plan_sum_cross5_prek
     if (depth) {
         size_t ix = D_BKF_LOW_CODE_OFF[
             size_t(D_BKF_FIXED_OWNER) * D_BKF_CODE_PITCH + db.hs] + lr;
-        uint32_t dc = D_BKF_LOW_CODES[ix];
         uint32_t key = D_P10DC_LOW_PREKEY[ix];
 #if GPU_DIRECT_PM_ACCUM
-        sum += p10dc_resolved_low_preimages_cross5_prekey(dc, key, depth, c.cross_base);
+        sum += p10dc_resolved_low_preimages_cross5_prekey_indexed(
+            ix, key, depth, c.cross_base);
 #else
         sum = gpu_direct_add(
-            sum, p10dc_resolved_low_preimages_cross5_prekey(dc, key, depth, c.cross_base));
+            sum, p10dc_resolved_low_preimages_cross5_prekey_indexed(
+                     ix, key, depth, c.cross_base));
 #endif
     }
 #if GPU_DIRECT_PM_ACCUM
