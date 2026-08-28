@@ -10,9 +10,13 @@ grep -Fq 'interval_io_kernel<false><<<interval_blocks(pg.mi.size(),threads),thre
 grep -Fq 'interval_io_kernel<false><<<interval_blocks(pg.di.size(),threads),threads,0,c.sBlock>>>' "$OUT"
 grep -Fq 'interval_io_kernel<true><<<interval_blocks(pg.mi.size(),threads),threads,0,c.sMain>>>' "$OUT"
 grep -Fq 'interval_io_kernel<true><<<interval_blocks(pg.di.size(),threads),threads,0,c.sBlock>>>' "$OUT"
+grep -Fq 'gather_main_kernel<<<bm,threads,0,c.sMain>>>' "$OUT"
+grep -Fq 'gather_block_kernel<<<bd,threads,0,c.sBlock>>>' "$OUT"
+grep -Fq 'scatter_main_kernel<<<bm,threads,0,c.sMain>>>' "$OUT"
+grep -Fq 'scatter_block_kernel<<<bd,threads,0,c.sBlock>>>' "$OUT"
 grep -Fq 'cudaStreamSynchronize(c.sMain),"main gather sync"' "$OUT"
 grep -Fq 'cudaStreamSynchronize(c.sBlock),"block gather sync"' "$OUT"
 grep -Fq 'cudaStreamSynchronize(c.sMain),"main scatter sync"' "$OUT"
 grep -Fq 'cudaStreamSynchronize(c.sBlock),"block scatter sync"' "$OUT"
-for stale in 'cudaDeviceSynchronize(),"doubleD gather sync"' 'cudaDeviceSynchronize(),"group sync"';do if grep -Fq "$stale" "$OUT";then echo "concurrent I/O source still contains device-wide sync: $stale" >&2;exit 3;fi;done
-echo "b300-vmm-basearg-concurrent-io-production-generate-proof OK gather_streams=2 scatter_streams=2 devicewide_io_sync=0 expected_default_overlap_groups=16384 expected_default_overlap_ratio=1.0"
+for stale in 'gather_main_kernel<<<bm,threads>>>' 'gather_block_kernel<<<bd,threads>>>' 'scatter_main_kernel<<<bm,threads>>>' 'scatter_block_kernel<<<bd,threads>>>' 'cudaDeviceSynchronize(),"doubleD gather sync"' 'cudaDeviceSynchronize(),"group sync"';do if grep -Fq "$stale" "$OUT";then echo "concurrent I/O source still contains serial/default-stream artifact: $stale" >&2;exit 3;fi;done
+echo "b300-vmm-basearg-concurrent-io-production-generate-proof OK interval_path_streamed=1 fallback_path_streamed=1 gather_streams=2 scatter_streams=2 devicewide_io_sync=0 expected_default_overlap_groups=16384 expected_default_overlap_ratio=1.0"
