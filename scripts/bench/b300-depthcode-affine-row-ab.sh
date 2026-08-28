@@ -79,9 +79,10 @@ if all(q[x][m]!='NA' for x in (base,opt) for m in ('forward_high_s','reverse_hig
     o=float(q[opt]['forward_high_s'])+float(q[opt]['reverse_high_s'])
     print(f'affine_row_total_high_speedup={b/o:.6f}x')
 print('base_source_row_resolution=physical_block')
-print('affine_source_row_resolution=base_plus_rank_times_stride')
-print('affine_descriptor_bytes=16')
+print('affine_source_row_resolution=base_plus_rank_times_stride_by_hs')
+print('affine_descriptor_bytes=8')
+print('affine_stride_storage=constant_by_hs')
 print(f'summary={dst}')
 PY
 
-echo "depthcode-affine-row-ab OK n=$N repeats=$REPEATS threads=$BUCKET_THREADS gx=$BUCKET_GRID_X gy=$BUCKET_GRID_Y decode_load=$DEPTHCODE_DECODE_LOAD transpose=$TRANSPOSE_MODE result=$RESULT" >&2
+echo "depthcode-affine-row-ab OK n=$N repeats=$REPEATS threads=$BUCKET_THREADS gx=$BUCKET_GRID_X gy=$BUCKET_GRID_Y decode_load=$DEPTHCODE_DECODE_LOAD transpose=$TRANSPOSE_MODE result=$RESULT affine_entry_bytes=8" >&2
