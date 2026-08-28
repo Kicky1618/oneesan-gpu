@@ -111,17 +111,23 @@ if r32logs:
         print(f'rankstream32_blocks_total={sum(v[1] for v in vals)}')
 rc32logs=list(ld.glob('*affine_rankchunk32_cross5_r1.err'))
 if rc32logs:
-    vals=[tuple(map(int,m)) for m in re.findall(r'p10dc_low_rankchunk32 fixed_owner=\d+ codes=(\d+) blocks=(\d+) l_ranks=(\d+) bytes=(\d+)',rc32logs[0].read_text(errors='replace'))]
+    text=rc32logs[0].read_text(errors='replace')
+    vals=[tuple(map(int,m)) for m in re.findall(r'p10dc_low_rankchunk32 fixed_owner=\d+ codes=(\d+) blocks=(\d+) l_ranks=(\d+) bytes=(\d+) meta_entries=(\d+) padding=(\d+)',text)]
     if vals:
         print(f'rankchunk32_runtime_metadata_mib_total={sum(v[3] for v in vals)/(1<<20):.6f}')
         print(f'rankchunk32_codes_total={sum(v[0] for v in vals)}')
         print(f'rankchunk32_blocks_total={sum(v[1] for v in vals)}')
+        print(f'rankchunk32_meta_entries_total={sum(v[4] for v in vals)}')
+        print(f'rankchunk32_padding_entries_total={sum(v[5] for v in vals)}')
+        codes=sum(v[0] for v in vals); pad=sum(v[5] for v in vals)
+        if codes: print(f'rankchunk32_padding_bytes_per_code={(pad*4)/codes:.9f}')
 print('rankstream_model=prekey32+offset32+rank16_per_L')
 print('rankstream32_model=key23+prefix9_per_code+blockbase32+rank16_per_L')
 print('rankstream32_block_base_loads_per_warp_max=2')
 print('rankstream32_cross_runtime_divmod=1')
-print('rankchunk32_model=chunk24+prefix8_per_code+blockbase16+rank16_per_L')
-print('rankchunk32_block_base_loads_per_warp_max=3')
+print('rankchunk32_model=heightalign32+chunk24+prefix8_per_meta+blockbase16+rank16_per_L')
+print('rankchunk32_block_base_loads_per_warp_max=2')
+print('rankchunk32_height_alignment=32')
 print('rankchunk32_cross_runtime_divmod=0')
 print('rankchunk32_cross_runtime_direct_lookup=0')
 print('fallback_structurally_unreachable=1')
