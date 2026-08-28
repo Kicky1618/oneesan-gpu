@@ -13,6 +13,9 @@ namespace oneesan::gridfp::reducedprod {
 #ifndef RP_RUNTIME_OWNER_FROM_BOUNDARIES
 #define RP_RUNTIME_OWNER_FROM_BOUNDARIES 1
 #endif
+#ifndef RP_RUNTIME_OWNER_RECIPROCAL
+#define RP_RUNTIME_OWNER_RECIPROCAL 1
+#endif
 #ifndef RP_RUNTIME_SUPPORT_RANK_SETBITS
 #define RP_RUNTIME_SUPPORT_RANK_SETBITS 1
 #endif
@@ -28,6 +31,8 @@ static_assert(RP_RUNTIME_BROADWORD_SUPPORT == 0 || RP_RUNTIME_BROADWORD_SUPPORT 
               "RP_RUNTIME_BROADWORD_SUPPORT must be 0 or 1");
 static_assert(RP_RUNTIME_OWNER_FROM_BOUNDARIES == 0 || RP_RUNTIME_OWNER_FROM_BOUNDARIES == 1,
               "RP_RUNTIME_OWNER_FROM_BOUNDARIES must be 0 or 1");
+static_assert(RP_RUNTIME_OWNER_RECIPROCAL == 0 || RP_RUNTIME_OWNER_RECIPROCAL == 1,
+              "RP_RUNTIME_OWNER_RECIPROCAL must be 0 or 1");
 static_assert(RP_RUNTIME_SUPPORT_RANK_SETBITS == 0 || RP_RUNTIME_SUPPORT_RANK_SETBITS == 1,
               "RP_RUNTIME_SUPPORT_RANK_SETBITS must be 0 or 1");
 static_assert(RP_RUNTIME_SECTOR_OFFSET_TABLE == 0 || RP_RUNTIME_SECTOR_OFFSET_TABLE == 1,
@@ -53,6 +58,23 @@ RP_RUNTIME_OUTER_GROUP_PREFIX[RP_RUNTIME_OUTER_GROUP_ENTRIES] = {
 };
 static_assert(sizeof(RP_RUNTIME_OUTER_GROUP_SIZE) == 396);
 static_assert(sizeof(RP_RUNTIME_OUTER_GROUP_PREFIX) == 792);
+
+// Production total dimensions and ceil(2^64/total) reciprocals for even W.
+// Owner midpoint assignment becomes one ordinary multiply plus multiply-high,
+// removing the per-component owner_begin[1..ngpu) boundary scan.
+__device__ __constant__ Rank64 RP_RUNTIME_OWNER_TOTAL[11] = {
+    632ULL,4451ULL,32427ULL,242413ULL,1849269ULL,14339193ULL,
+    112685373ULL,895517316ULL,7184644894ULL,58113695597ULL,
+    473397057701ULL
+};
+__device__ __constant__ Rank64 RP_RUNTIME_OWNER_TOTAL_MAGIC[11] = {
+    29187886192578405ULL,4144404420065054ULL,568869894646732ULL,
+    76096348272204ULL,9975154546856ULL,1286456223423ULL,
+    163701317950ULL,20598980885ULL,2567523427ULL,317425074ULL,
+    38966749ULL
+};
+static_assert(sizeof(RP_RUNTIME_OWNER_TOTAL) == 88);
+static_assert(sizeof(RP_RUNTIME_OWNER_TOTAL_MAGIC) == 88);
 
 struct GroupedComponentContextDevice {
     int owner = -1;
@@ -190,8 +212,23 @@ __device__ __forceinline__ bool runtime_outer_group_context_device(
 }
 
 __device__ __forceinline__ int runtime_owner_from_group_base_device(
-    Rank64 group_base, int W, int K, int ngpu, const Rank64* owner_begin
+    Rank64 group_base, Rank64 group, int W, int K, int ngpu,
+    const Rank64* owner_begin
 ) {
+#if RP_RUNTIME_OWNER_RECIPROCAL
+    if (W >= 8 && W <= RP_MAX_W && !(W & 1) && K == (W - 2) / 2) {
+        const int wi = (W - 8) >> 1;
+        const Rank64 total = RP_RUNTIME_OWNER_TOTAL[wi];
+        const Rank64 numerator =
+            (group_base + group / 2) * static_cast<Rank64>(ngpu);
+        Rank64 q = __umul64hi(numerator, RP_RUNTIME_OWNER_TOTAL_MAGIC[wi]);
+        const Rank64 product_lo = q * total;
+        const Rank64 product_hi = __umul64hi(q, total);
+        if (product_hi || product_lo > numerator) --q;
+        if (q >= static_cast<Rank64>(ngpu)) q = static_cast<Rank64>(ngpu - 1);
+        return static_cast<int>(q);
+    }
+#endif
 #if RP_RUNTIME_OWNER_FROM_BOUNDARIES
     if (W >= 8 && W <= RP_MAX_W && !(W & 1) && K == (W - 2) / 2) {
         int owner = 0;
@@ -223,7 +260,8 @@ __device__ __forceinline__ GroupedComponentContextDevice grouped_component_conte
     const Rank64 sr_outer = runtime_compact_support_rank_device(outer, O, outer_ones);
     const Rank64 group_base = prefix + sr_outer * group;
 
-    int owner = runtime_owner_from_group_base_device(group_base, W, K, ngpu, owner_begin);
+    int owner = runtime_owner_from_group_base_device(
+        group_base, group, W, K, ngpu, owner_begin);
     if (owner < 0) owner = weighted_outer_owner_device(outer, L, O, ngpu);
     return GroupedComponentContextDevice{
         owner, lo, L, outer_ones, group_base - owner_begin[owner]};
