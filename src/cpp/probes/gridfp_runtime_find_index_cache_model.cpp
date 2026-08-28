@@ -12,6 +12,9 @@
 
 namespace {
 
+constexpr std::uint8_t CACHE_COLLIDED = 0x80u;
+constexpr std::uint8_t CACHE_VALUE_MASK = 0x7fu;
+
 std::uint64_t cache_word(const Key& k) {
     return std::uint64_t(k.mate) | (k.blocked ? (1ULL << 63) : 0ULL);
 }
@@ -28,30 +31,41 @@ struct CacheStats {
     std::uint64_t exact_comparisons = 0;
     std::uint64_t definite_misses = 0;
     std::uint64_t direct_hits = 0;
+    std::uint64_t unique_bucket_misses = 0;
+    std::uint64_t collision_fallback_calls = 0;
     std::uint64_t fallback_hits = 0;
     std::uint64_t collision_misses = 0;
 };
 
 int cache_find_recent(
     const std::vector<Key>& a,
-    const std::array<int, 64>& latest,
+    const std::array<std::uint8_t, 64>& cache,
+    std::uint64_t occupancy,
     const Key& k,
     int buckets,
     CacheStats& st
 ) {
     ++st.calls;
     const int b = cache_hash(k, buckets);
-    const int candidate = latest[std::size_t(b)];
-    if (candidate < 0) {
+    const std::uint64_t bit = 1ULL << b;
+    if ((occupancy & bit) == 0) {
         ++st.definite_misses;
         return -1;
     }
-    if (candidate >= int(a.size())) fail("index-cache stale current-bucket index");
+    const std::uint8_t packed = cache[std::size_t(b)];
+    const int candidate = int(packed & CACHE_VALUE_MASK) - 1;
+    if (candidate < 0 || candidate >= int(a.size()))
+        fail("index-cache stale current-bucket index");
     ++st.exact_comparisons;
     if (same_key(a[std::size_t(candidate)], k)) {
         ++st.direct_hits;
         return candidate;
     }
+    if ((packed & CACHE_COLLIDED) == 0) {
+        ++st.unique_bucket_misses;
+        return -1;
+    }
+    ++st.collision_fallback_calls;
     for (int i = int(a.size()) - 1; i >= 0; --i) {
         if (i == candidate) continue;
         ++st.exact_comparisons;
@@ -62,6 +76,24 @@ int cache_find_recent(
     }
     ++st.collision_misses;
     return -1;
+}
+
+void cache_record(
+    std::array<std::uint8_t, 64>& cache,
+    std::uint64_t& occupancy,
+    const Key& k,
+    int index,
+    int buckets
+) {
+    const int b = cache_hash(k, buckets);
+    const std::uint64_t bit = 1ULL << b;
+    const bool collided = (occupancy & bit) != 0;
+    const std::uint8_t old = cache[std::size_t(b)];
+    const std::uint8_t flags = collided
+        ? std::uint8_t((old & CACHE_COLLIDED) | CACHE_COLLIDED)
+        : 0u;
+    cache[std::size_t(b)] = std::uint8_t(flags | std::uint8_t(index + 1));
+    occupancy |= bit;
 }
 
 struct CacheDiscoveryStats {
@@ -87,11 +119,11 @@ CacheDiscoveryStats simulate_cached_position(
         ++st.components;
         std::vector<Key> src{seed};
         std::vector<Key> dst;
-        std::array<int, 64> src_latest{};
-        std::array<int, 64> dst_latest{};
-        src_latest.fill(-1);
-        dst_latest.fill(-1);
-        src_latest[std::size_t(cache_hash(seed, buckets))] = 0;
+        std::array<std::uint8_t, 64> src_cache{};
+        std::array<std::uint8_t, 64> dst_cache{};
+        std::uint64_t src_occupancy = 0;
+        std::uint64_t dst_occupancy = 0;
+        cache_record(src_cache, src_occupancy, seed, 0, buckets);
         std::size_t cursor = 0;
         while (cursor < src.size()) {
             const Key s = src[cursor++];
@@ -99,19 +131,23 @@ CacheDiscoveryStats simulate_cached_position(
             for (const auto& [d, coef] : edge) {
                 if (!coef) continue;
                 ++st.edges;
-                if (cache_find_recent(dst, dst_latest, d, buckets, st.destination_find) >= 0)
+                if (cache_find_recent(
+                        dst, dst_cache, dst_occupancy, d, buckets,
+                        st.destination_find) >= 0)
                     continue;
                 const int di = int(dst.size());
                 dst.push_back(d);
-                dst_latest[std::size_t(cache_hash(d, buckets))] = di;
+                cache_record(dst_cache, dst_occupancy, d, di, buckets);
                 const Vec pre = inverse_reduced(d, W, p, reverse);
                 for (const auto& [x, a] : pre) {
                     if (!a) continue;
-                    if (cache_find_recent(src, src_latest, x, buckets, st.source_find) >= 0)
+                    if (cache_find_recent(
+                            src, src_cache, src_occupancy, x, buckets,
+                            st.source_find) >= 0)
                         continue;
                     const int si = int(src.size());
                     src.push_back(x);
-                    src_latest[std::size_t(cache_hash(x, buckets))] = si;
+                    cache_record(src_cache, src_occupancy, x, si, buckets);
                 }
             }
         }
@@ -128,6 +164,8 @@ void add_cache(CacheStats& a, const CacheStats& b) {
     a.exact_comparisons += b.exact_comparisons;
     a.definite_misses += b.definite_misses;
     a.direct_hits += b.direct_hits;
+    a.unique_bucket_misses += b.unique_bucket_misses;
+    a.collision_fallback_calls += b.collision_fallback_calls;
     a.fallback_hits += b.fallback_hits;
     a.collision_misses += b.collision_misses;
 }
@@ -187,6 +225,10 @@ int main(int argc, char** argv) {
             const std::uint64_t direct = c.destination_find.direct_hits + c.source_find.direct_hits;
             const std::uint64_t fallback = c.destination_find.fallback_hits + c.source_find.fallback_hits;
             const std::uint64_t definite = c.destination_find.definite_misses + c.source_find.definite_misses;
+            const std::uint64_t unique_miss = c.destination_find.unique_bucket_misses +
+                                              c.source_find.unique_bucket_misses;
+            const std::uint64_t fallback_calls = c.destination_find.collision_fallback_calls +
+                                                 c.source_find.collision_fallback_calls;
             std::cout << "W=" << W
                       << " buckets=" << buckets[i]
                       << " components=" << recent.components
@@ -198,11 +240,16 @@ int main(int argc, char** argv) {
                       << " direct_hit_rate=" << (calls ? double(direct) / double(calls) : 0.0)
                       << " fallback_hit_rate=" << (calls ? double(fallback) / double(calls) : 0.0)
                       << " definite_miss_rate=" << (calls ? double(definite) / double(calls) : 0.0)
+                      << " unique_bucket_miss_rate=" << (calls ? double(unique_miss) / double(calls) : 0.0)
+                      << " collision_fallback_rate=" << (calls ? double(fallback_calls) / double(calls) : 0.0)
                       << " max_pairs=" << c.max_sources
                       << " traversal_exact=1\n";
         }
     }
     std::cout << "ALL_OK runtime_find_index_cache_model=1"
-              << " hash=xor_shift_7_14 latest_index=1 stale_bytes_guarded_by_occupancy=1\n";
+              << " hash=xor_shift_7_14 latest_index=1"
+              << " collision_state=packed_high_bit"
+              << " extra_collision_registers=0"
+              << " stale_bytes_guarded_by_occupancy=1\n";
     return 0;
 }
