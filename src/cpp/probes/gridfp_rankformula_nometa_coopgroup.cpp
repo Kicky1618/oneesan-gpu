@@ -3,7 +3,7 @@
 #undef main
 
 struct CoopStats {
-    uint64_t codes=0,blocks=0,per_lane_steps=0,unique_steps=0;
+    uint64_t codes=0,blocks=0,per_lane_steps=0,unique_steps=0,cooperative_exact=0;
     uint32_t max_groups=0;
 };
 
@@ -19,12 +19,32 @@ static CoopStats measure_coop(const Factors& f,const std::vector<uint8_t>& owner
             if(v.empty())continue;z.codes+=rank;
             uint32_t gi=0,nb=(rank+uint32_t(B)-1u)/uint32_t(B);z.blocks+=nb;
             for(uint32_t b=0;b<nb;++b){
-                uint32_t lo=b*uint32_t(B),hi=std::min(rank,lo+uint32_t(B));
+                const uint32_t lo=b*uint32_t(B),hi=std::min(rank,lo+uint32_t(B));
                 while(gi+1<v.size()&&lo>=v[gi].start+v[gi].count)++gi;
                 uint32_t last=gi;
                 while(last+1<v.size()&&v[last+1].start<hi)++last;
-                uint32_t gb=last-gi+1u;z.max_groups=std::max(z.max_groups,gb);z.unique_steps+=gb-1u;
-                for(uint32_t r=lo;r<hi;++r){uint32_t q=gi;while(q+1<v.size()&&r>=v[q].start+v[q].count){++q;++z.per_lane_steps;}if(r<v[q].start||r>=v[q].start+v[q].count)return CoopStats{};}
+                const uint32_t gb=last-gi+1u;z.max_groups=std::max(z.max_groups,gb);z.unique_steps+=gb-1u;
+
+                std::vector<uint32_t> expected(hi-lo),got(hi-lo,0xffffffffu);
+                for(uint32_t r=lo;r<hi;++r){
+                    uint32_t q=gi;
+                    while(q+1<v.size()&&r>=v[q].start+v[q].count){++q;++z.per_lane_steps;}
+                    if(r<v[q].start||r>=v[q].start+v[q].count)return CoopStats{};
+                    expected[r-lo]=q;
+                }
+
+                uint32_t cursor=gi;
+                std::vector<uint8_t> resolved(hi-lo,0);
+                for(int round=0;round<B;++round){
+                    bool any_need=false;
+                    for(uint32_t r=lo;r<hi;++r){
+                        const bool need=r>=v[cursor].start+v[cursor].count;
+                        if(!resolved[r-lo]&&!need){got[r-lo]=cursor;resolved[r-lo]=1;}
+                        any_need|=need;
+                    }
+                    if(round+1<B&&any_need)++cursor;
+                }
+                for(uint32_t i=0;i<hi-lo;++i){if(!resolved[i]||got[i]!=expected[i])return CoopStats{};++z.cooperative_exact;}
             }
         }
     }
@@ -37,7 +57,7 @@ static void prove_subgroups(int B){
             const uint32_t src=lane&~uint32_t(B-1);
             const uint32_t full=((1u<<B)-1u)<<src;
             const uint32_t sub=full&((active==32)?0xffffffffu:((1u<<active)-1u));
-            if(src>=active||((sub>>lane)&1u)==0u||((sub>>src)&1u)==0u)return std::exit(20);
+            if(src>=active||((sub>>lane)&1u)==0u||((sub>>src)&1u)==0u)std::exit(20);
         }
     }
 }
@@ -48,6 +68,7 @@ int main(){
     prove_subgroups(4);prove_subgroups(8);prove_subgroups(16);
     const uint64_t l4=2*b4.blocks+b4.unique_steps,l8=2*b8.blocks+b8.unique_steps,l16=2*b16.blocks+b16.unique_steps;
     if(b4.codes!=1201917ull||b8.codes!=b4.codes||b16.codes!=b4.codes||
+       b4.cooperative_exact!=b4.codes||b8.cooperative_exact!=b8.codes||b16.cooperative_exact!=b16.codes||
        b4.per_lane_steps!=104346ull||b8.per_lane_steps!=243417ull||b16.per_lane_steps!=521034ull||
        b4.unique_steps!=52183ull||b8.unique_steps!=60845ull||b16.unique_steps!=65159ull||
        l4!=653231ull||l8!=361431ull||l16!=215509ull||
@@ -58,6 +79,7 @@ int main(){
                  <<" cooperative_successor_loads="<<z.unique_steps
                  <<" cooperative_table_loads="<<loads
                  <<" cooperative_loads_per_code="<<double(loads)/double(z.codes)
+                 <<" cooperative_exact="<<z.cooperative_exact
                  <<" max_groups_per_block="<<z.max_groups<<'\n';
     };
     emit(4,b4,l4);emit(8,b8,l8);emit(16,b16,l16);
@@ -65,6 +87,6 @@ int main(){
              <<" block8_old_warpshare_loads=544003"
              <<" block8_cooperative_loads=361431"
              <<" block8_successor_reduction_fraction="<<1.0-double(b8.unique_steps)/double(b8.per_lane_steps)
-             <<" fixed_rounds_block8=7 subgroup_prefix_safe=1\n";
+             <<" fixed_rounds_block8=7 subgroup_prefix_safe=1 cooperative_exact_all=1\n";
     return 0;
 }
