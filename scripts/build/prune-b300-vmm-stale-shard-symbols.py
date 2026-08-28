@@ -4,6 +4,13 @@ from __future__ import annotations
 import argparse
 from pathlib import Path
 
+FAST_MACRO_OLD='''#ifndef B300_FAST_SHARD_ADDRESS8
+#define B300_FAST_SHARD_ADDRESS8 0
+#endif
+static_assert(B300_FAST_SHARD_ADDRESS8==0||B300_FAST_SHARD_ADDRESS8==1,"B300_FAST_SHARD_ADDRESS8 must be 0 or 1");
+'''
+FAST_MACRO_NEW=''
+
 WIDTH_NGPU_OLD='__constant__ int D_MAIN_W,D_BLOCK_W,D_NGPU;'
 WIDTH_NGPU_NEW=''
 
@@ -14,6 +21,11 @@ __constant__ Count* D_BLOCK_VBASE;
 __constant__ Code D_MAIN_CHUNK,D_BLOCK_CHUNK;'''
 SHARD_SYMBOLS_NEW='''__constant__ Count* D_MAIN_VBASE;
 __constant__ Count* D_BLOCK_VBASE;'''
+
+SHARD_HELPER_OLD='''struct ShardAddress8{int owner;Code local;};
+__device__ __forceinline__ ShardAddress8 shard_address8(Code g,Code chunk){int o=0;Code c4=chunk<<2;if(g>=c4){g-=c4;o|=4;}Code c2=chunk<<1;if(g>=c2){g-=c2;o|=2;}if(g>=chunk){g-=chunk;o|=1;}return{o,g};}
+'''
+SHARD_HELPER_NEW=''
 
 INTERVAL_SIG_OLD='''static std::vector<PeerInterval> make_peer_intervals(const GroupSpec&s,Code chunk,int ng,bool& use_interval){
     (void)chunk;(void)ng;'''
@@ -77,8 +89,10 @@ def main()->None:
     ap.add_argument('out',type=Path)
     a=ap.parse_args()
     text=a.src.read_text()
+    text=once(text,FAST_MACRO_OLD,FAST_MACRO_NEW,'legacy shard-address macro')
     text=once(text,WIDTH_NGPU_OLD,WIDTH_NGPU_NEW,'stale width/ngpu declarations')
     text=once(text,SHARD_SYMBOLS_OLD,SHARD_SYMBOLS_NEW,'stale shard symbol declarations')
+    text=once(text,SHARD_HELPER_OLD,SHARD_HELPER_NEW,'legacy ShardAddress8 helper')
     text=once(text,INTERVAL_SIG_OLD,INTERVAL_SIG_NEW,'shard-free interval signature')
     text=once(text,PREPARE_OLD,PREPARE_NEW,'shard-free prepare_group')
     text=once(text,COUNTS_OLD,COUNTS_NEW,'remove logical shard chunks')
@@ -89,15 +103,15 @@ def main()->None:
     text=once(text,SCHEDULE_CALL_OLD,SCHEDULE_CALL_NEW,'shard-free prepare_group call')
     text=once(text,INIT_STATE_OLD,INIT_STATE_NEW,'direct VMM initial state')
     text=once(text,FINAL_STATE_OLD,FINAL_STATE_NEW,'direct VMM final state')
-    for token in ('D_MAIN_PTR','D_BLOCK_PTR','D_MAIN_CHUNK','D_BLOCK_CHUNK','D_NGPU','D_MAIN_W','D_BLOCK_W'):
+    for token in ('B300_FAST_SHARD_ADDRESS8','ShardAddress8','shard_address8(','D_MAIN_PTR','D_BLOCK_PTR','D_MAIN_CHUNK','D_BLOCK_CHUNK','D_NGPU','D_MAIN_W','D_BLOCK_W'):
         if token in text:
-            raise SystemExit(f'stale VMM symbol remains after prune: {token}')
+            raise SystemExit(f'stale VMM symbol/scaffolding remains after prune: {token}')
     for token in ('Code mc=','bc=(blockN+ng-1)/ng','Count*mp[MAXGPU]','*bp[MAXGPU]','std::vector<Code>ml','ml[d]=','bl[d]=','int io=int(ig/mc)','int fo=int(fg/mc)','prepare_group(W,pw.wp,g,mc,bc,ng)','make_peer_intervals(pg.ms,mc,ng'):
         if token in text:
             raise SystemExit(f'logical shard artifact remains after prune: {token}')
     a.out.parent.mkdir(parents=True,exist_ok=True)
     a.out.write_text(text)
-    print(f'pruned {a.out} stale_shard_symbols=0 stale_shard_symbol_copies=0 stale_shard_init_args=0 stale_width_symbols=0 per_group_width_symbol_copies=0 logical_shard_chunks=0 logical_shard_views=0 host_owner_div=0 direct_vmm_symbols=2')
+    print(f'pruned {a.out} legacy_shard_address_scaffolding=0 stale_shard_symbols=0 stale_shard_symbol_copies=0 stale_shard_init_args=0 stale_width_symbols=0 per_group_width_symbol_copies=0 logical_shard_chunks=0 logical_shard_views=0 host_owner_div=0 direct_vmm_symbols=2')
 
 if __name__=='__main__':
     main()
