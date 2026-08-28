@@ -63,6 +63,7 @@ GRIDFP_RUNTIME_AB_BUILD_TOKENS=(
   runtime_support_unrank_early_exit=1
   runtime_broadword_support=1
   runtime_owner_from_boundaries=1
+  runtime_owner_reciprocal=1
   runtime_owner_fixed54=0
   runtime_owner_fixed52=1
   runtime_owner_u32limb=0
