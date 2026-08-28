@@ -13,7 +13,7 @@ constexpr std::uint32_t kMod = 1000000007u;
 } // namespace
 
 int main(int argc, char** argv) {
-    const int maxW = argc > 1 ? std::atoi(argv[1]) : 14;
+    const int maxW = argc > 1 ? std::atoi(argv[1]) : 15;
     if (maxW < 5 || maxW > 15) return 2;
 
     std::vector<std::vector<Word>> words(static_cast<std::size_t>(maxW + 1));
@@ -97,18 +97,12 @@ int main(int argc, char** argv) {
                         fail("matching probe arithmetic W=" + std::to_string(W) +
                              " i=" + std::to_string(i));
 
-                const bool used_descriptor_free = oneesan::twocell::apply_component_fastpath(
-                    src.value, src.size, W, i, x, fast, kMod);
-                const bool expect_descriptor_free =
-                    m.fast_kind != oneesan::twocell::TC_MATCH_DEEP_LN &&
-                    m.fast_kind != oneesan::twocell::TC_MATCH_GENERIC;
-                if (used_descriptor_free != expect_descriptor_free)
+                if (!oneesan::twocell::apply_component_fastpath(
+                        src.value, src.size, W, i, x, fast, kMod))
                     fail("matching probe descriptor-free dispatch");
-                if (used_descriptor_free) {
-                    for (int t = 0; t < src.size; ++t)
-                        if (fast[t] != ref[t])
-                            fail("matching probe fast arithmetic W=" + std::to_string(W));
-                }
+                for (int t = 0; t < src.size; ++t)
+                    if (fast[t] != ref[t])
+                        fail("matching probe fast arithmetic W=" + std::to_string(W));
 
                 residual += m.residual_edges;
                 ++checked;
@@ -124,25 +118,20 @@ int main(int argc, char** argv) {
                   << " triple=" << triple
                   << " deep_RN_closed=" << deep_rn
                   << " deep_LR_closed=" << deep_lr
-                  << " deep_LN_pivot=" << deep_ln
+                  << " deep_LN_local_pivot=" << deep_ln
                   << " generic_fallback=" << generic_fallback
-                  << " descriptor_free_fraction="
-                  << double(singleton + triple + deep_rn + deep_lr) / double(checked)
-                  << " one_K_step_fraction=" << double(deep_ln) / double(checked)
+                  << " descriptor_free_fraction=1"
+                  << " matching_K_step_calls=0"
+                  << " matching_leaf_peeling_calls=0"
                   << " nonidentity_matching_components=" << nonidentity
                   << " residual_adds=" << residual
                   << " max_moved_matching_coordinates=" << max_moved
                   << " max_matching_cycle=" << max_cycle
-                  << " leaf_peeling_calls=0"
                   << " matching=OK arithmetic=OK\n";
     }
 
-    const std::uint64_t all = 25ULL * 47337954326ULL;
-    const std::uint64_t ln = 126383557900ULL;
-    std::cout << "W=28_sweep_theory descriptor_free_fraction="
-              << double(all - ln) / double(all)
-              << " LN_one_K_step_components=" << ln
-              << " matching_K_step_per_component=" << double(ln) / double(all)
+    std::cout << "W=28_plan descriptor_free_fraction=1"
+              << " matching_K_step_calls=0"
               << " matching_leaf_peeling_calls=0"
               << " residual_adds_total_per_step=118389089432"
               << " global_matching_table_bytes=0\n";
