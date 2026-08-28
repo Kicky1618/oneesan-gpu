@@ -28,7 +28,7 @@ if ! diff -u "$tmp_build" "$tmp_env"; then
 fi
 
 count="$(wc -l <"$tmp_build" | tr -d ' ')"
-[[ "$count" -ge 47 ]] || {
+[[ "$count" -ge 48 ]] || {
   echo "runtime A/B audit extracted suspiciously few knobs: $count" >&2
   exit 4
 }
@@ -37,6 +37,7 @@ for required in \
   RUNTIME_TURN_DIRECT_HIGH_COMPRESS_STEP \
   RUNTIME_TURN_DIRECT_LOW_COMPRESS_STEP \
   RUNTIME_TURN_DIRECT_HIGH_COMPRESS_INVERSE \
+  RUNTIME_TURN_DIRECT_LOW_EXPAND_INVERSE \
   RUNTIME_FIND_INDEX_BUCKETS \
   RUNTIME_FIND_INDEX_WAYS \
   RUNTIME_FIND_INDEX_CACHE; do
