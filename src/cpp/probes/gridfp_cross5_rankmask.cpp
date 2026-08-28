@@ -12,6 +12,9 @@ static constexpr int MAX_RUNTIME_DEPTH = 15;
 static constexpr int MAX_FACTOR = 14;
 static constexpr uint8_t MASK_MASK = 0x1fu;
 static constexpr int HALT_SHIFT = 5;
+static constexpr uint8_t META_LCOUNT_MASK = 0x07u;
+static constexpr int META_DELTA_SHIFT = 3;
+static constexpr int META_DELTA_BIAS = 5;
 
 static constexpr int pow3(int n) { return n ? 3 * pow3(n - 1) : 1; }
 
@@ -64,11 +67,18 @@ static constexpr uint8_t rank_entry(int key, int input_state) {
     uint8_t rankmask = 0;
     for (int pos = 0; pos < CHUNK; ++pos) {
         if (((mask >> pos) & 1u) == 0u) continue;
-        const uint8_t higher = uint8_t(lm & uint8_t(~uint8_t((uint8_t(1u << (pos + 1))) - 1u)));
+        const uint8_t higher = uint8_t(
+            lm & uint8_t(~uint8_t((uint8_t(1u << (pos + 1))) - 1u)));
         const uint8_t ordinal = popcount5(higher);
         rankmask = uint8_t(rankmask | uint8_t(1u << ordinal));
     }
     return uint8_t(rankmask | (e & uint8_t(1u << HALT_SHIFT)));
+}
+
+static constexpr uint8_t chunk_meta(int key) {
+    return uint8_t(
+        popcount5(lmask(key)) |
+        (uint8_t(int(cross5_delta(key)) + META_DELTA_BIAS) << META_DELTA_SHIFT));
 }
 
 struct Walk {
@@ -116,8 +126,9 @@ static Walk ranked(uint32_t key, int len, int input_state, int& max_state) {
         if (z.halt) {
             z.state = 1;
         } else {
-            lbase += popcount5(lmask(int(chunk)));
-            z.state += int(cross5_delta(int(chunk)));
+            const uint8_t meta = chunk_meta(int(chunk));
+            lbase += int(meta & META_LCOUNT_MASK);
+            z.state += int(meta >> META_DELTA_SHIFT) - META_DELTA_BIAS;
         }
         remaining = start;
     }
@@ -141,6 +152,14 @@ int main() {
     uint64_t composed_cases = 0;
     int max_state = 0;
 
+    for (int key = 0; key < KEYN; ++key) {
+        const uint8_t meta = chunk_meta(key);
+        const int got_lcount = int(meta & META_LCOUNT_MASK);
+        const int got_delta = int(meta >> META_DELTA_SHIFT) - META_DELTA_BIAS;
+        if (got_lcount != int(popcount5(lmask(key))) || got_delta != int(cross5_delta(key)))
+            return 6;
+    }
+
     for (int s = 1; s < STATES; ++s) {
         for (int key = 0; key < KEYN; ++key) {
             const uint8_t e = cross5_entry(key, s);
@@ -151,11 +170,14 @@ int main() {
             uint8_t expected = 0;
             for (int pos = 0; pos < CHUNK; ++pos) {
                 if (((mask >> pos) & 1u) == 0u) continue;
-                const uint8_t higher = uint8_t(lm & uint8_t(~uint8_t((uint8_t(1u << (pos + 1))) - 1u)));
+                const uint8_t higher = uint8_t(
+                    lm & uint8_t(~uint8_t((uint8_t(1u << (pos + 1))) - 1u)));
                 expected = uint8_t(expected | uint8_t(1u << popcount5(higher)));
             }
             const uint8_t got = rank_entry(key, s);
-            if ((got & MASK_MASK) != expected || ((got ^ e) & uint8_t(1u << HALT_SHIFT))) return 5;
+            if ((got & MASK_MASK) != expected ||
+                ((got ^ e) & uint8_t(1u << HALT_SHIFT)))
+                return 5;
             ++table_cases;
         }
     }
@@ -185,8 +207,10 @@ int main() {
               << " max_table_state=" << max_state
               << " max_factor=" << MAX_FACTOR
               << " rankmask_bytes=" << STATES * KEYN
-              << " lcount_bytes=" << KEYN
+              << " meta_bytes=" << KEYN
+              << " constant_loads_per_chunk=2"
               << " ordinal_popcount_runtime=0"
+              << " meta_lcount_exact=1 meta_delta_exact=1"
               << " candidate_set_exact=1 state_exact=1 halt_exact=1\n";
     return 0;
 }
