@@ -15,8 +15,8 @@
 #ifndef B300_SHARD_OWNER_MODE
 #define B300_SHARD_OWNER_MODE 0
 #endif
-static_assert(B300_SHARD_OWNER_MODE >= 0 && B300_SHARD_OWNER_MODE <= 4,
-              "B300_SHARD_OWNER_MODE must be 0..4");
+static_assert(B300_SHARD_OWNER_MODE >= 0 && B300_SHARD_OWNER_MODE <= 5,
+              "B300_SHARD_OWNER_MODE must be 0..5");
 
 namespace {
 
@@ -67,6 +67,41 @@ __device__ __forceinline__ int u32limb_owner(Code g) {
     return int(high64 >> MAIN_HIGH_SHIFT);
 }
 
+struct U32Product { std::uint32_t lo, hi; };
+
+__device__ __forceinline__ U32Product mul45_shiftadd(std::uint32_t x) {
+    std::uint32_t lo = x << 5;
+    std::uint32_t hi = x >> 27;
+    std::uint32_t add = x << 3;
+    std::uint32_t old = lo;
+    lo += add;
+    hi += (x >> 29) + std::uint32_t(lo < old);
+    add = x << 2;
+    old = lo;
+    lo += add;
+    hi += (x >> 30) + std::uint32_t(lo < old);
+    old = lo;
+    lo += x;
+    hi += std::uint32_t(lo < old);
+    return {lo, hi};
+}
+
+__device__ __forceinline__ int u32shift_owner(Code g) {
+    const std::uint32_t a0 = std::uint32_t(g);
+    const std::uint32_t a1 = std::uint32_t(g >> 32);
+    const std::uint32_t p00_hi = __umulhi(a0, MAIN_MAGIC_LO);
+    const U32Product p01 = mul45_shiftadd(a0);
+    const std::uint32_t p10_lo = a1 * MAIN_MAGIC_LO;
+    const std::uint32_t p10_hi = __umulhi(a1, MAIN_MAGIC_LO);
+    const std::uint32_t p11 = (a1 << 5) + (a1 << 3) + (a1 << 2) + a1;
+    const std::uint32_t s0 = p00_hi + p01.lo;
+    std::uint32_t carry = std::uint32_t(s0 < p00_hi);
+    const std::uint32_t s1 = s0 + p10_lo;
+    carry += std::uint32_t(s1 < s0);
+    const std::uint32_t high64 = p01.hi + p10_hi + p11 + carry;
+    return int(high64 >> MAIN_HIGH_SHIFT);
+}
+
 __device__ __forceinline__ ShardAddress8 mulhi_mul_address(Code g) {
     const int owner = mulhi_owner(g);
     return {owner, g - Code(owner) * MAIN_CHUNK};
@@ -87,6 +122,11 @@ __device__ __forceinline__ ShardAddress8 u32limb_mask_address(Code g) {
     return {owner, g - masked_base(owner)};
 }
 
+__device__ __forceinline__ ShardAddress8 u32shift_mask_address(Code g) {
+    const int owner = u32shift_owner(g);
+    return {owner, g - masked_base(owner)};
+}
+
 __device__ __forceinline__ ShardAddress8 candidate_address(Code g) {
 #if B300_SHARD_OWNER_MODE == 0
     return shard_address8(g, MAIN_CHUNK);
@@ -96,8 +136,10 @@ __device__ __forceinline__ ShardAddress8 candidate_address(Code g) {
     return mulhi_table_address(g);
 #elif B300_SHARD_OWNER_MODE == 3
     return mulhi_mask_address(g);
-#else
+#elif B300_SHARD_OWNER_MODE == 4
     return u32limb_mask_address(g);
+#else
+    return u32shift_mask_address(g);
 #endif
 }
 
@@ -176,7 +218,7 @@ int main(int argc, char** argv) {
     ck(cudaMalloc(&d_owner, size_t(n) * sizeof(int)), "alloc owner");
     ck(cudaMalloc(&d_local, size_t(n) * sizeof(Code)), "alloc local");
     ck(cudaMalloc(&d_out, size_t(n) * sizeof(Code)), "alloc out");
-    ck(cudaMemcpy(d_index, h_index.data(), size_t(n) * sizeof(Code),
+    ck(cudaMemcpy(d_index, h_index.data(), size_t(n) * sizeof(Code)),
                   cudaMemcpyHostToDevice), "copy index");
 
     exact_kernel<<<blocks, threads>>>(d_index, d_owner, d_local, n);
