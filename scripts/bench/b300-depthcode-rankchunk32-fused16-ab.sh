@@ -55,7 +55,7 @@ mkdir -p "$(dirname "$RESULT")" "$LOGDIR"
 bash "$ONEESAN_ROOT/scripts/bench/rankchunk32-warpbase-proof.sh"
 if [[ "$RUN_SELFTEST" == 1 ]]; then
   for fused in 0 1; do
-    RANKCHUNK32_FUSED16="$fused" RANKCHUNK32_ONESHFL="$RANKCHUNK32_ONESHFL" \
+    RUN_LAYOUT_PROOF=0 RANKCHUNK32_FUSED16="$fused" RANKCHUNK32_ONESHFL="$RANKCHUNK32_ONESHFL" \
       RANKSTREAM_LUT_LOAD="$RANKSTREAM_LUT_LOAD" PM_ACCUM="$PM_ACCUM" \
       DECODE_LOAD="$DEPTHCODE_DECODE_LOAD" \
       bash "$ONEESAN_ROOT/scripts/bench/pattern10-depthcode-rankchunk32-cross5-selftest.sh" \
@@ -152,6 +152,10 @@ if all(q[x][m] != 'NA' for x in ('0', '1') for m in ('forward_high_s', 'reverse_
     new = float(q['1']['forward_high_s']) + float(q['1']['reverse_high_s'])
     print(f'rankchunk32_fused16_total_high_speedup={old / new:.6f}x')
 stride = 256 if load_mode == 'ldg256' else 243
+print('rankchunk32_chunk_bits=23')
+print('rankchunk32_prefix_bits=9')
+print('rankchunk32_block=32')
+print('rankchunk32_height_padding_entries=0')
 print(f'rankchunk32_fused16_state_stride_entries={stride}')
 print(f'rankchunk32_fused16_active_lut_bytes={26 * stride * 2}')
 print('rankchunk32_separate_logical_lut_bytes=6561')
