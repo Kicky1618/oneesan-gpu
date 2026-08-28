@@ -9,7 +9,7 @@ static_assert(LOW_LUT_K <= 14, "rankformula nometa4 assumes LOW_LUT_K<=14");
 static_assert(P10DC_RANKFORMULA_NOMETA4_HEIGHTS <= uint32_t(MAXW + 2));
 
 // group64: [15:0] local group start, [29:16] support mask,
-// [47:32] signed (source_base-dest_base).  One sentinel is appended per height.
+// [47:32] signed (source_base-dest_base), [63:48] group count.
 __constant__ uint64_t* D_P10DC_LOW_RANKFORMULA_NOMETA4_GROUP64;
 __constant__ uint16_t* D_P10DC_LOW_RANKFORMULA_NOMETA4_BLOCK16;
 __constant__ uint32_t D_P10DC_LOW_RANKFORMULA_NOMETA4_GOFF[MAXW + 2];
@@ -19,10 +19,13 @@ __device__ __forceinline__ uint32_t p10dc_rankformula_nometa4_group_start(uint64
     return uint32_t(x) & 0xffffu;
 }
 __device__ __forceinline__ uint32_t p10dc_rankformula_nometa4_group_mask(uint64_t x) {
-    return (uint32_t(x >> 16) & (P10DC_RANKFORMULA_NOMETA4_MASKS - 1u));
+    return uint32_t(x >> 16) & (P10DC_RANKFORMULA_NOMETA4_MASKS - 1u);
 }
 __device__ __forceinline__ int p10dc_rankformula_nometa4_group_delta(uint64_t x) {
     return int(int16_t(uint16_t(x >> 32)));
+}
+__device__ __forceinline__ uint32_t p10dc_rankformula_nometa4_group_count(uint64_t x) {
+    return uint32_t(uint16_t(x >> 48));
 }
 
 struct P10DCRankFormulaNometa4Resolved {
@@ -39,11 +42,11 @@ p10dc_low_rankformula_nometa4_resolve(uint32_t h, uint32_t rank) {
     uint64_t e = D_P10DC_LOW_RANKFORMULA_NOMETA4_GROUP64[gi];
 #pragma unroll
     for (int k = 0; k < int(P10DC_RANKFORMULA_NOMETA4_BLOCK - 1u); ++k) {
-        const uint64_t n = D_P10DC_LOW_RANKFORMULA_NOMETA4_GROUP64[gi + 1u];
-        if (rank >= p10dc_rankformula_nometa4_group_start(n)) {
-            ++gi;
-            e = n;
-        }
+        const uint32_t start = p10dc_rankformula_nometa4_group_start(e);
+        const uint32_t count = p10dc_rankformula_nometa4_group_count(e);
+        if (rank < start + count) break;
+        ++gi;
+        e = D_P10DC_LOW_RANKFORMULA_NOMETA4_GROUP64[gi];
     }
     return P10DCRankFormulaNometa4Resolved{
         p10dc_rankformula_nometa4_group_mask(e),
@@ -67,12 +70,14 @@ struct BucketFusedDirectHighRowsRankFormulaNometa4Tables
         return mask;
     }
 
-    static uint64_t pack_group(uint32_t start, uint32_t mask, int delta) {
+    static uint64_t pack_group(uint32_t start, uint32_t mask, int delta, uint32_t count) {
         if (start >= 65536u || mask >= P10DC_RANKFORMULA_NOMETA4_MASKS ||
-            delta < -32768 || delta > 32767) std::exit(760);
+            delta < -32768 || delta > 32767 || count == 0u || count >= 65536u)
+            std::exit(760);
         return uint64_t(uint16_t(start)) |
                (uint64_t(mask) << 16) |
-               (uint64_t(uint16_t(int16_t(delta))) << 32);
+               (uint64_t(uint16_t(int16_t(delta))) << 32) |
+               (uint64_t(uint16_t(count)) << 48);
     }
 
     void bind_owner(
@@ -132,19 +137,22 @@ struct BucketFusedDirectHighRowsRankFormulaNometa4Tables
         size_t real_groups = 0;
         int min_delta = 32767, max_delta = -32768;
         size_t delta_rows = 0;
-        uint32_t max_groups_per_block = 0, max_locator_steps = 0;
+        uint32_t max_groups_per_block = 0, max_locator_steps = 0, max_group_count = 0;
+        uint64_t locator_steps_sum = 0, locator_codes = 0;
 
         for (uint32_t h = 0; h < uint32_t(MAXW + 2); ++h) {
             goff[h] = uint32_t(groups.size());
             boff[h] = uint32_t(blocks.size());
             if (h >= P10DC_RANKFORMULA_NOMETA4_HEIGHTS) continue;
             const auto& v = gh[h];
-            if (v.empty()) {
-                groups.push_back(pack_group(0u, 0u, 0));
-                continue;
-            }
+            if (v.empty()) continue;
             const uint32_t gbase = uint32_t(groups.size());
-            for (const G& z : v) {
+            for (uint32_t q = 0; q < uint32_t(v.size()); ++q) {
+                const G& z = v[q];
+                const uint32_t end = q + 1u < uint32_t(v.size())
+                    ? uint32_t(v[q + 1u].start) : ranks[h];
+                const uint32_t count = end - uint32_t(z.start);
+                max_group_count = std::max(max_group_count, count);
                 int delta = 0;
                 if (h + 2u < P10DC_RANKFORMULA_NOMETA4_HEIGHTS) {
                     const int32_t a = bref(h, z.mask);
@@ -156,11 +164,9 @@ struct BucketFusedDirectHighRowsRankFormulaNometa4Tables
                         ++delta_rows;
                     }
                 }
-                groups.push_back(pack_group(z.start, z.mask, delta));
+                groups.push_back(pack_group(z.start, z.mask, delta, count));
                 ++real_groups;
             }
-            // Sentinel makes the unrolled next-group tests safe for the final block.
-            groups.push_back(pack_group(ranks[h], 0u, 0));
 
             uint32_t gi = 0;
             const uint32_t nb = (ranks[h] + P10DC_RANKFORMULA_NOMETA4_BLOCK - 1u) /
@@ -180,6 +186,15 @@ struct BucketFusedDirectHighRowsRankFormulaNometa4Tables
                 while (last + 1u < v.size() && uint32_t(v[last + 1u].start) < hi) ++last;
                 max_groups_per_block = std::max(max_groups_per_block, last - gi + 1u);
                 max_locator_steps = std::max(max_locator_steps, last - gi);
+                for (uint32_t r = lo; r < hi; ++r) {
+                    uint32_t q = gi, steps = 0;
+                    while (q + 1u < v.size() && r >= uint32_t(v[q + 1u].start)) {
+                        ++q;
+                        ++steps;
+                    }
+                    locator_steps_sum += steps;
+                    ++locator_codes;
+                }
             }
         }
         if (max_locator_steps > P10DC_RANKFORMULA_NOMETA4_BLOCK - 1u ||
@@ -233,8 +248,6 @@ struct BucketFusedDirectHighRowsRankFormulaNometa4Tables
                               boff.data(), boff.size() * sizeof(uint32_t)),
            "p10dc rankformula nometa4 boff");
 
-        // Parent prekey is only used to reuse the authoritative fixed-owner bind;
-        // no per-code metadata remains resident in this backend.
         if (low_prekey) cudaFree(low_prekey);
         low_prekey = nullptr;
         low_prekey_count = 0;
@@ -245,6 +258,8 @@ struct BucketFusedDirectHighRowsRankFormulaNometa4Tables
 
         const size_t group_bytes = groups.size() * sizeof(uint64_t);
         const size_t block_bytes = blocks.size() * sizeof(uint16_t);
+        const double avg_steps = locator_codes
+            ? double(locator_steps_sum) / double(locator_codes) : 0.0;
         std::cerr << "p10dc_low_rankformula_nometa4 fixed_owner=" << fixed
                   << " real_groups=" << real_groups
                   << " group_entries=" << groups.size()
@@ -256,6 +271,9 @@ struct BucketFusedDirectHighRowsRankFormulaNometa4Tables
                   << " block_size=" << P10DC_RANKFORMULA_NOMETA4_BLOCK
                   << " max_groups_per_block=" << max_groups_per_block
                   << " max_locator_steps=" << max_locator_steps
+                  << " avg_locator_steps=" << avg_steps
+                  << " avg_group_loads_model=" << (1.0 + avg_steps)
+                  << " max_group_count=" << max_group_count
                   << " delta_rows=" << delta_rows
                   << " min_base_delta=" << (delta_rows ? min_delta : 0)
                   << " max_base_delta=" << (delta_rows ? max_delta : 0)
