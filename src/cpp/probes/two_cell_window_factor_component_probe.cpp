@@ -30,9 +30,13 @@ Word materialize_support_primitive(
     return w;
 }
 
-Rank total_primitive_lut_entries(const oneesan::twocell::RankTables& tables) {
+Rank total_label_primitive_lut_entries(
+    int W,
+    const oneesan::twocell::RankTables& tables
+) {
     Rank z = 0;
-    for (int occupied = 1; occupied <= oneesan::twocell::kMaxWidth - 1; occupied += 2)
+    const int label_len = W - 2;
+    for (int occupied = 1; occupied <= label_len; occupied += 2)
         z += tables.primitive[occupied][1];
     return z;
 }
@@ -108,12 +112,12 @@ int main(int argc, char** argv) {
     const int W = 28;
     const Rank labels = oneesan::twocell::component_label_count(W, tables);
     const Rank groups = Rank(1) << (W - 3);
-    const Rank primitive_entries = total_primitive_lut_entries(tables);
+    const Rank primitive_entries = total_label_primitive_lut_entries(W, tables);
     std::cout << "W=28_theory labels=" << labels
               << " outer_bits=" << (W - 6)
               << " valid_support_groups=" << groups
               << " avg_components_per_group=" << double(labels) / double(groups)
-              << " max_group=" << tables.primitive[27][1]
+              << " max_group=" << tables.primitive[25][1]
               << " primitive_lut_entries=" << primitive_entries
               << " primitive_lut_MiB="
               << double(primitive_entries * sizeof(std::uint32_t)) / double(1ULL << 20)
