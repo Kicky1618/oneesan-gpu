@@ -15,6 +15,9 @@
 #ifndef RP_RUNTIME_OWNER_LOCAL_SECTOR_PARITY
 #define RP_RUNTIME_OWNER_LOCAL_SECTOR_PARITY 1
 #endif
+#ifndef RP_RUNTIME_OWNER_LOCAL_SECTOR_COMPACT
+#define RP_RUNTIME_OWNER_LOCAL_SECTOR_COMPACT 0
+#endif
 #ifndef RP_RUNTIME_OWNER_LOCAL_SECTOR_CARRY_BEGIN
 #define RP_RUNTIME_OWNER_LOCAL_SECTOR_CARRY_BEGIN 0
 #endif
@@ -32,21 +35,37 @@ static_assert(RP_RUNTIME_OWNER_LOCAL_SECTOR_TABLE == 0 ||
 static_assert(RP_RUNTIME_OWNER_LOCAL_SECTOR_PARITY == 0 ||
               RP_RUNTIME_OWNER_LOCAL_SECTOR_PARITY == 1,
               "RP_RUNTIME_OWNER_LOCAL_SECTOR_PARITY must be 0 or 1");
+static_assert(RP_RUNTIME_OWNER_LOCAL_SECTOR_COMPACT == 0 ||
+              RP_RUNTIME_OWNER_LOCAL_SECTOR_COMPACT == 1,
+              "RP_RUNTIME_OWNER_LOCAL_SECTOR_COMPACT must be 0 or 1");
 static_assert(RP_RUNTIME_OWNER_LOCAL_SECTOR_CARRY_BEGIN == 0 ||
               RP_RUNTIME_OWNER_LOCAL_SECTOR_CARRY_BEGIN == 1,
               "RP_RUNTIME_OWNER_LOCAL_SECTOR_CARRY_BEGIN must be 0 or 1");
 static_assert(RP_RUNTIME_OWNER_LOCAL_SECTOR_W28_TREE == 0 ||
               RP_RUNTIME_OWNER_LOCAL_SECTOR_W28_TREE == 1,
               "RP_RUNTIME_OWNER_LOCAL_SECTOR_W28_TREE must be 0 or 1");
+static_assert(!RP_RUNTIME_OWNER_LOCAL_SECTOR_COMPACT ||
+              RP_RUNTIME_OWNER_LOCAL_SECTOR_PARITY,
+              "compact owner local-sector table requires parity search");
 
 namespace oneesan::gridfp::reducedprod {
 
+#if RP_RUNTIME_OWNER_LOCAL_SECTOR_COMPACT
+static constexpr int RP_RUNTIME_OWNER_LOCAL_SECTOR_POSITIVE_END_ENTRIES = 503;
+__device__ __constant__ std::uint32_t
+RP_RUNTIME_OWNER_LOCAL_SECTOR_POSITIVE_END[
+    RP_RUNTIME_OWNER_LOCAL_SECTOR_POSITIVE_END_ENTRIES] = {
+#include "gridfp_reduced_production_runtime_owner_local_sector_positive_end_values.inc"
+};
+static_assert(sizeof(RP_RUNTIME_OWNER_LOCAL_SECTOR_POSITIVE_END) == 2012);
+#else
 static constexpr int RP_RUNTIME_OWNER_LOCAL_SECTOR_END_ENTRIES = 1100;
 __device__ __constant__ std::uint32_t
 RP_RUNTIME_OWNER_LOCAL_SECTOR_END[RP_RUNTIME_OWNER_LOCAL_SECTOR_END_ENTRIES] = {
 #include "gridfp_reduced_production_runtime_owner_local_sector_end_values.inc"
 };
 static_assert(sizeof(RP_RUNTIME_OWNER_LOCAL_SECTOR_END) == 4400);
+#endif
 
 // Tiny O(W) per-GPU plan.  This replaces per-component weighted-owner
 // boundary division.  prefix[r] is the local component prefix before outer
@@ -127,6 +146,45 @@ __device__ __forceinline__ int runtime_owner_local_sector_row_base_device(int W)
     }
 }
 
+__device__ __forceinline__ int runtime_owner_local_sector_compact_width_base_device(int W) {
+    switch (W) {
+    case 8: return 0; case 10: return 8; case 12: return 21;
+    case 14: return 39; case 16: return 64; case 18: return 96;
+    case 20: return 137; case 22: return 187; case 24: return 248;
+    case 26: return 320; case 28: return 405; default: return -1;
+    }
+}
+
+__device__ __forceinline__ int runtime_owner_local_sector_compact_row_device(
+    int W, int L, int outer_ones
+) {
+    const int base = runtime_owner_local_sector_compact_width_base_device(W);
+    const int even_count = L >> 1;
+    const int odd_count = (L - 1) >> 1;
+    const int prior_even = (outer_ones + 1) >> 1;
+    const int prior_odd = outer_ones >> 1;
+    return base + prior_even * even_count + prior_odd * odd_count;
+}
+
+__device__ __forceinline__ Rank64 runtime_owner_local_sector_group_device(
+    int W, int L, int outer_ones
+) {
+    const int O = W - L;
+    if (L != W / 2 + 1 || outer_ones < 0 || outer_ones > O) return 0;
+    const int first = (outer_ones & 1) ? 2 : 1;
+    const int count = (L - first + 1) >> 1;
+#if RP_RUNTIME_OWNER_LOCAL_SECTOR_COMPACT
+    const int row = runtime_owner_local_sector_compact_row_device(W, L, outer_ones);
+    return row >= 0 ? RP_RUNTIME_OWNER_LOCAL_SECTOR_POSITIVE_END[row + count - 1] : 0;
+#else
+    const int base = runtime_owner_local_sector_row_base_device(W);
+    if (base < 0) return 0;
+    const int row = base + outer_ones * L;
+    const int last = first + ((count - 1) << 1);
+    return RP_RUNTIME_OWNER_LOCAL_SECTOR_END[row + last];
+#endif
+}
+
 __device__ __forceinline__ void runtime_owner_local_sector_w28_tree_device(
     int row,
     int first,
@@ -135,16 +193,27 @@ __device__ __forceinline__ void runtime_owner_local_sector_w28_tree_device(
     Rank64& local_within
 ) {
     // W=28,L=15 has exactly seven positive endpoints in every outer-popcount
-    // row.  A fixed 7-way lower_bound removes loop bookkeeping and, unlike the
-    // generic binary search, reuses the compared predecessor as the sector
-    // begin.  Thus sectors 1..6 avoid one extra constant-memory load.
+    // row. With the compact table those endpoints are contiguous; with the
+    // legacy table they remain every other entry. Both forms use the same tree.
+#if RP_RUNTIME_OWNER_LOCAL_SECTOR_COMPACT
+    const Rank64 e3 = RP_RUNTIME_OWNER_LOCAL_SECTOR_POSITIVE_END[row + 3];
+#else
     const Rank64 e3 = RP_RUNTIME_OWNER_LOCAL_SECTOR_END[row + first + 6];
+#endif
     int index = 0;
     Rank64 begin = 0;
     if (within < e3) {
+#if RP_RUNTIME_OWNER_LOCAL_SECTOR_COMPACT
+        const Rank64 e1 = RP_RUNTIME_OWNER_LOCAL_SECTOR_POSITIVE_END[row + 1];
+#else
         const Rank64 e1 = RP_RUNTIME_OWNER_LOCAL_SECTOR_END[row + first + 2];
+#endif
         if (within < e1) {
+#if RP_RUNTIME_OWNER_LOCAL_SECTOR_COMPACT
+            const Rank64 e0 = RP_RUNTIME_OWNER_LOCAL_SECTOR_POSITIVE_END[row];
+#else
             const Rank64 e0 = RP_RUNTIME_OWNER_LOCAL_SECTOR_END[row + first];
+#endif
             if (within < e0) {
                 index = 0;
             } else {
@@ -152,7 +221,11 @@ __device__ __forceinline__ void runtime_owner_local_sector_w28_tree_device(
                 begin = e0;
             }
         } else {
+#if RP_RUNTIME_OWNER_LOCAL_SECTOR_COMPACT
+            const Rank64 e2 = RP_RUNTIME_OWNER_LOCAL_SECTOR_POSITIVE_END[row + 2];
+#else
             const Rank64 e2 = RP_RUNTIME_OWNER_LOCAL_SECTOR_END[row + first + 4];
+#endif
             if (within < e2) {
                 index = 2;
                 begin = e1;
@@ -162,9 +235,17 @@ __device__ __forceinline__ void runtime_owner_local_sector_w28_tree_device(
             }
         }
     } else {
+#if RP_RUNTIME_OWNER_LOCAL_SECTOR_COMPACT
+        const Rank64 e5 = RP_RUNTIME_OWNER_LOCAL_SECTOR_POSITIVE_END[row + 5];
+#else
         const Rank64 e5 = RP_RUNTIME_OWNER_LOCAL_SECTOR_END[row + first + 10];
+#endif
         if (within < e5) {
+#if RP_RUNTIME_OWNER_LOCAL_SECTOR_COMPACT
+            const Rank64 e4 = RP_RUNTIME_OWNER_LOCAL_SECTOR_POSITIVE_END[row + 4];
+#else
             const Rank64 e4 = RP_RUNTIME_OWNER_LOCAL_SECTOR_END[row + first + 8];
+#endif
             if (within < e4) {
                 index = 4;
                 begin = e3;
@@ -190,10 +271,18 @@ __device__ __forceinline__ bool runtime_owner_local_sector_device(
     Rank64& local_within
 ) {
 #if RP_RUNTIME_OWNER_LOCAL_SECTOR_TABLE
-    const int base = runtime_owner_local_sector_row_base_device(W);
     const int O = W - L;
+#if RP_RUNTIME_OWNER_LOCAL_SECTOR_COMPACT
+    const int base = runtime_owner_local_sector_compact_width_base_device(W);
+#else
+    const int base = runtime_owner_local_sector_row_base_device(W);
+#endif
     if (base >= 0 && L == W / 2 + 1 && outer_ones >= 0 && outer_ones <= O) {
+#if RP_RUNTIME_OWNER_LOCAL_SECTOR_COMPACT
+        const int row = runtime_owner_local_sector_compact_row_device(W, L, outer_ones);
+#else
         const int row = base + outer_ones * L;
+#endif
 #if RP_RUNTIME_OWNER_LOCAL_SECTOR_PARITY
         // Positive local sectors require odd occupied count. local_ones=0 is
         // additionally impossible because both marked local positions must be
@@ -215,8 +304,12 @@ __device__ __forceinline__ bool runtime_owner_local_sector_device(
         Rank64 begin = 0;
         while (lo < hi) {
             const int mid = lo + ((hi - lo) >> 1);
+#if RP_RUNTIME_OWNER_LOCAL_SECTOR_COMPACT
+            const Rank64 end = RP_RUNTIME_OWNER_LOCAL_SECTOR_POSITIVE_END[row + mid];
+#else
             const int l = first + (mid << 1);
             const Rank64 end = RP_RUNTIME_OWNER_LOCAL_SECTOR_END[row + l];
+#endif
             if (within < end) {
                 hi = mid;
             } else {
@@ -224,20 +317,27 @@ __device__ __forceinline__ bool runtime_owner_local_sector_device(
                 begin = end;
             }
         }
-        const int l = first + (lo << 1);
-        local_ones = l;
+        local_ones = first + (lo << 1);
         local_within = within - begin;
 #else
         while (lo < hi) {
             const int mid = lo + ((hi - lo) >> 1);
+#if RP_RUNTIME_OWNER_LOCAL_SECTOR_COMPACT
+            if (within < RP_RUNTIME_OWNER_LOCAL_SECTOR_POSITIVE_END[row + mid]) hi = mid;
+#else
             const int l = first + (mid << 1);
             if (within < RP_RUNTIME_OWNER_LOCAL_SECTOR_END[row + l]) hi = mid;
+#endif
             else lo = mid + 1;
         }
         const int l = first + (lo << 1);
+#if RP_RUNTIME_OWNER_LOCAL_SECTOR_COMPACT
+        const Rank64 begin = lo ? RP_RUNTIME_OWNER_LOCAL_SECTOR_POSITIVE_END[row + lo - 1] : 0;
+#else
         const Rank64 begin = lo
             ? RP_RUNTIME_OWNER_LOCAL_SECTOR_END[row + first + ((lo - 1) << 1)]
             : 0;
+#endif
         local_ones = l;
         local_within = within - begin;
 #endif
