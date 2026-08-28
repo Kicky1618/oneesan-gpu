@@ -41,8 +41,12 @@ __device__ __forceinline__ MateID runtime_turn_compress_label_unrank_device(
     if (outer_ones < 0) return 0;
     const Rank64 group = plan.component_group[outer_ones];
     if (!group) return 0;
-    const Rank64 outer_sr = plan.sr_begin[outer_ones] + local / group;
-    Rank64 within = local % group;
+    Rank64 outer_delta = 0;
+    Rank64 within = 0;
+    runtime_fastdivmod64_magic(
+        local, group, runtime_turn_compress_group_magic(W, outer_ones),
+        outer_delta, within);
+    const Rank64 outer_sr = plan.sr_begin[outer_ones] + outer_delta;
     const std::uint32_t outer = support_unrank_mask_device(O, outer_ones, outer_sr);
 
     int local_ones = -1;
@@ -55,8 +59,9 @@ __device__ __forceinline__ MateID runtime_turn_compress_label_unrank_device(
         const Rank64 n = choose_device(L - 1, l) * pc;
         if (within < n) {
             local_ones = l;
-            local_sr = within / pc;
-            primitive_rank = within % pc;
+            runtime_fastdivmod64_magic(
+                within, pc, RP_RUNTIME_PRIMITIVE1_MAGIC[occupied],
+                local_sr, primitive_rank);
             break;
         }
         within -= n;
