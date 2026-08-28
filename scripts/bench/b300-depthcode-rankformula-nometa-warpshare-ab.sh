@@ -24,6 +24,8 @@ RESULT="${RESULT:-${PREFIX}.tsv}"; SUMMARY="${SUMMARY:-${PREFIX}_summary.tsv}"; 
 PARSER="$ONEESAN_ROOT/scripts/bench/parse-ptxas-resources.py"
 mkdir -p "$LOGDIR" "$(dirname "$RESULT")"
 
+bash "$ONEESAN_ROOT/scripts/bench/rankformula-nometa4-group64-proof.sh"
+bash "$ONEESAN_ROOT/scripts/bench/rankformula-nometa-group64-selfindex-proof.sh"
 bash "$ONEESAN_ROOT/scripts/bench/rankformula-nometa-warpshare-proof.sh"
 bash "$ONEESAN_ROOT/scripts/bench/rankformula-abstract-lut-proof.sh"
 bash "$ONEESAN_ROOT/scripts/bench/rankformula-abstract-lazy-load-proof.sh"
@@ -94,10 +96,12 @@ if run_ptxas=='1':
         print(f'{mode}_high_spill_store_bytes={sum(ss) if ss else "NA"}')
         print(f'{mode}_high_spill_load_bytes={sum(sl) if sl else "NA"}')
 print('block=8')
+print('group64_packed_bits=59')
+print('group64_self_index_bits=14')
 print('scalar_table_loads_model=2647251')
 print('warpshare_table_loads_model=544003')
-print('warpshare_table_load_reduction=79.450262%')
-print('warpshare_shuffles_per_resolve=3')
+print('warpshare_table_load_reduction=79.450267%')
+print('warpshare_shuffles_per_resolve=2')
 PY
 
 echo "b300-depthcode-rankformula-nometa-warpshare-ab OK n=$N repeats=$REPEATS block=8 result=$RESULT" >&2
