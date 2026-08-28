@@ -17,8 +17,11 @@ __device__ __forceinline__ uint32_t p10dc_rankdelta8_next(P10DCRankDelta8Cursor&
         return c.rank;
     }
     const uint32_t b0 = uint32_t(*c.p++);
-    uint32_t delta = b0 & 0x7fu;
-    if (b0 & 0x80u) delta |= uint32_t(*c.p++) << 7;
+    uint32_t delta = b0;
+    if (b0 == 0u) {
+        delta = uint32_t(c.p[0]) | (uint32_t(c.p[1]) << 8);
+        c.p += 2;
+    }
     c.rank += delta;
     return c.rank;
 }
