@@ -5,11 +5,17 @@
 
 // Rankstream CROSS5 uses the same 5-symbol automaton as the direct path, but
 // source addresses are ranks among L symbols rather than ternary-key deltas.
-// Precompute that projection so the device hot loop never has to popcount the
-// suffix of the L mask for every accepted source.
-__constant__ uint8_t D_P10DC_RANKSTREAM_LCOUNT[P10DC_CROSS5_KEYS];
+// The state-dependent table stores accepted L ordinals + halt.  Per chunk,
+// one compact metadata byte stores both L-count and signed state delta, so the
+// device path needs exactly two constant-memory reads per executed chunk.
+__constant__ uint8_t D_P10DC_RANKSTREAM_META[P10DC_CROSS5_KEYS];
 __constant__ uint8_t
     D_P10DC_RANKSTREAM_CROSS5[P10DC_CROSS5_STATES * P10DC_CROSS5_KEYS];
+
+static constexpr uint8_t P10DC_RANKSTREAM_META_LCOUNT_MASK = 0x07u;
+static constexpr int P10DC_RANKSTREAM_META_DELTA_SHIFT = 3;
+static constexpr int P10DC_RANKSTREAM_META_DELTA_BIAS = 5;
+static_assert(P10DC_CROSS5_CHUNK == 5, "rankstream metadata packing assumes CROSS5");
 
 static constexpr uint8_t p10dc_rankstream_lmask_host(uint32_t key) {
     uint8_t mask = 0;
@@ -45,12 +51,21 @@ static constexpr uint8_t p10dc_rankstream_host_entry(
         rankmask | (e & uint8_t(1u << P10DC_CROSS5_HALT_SHIFT)));
 }
 
+static constexpr uint8_t p10dc_rankstream_meta_host(uint32_t key) {
+    const uint8_t lcount = p10dc_rankstream_popcount5_host(
+        p10dc_rankstream_lmask_host(key));
+    const int delta = int(p10dc_cross5_host_delta(key));
+    return uint8_t(
+        lcount |
+        (uint8_t(delta + P10DC_RANKSTREAM_META_DELTA_BIAS)
+         << P10DC_RANKSTREAM_META_DELTA_SHIFT));
+}
+
 static std::array<uint8_t, P10DC_CROSS5_KEYS>
-p10dc_rankstream_lcount_table() {
+p10dc_rankstream_meta_table() {
     std::array<uint8_t, P10DC_CROSS5_KEYS> out{};
     for (uint32_t k = 0; k < P10DC_CROSS5_KEYS; ++k)
-        out[k] = p10dc_rankstream_popcount5_host(
-            p10dc_rankstream_lmask_host(k));
+        out[k] = p10dc_rankstream_meta_host(k);
     return out;
 }
 
@@ -67,11 +82,11 @@ p10dc_rankstream_cross5_table() {
 }
 
 static void p10dc_install_rankstream_lut() {
-    static const auto lcount = p10dc_rankstream_lcount_table();
+    static const auto meta = p10dc_rankstream_meta_table();
     static const auto table = p10dc_rankstream_cross5_table();
-    ck(cudaMemcpyToSymbol(D_P10DC_RANKSTREAM_LCOUNT, lcount.data(),
-                          lcount.size() * sizeof(uint8_t)),
-       "p10dc rankstream L-count table");
+    ck(cudaMemcpyToSymbol(D_P10DC_RANKSTREAM_META, meta.data(),
+                          meta.size() * sizeof(uint8_t)),
+       "p10dc rankstream chunk metadata table");
     ck(cudaMemcpyToSymbol(D_P10DC_RANKSTREAM_CROSS5, table.data(),
                           table.size() * sizeof(uint8_t)),
        "p10dc rankstream CROSS5 rank-mask table");
@@ -105,8 +120,11 @@ __device__ __forceinline__ uint32_t p10dc_cross5_apply_chunk_rankstream(
     }
     if (((e >> P10DC_CROSS5_HALT_SHIFT) & 1u) != 0) return 1u;
 
-    lbase += uint32_t(D_P10DC_RANKSTREAM_LCOUNT[chunk]);
-    state = uint32_t(int(state) + int(D_P10DC_CROSS5_DELTA[chunk]));
+    const uint8_t meta = D_P10DC_RANKSTREAM_META[chunk];
+    lbase += uint32_t(meta & P10DC_RANKSTREAM_META_LCOUNT_MASK);
+    state = uint32_t(
+        int(state) + int(meta >> P10DC_RANKSTREAM_META_DELTA_SHIFT)
+        - P10DC_RANKSTREAM_META_DELTA_BIAS);
     return 0u;
 }
 
