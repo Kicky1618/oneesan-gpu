@@ -87,15 +87,16 @@ if rs:
     vals=[tuple(map(int,m)) for m in re.findall(r'p10dc_low_rankstream fixed_owner=\d+ codes=(\d+) l_ranks=(\d+)',rs[0].read_text(errors='replace'))]
     if vals:
         codes=sum(x for x,_ in vals); ranks=sum(y for _,y in vals)
-        print(f'rankstream_metadata_mib_total={(codes*4+ranks*2)/(1<<20):.6f}')
+        print(f'rankstream_offset_rank_mib_total={(codes*4+ranks*2)/(1<<20):.6f}')
+        print(f'rankstream_runtime_metadata_mib_total={(codes*8+ranks*2)/(1<<20):.6f}')
 r32logs=list(ld.glob('*affine_rankstream32_cross5_r1.err'))
 if r32logs:
     vals=[tuple(map(int,m)) for m in re.findall(r'p10dc_low_rankstream32 fixed_owner=\d+ codes=(\d+) blocks=(\d+) l_ranks=(\d+) bytes=(\d+)',r32logs[0].read_text(errors='replace'))]
     if vals:
-        print(f'rankstream32_metadata_mib_total={sum(v[3] for v in vals)/(1<<20):.6f}')
+        print(f'rankstream32_runtime_metadata_mib_total={sum(v[3] for v in vals)/(1<<20):.6f}')
         print(f'rankstream32_codes_total={sum(v[0] for v in vals)}')
         print(f'rankstream32_blocks_total={sum(v[1] for v in vals)}')
-print('rankstream_model=offset32+rank16_per_L')
+print('rankstream_model=prekey32+offset32+rank16_per_L')
 print('rankstream32_model=key23+prefix9_per_code+blockbase32+rank16_per_L')
 print('rankstream32_cross_runtime_direct_lookup=0')
 print('fallback_structurally_unreachable=1')
