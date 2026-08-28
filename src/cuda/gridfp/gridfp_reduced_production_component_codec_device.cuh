@@ -2,6 +2,13 @@
 
 #include "gridfp_reduced_production_codec_device.cuh"
 
+#ifndef RP_FAST_COMPONENT_SUPPORT_ADJACENT_MARKS
+#define RP_FAST_COMPONENT_SUPPORT_ADJACENT_MARKS 0
+#endif
+static_assert(RP_FAST_COMPONENT_SUPPORT_ADJACENT_MARKS == 0 ||
+              RP_FAST_COMPONENT_SUPPORT_ADJACENT_MARKS == 1,
+              "RP_FAST_COMPONENT_SUPPORT_ADJACENT_MARKS must be 0 or 1");
+
 namespace oneesan::gridfp::reducedprod {
 
 __device__ __forceinline__ Rank64 choose_device(int n, int k) {
@@ -31,6 +38,88 @@ __device__ __forceinline__ int component_sector_of_rank_device(int W, Rank64& ra
     return -1;
 }
 
+__device__ __forceinline__ std::uint32_t component_support_unrank_adjacent_device(
+    int len,
+    int ones,
+    int mark0,
+    int mark1,
+    Rank64 rank
+) {
+    const int a = mark0 < mark1 ? mark0 : mark1;
+    const int b = mark0 < mark1 ? mark1 : mark0;
+    std::uint32_t support = 0;
+    int left = ones;
+
+    // Before the adjacent marked pair, both marks are still in the future.
+    // Therefore the valid zero branch is C(rem,left)-C(rem-2,left), without
+    // recomputing future_marks or testing seen_mark at every position.
+    for (int pos = 0; pos < a; ++pos) {
+#if RP_FAST_SUPPORT_UNRANK_EARLY_EXIT
+        if (!left) break;
+        const int remaining = len - pos;
+        if (left == remaining) {
+            support |= support_suffix_mask_device(pos, len);
+            return support;
+        }
+        const int rem = remaining - 1;
+#else
+        const int rem = len - pos - 1;
+#endif
+        const Rank64 zero_count =
+            choose_device(rem, left) - choose_device(rem - 2, left);
+        if (rank < zero_count) continue;
+        rank -= zero_count;
+        support |= std::uint32_t(1) << pos;
+        --left;
+    }
+
+#if RP_FAST_SUPPORT_UNRANK_EARLY_EXIT
+    if (!left) return support;
+    if (left == len - a) {
+        support |= support_suffix_mask_device(a, len);
+        return support;
+    }
+#endif
+
+    // If the first marked bit is zero, the second one is forced to one. Its
+    // whole branch has C(len-a-2,left-1) states, so we can consume the marked
+    // pair in one decision and skip the forced-bit loop iteration.
+    const int suffix = len - a - 2;
+    const Rank64 zero_count_a = choose_device(suffix, left - 1);
+    int start = b;
+    if (rank < zero_count_a) {
+        support |= std::uint32_t(1) << b;
+        --left;
+        start = b + 1;
+    } else {
+        rank -= zero_count_a;
+        support |= std::uint32_t(1) << a;
+        --left;
+    }
+
+    // Once either mark is selected, the remainder is an ordinary fixed-popcount
+    // subset unrank with no marked-position constraint.
+    for (int pos = start; pos < len; ++pos) {
+#if RP_FAST_SUPPORT_UNRANK_EARLY_EXIT
+        if (!left) break;
+        const int remaining = len - pos;
+        if (left == remaining) {
+            support |= support_suffix_mask_device(pos, len);
+            break;
+        }
+        const int rem = remaining - 1;
+#else
+        const int rem = len - pos - 1;
+#endif
+        const Rank64 zero_count = choose_device(rem, left);
+        if (rank < zero_count) continue;
+        rank -= zero_count;
+        support |= std::uint32_t(1) << pos;
+        --left;
+    }
+    return support;
+}
+
 // Lexicographic support unrank for subsets that contain at least one of the two
 // marked left-to-right positions.  It has no component table and uses only the
 // O(W^2) binomial table already resident for the reduced state codec.
@@ -41,6 +130,11 @@ __device__ __forceinline__ std::uint32_t component_support_unrank_device(
     int mark1,
     Rank64 rank
 ) {
+#if RP_FAST_COMPONENT_SUPPORT_ADJACENT_MARKS
+    if ((mark0 + 1 == mark1) || (mark1 + 1 == mark0))
+        return component_support_unrank_adjacent_device(
+            len, ones, mark0, mark1, rank);
+#endif
     std::uint32_t support = 0;
     int left = ones;
     bool seen_mark = false;
