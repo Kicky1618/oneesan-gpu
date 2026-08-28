@@ -3,14 +3,9 @@
 #include "ramstream32_bucket_closure_cross5_rankstream.cuh"
 #include "ramstream32_bucket_low_rankchunk32.cuh"
 
-#ifndef P10DC_RANKCHUNK32_ONESHFL
-#define P10DC_RANKCHUNK32_ONESHFL 1
-#endif
 #ifndef P10DC_RANKCHUNK32_FUSED16
 #define P10DC_RANKCHUNK32_FUSED16 0
 #endif
-static_assert(P10DC_RANKCHUNK32_ONESHFL == 0 || P10DC_RANKCHUNK32_ONESHFL == 1,
-              "P10DC_RANKCHUNK32_ONESHFL must be 0 or 1");
 static_assert(P10DC_RANKCHUNK32_FUSED16 == 0 || P10DC_RANKCHUNK32_FUSED16 == 1,
               "P10DC_RANKCHUNK32_FUSED16 must be 0 or 1");
 
@@ -58,37 +53,6 @@ static void p10dc_install_rankchunk32_lut() {
     p10dc_install_rankstream_lut();
 }
 #endif
-
-// A warp rank stripe is base32+lane but a height may start at an arbitrary
-// compact index. With 32-code metadata blocks the stripe intersects one or two
-// blocks. Lane 0 loads the first base; if a boundary lies inside the active
-// prefix, the boundary lane loads the second. Every lane then selects source 0
-// or the boundary lane with one variable-source shuffle.
-__device__ __forceinline__ void p10dc_low_rankchunk32_row_warpstripe_oneshfl(
-    uint32_t h, uint32_t rank, uint32_t& packed_chunks, const uint16_t*& row
-) {
-    const uint32_t lane = uint32_t(threadIdx.x) & 31u;
-    const unsigned active = __activemask();
-    const uint32_t compact = D_P10DC_LOW_RANKCHUNK_HOFF[h] + rank;
-    const uint32_t meta = D_P10DC_LOW_RANKCHUNKMETA32[compact];
-    packed_chunks = meta & P10DC_RANKCHUNK32_CHUNK_MASK;
-    const uint32_t prefix = meta >> P10DC_RANKCHUNK32_CHUNK_BITS;
-
-    const uint32_t first_compact = compact - lane;
-    const uint32_t first_block = first_compact >> P10DC_RANKCHUNK32_BLOCK_LOG2;
-    const uint32_t first_off = first_compact & (P10DC_RANKCHUNK32_BLOCK - 1u);
-    const uint32_t split_lane = P10DC_RANKCHUNK32_BLOCK - first_off;
-    const bool use_second = split_lane < 32u;
-    const uint32_t source_lane = use_second && lane >= split_lane ? split_lane : 0u;
-
-    uint32_t local_base = 0;
-    if (lane == 0u)
-        local_base = D_P10DC_LOW_RANKCHUNKBLOCK16[first_block];
-    if (use_second && lane == split_lane)
-        local_base = D_P10DC_LOW_RANKCHUNKBLOCK16[first_block + 1u];
-    const uint32_t block_base = __shfl_sync(active, local_base, int(source_lane));
-    row = D_P10DC_LOW_RANKSTREAM + block_base + prefix;
-}
 
 // Centralized production decoder. The third CROSS5 chunk occupies only bits
 // 16..22; bit 23 is already the low bit of the 9-bit rankstream prefix.
@@ -173,11 +137,10 @@ p10dc_resolved_low_preimages_cross5_rankchunk32_fixed(
 ) {
     uint32_t packed_chunks = 0;
     const uint16_t* rank_row = nullptr;
-#if P10DC_RANKCHUNK32_ONESHFL
-    p10dc_low_rankchunk32_row_warpstripe_oneshfl(h, rank, packed_chunks, rank_row);
-#else
+    // The low-rankchunk header owns the warp-striped block mapping and the
+    // P10DC_RANKCHUNK32_ONESHFL A/B switch. Keep exactly one implementation so
+    // packing/block-layout changes cannot drift between the two hot paths.
     p10dc_low_rankchunk32_row_warpstripe(h, rank, packed_chunks, rank_row);
-#endif
     return p10dc_resolved_low_preimages_cross5_rankchunk32_fast(
         packed_chunks, depth, source_row, rank_row);
 }
