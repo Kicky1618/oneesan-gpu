@@ -14,10 +14,11 @@ RUN_PREFIX_CARRY="${RUN_PREFIX_CARRY:-1}"
 RUN_OWNER_LOCAL_CARRY="${RUN_OWNER_LOCAL_CARRY:-1}"
 RUN_OWNER_TREE="${RUN_OWNER_TREE:-1}"
 RUN_ADJACENT_SUPPORT="${RUN_ADJACENT_SUPPORT:-1}"
+RUN_PLAN_SHARED="${RUN_PLAN_SHARED:-1}"
 RUN_TURN_TREE="${RUN_TURN_TREE:-1}"
 RUN_TURN_NONN="${RUN_TURN_NONN:-1}"
 
-for name in RUN_PREFIX_CARRY RUN_OWNER_LOCAL_CARRY RUN_OWNER_TREE RUN_ADJACENT_SUPPORT RUN_TURN_TREE RUN_TURN_NONN; do
+for name in RUN_PREFIX_CARRY RUN_OWNER_LOCAL_CARRY RUN_OWNER_TREE RUN_ADJACENT_SUPPORT RUN_PLAN_SHARED RUN_TURN_TREE RUN_TURN_NONN; do
   value="${!name}"
   if [[ "$value" != 0 && "$value" != 1 ]]; then
     echo "$name must be 0 or 1" >&2
@@ -26,7 +27,8 @@ for name in RUN_PREFIX_CARRY RUN_OWNER_LOCAL_CARRY RUN_OWNER_TREE RUN_ADJACENT_S
 done
 if [[ "$RUN_PREFIX_CARRY" == 0 && "$RUN_OWNER_LOCAL_CARRY" == 0 &&
       "$RUN_OWNER_TREE" == 0 && "$RUN_ADJACENT_SUPPORT" == 0 &&
-      "$RUN_TURN_TREE" == 0 && "$RUN_TURN_NONN" == 0 ]]; then
+      "$RUN_PLAN_SHARED" == 0 && "$RUN_TURN_TREE" == 0 &&
+      "$RUN_TURN_NONN" == 0 ]]; then
   echo "nothing selected" >&2
   exit 2
 fi
@@ -76,6 +78,10 @@ fi
 if [[ "$RUN_ADJACENT_SUPPORT" == 1 ]]; then
   run_case component_support_adjacent_marks \
     gridfp-component-support-adjacent-marks-microprobe.sh
+fi
+if [[ "$RUN_PLAN_SHARED" == 1 ]]; then
+  run_case owner_plan_shared_cache \
+    gridfp-runtime-owner-plan-shared-cache-microprobe.sh
 fi
 if [[ "$RUN_TURN_TREE" == 1 ]]; then
   run_case turn_local_sector_w28_tree \
