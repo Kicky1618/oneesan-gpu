@@ -82,16 +82,26 @@ __device__ __forceinline__ bool runtime_owner_local_sector_device(
     const int O = W - L;
     if (base >= 0 && L == W / 2 + 1 && outer_ones >= 0 && outer_ones <= O) {
         const int row = base + outer_ones * L;
+        // A local sector has positive size iff outer_ones + local_ones is odd.
+        // `within` is already reduced modulo component_group, so it is strictly
+        // below the final positive endpoint. Search only those parity-valid
+        // endpoints: W=28 shrinks 15 candidates to at most 8 and 4 comparisons
+        // to at most 3 without adding a sentinel comparison to the hot path.
+        const int parity = 1 - (outer_ones & 1);
+        const int count = (L + 1 - parity) >> 1;
         int lo = 0;
-        int hi = L;
+        int hi = count - 1;
         while (lo < hi) {
             const int mid = lo + ((hi - lo) >> 1);
-            if (within < RP_RUNTIME_OWNER_LOCAL_SECTOR_END[row + mid]) hi = mid;
+            const int l = parity + (mid << 1);
+            if (within < RP_RUNTIME_OWNER_LOCAL_SECTOR_END[row + l]) hi = mid;
             else lo = mid + 1;
         }
-        if (lo >= L) return false;
-        const Rank64 begin = lo ? RP_RUNTIME_OWNER_LOCAL_SECTOR_END[row + lo - 1] : 0;
-        local_ones = lo;
+        const int l = parity + (lo << 1);
+        const Rank64 begin = lo
+            ? RP_RUNTIME_OWNER_LOCAL_SECTOR_END[row + parity + ((lo - 1) << 1)]
+            : 0;
+        local_ones = l;
         local_within = within - begin;
         return true;
     }
