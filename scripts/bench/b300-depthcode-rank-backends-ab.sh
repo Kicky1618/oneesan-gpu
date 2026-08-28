@@ -77,57 +77,39 @@ q={r['high_ctx']:r for r in out}
 def ratio(a,b,m,label):
     if q[a][m]!='NA' and q[b][m]!='NA': print(f'{label}_{m}_speedup={float(q[a][m])/float(q[b][m]):.6f}x')
 for m in ('wall_s','forward_high_s','reverse_high_s'):
-    ratio(base,r16,m,'rank16')
-    ratio(base,rstream,m,'rankstream')
-    ratio(base,r32,m,'rankstream32')
-    ratio(base,rc32,m,'rankchunk32')
-    ratio(r16,r32,m,'rankstream32_vs_rank16')
-    ratio(rstream,r32,m,'rankstream32_vs_rankstream')
-    ratio(r32,rc32,m,'rankchunk32_vs_rankstream32')
-    ratio(rstream,rc32,m,'rankchunk32_vs_rankstream')
+    ratio(base,r16,m,'rank16'); ratio(base,rstream,m,'rankstream'); ratio(base,r32,m,'rankstream32'); ratio(base,rc32,m,'rankchunk32')
+    ratio(r16,r32,m,'rankstream32_vs_rank16'); ratio(rstream,r32,m,'rankstream32_vs_rankstream'); ratio(r32,rc32,m,'rankchunk32_vs_rankstream32'); ratio(rstream,rc32,m,'rankchunk32_vs_rankstream')
 for ctx,label in ((r16,'rank16'),(rstream,'rankstream'),(r32,'rankstream32'),(rc32,'rankchunk32')):
     if all(q[x][m]!='NA' for x in (base,ctx) for m in ('forward_high_s','reverse_high_s')):
-        b=float(q[base]['forward_high_s'])+float(q[base]['reverse_high_s'])
-        o=float(q[ctx]['forward_high_s'])+float(q[ctx]['reverse_high_s'])
-        print(f'{label}_total_high_speedup={b/o:.6f}x')
+        b=float(q[base]['forward_high_s'])+float(q[base]['reverse_high_s']); o=float(q[ctx]['forward_high_s'])+float(q[ctx]['reverse_high_s']); print(f'{label}_total_high_speedup={b/o:.6f}x')
 if all(q[x][m]!='NA' for x in (r32,rc32) for m in ('forward_high_s','reverse_high_s')):
-    a=float(q[r32]['forward_high_s'])+float(q[r32]['reverse_high_s'])
-    b=float(q[rc32]['forward_high_s'])+float(q[rc32]['reverse_high_s'])
-    print(f'rankchunk32_vs_rankstream32_total_high_speedup={a/b:.6f}x')
+    a=float(q[r32]['forward_high_s'])+float(q[r32]['reverse_high_s']); b=float(q[rc32]['forward_high_s'])+float(q[rc32]['reverse_high_s']); print(f'rankchunk32_vs_rankstream32_total_high_speedup={a/b:.6f}x')
 ld=pathlib.Path(logdir)
 rs=list(ld.glob('*prekey_rankstream_cross5_r1.err'))
 if rs:
     vals=[tuple(map(int,m)) for m in re.findall(r'p10dc_low_rankstream fixed_owner=\d+ codes=(\d+) l_ranks=(\d+)',rs[0].read_text(errors='replace'))]
     if vals:
         codes=sum(x for x,_ in vals); ranks=sum(y for _,y in vals)
-        print(f'rankstream_offset_rank_mib_total={(codes*4+ranks*2)/(1<<20):.6f}')
-        print(f'rankstream_runtime_metadata_mib_total={(codes*8+ranks*2)/(1<<20):.6f}')
+        print(f'rankstream_offset_rank_mib_total={(codes*4+ranks*2)/(1<<20):.6f}'); print(f'rankstream_runtime_metadata_mib_total={(codes*8+ranks*2)/(1<<20):.6f}')
 r32logs=list(ld.glob('*affine_rankstream32_cross5_r1.err'))
 if r32logs:
     vals=[tuple(map(int,m)) for m in re.findall(r'p10dc_low_rankstream32 fixed_owner=\d+ codes=(\d+) blocks=(\d+) l_ranks=(\d+) bytes=(\d+)',r32logs[0].read_text(errors='replace'))]
     if vals:
-        print(f'rankstream32_runtime_metadata_mib_total={sum(v[3] for v in vals)/(1<<20):.6f}')
-        print(f'rankstream32_codes_total={sum(v[0] for v in vals)}')
-        print(f'rankstream32_blocks_total={sum(v[1] for v in vals)}')
+        print(f'rankstream32_runtime_metadata_mib_total={sum(v[3] for v in vals)/(1<<20):.6f}'); print(f'rankstream32_codes_total={sum(v[0] for v in vals)}'); print(f'rankstream32_blocks_total={sum(v[1] for v in vals)}')
 rc32logs=list(ld.glob('*affine_rankchunk32_cross5_r1.err'))
 if rc32logs:
     text=rc32logs[0].read_text(errors='replace')
     vals=[tuple(map(int,m)) for m in re.findall(r'p10dc_low_rankchunk32 fixed_owner=\d+ codes=(\d+) blocks=(\d+) l_ranks=(\d+) bytes=(\d+) meta_entries=(\d+) padding=(\d+)',text)]
     if vals:
-        print(f'rankchunk32_runtime_metadata_mib_total={sum(v[3] for v in vals)/(1<<20):.6f}')
-        print(f'rankchunk32_codes_total={sum(v[0] for v in vals)}')
-        print(f'rankchunk32_blocks_total={sum(v[1] for v in vals)}')
-        print(f'rankchunk32_meta_entries_total={sum(v[4] for v in vals)}')
-        print(f'rankchunk32_padding_entries_total={sum(v[5] for v in vals)}')
-        codes=sum(v[0] for v in vals); pad=sum(v[5] for v in vals)
-        if codes: print(f'rankchunk32_padding_bytes_per_code={(pad*4)/codes:.9f}')
+        print(f'rankchunk32_runtime_metadata_mib_total={sum(v[3] for v in vals)/(1<<20):.6f}'); print(f'rankchunk32_codes_total={sum(v[0] for v in vals)}'); print(f'rankchunk32_blocks_total={sum(v[1] for v in vals)}'); print(f'rankchunk32_meta_entries_total={sum(v[4] for v in vals)}'); print(f'rankchunk32_padding_entries_total={sum(v[5] for v in vals)}')
 print('rankstream_model=prekey32+offset32+rank16_per_L')
 print('rankstream32_model=key23+prefix9_per_code+blockbase32+rank16_per_L')
 print('rankstream32_block_base_loads_per_warp_max=2')
 print('rankstream32_cross_runtime_divmod=1')
-print('rankchunk32_model=heightalign32+chunk24+prefix8_per_meta+blockbase16+rank16_per_L')
+print('rankchunk32_model=chunk23+prefix9_per_code+blockbase32+rank16_per_L')
+print('rankchunk32_height_padding_entries=0')
+print('rankchunk32_third_chunk_bits=7')
 print('rankchunk32_block_base_loads_per_warp_max=2')
-print('rankchunk32_height_alignment=32')
 print('rankchunk32_cross_runtime_divmod=0')
 print('rankchunk32_cross_runtime_direct_lookup=0')
 print('fallback_structurally_unreachable=1')
