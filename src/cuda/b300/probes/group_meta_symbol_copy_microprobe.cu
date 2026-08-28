@@ -30,8 +30,8 @@ __global__ void checksum_unpacked(unsigned long long* out){
     unsigned long long x=0;
     x^=D_MAIN_DP[0][0];x^=D_MAIN_DP[MAXW][MAXW+1]<<1;
     x^=D_BLOCK_DP[1][2]<<2;x^=D_BLOCK_DP[MAXW][0]<<3;
-    x^=unsigned long long(D_MAIN_FIXED)<<4;x^=unsigned long long(D_MAIN_OCC)<<5;
-    x^=unsigned long long(D_BLOCK_FIXED)<<6;x^=unsigned long long(D_BLOCK_OCC)<<7;
+    x^=static_cast<unsigned long long>(D_MAIN_FIXED)<<4;x^=static_cast<unsigned long long>(D_MAIN_OCC)<<5;
+    x^=static_cast<unsigned long long>(D_BLOCK_FIXED)<<6;x^=static_cast<unsigned long long>(D_BLOCK_OCC)<<7;
     *out=x;
 }
 __global__ void checksum_packed(unsigned long long* out){
@@ -39,8 +39,8 @@ __global__ void checksum_packed(unsigned long long* out){
     unsigned long long x=0;
     x^=D_GROUP_META.main_dp[0][0];x^=D_GROUP_META.main_dp[MAXW][MAXW+1]<<1;
     x^=D_GROUP_META.block_dp[1][2]<<2;x^=D_GROUP_META.block_dp[MAXW][0]<<3;
-    x^=unsigned long long(D_GROUP_META.main_fixed)<<4;x^=unsigned long long(D_GROUP_META.main_occ)<<5;
-    x^=unsigned long long(D_GROUP_META.block_fixed)<<6;x^=unsigned long long(D_GROUP_META.block_occ)<<7;
+    x^=static_cast<unsigned long long>(D_GROUP_META.main_fixed)<<4;x^=static_cast<unsigned long long>(D_GROUP_META.main_occ)<<5;
+    x^=static_cast<unsigned long long>(D_GROUP_META.block_fixed)<<6;x^=static_cast<unsigned long long>(D_GROUP_META.block_occ)<<7;
     *out=x;
 }
 
