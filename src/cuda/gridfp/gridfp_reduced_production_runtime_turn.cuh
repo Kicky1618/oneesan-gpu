@@ -348,6 +348,7 @@ __global__ void owner_turn_runtime_subwarp_kernel(
                         if (destination_ix < 0) {
                             if (sh_nd[warp][subgroup] >= RP_RUNTIME_MAX_PAIRS) {
                                 runtime_set_error(error, 323);
+                                cursor = RP_RUNTIME_MAX_PAIRS;
                                 break;
                             }
                             destination_ix = sh_nd[warp][subgroup]++;
@@ -357,6 +358,7 @@ __global__ void owner_turn_runtime_subwarp_kernel(
                                     sh_src[warp][subgroup], sh_ns[warp][subgroup],
                                     RP_RUNTIME_MAX_PAIRS)) {
                                 runtime_set_error(error, 324);
+                                cursor = RP_RUNTIME_MAX_PAIRS;
                                 break;
                             }
                         }
@@ -365,11 +367,14 @@ __global__ void owner_turn_runtime_subwarp_kernel(
                                 sh_edge[warp][subgroup], source_ix,
                                 destination_ix, int(edge.v[ei].coef))) {
                             runtime_set_error(error, 328);
+                            cursor = RP_RUNTIME_MAX_PAIRS;
                             break;
                         }
 #endif
                     }
+#if RP_RUNTIME_POLL_GLOBAL_ERROR
                     if (error && *error) break;
+#endif
                 }
             }
         }
