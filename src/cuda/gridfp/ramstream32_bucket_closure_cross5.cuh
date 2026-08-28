@@ -2,6 +2,8 @@
 
 #include "ramstream32_bucket_closure_cross5_common.cuh"
 
+#define P10DC_CROSS5_ORDINARY_LUT_DEFINED 1
+
 static_assert(
     P10DC_CROSS5_STATES * P10DC_CROSS5_KEYS * sizeof(uint8_t) +
         P10DC_CROSS5_KEYS * sizeof(int8_t) == 6561,
