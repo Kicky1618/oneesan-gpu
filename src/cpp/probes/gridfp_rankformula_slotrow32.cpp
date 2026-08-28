@@ -36,7 +36,7 @@ int main() {
         }
     }
 
-    uint64_t rows = 0, exact = 0;
+    uint64_t rows = 0, exact = 0, delta_rows = 0, top_active_support_rows = 0;
     int min_delta = std::numeric_limits<int>::max();
     int max_delta = std::numeric_limits<int>::min();
     uint32_t max_slot = 0, max_support = 0;
@@ -46,31 +46,40 @@ int main() {
             if (uint32_t(mask_slot[m]) != slot) return 3;
             max_slot = std::max(max_slot, slot);
             max_support = std::max(max_support, m);
-            for (int h = 0; h + 2 <= L + 1; ++h) {
+            for (int h = 0; h <= L + 1; ++h) {
                 const int a = base_ref(g, h, m);
-                const int b = base_ref(g, h + 2, m);
-                if (a < 0 || b < 0) continue;
-                const int delta = b - a;
-                if (delta < std::numeric_limits<int16_t>::min() ||
-                    delta > std::numeric_limits<int16_t>::max()) return 4;
+                const int b = h + 2 <= L + 1 ? base_ref(g, h + 2, m) : -1;
+                int delta = 0;
+                if (a >= 0 && b >= 0) {
+                    delta = b - a;
+                    if (delta < std::numeric_limits<int16_t>::min() ||
+                        delta > std::numeric_limits<int16_t>::max()) return 4;
+                    min_delta = std::min(min_delta, delta);
+                    max_delta = std::max(max_delta, delta);
+                    ++delta_rows;
+                }
                 const uint32_t packed = uint32_t(uint16_t(int16_t(delta))) | (m << 16);
                 const int got_delta = int(int16_t(packed & 0xffffu));
                 const uint32_t got_support = (packed >> 16) & (LM - 1u);
                 ++rows;
                 if (got_delta != delta || got_support != m || (packed >> 30) != 0u) return 5;
+                if (a >= 0 && h + 2 > L + 1) {
+                    ++top_active_support_rows;
+                    if (got_support != m || got_delta != 0) return 6;
+                }
                 ++exact;
-                min_delta = std::min(min_delta, delta);
-                max_delta = std::max(max_delta, delta);
             }
         }
     }
 
-    if (codes != 1201917ull || rows == 0 || exact != rows ||
-        max_slot != 2049u || max_support >= LM) return 6;
+    if (codes != 1201917ull || rows == 0 || exact != rows || delta_rows == 0 ||
+        top_active_support_rows == 0 || max_slot != 2049u || max_support >= LM) return 7;
     std::cout << "gridfp-rankformula-slotrow32 OK"
               << " codes=" << codes
               << " rows=" << rows
               << " exact=" << exact
+              << " delta_rows=" << delta_rows
+              << " top_active_support_rows=" << top_active_support_rows
               << " support_bits=" << L
               << " delta_bits=16"
               << " packed_bits=30"
@@ -80,6 +89,7 @@ int main() {
               << " min_base_delta=" << min_delta
               << " max_base_delta=" << max_delta
               << " loads_per_lookup=1"
+              << " top_support_preserved=1"
               << " separate_slot_support=0\n";
     return 0;
 }
