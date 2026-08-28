@@ -143,7 +143,7 @@ __device__ __forceinline__ uint32_t p10dc_rankformula_code10_key(uint32_t code10
 template<int LEN>
 __device__ __forceinline__ uint32_t p10dc_cross5_apply_rankformula(
     uint32_t chunk, uint32_t code10, uint32_t& state,
-    const Count* source_row, uint32_t source_base, uint32_t dest_local,
+    const Count* source_row, int source_rank_origin,
     int& factor_h, uint32_t& rem, int& prefix_corr, BkczCrossAccum& sum
 ) {
     static_assert(LEN >= 1 && LEN <= P10DC_CROSS5_CHUNK);
@@ -156,9 +156,8 @@ __device__ __forceinline__ uint32_t p10dc_cross5_apply_rankformula(
             const uint32_t dest_contrib = bp & 0xffffu;
             const int diff = int(int16_t(bp >> 16));
             if (state == 1u) {
-                const int source_local = int(dest_local) + prefix_corr - int(dest_contrib);
-                sum = bkcz_cross_add(
-                    sum, source_row[source_base + uint32_t(source_local)]);
+                const int source_rank = source_rank_origin + prefix_corr - int(dest_contrib);
+                sum = bkcz_cross_add(sum, source_row[uint32_t(source_rank)]);
             }
             prefix_corr += diff;
             ++factor_h;
@@ -204,9 +203,8 @@ __device__ __forceinline__ uint32_t p10dc_cross5_apply_rankformula(
             const uint32_t dest_contrib = bp & 0xffffu;
             const int diff = int(int16_t(bp >> 16));
             if (rankmask & (1u << lordinal)) {
-                const int source_local = int(dest_local) + prefix_corr - int(dest_contrib);
-                sum = bkcz_cross_add(
-                    sum, source_row[source_base + uint32_t(source_local)]);
+                const int source_rank = source_rank_origin + prefix_corr - int(dest_contrib);
+                sum = bkcz_cross_add(sum, source_row[uint32_t(source_rank)]);
             }
             prefix_corr += diff;
             ++factor_h;
@@ -281,16 +279,21 @@ p10dc_resolved_low_preimages_cross5_rankformula_fast(
     }
 #endif
 
+    int source_rank_origin = 0;
+#if P10DC_RANKFORMULA_BASE_DELTA
+    source_rank_origin = int(rank) + p10dc_low_rankformula_base_delta(h, mask);
+#else
     uint32_t dest_base = 0, source_base = 0;
     p10dc_low_rankformula_base_pair(h, mask, dest_base, source_base);
-    const uint32_t dest_local = rank - dest_base;
+    source_rank_origin = int(source_base) + int(rank - dest_base);
+#endif
     uint32_t state = depth;
     uint32_t rem = uint32_t(__popc(mask));
     int factor_h = int(h), prefix_corr = 0;
     BkczCrossAccum sum = 0;
 
     uint32_t st = p10dc_cross5_apply_rankformula<L0>(
-        c0, x0, state, source_row, source_base, dest_local,
+        c0, x0, state, source_row, source_rank_origin,
         factor_h, rem, prefix_corr, sum);
     if (st == 1u) return sum;
 
@@ -298,7 +301,7 @@ p10dc_resolved_low_preimages_cross5_rankformula_fast(
         constexpr int L1 = S0 >= P10DC_CROSS5_CHUNK ? P10DC_CROSS5_CHUNK : S0;
         constexpr int S1 = S0 - L1;
         st = p10dc_cross5_apply_rankformula<L1>(
-            c1, x1, state, source_row, source_base, dest_local,
+            c1, x1, state, source_row, source_rank_origin,
             factor_h, rem, prefix_corr, sum);
         if (st == 1u) return sum;
         if constexpr (S1 > 0) {
@@ -306,7 +309,7 @@ p10dc_resolved_low_preimages_cross5_rankformula_fast(
             constexpr int S2 = S1 - L2;
             static_assert(S2 == 0, "rankformula K<=14 must fit in three chunks");
             p10dc_cross5_apply_rankformula<L2>(
-                c2, x2, state, source_row, source_base, dest_local,
+                c2, x2, state, source_row, source_rank_origin,
                 factor_h, rem, prefix_corr, sum);
         }
     }
