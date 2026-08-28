@@ -4,6 +4,7 @@ source "$(dirname -- "${BASH_SOURCE[0]}")/../lib/common.sh"
 
 NVCC="${NVCC:-nvcc}"
 ARCH="${ARCH:-native}"
+PTX_ARCH="${PTX_ARCH:-sm_103}"
 RUNS="${RUNS:-1}"
 MOD="${MOD:-4294967291}"
 TARGET_MIB="${TARGET_MIB:-16384}"
@@ -22,8 +23,7 @@ visible="$(nvidia-smi --query-gpu=index --format=csv,noheader | wc -l)"
 mkdir -p "$(dirname "$RESULT")" "$LOGDIR"
 
 bash "$ONEESAN_ROOT/scripts/bench/b300-vmm-production-generate-proof.sh"
-PTX_ARCH="${PTX_ARCH:-sm_103}" ARCH="$PTX_ARCH" \
-  bash "$ONEESAN_ROOT/scripts/bench/b300-vmm-production-ptx-proof.sh" \
+ARCH="$PTX_ARCH" bash "$ONEESAN_ROOT/scripts/bench/b300-vmm-production-ptx-proof.sh" \
   >"$LOGDIR/vmm_ptx.out" 2>"$LOGDIR/vmm_ptx.err"
 
 BIN_COMPARE="$ONEESAN_BUILD_DIR/oneesan_cuda_gridfp_b300_hbm32_n27_vmmab_compare"
