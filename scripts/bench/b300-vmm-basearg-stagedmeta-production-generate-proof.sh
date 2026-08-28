@@ -23,6 +23,9 @@ grep -Fq 'void stage_group_meta(const std::vector<DeviceGroupMeta>& h)' "$OUT"
 grep -Fq 'size_t meta_id=0' "$OUT"
 grep -Fq 'cudaMemcpyDeviceToDevice' "$OUT"
 grep -Fq 'c.dGroupMeta+pg.meta_id' "$OUT"
+grep -Fq 'B300_STAGED_META_MAX_MIB' "$OUT"
+grep -Fq 'staged group meta exceeds cap:' "$OUT"
+grep -Fq 'cap_mib=' "$OUT"
 grep -Fq 'staged group meta: groups=' "$OUT"
 grep -Fq 'copy_mode=H2D_once_then_D2D_per_group' "$OUT"
 grep -Fq 'staged_group_meta.clear();staged_group_meta.shrink_to_fit();' "$OUT"
@@ -30,4 +33,4 @@ for stale in 'DeviceGroupMeta hmeta{}' 'cudaMemcpyToSymbol(D_GROUP_META,&hmeta';
   if grep -Fq "$stale" "$OUT"; then echo "stagedmeta source still rebuilds/copies host metadata per group: $stale" >&2; exit 3; fi
 done
 
-echo "b300-vmm-basearg-stagedmeta-production-generate-proof OK group_meta_bytes=13936 staged_h2d_once=1 per_group_meta_copy=D2D_sync host_meta_rebuild_per_group=0 staged_device_copy=1 expected_default_groups=16384 expected_default_mib_per_gpu=217.75 expected_old_meta_h2d_gib=5.9541015625 expected_staged_total_h2d_gib=1.701171875 h2d_reduction=3.5x"
+echo "b300-vmm-basearg-stagedmeta-production-generate-proof OK group_meta_bytes=13936 staged_h2d_once=1 per_group_meta_copy=D2D_sync host_meta_rebuild_per_group=0 staged_device_copy=1 default_stage_cap_mib=512 expected_default_groups=16384 expected_default_mib_per_gpu=217.75 expected_old_meta_h2d_gib=5.9541015625 expected_staged_total_h2d_gib=1.701171875 h2d_reduction=3.5x"
