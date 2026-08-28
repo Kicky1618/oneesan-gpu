@@ -118,6 +118,17 @@ __device__ __forceinline__ bool runtime_discover_blocked_include_candidate_forwa
     MateID x, MateID blocked_dest, int W, int p,
     RuntimeDiscoveryValidityHint hint, Sink& sink
 ) {
+#if RP_RUNTIME_FAST_DISCOVERY_VALIDITY
+    // LL/RR generation can produce candidates which do not map to this blocked
+    // destination. Reject those with include_horizontal first, and pay the
+    // full O(W) validity scan only for candidates that otherwise match.
+    if (hint == RP_RUNTIME_DISCOVERY_CHECK_FULL) {
+        const IncludeResult z = include_horizontal(x, W, p);
+        if (!z.valid || !z.blocked || z.mate != blocked_dest) return true;
+        if (!valid_mate_device(x, W)) return true;
+        return sink.emit(DeviceKey{x, 0});
+    }
+#endif
     if (!runtime_discovery_candidate_valid(x, W, p, hint)) return true;
     const IncludeResult z = include_horizontal(x, W, p);
     if (!z.valid || !z.blocked || z.mate != blocked_dest) return true;
