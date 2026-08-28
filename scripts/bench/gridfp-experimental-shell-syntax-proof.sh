@@ -5,10 +5,13 @@ source "$(dirname -- "${BASH_SOURCE[0]}")/../lib/common.sh"
 FILES=(
   scripts/lib/gridfp-runtime-ab-env.sh
   scripts/bench/gridfp-runtime-ab-env-proof.sh
+  scripts/bench/gridfp-runtime-experimental-ab-isolation-proof.sh
   scripts/bench/gridfp-runtime-label-hotpath-proof-suite.sh
   scripts/bench/gridfp-runtime-w28-label-hotpath-suite.sh
   scripts/bench/gridfp-codec-table-layout-suite.sh
   scripts/bench/gridfp-build-nvcc-prepend-smoke.sh
+  scripts/bench/gridfp-reduced-runtime-owner-label-hotpath-ab.sh
+  scripts/bench/gridfp-reduced-runtime-owner-local-sector-compact-table-ab.sh
   scripts/bench/gridfp-reduced-runtime-label-hotpath-cumulative-ab.sh
   scripts/bench/gridfp-reduced-runtime-materialize-primitive-last-r-ab.sh
   scripts/bench/gridfp-reduced-runtime-materialize-primitive-packed-ab.sh
