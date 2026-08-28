@@ -2,6 +2,12 @@
 
 #include "gridfp_reduced_production_grouped_device.cuh"
 
+#ifndef RP_FAST_OWNER_SUPPORT_BITPACK
+#define RP_FAST_OWNER_SUPPORT_BITPACK 1
+#endif
+static_assert(RP_FAST_OWNER_SUPPORT_BITPACK == 0 || RP_FAST_OWNER_SUPPORT_BITPACK == 1,
+              "RP_FAST_OWNER_SUPPORT_BITPACK must be 0 or 1");
+
 namespace oneesan::gridfp::reducedprod {
 
 struct OwnerSrRangeDevice {
@@ -72,12 +78,48 @@ __device__ __forceinline__ void owner_expand_outer_support_device(
     int hi,
     std::uint32_t& full
 ) {
+#if RP_FAST_OWNER_SUPPORT_BITPACK
+    const int O = W - (hi - lo + 1);
+    if (O < 32) outer &= O ? ((std::uint32_t(1) << O) - 1u) : 0u;
+    const std::uint32_t low_mask = lo
+        ? ((std::uint32_t(1) << lo) - 1u)
+        : 0u;
+    full |= (outer & low_mask) | ((outer >> lo) << (hi + 1));
+#else
     int q = 0;
     for (int bit = 0; bit < W; ++bit) {
         if (bit >= lo && bit <= hi) continue;
         if ((outer >> q) & 1u) full |= std::uint32_t(1) << bit;
         ++q;
     }
+#endif
+}
+
+__device__ __forceinline__ void owner_expand_local_support_device(
+    std::uint32_t local,
+    int L,
+    int lo,
+    int missing_bit,
+    std::uint32_t& full
+) {
+#if RP_FAST_OWNER_SUPPORT_BITPACK
+    const int pos = missing_bit - lo;
+    const int len = L - 1;
+    if (len < 32) local &= len ? ((std::uint32_t(1) << len) - 1u) : 0u;
+    const std::uint32_t low_mask = pos
+        ? ((std::uint32_t(1) << pos) - 1u)
+        : 0u;
+    const std::uint32_t expanded =
+        (local & low_mask) | ((local & ~low_mask) << 1);
+    full |= expanded << lo;
+#else
+    int q = 0;
+    for (int bit = lo; bit < lo + L; ++bit) {
+        if (bit == missing_bit) continue;
+        if ((local >> q) & 1u) full |= std::uint32_t(1) << bit;
+        ++q;
+    }
+#endif
 }
 
 __device__ __forceinline__ std::uint32_t owner_label_lr_support_device(
@@ -85,6 +127,15 @@ __device__ __forceinline__ std::uint32_t owner_label_lr_support_device(
     int W,
     int missing_bit
 ) {
+#if RP_FAST_OWNER_SUPPORT_BITPACK
+    if (W <= 1) return 0;
+    const std::uint32_t low_mask = missing_bit
+        ? ((std::uint32_t(1) << missing_bit) - 1u)
+        : 0u;
+    const std::uint32_t compact =
+        (full & low_mask) | ((full >> (missing_bit + 1)) << missing_bit);
+    return __brev(compact) >> (32 - (W - 1));
+#else
     std::uint32_t out = 0;
     int q = 0;
     for (int pos = 0; pos < W; ++pos) {
@@ -94,6 +145,7 @@ __device__ __forceinline__ std::uint32_t owner_label_lr_support_device(
         ++q;
     }
     return out;
+#endif
 }
 
 // Unrank one production component label owned by `owner` for a particular
@@ -156,22 +208,18 @@ __device__ __forceinline__ MateID owner_component_label_unrank_device(
     const int missing = reverse ? p - 1 : p;
     const int mark_a = reverse ? p : p - 1;
     const int mark_b = reverse ? p + 1 : p - 2;
-    int mark0 = -1, mark1 = -1, avail = 0;
-    int local_bits[RP_MAX_W]{};
-    for (int bit = lo; bit <= hi; ++bit) {
-        if (bit == missing) continue;
-        if (bit == mark_a) mark0 = avail;
-        if (bit == mark_b) mark1 = avail;
-        local_bits[avail++] = bit;
-    }
-    if (mark0 < 0 || mark1 < 0 || avail != L - 1) return 0;
+    if (missing < lo || missing > hi || mark_a < lo || mark_a > hi ||
+        mark_b < lo || mark_b > hi) return 0;
+    const int mark0 = mark_a - lo - int(mark_a > missing);
+    const int mark1 = mark_b - lo - int(mark_b > missing);
+    if (mark0 < 0 || mark0 >= L - 1 || mark1 < 0 || mark1 >= L - 1 || mark0 == mark1)
+        return 0;
 
     const std::uint32_t local = component_support_unrank_device(
         L - 1, local_ones, mark0, mark1, local_sr);
     std::uint32_t full = 0;
     owner_expand_outer_support_device(outer, W, lo, hi, full);
-    for (int j = 0; j < L - 1; ++j)
-        if ((local >> j) & 1u) full |= std::uint32_t(1) << local_bits[j];
+    owner_expand_local_support_device(local, L, lo, missing, full);
     if ((full >> missing) & 1u) return 0;
 
     const int occupied = outer_ones + local_ones;
