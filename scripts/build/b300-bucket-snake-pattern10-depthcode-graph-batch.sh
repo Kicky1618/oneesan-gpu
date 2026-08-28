@@ -30,7 +30,6 @@ case "$DEPTHCODE_DECODE_LOAD" in global|ldg) ;; *) echo "DEPTHCODE_DECODE_LOAD m
 case "$RANKSTREAM_LUT_LOAD" in constant|ldg|ldg256) ;; *) echo "RANKSTREAM_LUT_LOAD must be constant, ldg, or ldg256" >&2; exit 2;; esac
 if [[ "$HIGH_CTX" == warpstriped_delta_direct_affine_rankchunk32_basepair64_cross5 ]]; then
   RANKCHUNK32_BYTEPACK=1
-  RANKCHUNK32_ALIGN32=1
   RANKCHUNK32_BLOCK64=0
 fi
 for x in RANKCHUNK32_ONESHFL RANKCHUNK32_FUSED16 RANKCHUNK32_BYTEPACK RANKCHUNK32_ALIGN32 RANKCHUNK32_BLOCK64 PM_ACCUM TERNARY_KEY4 PTXAS_VERBOSE; do
