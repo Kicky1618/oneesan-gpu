@@ -7,13 +7,36 @@
 
 namespace oneesan::gridfp::reducedprod {
 
+#ifndef RP_RUNTIME_CACHE_EDGES
+#define RP_RUNTIME_CACHE_EDGES 1
+#endif
+static_assert(RP_RUNTIME_CACHE_EDGES == 0 || RP_RUNTIME_CACHE_EDGES == 1,
+              "RP_RUNTIME_CACHE_EDGES must be 0 or 1");
+
 static constexpr int RP_RUNTIME_WARPS_PER_BLOCK = 8;
 static constexpr int RP_RUNTIME_SUBGROUPS_PER_WARP = 4;
 static constexpr int RP_RUNTIME_SUBGROUP_WIDTH = 8;
 static constexpr int RP_RUNTIME_MAX_PAIRS = 20;
+static constexpr int RP_RUNTIME_MAX_EDGE_TERMS = 3;
 static constexpr int RP_RUNTIME_THREADS = 32 * RP_RUNTIME_WARPS_PER_BLOCK;
 
-// Production-path interior transfer.  There is deliberately no per-component
+// Compact source->destination topology recorded while the component is already
+// being discovered. Destination keys themselves remain in sh_dst; the hot
+// accumulation loop needs only a byte-sized destination index and coefficient.
+// 20*(1 + 3 + 3) = 140 bytes/subgroup, or 4480 bytes/block.
+struct RuntimeEdgeCache {
+    std::uint8_t count[RP_RUNTIME_MAX_PAIRS];
+    std::uint8_t destination[RP_RUNTIME_MAX_PAIRS][RP_RUNTIME_MAX_EDGE_TERMS];
+    std::int8_t coefficient[RP_RUNTIME_MAX_PAIRS][RP_RUNTIME_MAX_EDGE_TERMS];
+};
+static_assert(sizeof(RuntimeEdgeCache) == 140,
+              "runtime edge cache footprint regression");
+static constexpr int RP_RUNTIME_EDGE_CACHE_BYTES_PER_BLOCK =
+    int(sizeof(RuntimeEdgeCache)) * RP_RUNTIME_WARPS_PER_BLOCK *
+    RP_RUNTIME_SUBGROUPS_PER_WARP;
+static_assert(RP_RUNTIME_EDGE_CACHE_BYTES_PER_BLOCK == 4480);
+
+// Production-path interior transfer. There is deliberately no per-component
 // accounting atomic: exactness probes can wrap this kernel externally, while
 // the performance path performs only state traffic and local reconstruction.
 __global__ void owner_component_runtime_subwarp_kernel(
@@ -46,6 +69,10 @@ __global__ void owner_component_runtime_subwarp_kernel(
                                                    [RP_RUNTIME_SUBGROUPS_PER_WARP];
     __shared__ int sh_ns[RP_RUNTIME_WARPS_PER_BLOCK][RP_RUNTIME_SUBGROUPS_PER_WARP];
     __shared__ int sh_nd[RP_RUNTIME_WARPS_PER_BLOCK][RP_RUNTIME_SUBGROUPS_PER_WARP];
+#if RP_RUNTIME_CACHE_EDGES
+    __shared__ RuntimeEdgeCache sh_edge[RP_RUNTIME_WARPS_PER_BLOCK]
+                                       [RP_RUNTIME_SUBGROUPS_PER_WARP];
+#endif
 
     const int lane = threadIdx.x & 31;
     const int warp = threadIdx.x >> 5;
@@ -81,30 +108,44 @@ __global__ void owner_component_runtime_subwarp_kernel(
                     sh_ns[warp][subgroup] = 1;
                     int cursor = 0;
                     while (cursor < sh_ns[warp][subgroup]) {
+                        const int source_ix = cursor++;
+#if RP_RUNTIME_CACHE_EDGES
+                        sh_edge[warp][subgroup].count[source_ix] = 0;
+#endif
                         RuntimeSmallTerms edge;
                         if (!runtime_small_step(
-                                sh_src[warp][subgroup][cursor++], W, q, reverse, edge)) {
+                                sh_src[warp][subgroup][source_ix], W, q, reverse, edge)) {
                             runtime_set_error(error, 303);
                             break;
                         }
                         for (int ei = 0; ei < edge.n; ++ei) {
                             if (!edge.v[ei].coef) continue;
                             const DeviceKey d = edge.v[ei].key;
-                            if (runtime_find_key(
-                                    sh_dst[warp][subgroup], sh_nd[warp][subgroup], d) >= 0)
-                                continue;
-                            if (sh_nd[warp][subgroup] >= RP_RUNTIME_MAX_PAIRS) {
-                                runtime_set_error(error, 304);
-                                break;
+                            int destination_ix = runtime_find_key(
+                                sh_dst[warp][subgroup], sh_nd[warp][subgroup], d);
+                            if (destination_ix < 0) {
+                                if (sh_nd[warp][subgroup] >= RP_RUNTIME_MAX_PAIRS) {
+                                    runtime_set_error(error, 304);
+                                    break;
+                                }
+                                destination_ix = sh_nd[warp][subgroup]++;
+                                sh_dst[warp][subgroup][destination_ix] = d;
+                                if (!discover_inverse_direction_to_set(
+                                        d, W, q, reverse,
+                                        sh_src[warp][subgroup], sh_ns[warp][subgroup],
+                                        RP_RUNTIME_MAX_PAIRS)) {
+                                    runtime_set_error(error, 305);
+                                    break;
+                                }
                             }
-                            sh_dst[warp][subgroup][sh_nd[warp][subgroup]++] = d;
-                            if (!discover_inverse_direction_to_set(
-                                    d, W, q, reverse,
-                                    sh_src[warp][subgroup], sh_ns[warp][subgroup],
-                                    RP_RUNTIME_MAX_PAIRS)) {
-                                runtime_set_error(error, 305);
-                                break;
-                            }
+#if RP_RUNTIME_CACHE_EDGES
+                            const std::uint8_t slot =
+                                sh_edge[warp][subgroup].count[source_ix]++;
+                            sh_edge[warp][subgroup].destination[source_ix][slot] =
+                                static_cast<std::uint8_t>(destination_ix);
+                            sh_edge[warp][subgroup].coefficient[source_ix][slot] =
+                                edge.v[ei].coef;
+#endif
                         }
                         if (error && *error) break;
                     }
@@ -139,6 +180,17 @@ __global__ void owner_component_runtime_subwarp_kernel(
                 continue;
             }
             long long acc = 0;
+#if RP_RUNTIME_CACHE_EDGES
+            for (int si = 0; si < ns; ++si) {
+                const std::uint8_t nedge = sh_edge[warp][subgroup].count[si];
+                for (std::uint8_t ei = 0; ei < nedge; ++ei) {
+                    if (sh_edge[warp][subgroup].destination[si][ei] == di)
+                        acc += static_cast<long long>(
+                                   sh_edge[warp][subgroup].coefficient[si][ei]) *
+                               static_cast<long long>(sh_value[warp][subgroup][si]);
+                }
+            }
+#else
             for (int si = 0; si < ns; ++si) {
                 RuntimeSmallTerms edge;
                 if (!runtime_small_step(sh_src[warp][subgroup][si], W, q, reverse, edge)) {
@@ -151,6 +203,7 @@ __global__ void owner_component_runtime_subwarp_kernel(
                                static_cast<long long>(sh_value[warp][subgroup][si]);
                 }
             }
+#endif
             long long z = acc % static_cast<long long>(mod);
             if (z < 0) z += mod;
             state[dgr.local] = static_cast<std::uint32_t>(z);
