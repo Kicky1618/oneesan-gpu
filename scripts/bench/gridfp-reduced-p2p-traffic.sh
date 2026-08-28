@@ -12,11 +12,13 @@ TRAFFIC_S="${TRAFFIC_S:-13}"
 TRAFFIC_BLOCKS="${TRAFFIC_BLOCKS:-4096}"
 MATRIX_BLOCKS="${MATRIX_BLOCKS:-4096}"
 RUN_MATRIX="${RUN_MATRIX:-1}"
+RUN_MAILBOX="${RUN_MAILBOX:-1}"
 NGPU="${NGPU:-8}"
 MAX_DIRECT_OVER_LOGICAL="${MAX_DIRECT_OVER_LOGICAL:-0}"
 
 BUILD_SCRIPT="$(repo_path scripts/build/gridfp-reduced-component-probe.sh)"
 CAP_BIN="$(build_path gridfp_reduced_component_p2p-capability)"
+MAILBOX_BIN="$(build_path gridfp_reduced_component_p2p-mailbox)"
 PROOF_BIN="$(build_path gridfp_reduced_component_support-rank)"
 LUT_BIN="$(build_path gridfp_reduced_component_p2p-owner-lut)"
 TRAFFIC_BIN="$(build_path gridfp_reduced_component_p2p-traffic)"
@@ -31,6 +33,10 @@ for spec in \
   bin="${spec#*:}"
   MODE="$mode" ARCH="$ARCH" OUT="$(basename "$bin")" bash "$BUILD_SCRIPT"
 done
+if [[ "$RUN_MAILBOX" == 1 ]]; then
+  MODE=p2p-mailbox ARCH="$ARCH" OUT="$(basename "$MAILBOX_BIN")" \
+    bash "$BUILD_SCRIPT"
+fi
 if [[ "$RUN_MATRIX" == 1 ]]; then
   MODE=p2p-traffic-matrix ARCH="$ARCH" OUT="$(basename "$MATRIX_BIN")" \
     bash "$BUILD_SCRIPT"
@@ -48,6 +54,15 @@ NATIVE_FASTPATH="$(printf '%s\n' "$CAP_OUTPUT" | awk '
     }
   }
 ')"
+
+if [[ "$RUN_MAILBOX" == 1 ]]; then
+  if [[ "${NATIVE_FASTPATH:-0}" == 1 ]]; then
+    echo "== native-atomic P2P mailbox ring =="
+    "$MAILBOX_BIN" "$NGPU"
+  else
+    echo "SKIP native-atomic P2P mailbox ring: full native atomic mesh unavailable"
+  fi
+fi
 
 echo "== support-only slab-rank equivalence =="
 "$PROOF_BIN" "$PROOF_W" "$PROOF_K" "$PROOF_BLOCKS" "$NGPU"
