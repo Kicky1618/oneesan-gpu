@@ -20,8 +20,7 @@ struct BucketPattern10DepthCodeWarpStripedDeltaDirectAffineRankStream32Cross5Gra
 
     void init(const StorageLayout& layout, int threads = 256, int gx = 16, int gy = 8) {
         p10dc_warpstriped_delta_direct_affine_rankstream32_cross5_require_threads(threads);
-        p10dc_install_cross5_lut();
-        p10dc_install_rankstream_lmask();
+        p10dc_install_rankstream_lut();
         ck(cudaStreamCreateWithFlags(&stream, cudaStreamNonBlocking), "pattern10 depthcode affine-rankstream32-cross5 graph stream");
         capture_one(BKOC_GRAPH_FORWARD_LOW, [&] { bucket_enqueue_low_orbit_closure_pattern10_depthcode_warpstriped_delta_direct_affine_rankstream32_cross5(layout, stream, threads, gx, gy); }, "capture pattern10 depthcode affine-rankstream32-cross5 forward LOW graph");
         capture_one(BKOC_GRAPH_FORWARD_HIGH, [&] { bucket_enqueue_high_orbit_closure_pattern10_depthcode_warpstriped_delta_direct_affine_rankstream32_cross5(layout, stream, threads, gx, gy); }, "capture pattern10 depthcode affine-rankstream32-cross5 forward HIGH graph");
