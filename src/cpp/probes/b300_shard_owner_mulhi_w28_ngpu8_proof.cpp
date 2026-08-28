@@ -66,6 +66,13 @@ u64 owner_mulhi_model(u64 g, u64 magic, int shift) {
     return static_cast<u64>((u128(g) * magic) >> shift);
 }
 
+u64 masked_base(u64 owner, u64 chunk) {
+    const u64 b0 = (u64(0) - (owner & 1ULL)) & chunk;
+    const u64 b1 = (u64(0) - ((owner >> 1) & 1ULL)) & (chunk << 1);
+    const u64 b2 = (u64(0) - ((owner >> 2) & 1ULL)) & (chunk << 2);
+    return b0 + b1 + b2;
+}
+
 bool prove_case(const char* name, u64 total, u64 expected_total,
                 int expected_shift, u64 expected_magic) {
     if (total != expected_total) {
@@ -82,6 +89,14 @@ bool prove_case(const char* name, u64 total, u64 expected_total,
             name, p.shift, (unsigned long long)p.magic,
             (unsigned long long)p.lo_magic, (unsigned long long)p.hi_magic);
         return false;
+    }
+
+    for (u64 owner = 0; owner < NGPU; ++owner) {
+        if (masked_base(owner, chunk) != owner * chunk) {
+            std::fprintf(stderr, "%s masked-base failure owner=%llu\n",
+                name, (unsigned long long)owner);
+            return false;
+        }
     }
 
     u64 endpoint_cases = 0;
@@ -109,8 +124,9 @@ bool prove_case(const char* name, u64 total, u64 expected_total,
                 return false;
             }
             const u64 local = g - owner * chunk;
-            if (local >= chunk) {
-                std::fprintf(stderr, "%s local overflow\n", name);
+            const u64 masked_local = g - masked_base(owner, chunk);
+            if (local >= chunk || masked_local != local) {
+                std::fprintf(stderr, "%s local/masked-base failure\n", name);
                 return false;
             }
             max_owner = std::max(max_owner, owner);
@@ -119,7 +135,7 @@ bool prove_case(const char* name, u64 total, u64 expected_total,
         }
     }
 
-    // The transformed quotient is monotone in g.  Exactness at every interval's
+    // The transformed quotient is monotone in g. Exactness at every interval's
     // first and last point therefore proves the entire integer interval.
     for (int q = 0; q < NGPU; ++q) {
         const u64 lo = u64(q) * chunk;
@@ -134,7 +150,8 @@ bool prove_case(const char* name, u64 total, u64 expected_total,
 
     std::printf(
         "%s total=%llu chunk=%llu shift=%d high_shift=%d magic=%llu "
-        "magic_bits=%d endpoint_cases=%llu max_owner=%llu max_local=%llu exact=1\n",
+        "magic_bits=%d endpoint_cases=%llu max_owner=%llu max_local=%llu "
+        "masked_base_exact=1 exact=1\n",
         name,
         (unsigned long long)total,
         (unsigned long long)chunk,
@@ -161,6 +178,8 @@ int main() {
     if (!ok_main || !ok_block) return 1;
     std::puts(
         "b300-shard-owner-mulhi-w28-ngpu8-proof OK cases=2 ngpu=8 "
-        "main_high_shift=9 block_high_shift=7 magic_unique=1 monotone_interval_proof=1 exact=1");
+        "main_high_shift=9 block_high_shift=7 magic_unique=1 "
+        "masked_base_exact=1 masked_base_mul64=0 masked_base_table=0 "
+        "monotone_interval_proof=1 exact=1");
     return 0;
 }
