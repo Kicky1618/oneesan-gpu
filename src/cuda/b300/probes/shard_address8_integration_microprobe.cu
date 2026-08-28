@@ -69,29 +69,29 @@ int main(int argc,char**argv){
     const Code stride=std::max<Code>(1,total/Code(n));
     const Code step=std::max<Code>(1,chunk/7+1);
 
-    std::vector<Count> h_data(size_t(total));
-    for(Code i=0;i<total;++i)h_data[size_t(i)]=Count((i*2654435761ULL+17ULL)&0xffffffffu);
+    auto h_data=std::vector<Count>(static_cast<size_t>(total));
+    for(Code i=0;i<total;++i)h_data[static_cast<size_t>(i)]=Count((i*2654435761ULL+17ULL)&0xffffffffu);
     Count* d_data=nullptr;Count* d_out=nullptr;Code* d_index=nullptr;
-    ck(cudaMalloc(&d_data,size_t(total)*sizeof(Count)),"alloc data");
-    ck(cudaMalloc(&d_out,size_t(n)*sizeof(Count)),"alloc out");
-    ck(cudaMalloc(&d_index,size_t(n)*sizeof(Code)),"alloc index");
-    ck(cudaMemcpy(d_data,h_data.data(),size_t(total)*sizeof(Count),cudaMemcpyHostToDevice),"copy data");
+    ck(cudaMalloc(&d_data,static_cast<size_t>(total)*sizeof(Count)),"alloc data");
+    ck(cudaMalloc(&d_out,static_cast<size_t>(n)*sizeof(Count)),"alloc out");
+    ck(cudaMalloc(&d_index,static_cast<size_t>(n)*sizeof(Code)),"alloc index");
+    ck(cudaMemcpy(d_data,h_data.data(),static_cast<size_t>(total)*sizeof(Count),cudaMemcpyHostToDevice),"copy data");
 
     Count* ptrs[MAXGPU]{};for(int g=0;g<ngpu;++g)ptrs[g]=d_data+Code(g)*chunk;
     ck(cudaMemcpyToSymbol(D_MAIN_PTR,ptrs,sizeof(ptrs)),"main ptrs");
     ck(cudaMemcpyToSymbol(D_MAIN_CHUNK,&chunk,sizeof(chunk)),"main chunk");
     ck(cudaMemcpyToSymbol(D_NGPU,&ngpu,sizeof(ngpu)),"ngpu");
 
-    std::vector<Code> h_index(size_t(n));
-    for(int i=0;i<n;++i)h_index[size_t(i)]=(Code(i)*stride)%total;
-    ck(cudaMemcpy(d_index,h_index.data(),size_t(n)*sizeof(Code),cudaMemcpyHostToDevice),"copy index");
+    auto h_index=std::vector<Code>(static_cast<size_t>(n));
+    for(int i=0;i<n;++i)h_index[static_cast<size_t>(i)]=(Code(i)*stride)%total;
+    ck(cudaMemcpy(d_index,h_index.data(),static_cast<size_t>(n)*sizeof(Code),cudaMemcpyHostToDevice),"copy index");
     shard_load_once_kernel<<<blocks,threads>>>(d_index,d_out,n);ck(cudaGetLastError(),"once launch");ck(cudaDeviceSynchronize(),"once sync");
-    std::vector<Count> h_once(size_t(n));ck(cudaMemcpy(h_once.data(),d_out,size_t(n)*sizeof(Count),cudaMemcpyDeviceToHost),"copy once");
-    for(int i=0;i<n;++i)if(h_once[size_t(i)]!=h_data[size_t(h_index[size_t(i)])]){std::fprintf(stderr,"mismatch i=%d\n",i);return 3;}
+    auto h_once=std::vector<Count>(static_cast<size_t>(n));ck(cudaMemcpy(h_once.data(),d_out,static_cast<size_t>(n)*sizeof(Count),cudaMemcpyDeviceToHost),"copy once");
+    for(int i=0;i<n;++i)if(h_once[static_cast<size_t>(i)]!=h_data[static_cast<size_t>(h_index[static_cast<size_t>(i)])]){std::fprintf(stderr,"mismatch i=%d\n",i);return 3;}
 
     run_once(d_out,n,blocks,threads,iters,total,stride,step);
-    std::vector<float> times;times.reserve(size_t(repeats));for(int r=0;r<repeats;++r)times.push_back(run_once(d_out,n,blocks,threads,iters,total,stride,step));
-    std::vector<Count> h_out(size_t(n));ck(cudaMemcpy(h_out.data(),d_out,size_t(n)*sizeof(Count),cudaMemcpyDeviceToHost),"copy out");
+    std::vector<float> times;times.reserve(static_cast<size_t>(repeats));for(int r=0;r<repeats;++r)times.push_back(run_once(d_out,n,blocks,threads,iters,total,stride,step));
+    auto h_out=std::vector<Count>(static_cast<size_t>(n));ck(cudaMemcpy(h_out.data(),d_out,static_cast<size_t>(n)*sizeof(Count),cudaMemcpyDeviceToHost),"copy out");
     std::uint64_t checksum=0;for(Count x:h_out)checksum+=x;
     const double ops=double(n)*double(iters);
     const double ms=median(times);
