@@ -6,8 +6,61 @@
 #ifndef P10DC_RANKCHUNK32_ONESHFL
 #define P10DC_RANKCHUNK32_ONESHFL 1
 #endif
+#ifndef P10DC_RANKCHUNK32_FUSED16
+#define P10DC_RANKCHUNK32_FUSED16 0
+#endif
 static_assert(P10DC_RANKCHUNK32_ONESHFL == 0 || P10DC_RANKCHUNK32_ONESHFL == 1,
               "P10DC_RANKCHUNK32_ONESHFL must be 0 or 1");
+static_assert(P10DC_RANKCHUNK32_FUSED16 == 0 || P10DC_RANKCHUNK32_FUSED16 == 1,
+              "P10DC_RANKCHUNK32_FUSED16 must be 0 or 1");
+
+#if P10DC_RANKCHUNK32_FUSED16
+// Rankchunk32 consumes both the state-dependent rank mask and the chunk-only
+// state delta/L-count. Pack both bytes into one 16-bit load. This intentionally
+// leaves the generic rankstream LUT untouched so the experiment is isolated.
+#if P10DC_RANKSTREAM_LUT_LDG
+__device__ __align__(128) uint16_t
+    D_P10DC_RANKCHUNK32_FUSED16[P10DC_CROSS5_STATES * P10DC_RANKSTREAM_LUT_STRIDE];
+#else
+__constant__ uint16_t
+    D_P10DC_RANKCHUNK32_FUSED16[P10DC_CROSS5_STATES * P10DC_RANKSTREAM_LUT_STRIDE];
+#endif
+
+static std::array<uint16_t, P10DC_CROSS5_STATES * P10DC_RANKSTREAM_LUT_STRIDE>
+p10dc_rankchunk32_fused16_table() {
+    std::array<uint16_t, P10DC_CROSS5_STATES * P10DC_RANKSTREAM_LUT_STRIDE> out{};
+    for (uint32_t s = 0; s < P10DC_CROSS5_STATES; ++s) {
+        for (uint32_t k = 0; k < P10DC_CROSS5_KEYS; ++k) {
+            const uint16_t e = uint16_t(p10dc_rankstream_host_entry(k, s));
+            const uint16_t meta = uint16_t(p10dc_rankstream_meta_host(k));
+            out[size_t(s) * P10DC_RANKSTREAM_LUT_STRIDE + k] = e | (meta << 8);
+        }
+    }
+    return out;
+}
+
+static void p10dc_install_rankchunk32_lut() {
+    static const auto table = p10dc_rankchunk32_fused16_table();
+    ck(cudaMemcpyToSymbol(D_P10DC_RANKCHUNK32_FUSED16, table.data(),
+                          table.size() * sizeof(uint16_t)),
+       "p10dc rankchunk32 fused16 CROSS5 table");
+}
+
+__device__ __forceinline__ uint16_t p10dc_rankchunk32_pair_load(
+    uint32_t state, uint32_t chunk
+) {
+    const size_t ix = size_t(state) * P10DC_RANKSTREAM_LUT_STRIDE + chunk;
+#if P10DC_RANKSTREAM_LUT_LDG
+    return __ldg(D_P10DC_RANKCHUNK32_FUSED16 + ix);
+#else
+    return D_P10DC_RANKCHUNK32_FUSED16[ix];
+#endif
+}
+#else
+static void p10dc_install_rankchunk32_lut() {
+    p10dc_install_rankstream_lut();
+}
+#endif
 
 // Height-local rankchunk metadata is 32-entry aligned.  A warp stripe therefore
 // covers at most the two fixed 16-entry blocks sourced by lanes 0 and 16.
@@ -40,8 +93,13 @@ __device__ __forceinline__ uint32_t p10dc_cross5_apply_rankchunk32(
     uint32_t chunk, uint32_t& state, const Count* source_row,
     const uint16_t* rank_row, uint32_t& lbase, BkczCrossAccum& sum
 ) {
+#if P10DC_RANKCHUNK32_FUSED16
+    const uint16_t pair = p10dc_rankchunk32_pair_load(state, chunk);
+    const uint8_t e = uint8_t(pair);
+#else
     const uint8_t e = p10dc_rankstream_entry_load(
         size_t(state) * P10DC_RANKSTREAM_LUT_STRIDE + chunk);
+#endif
     uint8_t rankmask = uint8_t(e & P10DC_CROSS5_MASK_MASK);
     while (rankmask) {
         const int ordinal = __ffs(int(rankmask)) - 1;
@@ -51,7 +109,11 @@ __device__ __forceinline__ uint32_t p10dc_cross5_apply_rankchunk32(
     }
     if (((e >> P10DC_CROSS5_HALT_SHIFT) & 1u) != 0) return 1u;
 
+#if P10DC_RANKCHUNK32_FUSED16
+    const uint8_t meta = uint8_t(pair >> 8);
+#else
     const uint8_t meta = p10dc_rankstream_meta_load(chunk);
+#endif
     lbase += uint32_t(meta & P10DC_RANKSTREAM_META_LCOUNT_MASK);
     state = uint32_t(
         int(state) + int(meta >> P10DC_RANKSTREAM_META_DELTA_SHIFT)
