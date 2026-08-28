@@ -8,6 +8,7 @@ if [[ "$N" != 27 ]]; then
   exit 2
 fi
 W=$((N + 1))
+NVCC="${NVCC:-nvcc}"
 ARCH="${ARCH:-native}"
 LOW_LUT_K="${LOW_LUT_K:-13}"
 HIGH_LUT_K="${HIGH_LUT_K:-13}"
@@ -17,12 +18,12 @@ PRUNE="$ONEESAN_ROOT/scripts/build/prune-b300-vmm-stale-shard-symbols.py"
 GENSRC="${GENSRC:-$ONEESAN_BUILD_DIR/generated_b300_hbm32_vmm_n${N}.cu}"
 OUT="$(build_path "${OUT:-oneesan_cuda_gridfp_b300_hbm32_vmm_n${N}}")"
 
-command -v nvcc >/dev/null || { echo "nvcc not found" >&2; exit 2; }
+require_nvcc_version_at_least "$NVCC" 13 0 "B300 sm_103/VMM production"
 bash "$ONEESAN_ROOT/scripts/bench/b300-vmm-production-generate-proof.sh"
 python3 "$GEN" "$SRC" "$GENSRC"
 python3 "$PRUNE" "$GENSRC" "$GENSRC"
 
-TMPDIR="$ONEESAN_TMP_DIR" nvcc \
+TMPDIR="$ONEESAN_TMP_DIR" "$NVCC" \
   -O3 -std=c++17 -lineinfo \
   -arch="$ARCH" \
   -I"$ONEESAN_ROOT/src/cuda/b300" \
