@@ -46,15 +46,19 @@ __device__ __forceinline__ uint32_t p10dc_cross5_apply_rankdelta8(
 #endif
     const uint32_t lcount = uint32_t(meta & P10DC_RANKSTREAM_META_LCOUNT_MASK);
     const uint32_t rankmask = uint32_t(e & P10DC_CROSS5_MASK_MASK);
+    const bool halt = ((e >> P10DC_CROSS5_HALT_SHIFT) & 1u) != 0;
+    const uint32_t consume = halt
+        ? (rankmask ? 32u - uint32_t(__clz(rankmask)) : 0u)
+        : lcount;
 #pragma unroll
     for (uint32_t ordinal = 0; ordinal < P10DC_CROSS5_CHUNK; ++ordinal) {
-        if (ordinal < lcount) {
+        if (ordinal < consume) {
             const uint32_t source_rank = p10dc_rankdelta8_next(cursor);
             if (rankmask & (1u << ordinal))
                 sum = bkcz_cross_add(sum, source_row[source_rank]);
         }
     }
-    if (((e >> P10DC_CROSS5_HALT_SHIFT) & 1u) != 0) return 1u;
+    if (halt) return 1u;
     state = uint32_t(
         int(state) + int(meta >> P10DC_RANKSTREAM_META_DELTA_SHIFT)
         - P10DC_RANKSTREAM_META_DELTA_BIAS);
