@@ -3,9 +3,15 @@
 #include "ramstream32_bucket_low_prekey_rankstream.cuh"
 #include "ramstream32_bucket_closure_cross5_common.cuh"
 
+#ifndef P10DC_RANKCHUNK32_ONESHFL
+#define P10DC_RANKCHUNK32_ONESHFL 1
+#endif
+static_assert(P10DC_RANKCHUNK32_ONESHFL == 0 || P10DC_RANKCHUNK32_ONESHFL == 1,
+              "P10DC_RANKCHUNK32_ONESHFL must be 0 or 1");
+
 // Three CROSS5 chunks need only 23 bits for LOW_LUT_K<=14: the first two
 // chunks use 8 bits each (0..242), while the final chunk has at most four
-// ternary digits and therefore fits in 7 bits (0..80).  The reclaimed bit
+// ternary digits and therefore fits in 7 bits (0..80). The reclaimed bit
 // grows the within-block rankstream prefix from 8 to 9 bits, allowing 32-code
 // metadata blocks with no per-height padding.
 static constexpr uint32_t P10DC_RANKCHUNK32_BLOCK_LOG2 = 5u;
@@ -75,9 +81,10 @@ __device__ __forceinline__ void p10dc_low_rankchunk32_row(
 }
 
 // A contiguous 32-lane stripe can intersect at most two 32-code metadata
-// blocks even when a height begins at an arbitrary compact index. Lane 0 loads
-// the first block base; if the stripe crosses a boundary, the lane at that
-// boundary loads the second and broadcasts it. No height padding is required.
+// blocks even when a height begins at an arbitrary compact index. At most two
+// lanes load block bases. In the default path every lane chooses lane 0 or the
+// boundary lane as its source in one variable-index shuffle. The two-shuffle
+// form remains available as an A/B baseline.
 __device__ __forceinline__ void p10dc_low_rankchunk32_row_warpstripe(
     uint32_t h, uint32_t rank, uint32_t& packed_chunks, const uint16_t*& row
 ) {
@@ -93,10 +100,19 @@ __device__ __forceinline__ void p10dc_low_rankchunk32_row_warpstripe(
     const uint32_t first_off = first_compact & (P10DC_RANKCHUNK32_BLOCK - 1u);
     const uint32_t split_lane = P10DC_RANKCHUNK32_BLOCK - first_off; // [1,32]
 
+#if P10DC_RANKCHUNK32_ONESHFL
+    uint32_t local_base = 0;
+    if (lane == 0u)
+        local_base = D_P10DC_LOW_RANKCHUNKBLOCK16[first_block];
+    if (split_lane < 32u && lane == split_lane)
+        local_base = D_P10DC_LOW_RANKCHUNKBLOCK16[first_block + 1u];
+    const uint32_t source_lane =
+        (split_lane < 32u && lane >= split_lane) ? split_lane : 0u;
+    const uint32_t block_base = __shfl_sync(active, local_base, int(source_lane));
+#else
     uint32_t b0_local = 0;
     if (lane == 0u) b0_local = D_P10DC_LOW_RANKCHUNKBLOCK16[first_block];
     uint32_t block_base = __shfl_sync(active, b0_local, 0);
-
     if (split_lane < 32u) {
         const unsigned split_bit = 1u << split_lane;
         if (active & split_bit) {
@@ -107,6 +123,7 @@ __device__ __forceinline__ void p10dc_low_rankchunk32_row_warpstripe(
             if (lane >= split_lane) block_base = b1;
         }
     }
+#endif
     row = D_P10DC_LOW_RANKSTREAM + block_base + prefix;
 }
 
@@ -216,6 +233,7 @@ struct BucketFusedDirectHighRowsRankChunk32Tables
                   << " meta_entries=" << meta.size() << " padding=0"
                   << " chunk_bits=23 prefix_bits=9 block=32 height_align=1"
                   << " block_base_loads_per_warp_max=2"
+                  << " block_base_shuffles_per_warp=" << (P10DC_RANKCHUNK32_ONESHFL ? 1 : 2)
                   << " chunk_div_runtime=0 chunk_mod_runtime=0"
                   << " old_prekey_offset_arrays_freed=1 direct_lookup_runtime=0\n";
     }
