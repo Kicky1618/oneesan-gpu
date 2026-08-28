@@ -13,11 +13,13 @@ ORDER_SRC="$(repo_path src/cpp/probes/gridfp_reduced_production_persistent_pipel
 RACE_SRC="$(repo_path src/cpp/probes/gridfp_reduced_production_persistent_pipeline_race_probe.cpp)"
 EVENT_RACE_SRC="$(repo_path src/cpp/probes/gridfp_reduced_production_persistent_event_race_probe.cpp)"
 EAGER_LOAD_SRC="$(repo_path src/cpp/probes/gridfp_reduced_production_persistent_eager_load_probe.cpp)"
+LEADER_HASH_SRC="$(repo_path src/cpp/probes/gridfp_reduced_production_leader_batch_hash_probe.cpp)"
 PLAN_BIN="$(build_path gridfp_reduced_production_persistent_pipeline_plan_probe)"
 ORDER_BIN="$(build_path gridfp_reduced_production_persistent_pipeline_order_probe)"
 RACE_BIN="$(build_path gridfp_reduced_production_persistent_pipeline_race_probe)"
 EVENT_RACE_BIN="$(build_path gridfp_reduced_production_persistent_event_race_probe)"
 EAGER_LOAD_BIN="$(build_path gridfp_reduced_production_persistent_eager_load_probe)"
+LEADER_HASH_BIN="$(build_path gridfp_reduced_production_leader_batch_hash_probe)"
 
 # shellcheck disable=SC2086
 "$CXX" $CXXFLAGS "$PLAN_SRC" -o "$PLAN_BIN"
@@ -29,17 +31,21 @@ EAGER_LOAD_BIN="$(build_path gridfp_reduced_production_persistent_eager_load_pro
 "$CXX" $CXXFLAGS "$EVENT_RACE_SRC" -o "$EVENT_RACE_BIN"
 # shellcheck disable=SC2086
 "$CXX" $CXXFLAGS "$EAGER_LOAD_SRC" -o "$EAGER_LOAD_BIN"
+# shellcheck disable=SC2086
+"$CXX" $CXXFLAGS "$LEADER_HASH_SRC" -o "$LEADER_HASH_BIN"
 
 PLAN_OUTPUT="$($PLAN_BIN "$NODE_HBM_TBPS" "$NODE_NVLINK_TBPS")"
 ORDER_OUTPUT="$($ORDER_BIN "$NODE_HBM_TBPS" "$NODE_NVLINK_TBPS")"
 RACE_OUTPUT="$($RACE_BIN)"
 EVENT_RACE_OUTPUT="$($EVENT_RACE_BIN)"
 EAGER_LOAD_OUTPUT="$($EAGER_LOAD_BIN "$NODE_HBM_TBPS")"
+LEADER_HASH_OUTPUT="$($LEADER_HASH_BIN)"
 printf '%s\n' "$PLAN_OUTPUT"
 printf '%s\n' "$ORDER_OUTPUT"
 printf '%s\n' "$RACE_OUTPUT"
 printf '%s\n' "$EVENT_RACE_OUTPUT"
 printf '%s\n' "$EAGER_LOAD_OUTPUT"
+printf '%s\n' "$LEADER_HASH_OUTPUT"
 
 if ! printf '%s\n' "$PLAN_OUTPUT" | grep -q 'ALL_OK production_persistent_pipeline_plan=1'; then
   echo "persistent pipeline plan missing ALL_OK" >&2
@@ -60,6 +66,10 @@ fi
 if ! printf '%s\n' "$EAGER_LOAD_OUTPUT" | grep -q 'ALL_OK production_persistent_eager_load=1'; then
   echo "persistent eager load plan missing ALL_OK" >&2
   exit 10
+fi
+if ! printf '%s\n' "$LEADER_HASH_OUTPUT" | grep -q 'ALL_OK production_leader_batch_hash=1 exact_W28=1'; then
+  echo "production leader batch hash audit missing ALL_OK" >&2
+  exit 11
 fi
 
 for direction in forward reverse; do
@@ -84,4 +94,18 @@ for direction in forward reverse; do
   fi
 done
 
-echo "persistent-pipeline-plan exact=OK batches=16 double_scratch=1 exact_order_dp=1 overlap_race_proof=1 event_fanin_race_proof=1 eager_load_smoothing=1 node_HBM_TBps=$NODE_HBM_TBPS node_NVLink_TBps=$NODE_NVLINK_TBPS"
+BAL_HEADROOM="$(printf '%s\n' "$LEADER_HASH_OUTPUT" | awk '
+  /leader-batch-hash/ && /scheme=leader-shift12/ {
+    for(i=1;i<=NF;++i) if($i~/^B300_headroom_GiB=/){split($i,a,"=");print a[2];exit}
+  }
+')"
+if [[ -z "$BAL_HEADROOM" ]]; then
+  echo "leader batch hash audit missing balanced B300 headroom" >&2
+  exit 12
+fi
+if ! awk -v got="$BAL_HEADROOM" -v want="20" 'BEGIN { exit !(got + 0 >= want + 0) }'; then
+  echo "balanced leader hash B300 headroom unexpectedly small got=$BAL_HEADROOM" >&2
+  exit 13
+fi
+
+echo "persistent-pipeline-plan exact=OK batches=16 double_scratch=1 exact_order_dp=1 overlap_race_proof=1 event_fanin_race_proof=1 eager_load_smoothing=1 balanced_leader_hash=1 batch_hash_shift=12 node_HBM_TBps=$NODE_HBM_TBPS node_NVLink_TBps=$NODE_NVLINK_TBPS"
