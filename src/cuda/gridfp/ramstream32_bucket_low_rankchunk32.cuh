@@ -9,24 +9,34 @@
 static_assert(P10DC_RANKCHUNK32_ONESHFL == 0 || P10DC_RANKCHUNK32_ONESHFL == 1,
               "P10DC_RANKCHUNK32_ONESHFL must be 0 or 1");
 
-// Three CROSS5 chunks need only 23 bits for LOW_LUT_K<=14: the first two
-// chunks use 8 bits each (0..242), while the final chunk has at most four
-// ternary digits and therefore fits in 7 bits (0..80). The reclaimed bit
-// grows the within-block rankstream prefix from 8 to 9 bits, allowing 32-code
-// metadata blocks with no per-height padding.
+#ifndef P10DC_RANKCHUNK32_BYTEPACK
+#define P10DC_RANKCHUNK32_BYTEPACK 0
+#endif
+static_assert(P10DC_RANKCHUNK32_BYTEPACK == 0 || P10DC_RANKCHUNK32_BYTEPACK == 1,
+              "P10DC_RANKCHUNK32_BYTEPACK must be 0 or 1");
+
+// Both layouts use 32-code blocks. Compact mode stores the final <=4-digit
+// chunk in 7 bits and gives the prefix 9 bits. Bytepack mode keeps three clean
+// chunk bytes and uses an 8-bit prefix. Legal LOW codes satisfy #L<=#R, so a
+// K<=14 code contains at most floor(K/2)<=7 L digits; therefore the largest
+// prefix before the 32nd code is 31*7=217 and still fits in 8 bits.
 static constexpr uint32_t P10DC_RANKCHUNK32_BLOCK_LOG2 = 5u;
 static constexpr uint32_t P10DC_RANKCHUNK32_BLOCK = 1u << P10DC_RANKCHUNK32_BLOCK_LOG2;
 static constexpr uint32_t P10DC_RANKCHUNK32_HEIGHT_ALIGN = 1u; // compatibility: no padding
-static constexpr uint32_t P10DC_RANKCHUNK32_CHUNK_BITS = 23u;
-static constexpr uint32_t P10DC_RANKCHUNK32_PREFIX_BITS = 9u;
+static constexpr uint32_t P10DC_RANKCHUNK32_CHUNK_BITS = P10DC_RANKCHUNK32_BYTEPACK ? 24u : 23u;
+static constexpr uint32_t P10DC_RANKCHUNK32_PREFIX_BITS = 32u - P10DC_RANKCHUNK32_CHUNK_BITS;
 static constexpr uint32_t P10DC_RANKCHUNK32_CHUNK_MASK = (1u << P10DC_RANKCHUNK32_CHUNK_BITS) - 1u;
+static constexpr uint32_t P10DC_RANKCHUNK32_MAX_L_PER_LEGAL_CODE = uint32_t(LOW_LUT_K / 2);
 static_assert(P10DC_RANKCHUNK32_CHUNK_BITS + P10DC_RANKCHUNK32_PREFIX_BITS == 32u);
 static_assert(LOW_LUT_K <= 14, "rankchunk32 assumes at most three CROSS5 chunks");
-static_assert((P10DC_RANKCHUNK32_BLOCK - 1u) * uint32_t(LOW_LUT_K) <
-              (1u << P10DC_RANKCHUNK32_PREFIX_BITS),
-              "rankchunk32 worst-case within-block prefix no longer fits 9 bits");
+static_assert(
+    (P10DC_RANKCHUNK32_BLOCK - 1u) *
+        (P10DC_RANKCHUNK32_BYTEPACK ? P10DC_RANKCHUNK32_MAX_L_PER_LEGAL_CODE
+                                    : uint32_t(LOW_LUT_K)) <
+        (1u << P10DC_RANKCHUNK32_PREFIX_BITS),
+    "rankchunk32 within-block prefix no longer fits selected packing");
 static_assert(p10dc_cross5_pow3_host(4) <= (1u << 7),
-              "rankchunk32 four-digit tail no longer fits 7 bits");
+              "rankchunk32 four-digit tail no longer fits 7 value bits");
 
 static constexpr uint32_t p10dc_rankchunk32_pack_host(uint32_t key) {
     constexpr int L0 = LOW_LUT_K >= P10DC_CROSS5_CHUNK ? P10DC_CROSS5_CHUNK : LOW_LUT_K;
@@ -41,7 +51,7 @@ static constexpr uint32_t p10dc_rankchunk32_pack_host(uint32_t key) {
             constexpr int L2 = S1 >= P10DC_CROSS5_CHUNK ? P10DC_CROSS5_CHUNK : S1;
             constexpr int S2 = S1 - L2;
             static_assert(S2 == 0, "rankchunk32 K<=14 must fit in three chunks");
-            static_assert(L2 <= 4, "rankchunk32 tail must fit the 7-bit third chunk");
+            static_assert(L2 <= 4, "rankchunk32 tail must fit the third chunk byte");
             c2 = key % p10dc_cross5_pow3_host(L2);
         }
     }
@@ -56,7 +66,8 @@ static constexpr uint32_t p10dc_rankchunk32_unpack_host(uint32_t packed) {
         constexpr int L1 = S0 >= P10DC_CROSS5_CHUNK ? P10DC_CROSS5_CHUNK : S0;
         constexpr int S1 = S0 - L1;
         key += ((packed >> 8) & 0xffu) * p10dc_cross5_pow3_host(S1);
-        if constexpr (S1 > 0) key += (packed >> 16) & 0x7fu;
+        if constexpr (S1 > 0)
+            key += (packed >> 16) & (P10DC_RANKCHUNK32_BYTEPACK ? 0xffu : 0x7fu);
     }
     return key;
 }
@@ -170,16 +181,20 @@ struct BucketFusedDirectHighRowsRankChunk32Tables
                 const uint32_t code = f.low_codes[i];
                 const uint32_t key = gpu_direct_ternary_key_host(code, LOW_LUT_K);
                 const uint32_t chunks = p10dc_rankchunk32_pack_host(key);
+                uint32_t lcount = 0;
+                for (int pos = 0; pos < LOW_LUT_K; ++pos)
+                    if (((code >> (2 * pos)) & 3u) == uint32_t(::L)) ++lcount;
                 if ((chunks >> P10DC_RANKCHUNK32_CHUNK_BITS) != 0u ||
                     p10dc_rankchunk32_unpack_host(chunks) != key ||
-                    prefix >= (1u << P10DC_RANKCHUNK32_PREFIX_BITS)) {
+                    prefix >= (1u << P10DC_RANKCHUNK32_PREFIX_BITS) ||
+                    lcount > P10DC_RANKCHUNK32_MAX_L_PER_LEGAL_CODE) {
                     std::cerr << "p10dc rankchunk32 packing failure key=" << key
-                              << " chunks=" << chunks << " prefix=" << prefix << '\n';
+                              << " chunks=" << chunks << " prefix=" << prefix
+                              << " lcount=" << lcount << '\n';
                     std::exit(662);
                 }
                 meta.push_back(chunks | (prefix << P10DC_RANKCHUNK32_CHUNK_BITS));
-                for (int pos = 0; pos < LOW_LUT_K; ++pos)
-                    if (((code >> (2 * pos)) & 3u) == uint32_t(::L)) ++stream_cursor;
+                stream_cursor += lcount;
             }
         }
         if (meta.size() != low_prekey_count || stream_cursor != low_rankstream_count) {
@@ -231,7 +246,11 @@ struct BucketFusedDirectHighRowsRankChunk32Tables
                   << " codes=" << meta.size() << " blocks=" << blocks.size()
                   << " l_ranks=" << low_rankstream_count << " bytes=" << bytes
                   << " meta_entries=" << meta.size() << " padding=0"
-                  << " chunk_bits=23 prefix_bits=9 block=32 height_align=1"
+                  << " chunk_bits=" << P10DC_RANKCHUNK32_CHUNK_BITS
+                  << " prefix_bits=" << P10DC_RANKCHUNK32_PREFIX_BITS
+                  << " block=32 height_align=1"
+                  << " byte_aligned_chunks=" << P10DC_RANKCHUNK32_BYTEPACK
+                  << " max_l_per_legal_code=" << P10DC_RANKCHUNK32_MAX_L_PER_LEGAL_CODE
                   << " block_base_loads_per_warp_max=2"
                   << " block_base_shuffles_per_warp=" << (P10DC_RANKCHUNK32_ONESHFL ? 1 : 2)
                   << " chunk_div_runtime=0 chunk_mod_runtime=0"
