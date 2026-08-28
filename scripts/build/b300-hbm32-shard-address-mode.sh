@@ -13,12 +13,12 @@ GENERATOR="$ONEESAN_ROOT/scripts/build/gen-b300-shard-address-mode.py"
 GENSRC="${GENSRC:-$ONEESAN_BUILD_DIR/generated_b300_hbm32_n${N}_shardmode${MODE}.cu}"
 OUT="$(build_path "${OUT:-oneesan_cuda_gridfp_b300_hbm32_n${N}_shardmode${MODE}}")"
 
-if [[ "$MODE" != 0 && "$MODE" != 1 && "$MODE" != 2 ]]; then
-  echo "SHARD_ADDRESS_MODE must be 0, 1, or 2" >&2
+if [[ "$MODE" != 0 && "$MODE" != 1 && "$MODE" != 2 && "$MODE" != 3 ]]; then
+  echo "SHARD_ADDRESS_MODE must be 0, 1, 2, or 3" >&2
   exit 2
 fi
-if [[ "$MODE" == 2 && "$N" != 27 ]]; then
-  echo "SHARD_ADDRESS_MODE=2 is specialized for n=27 / W=28" >&2
+if (( MODE >= 2 )) && [[ "$N" != 27 ]]; then
+  echo "SHARD_ADDRESS_MODE>=2 is specialized for n=27 / W=28" >&2
   exit 2
 fi
 if [[ -z "$LOW_LUT_K" ]]; then
@@ -28,8 +28,11 @@ if [[ -z "$HIGH_LUT_K" ]]; then
   if (( N >= 27 )); then HIGH_LUT_K=13; else HIGH_LUT_K=0; fi
 fi
 
-if [[ "$MODE" == 2 ]]; then
+if (( MODE >= 2 )); then
   bash "$ONEESAN_ROOT/scripts/bench/b300-shard-owner-mulhi-w28-ngpu8-proof.sh"
+fi
+if [[ "$MODE" == 3 ]]; then
+  bash "$ONEESAN_ROOT/scripts/bench/b300-shard-owner-u32limb-w28-ngpu8-proof.sh"
 fi
 python3 "$GENERATOR" "$SRC" "$GENSRC"
 
@@ -49,4 +52,5 @@ echo "  generated_source=$GENSRC"
 echo "  n=$N width=$W arch=$ARCH low_lut_k=$LOW_LUT_K high_lut_k=$HIGH_LUT_K shard_address_mode=$MODE"
 echo "  mode0=runtime_u64_division"
 echo "  mode1=three_compare_subtract_stages"
-echo "  mode2=w28x8_mulhi_masked_base"
+echo "  mode2=w28x8_mulhi64_masked_base"
+echo "  mode3=w28x8_pure_u32_limb_masked_base"
