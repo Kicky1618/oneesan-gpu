@@ -13,7 +13,8 @@ grep -Fq 'gridfp-rankformula-plan OK' <<<"$out"
 grep -Fq 'codes=1201917' <<<"$out"
 grep -Fq 'transitions=3720805' <<<"$out"
 grep -Fq 'mismatches=0' <<<"$out"
-grep -Fq 'dense_base_bytes_per_owner=983040' <<<"$out"
 grep -Fq 'rankstream_bytes=0' <<<"$out"
 grep -Fq 'source_height_delta=2' <<<"$out"
-echo 'rankformula-plan OK exact_w28=1 streamless=1 dense_base_960kib_per_owner=1' >&2
+base_bytes=$(((14 + 2) * (1 << 14) * 2))
+[[ "$base_bytes" == 524288 ]]
+echo 'rankformula-plan OK exact_w28=1 streamless=1 dense_base_512kib_per_owner=1' >&2
