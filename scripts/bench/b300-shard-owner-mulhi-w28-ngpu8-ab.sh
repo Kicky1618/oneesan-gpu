@@ -8,7 +8,7 @@ PTX_ARCH="${PTX_ARCH:-sm_80}"
 BLOCKS="${BLOCKS:-256}"
 THREADS="${THREADS:-256}"
 ITERS="${ITERS:-8192}"
-RUNS="${RUNS:-15}"
+RUNS="${RUNS:-18}"
 PTXAS_VERBOSE="${PTXAS_VERBOSE:-1}"
 if (( BLOCKS < 1 || THREADS < 1 || THREADS > 1024 || ITERS < 1 || RUNS < 1 )); then
   echo "invalid BLOCKS/THREADS/ITERS/RUNS" >&2
@@ -19,6 +19,7 @@ command -v nvidia-smi >/dev/null || { echo "nvidia-smi not found" >&2; exit 2; }
 
 bash "$ONEESAN_ROOT/scripts/bench/b300-shard-owner-mulhi-w28-ngpu8-proof.sh"
 bash "$ONEESAN_ROOT/scripts/bench/b300-shard-owner-u32limb-w28-ngpu8-proof.sh"
+bash "$ONEESAN_ROOT/scripts/bench/b300-shard-owner-u32shift-w28-ngpu8-proof.sh"
 ARCH="$PTX_ARCH" bash "$ONEESAN_ROOT/scripts/bench/b300-shard-owner-mulhi-w28-ngpu8-ptx-proof.sh"
 
 SRC="$ONEESAN_ROOT/src/cuda/b300/probes/shard_owner_mulhi_w28_ngpu8_microprobe.cu"
@@ -38,7 +39,7 @@ build_one() {
     "$SRC" -o "$bin" >"$LOGDIR/mode_${mode}.build.out" 2>"$LOGDIR/mode_${mode}.build.err"
 }
 BINS=()
-for mode in 0 1 2 3 4; do
+for mode in 0 1 2 3 4 5; do
   BINS[$mode]="$ONEESAN_BUILD_DIR/b300_shard_owner_mulhi_w28_g8_mode${mode}"
   build_one "$mode" "${BINS[$mode]}"
 done
@@ -59,12 +60,13 @@ run_one() {
   printf '%s\t%s\t%s\t%s\t%s\n' "$mode" "$run" "$ms" "$rate" "$checksum" >>"$RESULT"
 }
 for ((r=1; r<=RUNS; ++r)); do
-  case $(( (r-1) % 5 )) in
-    0) order=(0 1 2 3 4) ;;
-    1) order=(1 2 3 4 0) ;;
-    2) order=(2 3 4 0 1) ;;
-    3) order=(3 4 0 1 2) ;;
-    4) order=(4 0 1 2 3) ;;
+  case $(( (r-1) % 6 )) in
+    0) order=(0 1 2 3 4 5) ;;
+    1) order=(1 2 3 4 5 0) ;;
+    2) order=(2 3 4 5 0 1) ;;
+    3) order=(3 4 5 0 1 2) ;;
+    4) order=(4 5 0 1 2 3) ;;
+    5) order=(5 0 1 2 3 4) ;;
   esac
   for mode in "${order[@]}"; do
     echo "=== b300 W28x8 shard owner mode=$mode run $r/$RUNS ===" >&2
@@ -79,7 +81,7 @@ src, dst = sys.argv[1:]
 rows = list(csv.DictReader(open(src), delimiter='\t'))
 out = []
 checks = {}
-for mode in ('0','1','2','3','4'):
+for mode in ('0','1','2','3','4','5'):
     rs = [r for r in rows if r['mode'] == mode]
     xs = [float(r['median_ms']) for r in rs]
     rates = [float(r['Gaddr_s']) for r in rs]
@@ -103,7 +105,7 @@ with open(dst, 'w', newline='') as f:
     w.writeheader(); w.writerows(out)
 q = {r['mode']: r for r in out}
 base = float(q['0']['median_ms'])
-for mode, name in [('1','mulhi_mul'),('2','mulhi_table'),('3','mulhi_mask'),('4','u32limb_mask')]:
+for mode, name in [('1','mulhi_mul'),('2','mulhi_table'),('3','mulhi_mask'),('4','u32limb_mask'),('5','u32shift_mask')]:
     new = float(q[mode]['median_ms'])
     print(f'b300_shard_owner_{name}_speedup={base/new:.6f}x')
     print(f'b300_shard_owner_{name}_delta_pct={(new/base-1)*100:.4f}%')
@@ -115,7 +117,10 @@ print('mode1=mulhi_shift_plus_owner_times_chunk')
 print('mode2=mulhi_shift_plus_constant_base_lookup')
 print('mode3=mulhi_shift_plus_owner_bit_masked_base')
 print('mode4=pure_u32_high64_limb_plus_owner_bit_masked_base')
-print('mode4_div64=0 mode4_mod64=0 mode4_mul64=0 mode4_table_load=0')
+print('mode5=pure_u32_shiftadd_magic_hi_plus_owner_bit_masked_base')
+print('mode4_nominal_umulhi32=3 mode4_nominal_mullo32=3')
+print('mode5_nominal_umulhi32=2 mode5_nominal_mullo32=1')
+print('mode5_div64=0 mode5_mod64=0 mode5_mul64=0 mode5_table_load=0')
 print('main_magic=195888106327 main_high_shift=9')
 print('block_magic=139905900989 block_high_shift=7')
 print(f'checksum={checks["0"]}')
@@ -123,7 +128,7 @@ print(f'summary={dst}')
 PY
 
 if [[ "$PTXAS_VERBOSE" == 1 ]]; then
-  for mode in 0 1 2 3 4; do
+  for mode in 0 1 2 3 4 5; do
     echo "--- ptxas shard-owner mode=$mode ---" >&2
     grep -E 'Used .* registers|bytes smem|bytes cmem' "$LOGDIR/mode_${mode}.build.err" >&2 || true
   done
