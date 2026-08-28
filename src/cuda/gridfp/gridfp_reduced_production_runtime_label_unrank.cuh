@@ -6,8 +6,8 @@
 namespace oneesan::gridfp::reducedprod {
 
 // Runtime-only counterpart of owner_component_label_unrank_planned_device.
-// The combinatorial logic stays identical; only its two dynamic div/mod pairs
-// use exact reciprocal multiply-high with tiny constant-memory magic tables.
+// The outer-support group division stays in the legacy form for now; the
+// universal primitive-count div/mod pair uses exact reciprocal multiply-high.
 __device__ __forceinline__ MateID runtime_owner_component_label_unrank_planned_device(
     int W,
     int p,
@@ -36,13 +36,8 @@ __device__ __forceinline__ MateID runtime_owner_component_label_unrank_planned_d
 
     const Rank64 component_group = plan.component_group[outer_ones];
     if (!component_group) return 0;
-    Rank64 outer_delta = 0;
-    Rank64 within = 0;
-    runtime_fastdivmod64_magic(
-        local, component_group,
-        RP_RUNTIME_COMPONENT_GROUP_MAGIC[outer_ones],
-        outer_delta, within);
-    const Rank64 outer_sr = plan.sr_begin[outer_ones] + outer_delta;
+    const Rank64 outer_sr = plan.sr_begin[outer_ones] + local / component_group;
+    Rank64 within = local % component_group;
     const std::uint32_t outer = support_unrank_mask_device(O, outer_ones, outer_sr);
 
     int local_ones = -1;
