@@ -5,8 +5,15 @@
 #ifndef RP_RUNTIME_FIND_INDEX_CACHE
 #define RP_RUNTIME_FIND_INDEX_CACHE 0
 #endif
+#ifndef RP_RUNTIME_FIND_INDEX_BUCKETS
+#define RP_RUNTIME_FIND_INDEX_BUCKETS 64
+#endif
 static_assert(RP_RUNTIME_FIND_INDEX_CACHE == 0 || RP_RUNTIME_FIND_INDEX_CACHE == 1,
               "RP_RUNTIME_FIND_INDEX_CACHE must be 0 or 1");
+static_assert(RP_RUNTIME_FIND_INDEX_BUCKETS == 16 ||
+              RP_RUNTIME_FIND_INDEX_BUCKETS == 32 ||
+              RP_RUNTIME_FIND_INDEX_BUCKETS == 64,
+              "RP_RUNTIME_FIND_INDEX_BUCKETS must be 16, 32, or 64");
 
 namespace oneesan::gridfp::reducedprod {
 
@@ -14,22 +21,23 @@ namespace oneesan::gridfp::reducedprod {
 // cleared between components: a lane-0 register occupancy mask identifies the
 // buckets written by the current component, so stale shared bytes are ignored.
 struct RuntimeFindIndexCache {
-    std::uint8_t latest_plus_one[64];
+    std::uint8_t latest_plus_one[RP_RUNTIME_FIND_INDEX_BUCKETS];
 };
-static_assert(sizeof(RuntimeFindIndexCache) == 64,
+static_assert(sizeof(RuntimeFindIndexCache) == RP_RUNTIME_FIND_INDEX_BUCKETS,
               "runtime find index cache footprint regression");
 static constexpr int RP_RUNTIME_FIND_INDEX_CACHE_BYTES_PER_SET =
     int(sizeof(RuntimeFindIndexCache));
 static constexpr int RP_RUNTIME_FIND_INDEX_CACHE_BYTES_PER_SUBGROUP =
     2 * RP_RUNTIME_FIND_INDEX_CACHE_BYTES_PER_SET;
-static_assert(RP_RUNTIME_FIND_INDEX_CACHE_BYTES_PER_SUBGROUP == 128);
+static_assert(RP_RUNTIME_FIND_INDEX_CACHE_BYTES_PER_SUBGROUP ==
+              2 * RP_RUNTIME_FIND_INDEX_BUCKETS);
 
 __device__ __forceinline__ int runtime_find_index_bucket(DeviceKey k) {
     std::uint64_t x = std::uint64_t(k.mate) |
         (k.blocked ? RP_RUNTIME_SHARED_BLOCKED_BIT : 0ULL);
     x ^= x >> 7;
     x ^= x >> 14;
-    return int(x & 63ULL);
+    return int(x & std::uint64_t(RP_RUNTIME_FIND_INDEX_BUCKETS - 1));
 }
 
 __device__ __forceinline__ bool runtime_shared_key_matches(
