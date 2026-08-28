@@ -2,12 +2,13 @@
 set -euo pipefail
 source "$(dirname -- "${BASH_SOURCE[0]}")/../lib/common.sh"
 
-W="${W:-10}"; ARCH="${ARCH:-sm_80}"; PM_ACCUM="${PM_ACCUM:-0}"; DECODE_LOAD="${DECODE_LOAD:-ldg}"; RANKSTREAM_LUT_LOAD="${RANKSTREAM_LUT_LOAD:-constant}"; RANKCHUNK32_ONESHFL="${RANKCHUNK32_ONESHFL:-1}"; RANKCHUNK32_FUSED16="${RANKCHUNK32_FUSED16:-0}"; RUN_LAYOUT_PROOF="${RUN_LAYOUT_PROOF:-1}"
+W="${W:-10}"; ARCH="${ARCH:-sm_80}"; PM_ACCUM="${PM_ACCUM:-0}"; DECODE_LOAD="${DECODE_LOAD:-ldg}"; RANKSTREAM_LUT_LOAD="${RANKSTREAM_LUT_LOAD:-constant}"; RANKCHUNK32_ONESHFL="${RANKCHUNK32_ONESHFL:-1}"; RANKCHUNK32_FUSED16="${RANKCHUNK32_FUSED16:-0}"; RANKCHUNK32_BYTEPACK="${RANKCHUNK32_BYTEPACK:-0}"; RUN_LAYOUT_PROOF="${RUN_LAYOUT_PROOF:-1}"
 LOW_LUT_K="${LOW_LUT_K:-$((W / 2))}"; HIGH_LUT_K="${HIGH_LUT_K:-$((W - LOW_LUT_K - 1))}"
 if (( W > 12 || LOW_LUT_K <= 0 || HIGH_LUT_K <= 0 || LOW_LUT_K + HIGH_LUT_K + 1 != W )); then echo "rankchunk32 CROSS5 selftest requires valid W<=12 split" >&2; exit 2; fi
 if [[ "$PM_ACCUM" != 0 && "$PM_ACCUM" != 1 ]]; then echo "PM_ACCUM must be 0 or 1" >&2; exit 2; fi
 if [[ "$RANKCHUNK32_ONESHFL" != 0 && "$RANKCHUNK32_ONESHFL" != 1 ]]; then echo "RANKCHUNK32_ONESHFL must be 0 or 1" >&2; exit 2; fi
 if [[ "$RANKCHUNK32_FUSED16" != 0 && "$RANKCHUNK32_FUSED16" != 1 ]]; then echo "RANKCHUNK32_FUSED16 must be 0 or 1" >&2; exit 2; fi
+if [[ "$RANKCHUNK32_BYTEPACK" != 0 && "$RANKCHUNK32_BYTEPACK" != 1 ]]; then echo "RANKCHUNK32_BYTEPACK must be 0 or 1" >&2; exit 2; fi
 if [[ "$RUN_LAYOUT_PROOF" != 0 && "$RUN_LAYOUT_PROOF" != 1 ]]; then echo "RUN_LAYOUT_PROOF must be 0 or 1" >&2; exit 2; fi
 case "$DECODE_LOAD" in global) P10DC_DECODE_LDG=0 ;; ldg) P10DC_DECODE_LDG=1 ;; *) echo "DECODE_LOAD must be global or ldg" >&2; exit 2;; esac
 P10DC_RANKSTREAM_LUT_LDG=0
@@ -19,14 +20,23 @@ case "$RANKSTREAM_LUT_LOAD" in
   *) echo "RANKSTREAM_LUT_LOAD must be constant, ldg, or ldg256" >&2; exit 2;;
 esac
 
+if [[ "$RANKCHUNK32_BYTEPACK" == 1 ]]; then
+  EXPECT_CHUNK_BITS=24; EXPECT_PREFIX_BITS=8; LAYOUT_NAME=24bit_chunks_8bit_prefix_block32_padding0
+else
+  EXPECT_CHUNK_BITS=23; EXPECT_PREFIX_BITS=9; LAYOUT_NAME=23bit_chunks_9bit_prefix_block32_padding0
+fi
+
 # Keep layout/packing validation independent from CUDA execution. A/B drivers
 # run it once up front and disable this duplicate pass for their selftests.
 if [[ "$RUN_LAYOUT_PROOF" == 1 ]]; then
   bash "$ONEESAN_ROOT/scripts/bench/rankchunk32-warpbase-proof.sh"
+  if [[ "$RANKCHUNK32_BYTEPACK" == 1 ]]; then
+    bash "$ONEESAN_ROOT/scripts/bench/rankchunk32-bytepack-proof.sh"
+  fi
 fi
 
 SRC="$ONEESAN_ROOT/src/cuda/gridfp/probes/ramstream32_bucket_orbit_closure_pattern10_depthcode_rankchunk32_cross5_selftest.cu"
-BIN="${BIN:-$ONEESAN_BUILD_DIR/pattern10_depthcode_rankchunk32_cross5_selftest_w${W}_pm${PM_ACCUM}_${DECODE_LOAD}_ranklut${RANKSTREAM_LUT_LOAD}_oneshfl${RANKCHUNK32_ONESHFL}_fused16${RANKCHUNK32_FUSED16}}"
+BIN="${BIN:-$ONEESAN_BUILD_DIR/pattern10_depthcode_rankchunk32_cross5_selftest_w${W}_pm${PM_ACCUM}_${DECODE_LOAD}_ranklut${RANKSTREAM_LUT_LOAD}_oneshfl${RANKCHUNK32_ONESHFL}_fused16${RANKCHUNK32_FUSED16}_bytepack${RANKCHUNK32_BYTEPACK}}"
 mkdir -p "$(dirname "$BIN")"
 TMPDIR="$ONEESAN_TMP_DIR" nvcc -O3 -std=c++17 -lineinfo -arch="$ARCH" \
   -DTARGET_W="$W" -DLOW_LUT_K="$LOW_LUT_K" -DHIGH_LUT_K="$HIGH_LUT_K" \
@@ -35,15 +45,16 @@ TMPDIR="$ONEESAN_TMP_DIR" nvcc -O3 -std=c++17 -lineinfo -arch="$ARCH" \
   -DP10DC_RANKSTREAM_LUT_PAD256="$P10DC_RANKSTREAM_LUT_PAD256" \
   -DP10DC_RANKCHUNK32_ONESHFL="$RANKCHUNK32_ONESHFL" \
   -DP10DC_RANKCHUNK32_FUSED16="$RANKCHUNK32_FUSED16" \
+  -DP10DC_RANKCHUNK32_BYTEPACK="$RANKCHUNK32_BYTEPACK" \
   "$SRC" -o "$BIN"
 out="$($BIN)"
 printf '%s\n' "$out"
 grep -Eq "bucket-closure-pattern10-depthcode-rankchunk32-cross5-selftest (OK W=$W|SKIP no CUDA device)" <<<"$out"
 if grep -Fq "OK W=$W" <<<"$out"; then
   grep -Fq 'forward_exact=1 reverse_exact=1 rankchunk32_table_exact=1 padding_exact=1' <<<"$out"
-  grep -Fq 'chunk_bits=23 prefix_bits=9 block=32 height_align=1' <<<"$out"
+  grep -Fq "chunk_bits=$EXPECT_CHUNK_BITS prefix_bits=$EXPECT_PREFIX_BITS block=32 height_align=1" <<<"$out"
   grep -Fq 'third_chunk_bits=7 block_base_loads_per_warp_max=2' <<<"$out"
   grep -Fq 'cross_runtime_div=0 cross_runtime_mod=0 cross_runtime_direct_lookup=0' <<<"$out"
   grep -Fq 'old_prekey_offset_arrays_freed=1 fallback_structurally_unreachable=1' <<<"$out"
 fi
-echo "pattern10-depthcode-rankchunk32-cross5-selftest OK W=$W pm_accum=$PM_ACCUM decode_load=$DECODE_LOAD rankstream_lut_load=$RANKSTREAM_LUT_LOAD layout=23bit_chunks_9bit_prefix_block32_padding0 prefix_isolation=1 rankchunk32_oneshfl=$RANKCHUNK32_ONESHFL rankchunk32_fused16=$RANKCHUNK32_FUSED16 layout_proof=$RUN_LAYOUT_PROOF" >&2
+echo "pattern10-depthcode-rankchunk32-cross5-selftest OK W=$W pm_accum=$PM_ACCUM decode_load=$DECODE_LOAD rankstream_lut_load=$RANKSTREAM_LUT_LOAD layout=$LAYOUT_NAME rankchunk32_bytepack=$RANKCHUNK32_BYTEPACK prefix_bound_proved=1 rankchunk32_oneshfl=$RANKCHUNK32_ONESHFL rankchunk32_fused16=$RANKCHUNK32_FUSED16 layout_proof=$RUN_LAYOUT_PROOF" >&2
