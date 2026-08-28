@@ -10,11 +10,17 @@ namespace oneesan::gridfp::reducedprod {
 #ifndef RP_RUNTIME_FAST_DISCOVERY_VALIDITY
 #define RP_RUNTIME_FAST_DISCOVERY_VALIDITY 1
 #endif
+#ifndef RP_RUNTIME_DISCOVERY_ENDPOINT_SCAN
+#define RP_RUNTIME_DISCOVERY_ENDPOINT_SCAN 1
+#endif
 static_assert(RP_RUNTIME_PACK_SHARED_KEYS == 0 || RP_RUNTIME_PACK_SHARED_KEYS == 1,
               "RP_RUNTIME_PACK_SHARED_KEYS must be 0 or 1");
 static_assert(RP_RUNTIME_FAST_DISCOVERY_VALIDITY == 0 ||
               RP_RUNTIME_FAST_DISCOVERY_VALIDITY == 1,
               "RP_RUNTIME_FAST_DISCOVERY_VALIDITY must be 0 or 1");
+static_assert(RP_RUNTIME_DISCOVERY_ENDPOINT_SCAN == 0 ||
+              RP_RUNTIME_DISCOVERY_ENDPOINT_SCAN == 1,
+              "RP_RUNTIME_DISCOVERY_ENDPOINT_SCAN must be 0 or 1");
 
 static constexpr std::uint64_t RP_RUNTIME_SHARED_BLOCKED_BIT = 1ULL << 63;
 static constexpr std::uint64_t RP_RUNTIME_SHARED_MATE_MASK =
@@ -113,6 +119,21 @@ __device__ __forceinline__ bool runtime_discovery_candidate_valid(
     return valid_mate_device(x, W);
 }
 
+__device__ __forceinline__ std::uint32_t runtime_discovery_endpoint_mask(
+    MateID mate, int W
+) {
+    std::uint64_t x = (std::uint64_t(mate) | (std::uint64_t(mate) >> 1)) &
+                      0x5555555555555555ULL;
+    x = (x | (x >> 1)) & 0x3333333333333333ULL;
+    x = (x | (x >> 2)) & 0x0f0f0f0f0f0f0f0fULL;
+    x = (x | (x >> 4)) & 0x00ff00ff00ff00ffULL;
+    x = (x | (x >> 8)) & 0x0000ffff0000ffffULL;
+    x = (x | (x >> 16)) & 0x00000000ffffffffULL;
+    std::uint32_t out = static_cast<std::uint32_t>(x);
+    if (W < 32) out &= (std::uint32_t(1) << W) - 1u;
+    return out;
+}
+
 template<class Sink>
 __device__ __forceinline__ bool runtime_discover_blocked_include_candidate_forward(
     MateID x, MateID blocked_dest, int W, int p,
@@ -139,8 +160,6 @@ __device__ __forceinline__ bool runtime_discover_blocked_include_preimages_forwa
     if (is_endpoint(mget(b, p - 1))) {
         const MateID x = minsert(b, p, N);
 #if RP_RUNTIME_FAST_DISCOVERY_VALIDITY
-        // Inserting N preserves the valid path. RN/LN is exactly the inverse
-        // of the blocked NR/NL include branch, so no include recheck is needed.
         if (!sink.emit(DeviceKey{x, 0})) return false;
 #else
         if (!runtime_discover_blocked_include_candidate_forward(
@@ -154,8 +173,6 @@ __device__ __forceinline__ bool runtime_discover_blocked_include_preimages_forwa
 
     const MateID rl = msetpair(d, p, RL);
 #if RP_RUNTIME_FAST_DISCOVERY_VALIDITY
-    // RL->NN then shrinking the inserted N is exactly b. Only the leading R
-    // can violate the ballot condition, tested by the packed prefix popcounts.
     if (runtime_discovery_rl_candidate_valid(rl, W, p)) {
         if (!sink.emit(DeviceKey{rl, 0})) return false;
     }
@@ -165,6 +182,57 @@ __device__ __forceinline__ bool runtime_discover_blocked_include_preimages_forwa
         return false;
 #endif
 
+#if RP_RUNTIME_DISCOVERY_ENDPOINT_SCAN
+    const std::uint32_t endpoints = runtime_discovery_endpoint_mask(d, W);
+    std::uint32_t left = p <= 1 ? 0u :
+        (endpoints & ((std::uint32_t(1) << (p - 1)) - 1u));
+    int bal = 0;
+    while (left) {
+        const int q = 31 - __clz(left);
+        const MateValue v = mget(d, q);
+        if (bal == 0 && v == L) {
+            MateID x = msetpair(d, p, LL);
+            x = mset(x, q, R);
+#if RP_RUNTIME_FAST_DISCOVERY_VALIDITY
+            if (!sink.emit(DeviceKey{x, 0})) return false;
+#else
+            if (!runtime_discover_blocked_include_candidate_forward(
+                    x, b, W, p, RP_RUNTIME_DISCOVERY_CHECK_FULL, sink))
+                return false;
+#endif
+        }
+        if (v == L) ++bal;
+        else --bal;
+        left ^= std::uint32_t(1) << q;
+        if (bal < 0) break;
+    }
+
+    const std::uint32_t width_mask =
+        W == 32 ? ~0u : ((std::uint32_t(1) << W) - 1u);
+    const std::uint32_t low_mask =
+        (std::uint32_t(1) << (p + 1)) - 1u;
+    std::uint32_t right = endpoints & width_mask & ~low_mask;
+    bal = 0;
+    while (right) {
+        const int q = __ffs(right) - 1;
+        const MateValue v = mget(d, q);
+        if (bal == 0 && v == R) {
+            MateID x = msetpair(d, p, RR);
+            x = mset(x, q, L);
+#if RP_RUNTIME_FAST_DISCOVERY_VALIDITY
+            if (!sink.emit(DeviceKey{x, 0})) return false;
+#else
+            if (!runtime_discover_blocked_include_candidate_forward(
+                    x, b, W, p, RP_RUNTIME_DISCOVERY_CHECK_FULL, sink))
+                return false;
+#endif
+        }
+        if (v == R) ++bal;
+        else --bal;
+        right &= right - 1u;
+        if (bal < 0) break;
+    }
+#else
     int bal = 0;
     for (int q = p - 2; q >= 0; --q) {
         const MateValue v = mget(d, q);
@@ -172,9 +240,6 @@ __device__ __forceinline__ bool runtime_discover_blocked_include_preimages_forwa
             MateID x = msetpair(d, p, LL);
             x = mset(x, q, R);
 #if RP_RUNTIME_FAST_DISCOVERY_VALIDITY
-            // NN->LL raises every affected prefix by two until q; L->R restores
-            // the original height there. The balance condition makes q exactly
-            // the mate found by include_horizontal(LL), hence the result is b.
             if (!sink.emit(DeviceKey{x, 0})) return false;
 #else
             if (!runtime_discover_blocked_include_candidate_forward(
@@ -194,8 +259,6 @@ __device__ __forceinline__ bool runtime_discover_blocked_include_preimages_forwa
             MateID x = msetpair(d, p, RR);
             x = mset(x, q, L);
 #if RP_RUNTIME_FAST_DISCOVERY_VALIDITY
-            // Symmetrically R->L raises prefixes until RR removes two units;
-            // q is exactly the mate found by include_horizontal(RR).
             if (!sink.emit(DeviceKey{x, 0})) return false;
 #else
             if (!runtime_discover_blocked_include_candidate_forward(
@@ -207,6 +270,7 @@ __device__ __forceinline__ bool runtime_discover_blocked_include_preimages_forwa
         else if (v == L) --bal;
         if (bal < 0) break;
     }
+#endif
     return true;
 }
 
@@ -234,8 +298,6 @@ __device__ __forceinline__ bool runtime_discover_inverse_reduced_forward(
 
     const MateValuePair w = mpair(d, p);
 #if RP_RUNTIME_FAST_DISCOVERY_VALIDITY
-    // These three rewrites are exact inverse pairs of the main include cases on
-    // a valid destination. Their candidates are valid and include back to d.
     if (w == LR && !sink.emit(DeviceKey{msetpair(d, p, NN), 0})) return false;
     if (w == NR && !sink.emit(DeviceKey{msetpair(d, p, RN), 0})) return false;
     if (w == NL && !sink.emit(DeviceKey{msetpair(d, p, LN), 0})) return false;
