@@ -16,11 +16,11 @@ out="$($BIN)"
 printf '%s\n' "$out"
 
 grep -Fq 'gridfp-runtime-edgecache-proof OK' <<<"$out"
-grep -Fq 'packing_cases=80 routing_cases=210 accumulation_cases=400' <<<"$out"
+grep -Fq 'coefficient_merge_cases=31 packing_cases=80 routing_cases=210 accumulation_cases=400' <<<"$out"
 grep -Fq 'subgroup_width=8 max_pairs=20 max_edge_terms=3' <<<"$out"
 grep -Fq 'coefficient_range=-1..2' <<<"$out"
 grep -Fq 'max_destination_slot=2' <<<"$out"
 grep -Fq 'cache_bytes_per_subgroup=80 cache_bytes_per_block=2560' <<<"$out"
-grep -Fq 'packing_exact=1 routing_exact=1 accumulation_exact=1' <<<"$out"
+grep -Fq 'coefficient_bound_exact=1 packing_exact=1 routing_exact=1 accumulation_exact=1' <<<"$out"
 
-echo 'gridfp-runtime-edgecache-proof OK packing_cases=80 routing_cases=210 accumulation_cases=400 cache_bytes_per_block=2560' >&2
+echo 'gridfp-runtime-edgecache-proof OK coefficient_merge_cases=31 packing_cases=80 routing_cases=210 accumulation_cases=400 cache_bytes_per_block=2560' >&2
