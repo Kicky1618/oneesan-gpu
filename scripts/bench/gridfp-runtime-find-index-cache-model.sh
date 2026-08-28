@@ -8,5 +8,7 @@ SRC="$ONEESAN_ROOT/src/cpp/probes/gridfp_runtime_find_index_cache_model.cpp"; BI
 "$CXX" -O3 -std=c++17 "$SRC" -o "$BIN"
 out="$($BIN "$MAX_W")"; printf '%s\n' "$out"
 grep -Fq 'ALL_OK runtime_find_index_cache_model=1' <<<"$out"
+grep -Fq 'collision_state=packed_high_bit' <<<"$out"
+grep -Fq 'extra_collision_registers=0' <<<"$out"
 grep -Fq 'stale_bytes_guarded_by_occupancy=1' <<<"$out"
-echo "gridfp-runtime-find-index-cache-model OK maxW=$MAX_W" >&2
+echo "gridfp-runtime-find-index-cache-model OK maxW=$MAX_W collision_state=packed_high_bit" >&2
