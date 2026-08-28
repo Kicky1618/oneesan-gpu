@@ -13,8 +13,8 @@ GENERATOR="$ONEESAN_ROOT/scripts/build/gen-b300-shard-address-mode.py"
 GENSRC="${GENSRC:-$ONEESAN_BUILD_DIR/generated_b300_hbm32_n${N}_shardmode${MODE}.cu}"
 OUT="$(build_path "${OUT:-oneesan_cuda_gridfp_b300_hbm32_n${N}_shardmode${MODE}}")"
 
-if [[ "$MODE" != 0 && "$MODE" != 1 && "$MODE" != 2 && "$MODE" != 3 ]]; then
-  echo "SHARD_ADDRESS_MODE must be 0, 1, 2, or 3" >&2
+if [[ "$MODE" != 0 && "$MODE" != 1 && "$MODE" != 2 && "$MODE" != 3 && "$MODE" != 4 ]]; then
+  echo "SHARD_ADDRESS_MODE must be 0, 1, 2, 3, or 4" >&2
   exit 2
 fi
 if (( MODE >= 2 )) && [[ "$N" != 27 ]]; then
@@ -33,6 +33,9 @@ if (( MODE >= 2 )); then
 fi
 if [[ "$MODE" == 3 ]]; then
   bash "$ONEESAN_ROOT/scripts/bench/b300-shard-owner-u32limb-w28-ngpu8-proof.sh"
+fi
+if [[ "$MODE" == 4 ]]; then
+  bash "$ONEESAN_ROOT/scripts/bench/b300-shard-owner-u32shift-w28-ngpu8-proof.sh"
 fi
 python3 "$GENERATOR" "$SRC" "$GENSRC"
 
@@ -54,3 +57,4 @@ echo "  mode0=runtime_u64_division"
 echo "  mode1=three_compare_subtract_stages"
 echo "  mode2=w28x8_mulhi64_masked_base"
 echo "  mode3=w28x8_pure_u32_limb_masked_base"
+echo "  mode4=w28x8_pure_u32_shiftadd_masked_base"
