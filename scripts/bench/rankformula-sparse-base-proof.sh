@@ -10,7 +10,7 @@ mkdir -p "$(dirname "$BIN")"
 out="$($BIN)"
 printf '%s\n' "$out"
 grep -Fq 'gridfp-rankformula-sparse-base OK' <<<"$out"
-field(){ sed -nE "s/.*(^|[[:space:]])$1=([^[:space:]]+).*/\\2/p" <<<"$out" | tail -n1; }
+field(){ local key="$1"; sed -nE "s/(^|.*[[:space:]])${key}=([^[:space:]]+).*/\\2/p" <<<"$out" | tail -n1; }
 max_masks="$(field max_owner_masks)"
 slot_bytes="$(field mask_slot_bytes)"
 base_bytes="$(field max_sparse_base_bytes)"
