@@ -54,6 +54,8 @@ GRIDFP_RUNTIME_AB_ENV=(
   RUNTIME_FAST_INCLUDE_HORIZONTAL_REVERSE=1
   RUNTIME_FAST_BLOCKED_EXCLUDE_REVERSE=1
   RUNTIME_DIRECT_REVERSE_SMALL_STEP=1
+  RUNTIME_DIRECT_REVERSE_P1_MAIN_STEP=1
+  RUNTIME_DIRECT_FORWARD_LAST_MAIN_STEP=1
 )
 
 GRIDFP_RUNTIME_AB_BUILD_TOKENS=(
@@ -105,6 +107,8 @@ GRIDFP_RUNTIME_AB_BUILD_TOKENS=(
   runtime_fast_include_horizontal_reverse=1
   runtime_fast_blocked_exclude_reverse=1
   runtime_direct_reverse_small_step=1
+  runtime_direct_reverse_p1_main_step=1
+  runtime_direct_forward_last_main_step=1
 )
 
 gridfp_runtime_ab_assert_build() {
