@@ -29,16 +29,9 @@ __device__ __forceinline__ MateID runtime_turn_compress_label_unrank_device(
     const int hi = lo + L - 1;
     const int missing = high ? W - 2 : 1;
 
-    int outer_ones = -1;
-    Rank64 local = 0;
-    for (int r = 0; r <= O; ++r) {
-        if (rank < plan.prefix[r + 1]) {
-            outer_ones = r;
-            local = rank - plan.prefix[r];
-            break;
-        }
-    }
+    const int outer_ones = runtime_owner_prefix_sector_device(plan.prefix, O, rank);
     if (outer_ones < 0) return 0;
+    const Rank64 local = rank - plan.prefix[outer_ones];
     const Rank64 group = plan.component_group[outer_ones];
     if (!group) return 0;
     Rank64 outer_delta = 0;
@@ -72,13 +65,7 @@ __device__ __forceinline__ MateID runtime_turn_compress_label_unrank_device(
         L - 1, local_ones, local_sr);
     std::uint32_t full = 0;
     owner_expand_outer_support_device(outer, W, lo, hi, full);
-    int cp = 0;
-    for (int bit = lo; bit <= hi; ++bit) {
-        if (bit == missing) continue;
-        if ((local_support >> cp) & 1u)
-            full |= std::uint32_t(1) << bit;
-        ++cp;
-    }
+    owner_expand_local_support_device(local_support, L, lo, missing, full);
     const int occupied = outer_ones + local_ones;
     const std::uint32_t label_support = owner_label_lr_support_device(
         full, W, missing);
