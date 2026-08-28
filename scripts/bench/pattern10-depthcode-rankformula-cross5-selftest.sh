@@ -5,9 +5,10 @@ source "$(dirname -- "${BASH_SOURCE[0]}")/../lib/common.sh"
 W="${W:-10}"; ARCH="${ARCH:-sm_80}"; PM_ACCUM="${PM_ACCUM:-0}"
 DECODE_LOAD="${DECODE_LOAD:-ldg}"; RANKSTREAM_LUT_LOAD="${RANKSTREAM_LUT_LOAD:-ldg}"
 RANKDELTA8_FUSED13="${RANKDELTA8_FUSED13:-1}"; RANKFORMULA_SPARSE_BASE="${RANKFORMULA_SPARSE_BASE:-1}"
+RANKFORMULA_RAWCODE="${RANKFORMULA_RAWCODE:-0}"
 LOW_LUT_K="${LOW_LUT_K:-$((W / 2))}"; HIGH_LUT_K="${HIGH_LUT_K:-$((W - LOW_LUT_K - 1))}"
 if (( W > 12 || LOW_LUT_K <= 0 || HIGH_LUT_K <= 0 || LOW_LUT_K + HIGH_LUT_K + 1 != W )); then echo "rankformula selftest requires valid W<=12 split" >&2; exit 2; fi
-for x in PM_ACCUM RANKDELTA8_FUSED13 RANKFORMULA_SPARSE_BASE; do v="${!x}"; [[ "$v" == 0 || "$v" == 1 ]] || { echo "$x must be 0 or 1" >&2; exit 2; }; done
+for x in PM_ACCUM RANKDELTA8_FUSED13 RANKFORMULA_SPARSE_BASE RANKFORMULA_RAWCODE; do v="${!x}"; [[ "$v" == 0 || "$v" == 1 ]] || { echo "$x must be 0 or 1" >&2; exit 2; }; done
 case "$DECODE_LOAD" in global) P10DC_DECODE_LDG=0 ;; ldg) P10DC_DECODE_LDG=1 ;; *) echo "DECODE_LOAD must be global or ldg" >&2; exit 2;; esac
 P10DC_RANKSTREAM_LUT_LDG=0; P10DC_RANKSTREAM_LUT_PAD256=0
 case "$RANKSTREAM_LUT_LOAD" in
@@ -18,7 +19,7 @@ case "$RANKSTREAM_LUT_LOAD" in
 esac
 
 SRC="$ONEESAN_ROOT/src/cuda/gridfp/probes/ramstream32_bucket_orbit_closure_pattern10_depthcode_rankformula_cross5_selftest.cu"
-BIN="${BIN:-$ONEESAN_BUILD_DIR/pattern10_depthcode_rankformula_cross5_selftest_w${W}_pm${PM_ACCUM}_${DECODE_LOAD}_ranklut${RANKSTREAM_LUT_LOAD}_fused${RANKDELTA8_FUSED13}_sparse${RANKFORMULA_SPARSE_BASE}}"
+BIN="${BIN:-$ONEESAN_BUILD_DIR/pattern10_depthcode_rankformula_cross5_selftest_w${W}_pm${PM_ACCUM}_${DECODE_LOAD}_ranklut${RANKSTREAM_LUT_LOAD}_fused${RANKDELTA8_FUSED13}_sparse${RANKFORMULA_SPARSE_BASE}_raw${RANKFORMULA_RAWCODE}}"
 mkdir -p "$(dirname "$BIN")"
 TMPDIR="$ONEESAN_TMP_DIR" nvcc -O3 -std=c++17 -lineinfo -arch="$ARCH" \
   -DTARGET_W="$W" -DLOW_LUT_K="$LOW_LUT_K" -DHIGH_LUT_K="$HIGH_LUT_K" \
@@ -28,6 +29,7 @@ TMPDIR="$ONEESAN_TMP_DIR" nvcc -O3 -std=c++17 -lineinfo -arch="$ARCH" \
   -DP10DC_RANKCHUNK32_FUSED16=0 -DP10DC_RANKCHUNK32_BYTEPACK=0 \
   -DP10DC_RANKCHUNK32_BLOCK64=0 -DP10DC_RANKDELTA8_FUSED13="$RANKDELTA8_FUSED13" \
   -DP10DC_RANKFORMULA_SPARSE_BASE="$RANKFORMULA_SPARSE_BASE" \
+  -DP10DC_RANKFORMULA_RAWCODE="$RANKFORMULA_RAWCODE" \
   "$SRC" -o "$BIN"
 out="$($BIN)"
 printf '%s\n' "$out"
@@ -36,6 +38,9 @@ if grep -Fq "OK W=$W" <<<"$out"; then
   grep -Fq 'forward_exact=1 reverse_exact=1' <<<"$out"
   grep -Fq 'rankstream_bytes=0 chunk_meta_bytes_per_code=4' <<<"$out"
   grep -Fq 'formula_ballot=1' <<<"$out"
+  grep -Fq "rawcode=$RANKFORMULA_RAWCODE" <<<"$out"
+  expected_loads=3; [[ "$RANKFORMULA_RAWCODE" == 1 ]] && expected_loads=0
+  grep -Fq "chunkinfo_loads=$expected_loads" <<<"$out"
   grep -Fq 'cross_runtime_div=0 cross_runtime_mod=0' <<<"$out"
 fi
-echo "pattern10-depthcode-rankformula-cross5-selftest OK W=$W pm=$PM_ACCUM lut=$RANKSTREAM_LUT_LOAD fused13=$RANKDELTA8_FUSED13 sparse_base=$RANKFORMULA_SPARSE_BASE" >&2
+echo "pattern10-depthcode-rankformula-cross5-selftest OK W=$W pm=$PM_ACCUM lut=$RANKSTREAM_LUT_LOAD fused13=$RANKDELTA8_FUSED13 sparse_base=$RANKFORMULA_SPARSE_BASE rawcode=$RANKFORMULA_RAWCODE" >&2
