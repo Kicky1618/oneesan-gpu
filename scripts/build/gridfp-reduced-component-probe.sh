@@ -37,8 +37,11 @@ case "$MODE" in
   shift-cycle)
     SRC_REL="src/cuda/gridfp/gridfp_reduced_production_shift_cycle_microprobe.cu"
     ;;
+  turn)
+    SRC_REL="src/cuda/gridfp/gridfp_reduced_production_turn_microprobe.cu"
+    ;;
   *)
-    echo "invalid MODE=$MODE (forward|reverse|register|persistent|dense|edge|grouped|inplace|cycle|shift-cycle)" >&2
+    echo "invalid MODE=$MODE (forward|reverse|register|persistent|dense|edge|grouped|inplace|cycle|shift-cycle|turn)" >&2
     exit 2
     ;;
 esac
