@@ -76,12 +76,14 @@ static void p10dc_install_cross5_lut() {
        "p10dc cross5 constant delta table");
 }
 
-__device__ __forceinline__ BkczCrossAccum p10dc_resolved_low_preimages_cross5_fallback(
-    uint32_t dest_code, uint32_t depth, const Count* source_row
+// Scalar fallback that accepts an already-computed ternary key. Keeping the
+// key explicit means the prekey backend never reintroduces a factor fold even
+// on the defensive overflow path.
+__device__ __forceinline__ BkczCrossAccum p10dc_resolved_low_preimages_cross5_fallback_prekey(
+    uint32_t dest_code, uint32_t key, uint32_t depth, const Count* source_row
 ) {
     BkczCrossAccum sum = 0;
     int s = int(depth);
-    uint32_t key = bkcz_ternary_key<LOW_LUT_K>(dest_code);
     uint32_t weight = bkcz_pow3_const(LOW_LUT_K - 1);
 #pragma unroll
     for (int pos = LOW_LUT_K - 1; pos >= 0; --pos) {
@@ -100,6 +102,13 @@ __device__ __forceinline__ BkczCrossAccum p10dc_resolved_low_preimages_cross5_fa
         if (pos) weight /= 3u;
     }
     return sum;
+}
+
+__device__ __forceinline__ BkczCrossAccum p10dc_resolved_low_preimages_cross5_fallback(
+    uint32_t dest_code, uint32_t depth, const Count* source_row
+) {
+    return p10dc_resolved_low_preimages_cross5_fallback_prekey(
+        dest_code, bkcz_ternary_key<LOW_LUT_K>(dest_code), depth, source_row);
 }
 
 // Return 0=continue, 1=halt, 2=state-table overflow. The caller handles 2 by
@@ -131,35 +140,41 @@ __device__ __forceinline__ uint32_t p10dc_cross5_apply_chunk(
     return 0u;
 }
 
-__device__ __forceinline__ BkczCrossAccum p10dc_resolved_low_preimages_cross5(
-    uint32_t dest_code, uint32_t depth, const Count* source_row
+__device__ __forceinline__ BkczCrossAccum p10dc_resolved_low_preimages_cross5_prekey(
+    uint32_t dest_code, uint32_t key, uint32_t depth, const Count* source_row
 ) {
     if (!depth) return BkczCrossAccum(0);
     uint32_t state = depth;
     if (state >= P10DC_CROSS5_STATES)
-        return p10dc_resolved_low_preimages_cross5_fallback(dest_code, depth, source_row);
-    uint32_t key = bkcz_ternary_key<LOW_LUT_K>(dest_code);
+        return p10dc_resolved_low_preimages_cross5_fallback_prekey(dest_code, key, depth, source_row);
     BkczCrossAccum sum = 0;
 
     constexpr int L0 = LOW_LUT_K >= 5 ? 5 : LOW_LUT_K;
     constexpr int S0 = LOW_LUT_K - L0;
     uint32_t st = p10dc_cross5_apply_chunk<S0, L0>(key, state, source_row, sum);
     if (st == 1u) return sum;
-    if (st == 2u) return p10dc_resolved_low_preimages_cross5_fallback(dest_code, depth, source_row);
+    if (st == 2u) return p10dc_resolved_low_preimages_cross5_fallback_prekey(dest_code, key, depth, source_row);
 
     if constexpr (S0 > 0) {
         constexpr int L1 = S0 >= 5 ? 5 : S0;
         constexpr int S1 = S0 - L1;
         st = p10dc_cross5_apply_chunk<S1, L1>(key, state, source_row, sum);
         if (st == 1u) return sum;
-        if (st == 2u) return p10dc_resolved_low_preimages_cross5_fallback(dest_code, depth, source_row);
+        if (st == 2u) return p10dc_resolved_low_preimages_cross5_fallback_prekey(dest_code, key, depth, source_row);
         if constexpr (S1 > 0) {
             constexpr int L2 = S1 >= 5 ? 5 : S1;
             constexpr int S2 = S1 - L2;
             static_assert(S2 == 0, "K<=14 must fit in three cross5 chunks");
             st = p10dc_cross5_apply_chunk<S2, L2>(key, state, source_row, sum);
-            if (st == 2u) return p10dc_resolved_low_preimages_cross5_fallback(dest_code, depth, source_row);
+            if (st == 2u) return p10dc_resolved_low_preimages_cross5_fallback_prekey(dest_code, key, depth, source_row);
         }
     }
     return sum;
+}
+
+__device__ __forceinline__ BkczCrossAccum p10dc_resolved_low_preimages_cross5(
+    uint32_t dest_code, uint32_t depth, const Count* source_row
+) {
+    return p10dc_resolved_low_preimages_cross5_prekey(
+        dest_code, bkcz_ternary_key<LOW_LUT_K>(dest_code), depth, source_row);
 }
