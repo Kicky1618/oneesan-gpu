@@ -22,6 +22,58 @@ struct ComponentMatching {
     bool ok = false;
 };
 
+ONEESAN_TC_MATCH_HD void clear_component_matching(ComponentMatching& out, int n) {
+    out = ComponentMatching{};
+    out.size = n;
+    for (int q = 0; q < kMaxComponentMatching; ++q) {
+        out.src_to_dst[q] = 0xffu;
+        out.dst_to_src[q] = 0xffu;
+    }
+}
+
+// direct_component_sources() has a canonical order.  In that order the two
+// shallow component classes have universal matrices, independent of W, i, and
+// the surrounding Motzkin connectivity:
+//
+//   n=1: [1]
+//
+//   n=3 source adjacency masks: [100, 010, 111]
+//       unique matching:          [2,   1,   0]
+//
+// Hence singleton/triple components need neither K_step() calls nor leaf
+// peeling.  Deep components have n>=5 and use the generic builder below.
+ONEESAN_TC_MATCH_HD bool build_component_matching_fastpath(
+    int n,
+    ComponentMatching& out
+) {
+    clear_component_matching(out, n);
+    if (n == 1) {
+        out.adjacency[0] = 0x1u;
+        out.src_to_dst[0] = 0;
+        out.dst_to_src[0] = 0;
+        out.edges = 1;
+        out.residual_edges = 0;
+        out.ok = true;
+        return true;
+    }
+    if (n == 3) {
+        out.adjacency[0] = 0x4u;
+        out.adjacency[1] = 0x2u;
+        out.adjacency[2] = 0x7u;
+        out.src_to_dst[0] = 2;
+        out.src_to_dst[1] = 1;
+        out.src_to_dst[2] = 0;
+        out.dst_to_src[0] = 2;
+        out.dst_to_src[1] = 1;
+        out.dst_to_src[2] = 0;
+        out.edges = 5;
+        out.residual_edges = 2;
+        out.ok = true;
+        return true;
+    }
+    return false;
+}
+
 ONEESAN_TC_MATCH_HD int coordinate_index_for_destination(
     const PackedKey* src,
     int n,
@@ -45,12 +97,9 @@ ONEESAN_TC_MATCH_HD ComponentMatching build_component_matching(
     int i
 ) {
     ComponentMatching out{};
-    out.size = n;
     if (n <= 0 || n > kMaxComponentMatching) return out;
-    for (int q = 0; q < kMaxComponentMatching; ++q) {
-        out.src_to_dst[q] = 0xffu;
-        out.dst_to_src[q] = 0xffu;
-    }
+    if (build_component_matching_fastpath(n, out)) return out;
+    clear_component_matching(out, n);
 
     for (int s = 0; s < n; ++s) {
         const auto edges = K_step(src[s], W, i);
@@ -152,6 +201,32 @@ ONEESAN_TC_MATCH_HD bool apply_component_matching(
         }
     }
     return true;
+}
+
+// Even the tiny matching descriptor can be skipped for the two closed shallow
+// cases.  This is useful in hot CUDA paths where n is known after component
+// reconstruction.
+template <class Value>
+ONEESAN_TC_MATCH_HD bool apply_component_fastpath(
+    int n,
+    const Value* input,
+    Value* output,
+    std::uint32_t mod
+) {
+    if (n == 1) {
+        output[0] = input[0];
+        return true;
+    }
+    if (n == 3) {
+        output[0] = input[2];
+        unsigned long long z =
+            static_cast<unsigned long long>(input[1]) + input[2];
+        output[1] = static_cast<Value>(z >= mod ? z - mod : z);
+        z = static_cast<unsigned long long>(input[0]) + input[2];
+        output[2] = static_cast<Value>(z >= mod ? z - mod : z);
+        return true;
+    }
+    return false;
 }
 
 } // namespace oneesan::twocell
