@@ -141,6 +141,8 @@ int main() {
               << " rankstream_bytes=0 chunk_meta_bytes_per_code=4"
               << " base16=1 formula_ballot=1"
               << " sparse_base=" << P10DC_RANKFORMULA_SPARSE_BASE
+              << " base_delta=" << P10DC_RANKFORMULA_BASE_DELTA
+              << " base_values_per_lookup=" << (P10DC_RANKFORMULA_BASE_DELTA ? 1 : 2)
               << " rawcode=" << P10DC_RANKFORMULA_RAWCODE
               << " chunkinfo_elided=" << P10DC_RANKFORMULA_RAWCODE
               << " inline_cross=" << P10DC_RANKFORMULA_INLINE_CROSS
