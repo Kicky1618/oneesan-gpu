@@ -3,19 +3,32 @@
 #include "ramstream32_bucket_closure_cross5_common.cuh"
 #include "ramstream32_bucket_low_prekey_rankstream.cuh"
 
-// Rankstream CROSS5 uses the same 5-symbol automaton as the direct path, but
-// source addresses are ranks among L symbols rather than ternary-key deltas.
-// The state-dependent table stores accepted L ordinals + halt.  Per chunk,
-// one compact metadata byte stores both L-count and signed state delta, so the
-// device path needs exactly two constant-memory reads per executed chunk.
+#ifndef P10DC_RANKSTREAM_LUT_LDG
+#define P10DC_RANKSTREAM_LUT_LDG 0
+#endif
+static_assert(P10DC_RANKSTREAM_LUT_LDG == 0 || P10DC_RANKSTREAM_LUT_LDG == 1,
+              "P10DC_RANKSTREAM_LUT_LDG must be 0 or 1");
+
+// Warp-striped execution gives every lane a different LOW rank/key.  Constant
+// memory is therefore not always a broadcast.  Keep both storage modes behind
+// one compile-time switch so B300 can A/B constant-cache serialization against
+// ordinary read-only/L1 loads without changing the automaton representation.
+#if P10DC_RANKSTREAM_LUT_LDG
+__device__ __align__(128) uint8_t D_P10DC_RANKSTREAM_META[P10DC_CROSS5_KEYS];
+__device__ __align__(128) uint8_t
+    D_P10DC_RANKSTREAM_CROSS5[P10DC_CROSS5_STATES * P10DC_CROSS5_KEYS];
+#else
 __constant__ uint8_t D_P10DC_RANKSTREAM_META[P10DC_CROSS5_KEYS];
 __constant__ uint8_t
     D_P10DC_RANKSTREAM_CROSS5[P10DC_CROSS5_STATES * P10DC_CROSS5_KEYS];
+#endif
 
 static constexpr uint8_t P10DC_RANKSTREAM_META_LCOUNT_MASK = 0x07u;
 static constexpr int P10DC_RANKSTREAM_META_DELTA_SHIFT = 3;
 static constexpr int P10DC_RANKSTREAM_META_DELTA_BIAS = 5;
 static_assert(P10DC_CROSS5_CHUNK == 5, "rankstream metadata packing assumes CROSS5");
+static_assert(P10DC_CROSS5_STATES * P10DC_CROSS5_KEYS + P10DC_CROSS5_KEYS == 6561,
+              "rankstream CROSS5 LUT size regression");
 
 static constexpr uint8_t p10dc_rankstream_lmask_host(uint32_t key) {
     uint8_t mask = 0;
@@ -97,6 +110,22 @@ static void p10dc_install_rankstream_lmask() {
     p10dc_install_rankstream_lut();
 }
 
+__device__ __forceinline__ uint8_t p10dc_rankstream_entry_load(size_t ix) {
+#if P10DC_RANKSTREAM_LUT_LDG
+    return __ldg(D_P10DC_RANKSTREAM_CROSS5 + ix);
+#else
+    return D_P10DC_RANKSTREAM_CROSS5[ix];
+#endif
+}
+
+__device__ __forceinline__ uint8_t p10dc_rankstream_meta_load(uint32_t chunk) {
+#if P10DC_RANKSTREAM_LUT_LDG
+    return __ldg(D_P10DC_RANKSTREAM_META + chunk);
+#else
+    return D_P10DC_RANKSTREAM_META[chunk];
+#endif
+}
+
 template<int START, int LEN>
 __device__ __forceinline__ uint32_t p10dc_cross5_apply_chunk_rankstream(
     uint32_t full_key, uint32_t& state, const Count* source_row,
@@ -109,8 +138,8 @@ __device__ __forceinline__ uint32_t p10dc_cross5_apply_chunk_rankstream(
     const uint32_t chunk = (full_key / DIV) % MOD;
     if (state >= P10DC_CROSS5_STATES) return 2u;
 
-    const uint8_t e = D_P10DC_RANKSTREAM_CROSS5[
-        size_t(state) * P10DC_CROSS5_KEYS + chunk];
+    const uint8_t e = p10dc_rankstream_entry_load(
+        size_t(state) * P10DC_CROSS5_KEYS + chunk);
     uint8_t rankmask = uint8_t(e & P10DC_CROSS5_MASK_MASK);
     while (rankmask) {
         const int ordinal = __ffs(int(rankmask)) - 1;
@@ -120,7 +149,7 @@ __device__ __forceinline__ uint32_t p10dc_cross5_apply_chunk_rankstream(
     }
     if (((e >> P10DC_CROSS5_HALT_SHIFT) & 1u) != 0) return 1u;
 
-    const uint8_t meta = D_P10DC_RANKSTREAM_META[chunk];
+    const uint8_t meta = p10dc_rankstream_meta_load(chunk);
     lbase += uint32_t(meta & P10DC_RANKSTREAM_META_LCOUNT_MASK);
     state = uint32_t(
         int(state) + int(meta >> P10DC_RANKSTREAM_META_DELTA_SHIFT)
