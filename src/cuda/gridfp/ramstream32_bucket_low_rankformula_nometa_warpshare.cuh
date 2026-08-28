@@ -59,13 +59,12 @@ p10dc_low_rankformula_nometa_resolve_warpshare(uint32_t h, uint32_t rank) {
         p10dc_rankformula_nometa4_group_delta(e)};
 }
 
-// Successor groups are also shared. Every active lane executes the same fixed
-// B rounds so __ballot_sync(active, ...) remains legal. Within each B-lane
-// subgroup, need_sub is uniform: the subgroup leader performs one successor
-// load and broadcasts it with a subgroup mask. Lanes remember the first cursor
-// that covers their rank while continuing to help advance the shared cursor for
-// higher lanes. This changes successor global loads from the sum of per-lane
-// locator steps to the number of distinct group boundaries crossed per block.
+// Successor groups are also shared. All active lanes execute each ballot. When
+// the warp-wide ballot is zero, every subgroup has resolved every active lane,
+// so the loop can terminate warp-uniformly without violating sync-mask rules.
+// Otherwise each subgroup with unresolved high lanes has its leader load exactly
+// one successor group and broadcast it. Lanes remember the first cursor covering
+// their rank while continuing to advance the shared cursor for higher lanes.
 __device__ __forceinline__ P10DCRankFormulaNometa4Resolved
 p10dc_low_rankformula_nometa_resolve_coopgroup(uint32_t h, uint32_t rank) {
     constexpr uint32_t B = P10DC_RANKFORMULA_NOMETA4_BLOCK;
@@ -102,7 +101,9 @@ p10dc_low_rankformula_nometa_resolve_coopgroup(uint32_t h, uint32_t rank) {
             resolved = true;
         }
         if (k + 1 < int(B)) {
-            const unsigned needs = __ballot_sync(active, need) & submask;
+            const unsigned all_needs = __ballot_sync(active, need);
+            if (!all_needs) break;
+            const unsigned needs = all_needs & submask;
             if (needs) {
                 uint32_t nlo = 0u, nhi = 0u;
                 if (lane == src_lane) {
