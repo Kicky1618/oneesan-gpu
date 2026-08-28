@@ -27,6 +27,7 @@ BUCKET_THREADS="${BUCKET_THREADS:-256}"
 BUCKET_GRID_X="${BUCKET_GRID_X:-16}"
 BUCKET_GRID_Y="${BUCKET_GRID_Y:-8}"
 REPEATS="${REPEATS:-5}"
+RUN_SELFTEST="${RUN_SELFTEST:-1}"
 
 PREFIX="${PREFIX:-$ONEESAN_ROOT/work/b300_depthcode_rankchunk32_direct3_ab_n${N}_${TRANSPOSE_MODE}_${DEPTHCODE_DECODE_LOAD}_${RANKSTREAM_LUT_LOAD}_fused${RANKCHUNK32_FUSED16}_byte${RANKCHUNK32_BYTEPACK}_align${RANKCHUNK32_ALIGN32}_block64${RANKCHUNK32_BLOCK64}_pm${PM_ACCUM}}"
 RESULT="${RESULT:-${PREFIX}.tsv}"
@@ -36,7 +37,7 @@ LOGDIR="${LOGDIR:-${PREFIX}_logs}"
 case "$TRANSPOSE_MODE" in sync|events|pipeline) ;; *) echo "invalid TRANSPOSE_MODE" >&2; exit 2;; esac
 case "$DEPTHCODE_DECODE_LOAD" in global|ldg) ;; *) echo "invalid DEPTHCODE_DECODE_LOAD" >&2; exit 2;; esac
 case "$RANKSTREAM_LUT_LOAD" in constant|ldg|ldg256) ;; *) echo "invalid RANKSTREAM_LUT_LOAD" >&2; exit 2;; esac
-for x in RANKCHUNK32_ONESHFL RANKCHUNK32_FUSED16 RANKCHUNK32_BYTEPACK RANKCHUNK32_ALIGN32 RANKCHUNK32_BLOCK64 PM_ACCUM TERNARY_KEY4; do
+for x in RANKCHUNK32_ONESHFL RANKCHUNK32_FUSED16 RANKCHUNK32_BYTEPACK RANKCHUNK32_ALIGN32 RANKCHUNK32_BLOCK64 PM_ACCUM TERNARY_KEY4 RUN_SELFTEST; do
   v="${!x}"; [[ "$v" == 0 || "$v" == 1 ]] || { echo "$x must be 0 or 1" >&2; exit 2; }
 done
 if [[ "$RANKCHUNK32_BLOCK64" == 1 && "$RANKCHUNK32_BYTEPACK" == 1 ]]; then
@@ -55,6 +56,24 @@ mkdir -p "$(dirname "$RESULT")" "$LOGDIR"
 bash "$ONEESAN_ROOT/scripts/bench/cross5-rankmask-shape-proof.sh"
 bash "$ONEESAN_ROOT/scripts/bench/cross5-rankstream-projection-proof.sh"
 bash "$ONEESAN_ROOT/scripts/bench/rankchunk32-warpbase-proof.sh"
+
+if [[ "$RUN_SELFTEST" == 1 ]]; then
+  for direct3 in 0 1; do
+    echo "=== selftest rankchunk32 direct3=$direct3 ===" >&2
+    RUN_LAYOUT_PROOF=0 \
+      RANKCHUNK32_DIRECT3="$direct3" \
+      RANKCHUNK32_ONESHFL="$RANKCHUNK32_ONESHFL" \
+      RANKCHUNK32_FUSED16="$RANKCHUNK32_FUSED16" \
+      RANKCHUNK32_BYTEPACK="$RANKCHUNK32_BYTEPACK" \
+      RANKCHUNK32_ALIGN32="$RANKCHUNK32_ALIGN32" \
+      RANKCHUNK32_BLOCK64="$RANKCHUNK32_BLOCK64" \
+      RANKSTREAM_LUT_LOAD="$RANKSTREAM_LUT_LOAD" \
+      PM_ACCUM="$PM_ACCUM" DECODE_LOAD="$DEPTHCODE_DECODE_LOAD" \
+      bash "$ONEESAN_ROOT/scripts/bench/pattern10-depthcode-rankchunk32-cross5-selftest.sh" \
+      >"$LOGDIR/direct3_${direct3}.selftest.out" \
+      2>"$LOGDIR/direct3_${direct3}.selftest.err"
+  done
+fi
 
 field() {
   local key="$1" line="$2"
@@ -140,4 +159,4 @@ print('direct3_replaces=ffs_plus_bitclear_loop')
 print(f'summary={dst}')
 PY
 
-echo "b300-depthcode-rankchunk32-direct3-ab OK n=$N repeats=$REPEATS lut=$RANKSTREAM_LUT_LOAD decode_load=$DEPTHCODE_DECODE_LOAD fused16=$RANKCHUNK32_FUSED16 bytepack=$RANKCHUNK32_BYTEPACK align32=$RANKCHUNK32_ALIGN32 block64=$RANKCHUNK32_BLOCK64 result=$RESULT" >&2
+echo "b300-depthcode-rankchunk32-direct3-ab OK n=$N repeats=$REPEATS selftest=$RUN_SELFTEST lut=$RANKSTREAM_LUT_LOAD decode_load=$DEPTHCODE_DECODE_LOAD fused16=$RANKCHUNK32_FUSED16 bytepack=$RANKCHUNK32_BYTEPACK align32=$RANKCHUNK32_ALIGN32 block64=$RANKCHUNK32_BLOCK64 result=$RESULT" >&2
