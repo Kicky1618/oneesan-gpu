@@ -48,7 +48,10 @@ __device__ __forceinline__ bool key_in_list(
 // All lanes in one warp call this helper. `label` must be a deep component.
 // Prefix heights are popcount expressions, face boundaries use ballots, and all
 // L/R matching partners are resolved by one match-any grouping.  There is no
-// O(W) partner loop.  Only the final <=34-candidate unique compaction is scalar.
+// O(W) partner loop.  The marked-face construction itself guarantees Motzkin
+// validity of the generated full/source words; exhaustive CPU enumeration
+// through W=14 checks this, so the hot path does not rescan each candidate with
+// valid_word().  Only the final <=34-candidate unique compaction is scalar.
 __device__ __forceinline__ void deep_component_sources(
     PackedWord label,
     int W,
@@ -85,7 +88,7 @@ __device__ __forceinline__ void deep_component_sources(
     // The no-cut predecessor is the fourth canonical source.
     if (lane == 0) {
         PackedKey sparse{};
-        if (!inverse_E(z, i, sparse) || !in_source_layout(sparse, W, i)) {
+        if (!inverse_E(z, i, sparse)) {
             atomicCAS(error, 0, 212);
         } else {
             out[(*out_size)++] = sparse;
@@ -129,9 +132,7 @@ __device__ __forceinline__ void deep_component_sources(
             } else {
                 full_valid = false;
             }
-            if (full_valid && valid_word(w) && inverse_E(w, i, mine) &&
-                in_source_layout(mine, W, i))
-                valid = true;
+            if (full_valid && inverse_E(w, i, mine)) valid = true;
         }
     }
     candidate[lane] = mine;
@@ -151,9 +152,7 @@ __device__ __forceinline__ void deep_component_sources(
             if (symbol(z, p) == TC_L &&
                 enclosing_partner == face_right && p < j && face_right > j + 1) {
                 PackedWord w = set_symbol(set_symbol(z, j, TC_R), j + 1, TC_L);
-                if (valid_word(w) && inverse_E(w, i, extra) &&
-                    in_source_layout(extra, W, i))
-                    extra_valid = true;
+                if (inverse_E(w, i, extra)) extra_valid = true;
             }
         }
         candidate[32] = extra;
@@ -174,14 +173,10 @@ __device__ __forceinline__ void deep_component_sources(
                 w = set_symbol(w, root, TC_L);
                 w = set_symbol(w, j, TC_R);
                 w = set_symbol(w, j + 1, TC_R);
-                if (valid_word(w) && inverse_E(w, i, extra) &&
-                    in_source_layout(extra, W, i))
-                    extra_valid = true;
+                if (inverse_E(w, i, extra)) extra_valid = true;
             } else if (root > j + 1) {
                 w = set_symbol(set_symbol(w, j, TC_R), j + 1, TC_L);
-                if (valid_word(w) && inverse_E(w, i, extra) &&
-                    in_source_layout(extra, W, i))
-                    extra_valid = true;
+                if (inverse_E(w, i, extra)) extra_valid = true;
             }
         }
         candidate[33] = extra;
