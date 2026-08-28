@@ -26,7 +26,8 @@ __global__ void cross5_compare_kernel(
     uint32_t code = codes[ci];
     BkczCrossAccum a = p10dc_resolved_low_preimages(code, depth, source_row);
     BkczCrossAccum b = p10dc_resolved_low_preimages_cross5(code, depth, source_row);
-    if (a != b) atomicAdd(mismatches, 1u);
+    BkczCrossAccum c = p10dc_resolved_low_preimages_cross5_prekey(code, ci, depth, source_row);
+    if (a != b || a != c) atomicAdd(mismatches, 1u);
     atomicAdd(checked, 1u);
 }
 
@@ -89,7 +90,7 @@ int main() {
               << " low_k=" << LOW_LUT_K
               << " codes=" << ncode
               << " depths=15 checked=" << checked
-              << " mismatches=0 table_bytes=6561 scalar_equivalent=1 pm_accum=" << GPU_DIRECT_PM_ACCUM
+              << " mismatches=0 table_bytes=6561 scalar_equivalent=1 prekey_equivalent=1 pm_accum=" << GPU_DIRECT_PM_ACCUM
               << '\n';
     return 0;
 }
