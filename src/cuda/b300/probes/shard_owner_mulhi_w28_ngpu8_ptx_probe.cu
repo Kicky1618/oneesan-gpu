@@ -44,6 +44,41 @@ __device__ __forceinline__ int shard_owner8_u32limb(Code g) {
     return int(high64 >> B300_MAIN_HIGH_SHIFT_W28_G8);
 }
 
+struct ShiftProduct32 { std::uint32_t lo, hi; };
+
+__device__ __forceinline__ ShiftProduct32 mul45_shiftadd_probe(std::uint32_t x) {
+    std::uint32_t lo = x << 5;
+    std::uint32_t hi = x >> 27;
+    std::uint32_t add = x << 3;
+    std::uint32_t old = lo;
+    lo += add;
+    hi += (x >> 29) + std::uint32_t(lo < old);
+    add = x << 2;
+    old = lo;
+    lo += add;
+    hi += (x >> 30) + std::uint32_t(lo < old);
+    old = lo;
+    lo += x;
+    hi += std::uint32_t(lo < old);
+    return {lo, hi};
+}
+
+__device__ __forceinline__ int shard_owner8_u32shift(Code g) {
+    const std::uint32_t a0 = std::uint32_t(g);
+    const std::uint32_t a1 = std::uint32_t(g >> 32);
+    const std::uint32_t p00_hi = __umulhi(a0, B300_MAIN_MAGIC_LO_W28_G8);
+    const ShiftProduct32 p01 = mul45_shiftadd_probe(a0);
+    const std::uint32_t p10_lo = a1 * B300_MAIN_MAGIC_LO_W28_G8;
+    const std::uint32_t p10_hi = __umulhi(a1, B300_MAIN_MAGIC_LO_W28_G8);
+    const std::uint32_t p11 = (a1 << 5) + (a1 << 3) + (a1 << 2) + a1;
+    const std::uint32_t s0 = p00_hi + p01.lo;
+    std::uint32_t carry = std::uint32_t(s0 < p00_hi);
+    const std::uint32_t s1 = s0 + p10_lo;
+    carry += std::uint32_t(s1 < s0);
+    const std::uint32_t high64 = p01.hi + p10_hi + p11 + carry;
+    return int(high64 >> B300_MAIN_HIGH_SHIFT_W28_G8);
+}
+
 __device__ __forceinline__ Code shard_base8_masked_probe(int owner) {
     const Code u = Code(unsigned(owner));
     const Code b0 = (Code(0) - (u & 1ULL)) & B300_MAIN_CHUNK_W28_G8;
@@ -69,6 +104,11 @@ __device__ __forceinline__ ShardAddress8 shard_address8_mulhi_mask(Code g) {
 
 __device__ __forceinline__ ShardAddress8 shard_address8_u32limb_mask(Code g) {
     const int owner = shard_owner8_u32limb(g);
+    return {owner, g - shard_base8_masked_probe(owner)};
+}
+
+__device__ __forceinline__ ShardAddress8 shard_address8_u32shift_mask(Code g) {
+    const int owner = shard_owner8_u32shift(g);
     return {owner, g - shard_base8_masked_probe(owner)};
 }
 
@@ -114,6 +154,15 @@ extern "C" __global__ void gridfp_b300_shard_owner_u32limb_mask_probe(
 ) {
     const int tid = int(blockIdx.x * blockDim.x + threadIdx.x);
     const ShardAddress8 a = shard_address8_u32limb_mask(global_index[tid]);
+    owner[tid] = a.owner;
+    local[tid] = a.local;
+}
+
+extern "C" __global__ void gridfp_b300_shard_owner_u32shift_mask_probe(
+    const Code* global_index, int* owner, Code* local
+) {
+    const int tid = int(blockIdx.x * blockDim.x + threadIdx.x);
+    const ShardAddress8 a = shard_address8_u32shift_mask(global_index[tid]);
     owner[tid] = a.owner;
     local[tid] = a.local;
 }
