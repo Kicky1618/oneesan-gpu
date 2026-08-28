@@ -7,6 +7,7 @@ GEN="$ONEESAN_ROOT/scripts/build/gen-b300-vmm-production.py"
 OUT="${OUT:-$ONEESAN_BUILD_DIR/generated_b300_vmm_production_proof.cu}"
 
 bash "$ONEESAN_ROOT/scripts/bench/b300-vmm-contiguous-layout-proof.sh"
+bash "$ONEESAN_ROOT/scripts/bench/b300-vmm-balanced-physical-layout-proof.sh"
 python3 "$GEN" "$SRC" "$OUT"
 
 grep -Fq '#include "b300_vmm_contiguous_storage.cuh"' "$OUT"
@@ -33,4 +34,4 @@ if grep -Fq 'cudaFree(mp[d])' "$OUT" || grep -Fq 'cudaFree(bp[d])' "$OUT"; then
   exit 4
 fi
 
-echo "b300-vmm-production-generate-proof OK direct_global_index=1 logical_shard_views=1 authoritative_cudaMalloc=0 authoritative_cudaFree=0 balanced_physical_rotation=1"
+echo "b300-vmm-production-generate-proof OK direct_global_index=1 logical_shard_views=1 authoritative_cudaMalloc=0 authoritative_cudaFree=0 balanced_physical_rotation=1 combined_imbalance_le_one_granularity=1"
