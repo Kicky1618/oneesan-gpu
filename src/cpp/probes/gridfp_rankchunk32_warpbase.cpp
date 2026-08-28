@@ -4,68 +4,58 @@
 int main() {
     constexpr uint32_t WARP = 32;
     constexpr uint32_t BLOCK = 16;
+    constexpr uint32_t ALIGN = 32;
     uint64_t cases = 0, lanes = 0;
-    uint32_t max_blocks = 0;
+    uint32_t max_blocks = 0, max_padding = 0;
 
-    // A warp stripe starts at a rank multiple of 32.  Only the compact height
-    // offset modulo the 16-code metadata block changes the block alignment.
-    // Final partial stripes keep active lanes as the contiguous prefix
-    // [0,active_lanes), exactly as the warp-striped HIGH kernels do.
-    for (uint32_t hoff_mod = 0; hoff_mod < BLOCK; ++hoff_mod) {
-        for (uint32_t active_lanes = 1; active_lanes <= WARP; ++active_lanes) {
-            const uint32_t first_compact = hoff_mod;
-            const uint32_t first_block = first_compact >> 4;
-            const uint32_t first_off = first_compact & 15u;
-            const uint32_t split1 = BLOCK - first_off;
-            const uint32_t split2 = split1 + BLOCK;
-            uint32_t used_mask = 0;
+    // Before a height is emitted its metadata cursor can have any alignment.
+    // Padding moves the height start to the next 32-entry boundary.  Rank
+    // stripes then begin at another multiple of 32, so lanes 0..15 and 16..31
+    // map exactly to the two 16-entry metadata blocks.
+    for (uint32_t prior_mod = 0; prior_mod < ALIGN; ++prior_mod) {
+        const uint32_t padding = (ALIGN - prior_mod) & (ALIGN - 1u);
+        if (padding > max_padding) max_padding = padding;
+        const uint32_t hoff = prior_mod + padding;
+        if ((hoff & (ALIGN - 1u)) != 0u) return 2;
 
-            for (uint32_t lane = 0; lane < active_lanes; ++lane) {
-                const uint32_t compact = hoff_mod + lane;
-                const uint32_t direct_block = compact >> 4;
-                uint32_t shared_block = first_block;
-                if (lane >= split1) shared_block = first_block + 1u;
-                if (split2 < WARP && lane >= split2) shared_block = first_block + 2u;
-                if (direct_block != shared_block) {
-                    std::cerr << "rankchunk32 warp-base mismatch hoff_mod=" << hoff_mod
-                              << " active=" << active_lanes << " lane=" << lane
-                              << " direct=" << direct_block << " shared=" << shared_block
-                              << " split1=" << split1 << " split2=" << split2 << '\n';
-                    return 2;
+        for (uint32_t stripe = 0; stripe < 4u * WARP; stripe += WARP) {
+            for (uint32_t active_lanes = 1; active_lanes <= WARP; ++active_lanes) {
+                const uint32_t first_compact = hoff + stripe;
+                const uint32_t first_block = first_compact >> 4;
+                uint32_t blocks = 1;
+
+                for (uint32_t lane = 0; lane < active_lanes; ++lane) {
+                    const uint32_t compact = hoff + stripe + lane;
+                    const uint32_t direct_block = compact >> 4;
+                    const uint32_t shared_block = first_block + (lane >= BLOCK ? 1u : 0u);
+                    if (direct_block != shared_block) {
+                        std::cerr << "rankchunk32 aligned warp-base mismatch prior_mod=" << prior_mod
+                                  << " padding=" << padding << " stripe=" << stripe
+                                  << " active=" << active_lanes << " lane=" << lane
+                                  << " direct=" << direct_block << " shared=" << shared_block << '\n';
+                        return 3;
+                    }
+                    if (lane >= BLOCK) blocks = 2;
+                    ++lanes;
                 }
-                used_mask |= 1u << direct_block;
-                ++lanes;
-            }
 
-            const uint32_t blocks = uint32_t(__builtin_popcount(used_mask));
-            if (blocks > 3u) return 3;
-            if (blocks > max_blocks) max_blocks = blocks;
-
-            // lane 0 is always active.  A later block is used iff its first lane
-            // is active, so that lane can safely issue the load and broadcast.
-            if (blocks >= 2u && !(split1 < active_lanes)) {
-                std::cerr << "rankchunk32 second-block source inactive hoff_mod=" << hoff_mod
-                          << " active=" << active_lanes << " split1=" << split1 << '\n';
-                return 4;
+                if (blocks > max_blocks) max_blocks = blocks;
+                if (blocks == 2u && active_lanes <= BLOCK) return 4;
+                ++cases;
             }
-            if (blocks == 3u && !(split2 < WARP && split2 < active_lanes)) {
-                std::cerr << "rankchunk32 third-block source inactive hoff_mod=" << hoff_mod
-                          << " active=" << active_lanes << " split2=" << split2 << '\n';
-                return 5;
-            }
-            ++cases;
         }
     }
 
-    if (cases != 16u * 32u || max_blocks != 3u) return 6;
+    if (cases != 32u * 4u * 32u || max_blocks != 2u || max_padding != 31u) return 5;
     std::cout << "gridfp-rankchunk32-warpbase OK"
               << " cases=" << cases
               << " active_lane_checks=" << lanes
-              << " alignments=16 partial_widths=32"
-              << " max_block_base_loads_per_warp=3"
+              << " prealignments=32 stripes=4 partial_widths=32"
+              << " height_alignment=32"
+              << " max_padding_entries_per_height=31"
+              << " max_block_base_loads_per_warp=2"
               << " lane0_source_always_active=1"
-              << " second_source_active_if_needed=1"
-              << " third_source_active_if_needed=1"
+              << " lane16_source_active_if_needed=1"
               << " direct_block_exact=1\n";
     return 0;
 }
