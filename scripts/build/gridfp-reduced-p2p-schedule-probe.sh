@@ -13,6 +13,9 @@ case "$MODE" in
   ownerfirst)
     SRC_REL="src/cuda/gridfp/gridfp_reduced_production_p2p_ownerfirst_ab_microprobe.cu"
     ;;
+  tie)
+    SRC_REL="src/cuda/gridfp/gridfp_reduced_production_p2p_tie_balance_microprobe.cu"
+    ;;
   worklist)
     SRC_REL="src/cuda/gridfp/gridfp_reduced_production_p2p_worklist_microprobe.cu"
     ;;
@@ -20,7 +23,7 @@ case "$MODE" in
     SRC_REL="src/cuda/gridfp/gridfp_reduced_production_p2p_compiled_schedule_microprobe.cu"
     ;;
   *)
-    echo "invalid MODE=$MODE (baseline|ownerfirst|worklist|compiled)" >&2
+    echo "invalid MODE=$MODE (baseline|ownerfirst|tie|worklist|compiled)" >&2
     exit 2
     ;;
 esac
