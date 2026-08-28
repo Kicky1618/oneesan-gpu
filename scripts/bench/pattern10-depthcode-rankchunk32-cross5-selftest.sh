@@ -17,6 +17,12 @@ case "$RANKSTREAM_LUT_LOAD" in
   ldg256) P10DC_RANKSTREAM_LUT_LDG=1; P10DC_RANKSTREAM_LUT_PAD256=1 ;;
   *) echo "RANKSTREAM_LUT_LOAD must be constant, ldg, or ldg256" >&2; exit 2;;
 esac
+
+# Keep layout/packing validation independent from CUDA execution. This proves
+# the current 23-bit chunks + 9-bit prefix, 32-code block, zero-padding layout
+# and the variable-source one-shuffle mapping before compiling the GPU probe.
+bash "$ONEESAN_ROOT/scripts/bench/rankchunk32-warpbase-proof.sh"
+
 SRC="$ONEESAN_ROOT/src/cuda/gridfp/probes/ramstream32_bucket_orbit_closure_pattern10_depthcode_rankchunk32_cross5_selftest.cu"
 BIN="${BIN:-$ONEESAN_BUILD_DIR/pattern10_depthcode_rankchunk32_cross5_selftest_w${W}_pm${PM_ACCUM}_${DECODE_LOAD}_ranklut${RANKSTREAM_LUT_LOAD}_oneshfl${RANKCHUNK32_ONESHFL}_fused16${RANKCHUNK32_FUSED16}}"
 mkdir -p "$(dirname "$BIN")"
@@ -33,9 +39,8 @@ printf '%s\n' "$out"
 grep -Eq "bucket-closure-pattern10-depthcode-rankchunk32-cross5-selftest (OK W=$W|SKIP no CUDA device)" <<<"$out"
 if grep -Fq "OK W=$W" <<<"$out"; then
   grep -Fq 'forward_exact=1 reverse_exact=1 rankchunk32_table_exact=1 padding_exact=1' <<<"$out"
-  grep -Fq 'chunk_bits=24 prefix_bits=8 block=16 height_align=32' <<<"$out"
   grep -Fq 'block_base_loads_per_warp_max=2' <<<"$out"
   grep -Fq 'cross_runtime_div=0 cross_runtime_mod=0 cross_runtime_direct_lookup=0' <<<"$out"
   grep -Fq 'old_prekey_offset_arrays_freed=1 fallback_structurally_unreachable=1' <<<"$out"
 fi
-echo "pattern10-depthcode-rankchunk32-cross5-selftest OK W=$W pm_accum=$PM_ACCUM decode_load=$DECODE_LOAD rankstream_lut_load=$RANKSTREAM_LUT_LOAD aligned_meta=1 rankchunk32_oneshfl=$RANKCHUNK32_ONESHFL rankchunk32_fused16=$RANKCHUNK32_FUSED16" >&2
+echo "pattern10-depthcode-rankchunk32-cross5-selftest OK W=$W pm_accum=$PM_ACCUM decode_load=$DECODE_LOAD rankstream_lut_load=$RANKSTREAM_LUT_LOAD layout=23bit_chunks_9bit_prefix_block32_padding0 rankchunk32_oneshfl=$RANKCHUNK32_ONESHFL rankchunk32_fused16=$RANKCHUNK32_FUSED16" >&2
