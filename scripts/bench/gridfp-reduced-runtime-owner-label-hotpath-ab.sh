@@ -63,7 +63,9 @@ build_one() {
   read -r prefix_carry local_carry adjacent <<<"$(mode_flags "$mode")"
   local inject="-DRP_RUNTIME_OWNER_PREFIX_CARRY_BEGIN=$prefix_carry -DRP_RUNTIME_OWNER_LOCAL_SECTOR_CARRY_BEGIN=$local_carry -DRP_FAST_COMPONENT_SUPPORT_ADJACENT_MARKS=$adjacent"
 
-  NVCC_PREPEND_FLAGS="$inject ${NVCC_PREPEND_FLAGS:-}" \
+  # Do not inherit caller NVCC_PREPEND_FLAGS: an unrelated -D would invalidate
+  # the five-way isolation. Every non-experimental runtime knob is fixed below.
+  NVCC_PREPEND_FLAGS="$inject" \
   MODE=two-row-runtime-multigpu \
   RUNTIME_CACHE_EDGES=1 \
   RUNTIME_FAST_P32M5_MOD=1 \
@@ -109,8 +111,6 @@ build_one() {
   bash "$ONEESAN_ROOT/scripts/build/gridfp-reduced-component-probe.sh" \
     >"$LOGDIR/mode${mode}.build.out" 2>"$LOGDIR/mode${mode}.build.err"
 
-  # nvcc prints effective prepend flags when --verbose is not requested only via
-  # our own record, so keep an explicit audit trail beside each build log.
   printf 'mode=%s prefix_carry=%s local_carry=%s adjacent=%s\n' \
     "$mode" "$prefix_carry" "$local_carry" "$adjacent" \
     >"$LOGDIR/mode${mode}.flags"
