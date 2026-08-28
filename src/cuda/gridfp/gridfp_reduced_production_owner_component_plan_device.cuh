@@ -1,6 +1,7 @@
 #pragma once
 
 #include "gridfp_reduced_production_owner_component_device.cuh"
+#include "gridfp_reduced_production_runtime_fastdiv64.cuh"
 
 namespace oneesan::gridfp::reducedprod {
 
@@ -49,8 +50,26 @@ __device__ __forceinline__ MateID owner_component_label_unrank_planned_device(
 
     const Rank64 component_group = plan.component_group[outer_ones];
     if (!component_group) return 0;
-    const Rank64 outer_sr = plan.sr_begin[outer_ones] + local / component_group;
-    Rank64 within = local % component_group;
+    Rank64 outer_delta = 0;
+    Rank64 within = 0;
+#if RP_RUNTIME_FAST_DIV64
+    // The fixed owner-group reciprocal table is valid exactly for the two-row
+    // production geometry. Generic probes with another K retain ordinary
+    // div/mod, while the primitive divisor below is universal.
+    if (W >= RP_RUNTIME_OWNER_W_MIN && W <= RP_MAX_W && !(W & 1) &&
+        K == (W - 2) / 2) {
+        runtime_fastdivmod64_magic(
+            local, component_group, runtime_owner_group_magic(W, outer_ones),
+            outer_delta, within);
+    } else {
+        outer_delta = local / component_group;
+        within = local % component_group;
+    }
+#else
+    outer_delta = local / component_group;
+    within = local % component_group;
+#endif
+    const Rank64 outer_sr = plan.sr_begin[outer_ones] + outer_delta;
     const std::uint32_t outer = support_unrank_mask_device(O, outer_ones, outer_sr);
 
     int local_ones = -1;
@@ -64,8 +83,9 @@ __device__ __forceinline__ MateID owner_component_label_unrank_planned_device(
         const Rank64 n = supports * pc;
         if (within < n) {
             local_ones = l;
-            local_sr = within / pc;
-            primitive_rank = within % pc;
+            runtime_fastdivmod64_magic(
+                within, pc, RP_RUNTIME_PRIMITIVE1_MAGIC[occupied],
+                local_sr, primitive_rank);
             break;
         }
         within -= n;
