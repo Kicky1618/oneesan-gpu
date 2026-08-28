@@ -52,12 +52,13 @@ __device__ __forceinline__ std::uint32_t owner_ngpu8(
 
 template <bool Specialized>
 __global__ void owner_probe_kernel(
-    std::uint32_t* out, int n, int iters, Rank64 total, std::uint32_t meta
+    std::uint32_t* out, int n, int iters, Rank64 total, Rank64 stride,
+    std::uint32_t meta, int ngpu
 ) {
     const int tid = blockIdx.x * blockDim.x + threadIdx.x;
     if (tid >= n) return;
-    Rank64 midpoint = static_cast<Rank64>(tid) << 20;
-    while (midpoint >= total) midpoint -= total;
+    Rank64 midpoint = static_cast<Rank64>(tid) * stride;
+    if (midpoint >= total) midpoint = total - 1;
     std::uint32_t acc = 0;
     for (int i = 0; i < iters; ++i) {
         midpoint += 17;
@@ -65,7 +66,7 @@ __global__ void owner_probe_kernel(
         if constexpr (Specialized)
             acc += owner_ngpu8(midpoint, meta);
         else
-            acc += owner_generic(midpoint, meta, 8);
+            acc += owner_generic(midpoint, meta, ngpu);
     }
     out[tid] = acc;
 }
@@ -80,14 +81,14 @@ void ck(cudaError_t e, const char* what) {
 template <bool Specialized>
 float run_once(
     std::uint32_t* d_out, int n, int blocks, int threads, int iters,
-    Rank64 total, std::uint32_t meta
+    Rank64 total, Rank64 stride, std::uint32_t meta, int ngpu
 ) {
     cudaEvent_t a{}, b{};
     ck(cudaEventCreate(&a), "cudaEventCreate(a)");
     ck(cudaEventCreate(&b), "cudaEventCreate(b)");
     ck(cudaEventRecord(a), "cudaEventRecord(a)");
     owner_probe_kernel<Specialized><<<blocks, threads>>>(
-        d_out, n, iters, total, meta);
+        d_out, n, iters, total, stride, meta, ngpu);
     ck(cudaGetLastError(), "owner_probe_kernel");
     ck(cudaEventRecord(b), "cudaEventRecord(b)");
     ck(cudaEventSynchronize(b), "cudaEventSynchronize(b)");
@@ -119,25 +120,27 @@ int main(int argc, char** argv) {
     const int wi = (W - 8) >> 1;
     const int n = blocks * threads;
     const Rank64 total = TOTAL[wi];
+    const Rank64 stride = std::max<Rank64>(Rank64(1), total / Rank64(n));
     const std::uint32_t meta = META[wi];
+    constexpr int ngpu = 8;
 
     std::uint32_t *d0 = nullptr, *d1 = nullptr;
     ck(cudaMalloc(&d0, std::size_t(n) * sizeof(*d0)), "cudaMalloc(d0)");
     ck(cudaMalloc(&d1, std::size_t(n) * sizeof(*d1)), "cudaMalloc(d1)");
 
-    run_once<false>(d0, n, blocks, threads, iters, total, meta);
-    run_once<true>(d1, n, blocks, threads, iters, total, meta);
+    run_once<false>(d0, n, blocks, threads, iters, total, stride, meta, ngpu);
+    run_once<true>(d1, n, blocks, threads, iters, total, stride, meta, ngpu);
 
     std::vector<float> generic, ngpu8;
     generic.reserve(repeats);
     ngpu8.reserve(repeats);
     for (int r = 0; r < repeats; ++r) {
         if (r & 1) {
-            ngpu8.push_back(run_once<true>(d1, n, blocks, threads, iters, total, meta));
-            generic.push_back(run_once<false>(d0, n, blocks, threads, iters, total, meta));
+            ngpu8.push_back(run_once<true>(d1, n, blocks, threads, iters, total, stride, meta, ngpu));
+            generic.push_back(run_once<false>(d0, n, blocks, threads, iters, total, stride, meta, ngpu));
         } else {
-            generic.push_back(run_once<false>(d0, n, blocks, threads, iters, total, meta));
-            ngpu8.push_back(run_once<true>(d1, n, blocks, threads, iters, total, meta));
+            generic.push_back(run_once<false>(d0, n, blocks, threads, iters, total, stride, meta, ngpu));
+            ngpu8.push_back(run_once<true>(d1, n, blocks, threads, iters, total, stride, meta, ngpu));
         }
     }
 
