@@ -19,3 +19,4 @@ build_and_run() {
 build_and_run two_cell_forest_permutation_probe
 build_and_run two_cell_inplace_shear_probe
 build_and_run two_cell_local_permutation_probe
+build_and_run two_cell_local_topology_probe
