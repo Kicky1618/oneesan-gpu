@@ -4,11 +4,13 @@ source "$(dirname -- "${BASH_SOURCE[0]}")/../lib/common.sh"
 
 SRC="$ONEESAN_ROOT/src/cuda/b300/oneesan_cuda_gridfp_b300_hbm32_fullmate_dropN.cu"
 GEN="$ONEESAN_ROOT/scripts/build/gen-b300-vmm-production.py"
+PRUNE="$ONEESAN_ROOT/scripts/build/prune-b300-vmm-stale-shard-symbols.py"
 OUT="${OUT:-$ONEESAN_BUILD_DIR/generated_b300_vmm_production_proof.cu}"
 
 bash "$ONEESAN_ROOT/scripts/bench/b300-vmm-contiguous-layout-proof.sh"
 bash "$ONEESAN_ROOT/scripts/bench/b300-vmm-balanced-physical-layout-proof.sh"
 python3 "$GEN" "$SRC" "$OUT"
+python3 "$PRUNE" "$OUT" "$OUT"
 
 grep -Fq '#include "b300_vmm_contiguous_storage.cuh"' "$OUT"
 grep -Fq 'static_assert(sizeof(Count)==4,"B300 VMM authoritative storage requires 32-bit Count");' "$OUT"
@@ -34,25 +36,27 @@ grep -Fq 'cudaMemcpyToSymbol(D_BLOCK_VBASE,&block_base,sizeof(block_base))' "$OU
 grep -Fq 'main_store.destroy();block_store.destroy();' "$OUT"
 grep -Fq 'backend=gridfp-b300-hbm32-fullmate-dropN-vmm n=' "$OUT"
 
+for stale in D_MAIN_PTR D_BLOCK_PTR D_MAIN_CHUNK D_BLOCK_CHUNK D_NGPU; do
+  if grep -Fq "$stale" "$OUT"; then
+    echo "generated VMM source still contains stale shard symbol $stale" >&2
+    exit 3
+  fi
+done
 if grep -Fq 'uint32_t owner,pad' "$OUT"; then
   echo "generated VMM PeerInterval still contains owner/pad" >&2
-  exit 3
+  exit 4
 fi
 if grep -Fq 'cudaMalloc(&mp[d]' "$OUT" || grep -Fq 'cudaMalloc(&bp[d]' "$OUT"; then
   echo "generated VMM source still cudaMallocs authoritative shards" >&2
-  exit 4
+  exit 5
 fi
 if grep -Fq 'cudaFree(mp[d])' "$OUT" || grep -Fq 'cudaFree(bp[d])' "$OUT"; then
   echo "generated VMM source still cudaFrees VMM logical views" >&2
-  exit 5
+  exit 6
 fi
 if grep -Fq 'Every shard boundary can split at most one globally ordered interval.' "$OUT" || grep -Fq 'int owner=int(g/chunk)' "$OUT"; then
   echo "generated VMM interval planner still performs logical shard splitting" >&2
-  exit 6
-fi
-if grep -Fq 'Count*peer=(BLOCK?D_BLOCK_PTR[x.owner]:D_MAIN_PTR[x.owner])+x.remote;' "$OUT"; then
-  echo "generated VMM interval kernel still selects a logical shard pointer" >&2
   exit 7
 fi
 
-echo "b300-vmm-production-generate-proof OK count_bytes=4 direct_global_index=1 shard_free_interval_io=1 compact_interval_bytes=24 compact_interval_vs_old_pct=75 interval_host_owner_div=0 interval_device_ptr_index=0 logical_shard_views=1 authoritative_cudaMalloc=0 authoritative_cudaFree=0 balanced_physical_rotation=1 combined_imbalance_le_one_granularity=1 runtime_physical_balance_guard=1"
+echo "b300-vmm-production-generate-proof OK count_bytes=4 direct_global_index=1 shard_free_interval_io=1 compact_interval_bytes=24 compact_interval_vs_old_pct=75 interval_host_owner_div=0 interval_device_ptr_index=0 stale_shard_symbols=0 stale_shard_symbol_copies=0 logical_shard_views=host_only authoritative_cudaMalloc=0 authoritative_cudaFree=0 balanced_physical_rotation=1 combined_imbalance_le_one_granularity=1 runtime_physical_balance_guard=1"
