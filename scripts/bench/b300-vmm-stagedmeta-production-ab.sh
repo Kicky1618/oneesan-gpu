@@ -38,7 +38,7 @@ NVCC="$NVCC" N=27 ARCH="$ARCH" OUT="$BIN_PACK" bash "$ONEESAN_ROOT/scripts/build
 NVCC="$NVCC" N=27 ARCH="$ARCH" OUT="$BIN_STAGE" bash "$ONEESAN_ROOT/scripts/build/b300-hbm32-vmm-basearg-stagedmeta.sh" >"$LOGDIR/stage.build.out" 2>"$LOGDIR/stage.build.err"
 grep -Fq 'per_group_meta_copy=D2D_sync' "$LOGDIR/stage.build.out"
 
-printf 'mode\trun\tresidue\twall_s\tprepare_s\ttotal_s\tactive_max_s\tactive_sum_s\tmax_intervals\tstaged_groups\tstaged_mib_per_gpu\tstaged_cap_mib\tstaged_total_h2d_gib\n' >"$RESULT"
+printf 'mode\trun\tresidue\twall_s\tprepare_s\ttotal_s\tactive_max_s\tactive_sum_s\tmax_intervals\tstaged_groups\tstaged_mib_per_gpu\tstaged_cap_mib\tstaged_reserve_mib\tstaged_total_h2d_gib\n' >"$RESULT"
 run_one(){
   local mode="$1" run="$2" bin;[[ "$mode" == pack ]]&&bin="$BIN_PACK"||bin="$BIN_STAGE"
   local out="$LOGDIR/${mode}_run${run}.out" err="$LOGDIR/${mode}_run${run}.err"
@@ -52,15 +52,16 @@ import sys
 print(f'{float(sys.argv[1])+float(sys.argv[2]):.9f}')
 PY
 )"
-  local groups='-' mib='-' cap='-' h2d='-'
+  local groups='-' mib='-' cap='-' reserve='-' h2d='-'
   if [[ "$mode" == stage ]];then
     local meta;meta="$(grep '^staged group meta: ' "$err"|tail -n1||true)";[[ -n "$meta" ]]||{ echo "missing staged metadata runtime line" >&2;exit 5; }
     mfield(){ sed -nE "s/.* $1=([^[:space:]]+).*/\\1/p"<<<"$meta"; }
-    groups="$(mfield groups)";mib="$(mfield mib_per_gpu)";cap="$(mfield cap_mib)";h2d="$(mfield total_h2d_gib)";[[ -n "$groups"&&-n "$mib"&&-n "$cap"&&-n "$h2d" ]]||exit 6
+    groups="$(mfield groups)";mib="$(mfield mib_per_gpu)";cap="$(mfield cap_mib)";reserve="$(mfield reserve_mib)";h2d="$(mfield total_h2d_gib)";[[ -n "$groups"&&-n "$mib"&&-n "$cap"&&-n "$reserve"&&-n "$h2d" ]]||exit 6
     [[ "$cap" == "$B300_STAGED_META_MAX_MIB" ]]||{ echo "staged metadata cap mismatch runtime=$cap requested=$B300_STAGED_META_MAX_MIB" >&2;exit 7; }
-    if [[ "$TARGET_MIB" == 16384 && "$MAX_WINDOW" == 14 ]];then [[ "$groups" == 16384 ]]||{ echo "unexpected default staged group count $groups" >&2;exit 8; };fi
+    [[ "$reserve" == "$GRIDFP_VRAM_RESERVE_MIB" ]]||{ echo "staged metadata reserve mismatch runtime=$reserve requested=$GRIDFP_VRAM_RESERVE_MIB" >&2;exit 8; }
+    if [[ "$TARGET_MIB" == 16384 && "$MAX_WINDOW" == 14 ]];then [[ "$groups" == 16384 ]]||{ echo "unexpected default staged group count $groups" >&2;exit 9; };fi
   fi
-  printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' "$mode" "$run" "$residue" "$wall" "$prep" "$total" "$active" "$sum" "$ints" "$groups" "$mib" "$cap" "$h2d" >>"$RESULT"
+  printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' "$mode" "$run" "$residue" "$wall" "$prep" "$total" "$active" "$sum" "$ints" "$groups" "$mib" "$cap" "$reserve" "$h2d" >>"$RESULT"
 }
 for((r=1;r<=RUNS;++r));do if((r&1));then order=(pack stage);else order=(stage pack);fi;for m in "${order[@]}";do run_one "$m" "$r";done;done
 cat "$RESULT"
@@ -73,7 +74,7 @@ for mode in ('pack','stage'):
  res[mode]=next(iter(rr));med=lambda k:statistics.median(float(x[k]) for x in r)
  d=dict(mode=mode,runs=len(r),residue=res[mode],median_wall_s=f'{med("wall_s"):.9f}',median_prepare_s=f'{med("prepare_s"):.9f}',median_total_s=f'{med("total_s"):.9f}',median_active_max_s=f'{med("active_max_s"):.9f}',median_active_sum_s=f'{med("active_sum_s"):.9f}',max_intervals=max(int(x['max_intervals']) for x in r))
  if mode=='stage':
-  for k in ('staged_groups','staged_mib_per_gpu','staged_cap_mib','staged_total_h2d_gib'):
+  for k in ('staged_groups','staged_mib_per_gpu','staged_cap_mib','staged_reserve_mib','staged_total_h2d_gib'):
    vals={x[k] for x in r};
    if len(vals)!=1:raise SystemExit(f'unstable {k}: {vals}')
    d[k]=next(iter(vals))
@@ -95,8 +96,9 @@ print(f'b300_stagedmeta_best_total={"stage" if st<pt else "pack"}')
 print(f'b300_stagedmeta_groups={q["stage"].get("staged_groups","-")}')
 print(f'b300_stagedmeta_mib_per_gpu={q["stage"].get("staged_mib_per_gpu","-")}')
 print(f'b300_stagedmeta_cap_mib={q["stage"].get("staged_cap_mib","-")}')
+print(f'b300_stagedmeta_reserve_mib={q["stage"].get("staged_reserve_mib","-")}')
 print(f'b300_stagedmeta_total_h2d_gib={q["stage"].get("staged_total_h2d_gib","-")}')
 print(f'residue={res["pack"]}')
 print(f'summary={dst}')
 PY
-echo "b300-vmm-stagedmeta-production-ab OK runs=$RUNS median_gate=${STAGED_SPEEDUP}x median_threshold=${MIN_STAGED_SPEEDUP}x worst_gate=${STAGED_WORST}x worst_threshold=${MIN_WORST_STAGED_SPEEDUP}x stage_cap_mib=$B300_STAGED_META_MAX_MIB result=$RESULT" >&2
+echo "b300-vmm-stagedmeta-production-ab OK runs=$RUNS median_gate=${STAGED_SPEEDUP}x median_threshold=${MIN_STAGED_SPEEDUP}x worst_gate=${STAGED_WORST}x worst_threshold=${MIN_WORST_STAGED_SPEEDUP}x stage_cap_mib=$B300_STAGED_META_MAX_MIB reserve_mib=$GRIDFP_VRAM_RESERVE_MIB result=$RESULT" >&2
