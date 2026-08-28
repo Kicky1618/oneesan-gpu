@@ -10,7 +10,11 @@ tmp_build="$(mktemp)"
 tmp_env="$(mktemp)"
 trap 'rm -f "$tmp_build" "$tmp_env"' EXIT
 
-sed -nE 's/^(RUNTIME_[A-Z0-9_]+)=.*/\1/p' "$BUILD" | sort -u >"$tmp_build"
+# Compare user-settable RUNTIME_* inputs. HASH_BUCKETS is derived from storage
+# bytes / associativity inside the build script and must not be independently
+# pinned by experiments.
+sed -nE 's/^(RUNTIME_[A-Z0-9_]+)=.*/\1/p' "$BUILD" |
+  grep -v '^RUNTIME_FIND_INDEX_HASH_BUCKETS$' | sort -u >"$tmp_build"
 sed -nE 's/^  (RUNTIME_[A-Z0-9_]+)=.*/\1/p' "$ENVFILE" | sort -u >"$tmp_env"
 
 if ! diff -u "$tmp_build" "$tmp_env"; then
