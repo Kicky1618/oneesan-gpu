@@ -144,7 +144,10 @@ int main() {
               << " base_delta=" << P10DC_RANKFORMULA_BASE_DELTA
               << " base_values_per_lookup=" << (P10DC_RANKFORMULA_BASE_DELTA ? 1 : 2)
               << " rawcode=" << P10DC_RANKFORMULA_RAWCODE
-              << " chunkinfo_elided=" << P10DC_RANKFORMULA_RAWCODE
+              << " slotmeta=" << P10DC_RANKFORMULA_SLOTMETA
+              << " chunkinfo_elided=" << (P10DC_RANKFORMULA_RAWCODE || P10DC_RANKFORMULA_SLOTMETA)
+              << " broadword_support_elided=" << P10DC_RANKFORMULA_SLOTMETA
+              << " direct_mask_slot_elided=" << P10DC_RANKFORMULA_SLOTMETA
               << " inline_cross=" << P10DC_RANKFORMULA_INLINE_CROSS
               << " cross_lut_elided=" << P10DC_RANKFORMULA_INLINE_CROSS
               << " fused13=" << P10DC_RANKDELTA8_FUSED13
