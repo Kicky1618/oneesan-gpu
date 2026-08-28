@@ -16,10 +16,10 @@ if grep -Eq '\bmul\.(lo|hi)\.u64\b|\bdiv\.u64\b|\brem\.u64\b' "$PTX"; then
   grep -En '\bmul\.(lo|hi)\.u64\b|\bdiv\.u64\b|\brem\.u64\b' "$PTX" >&2 || true
   exit 3
 fi
-grep -Eq '\bmul\.wide\.u32\b' "$PTX" || { echo 'missing mul.wide.u32 in u32-limb owner PTX' >&2; exit 4; }
-grep -Eq '\bmul\.hi\.u32\b' "$PTX" || { echo 'missing mul.hi.u32 in u32-limb owner PTX' >&2; exit 5; }
+grep -Eq '\bmul\.hi\.u32\b' "$PTX" || { echo 'missing mul.hi.u32 in u32-limb owner PTX' >&2; exit 4; }
+grep -Eq '\b(mul|mad)\.lo\.u32\b' "$PTX" || { echo 'missing 32-bit low multiply in u32-limb owner PTX' >&2; exit 5; }
 
-wide="$(grep -Ec '\bmul\.wide\.u32\b' "$PTX" || true)"
+wide="$(grep -Ec '\b(mul|mad)\.wide\.u32\b' "$PTX" || true)"
 hi="$(grep -Ec '\bmul\.hi\.u32\b' "$PTX" || true)"
-lo32="$(grep -Ec '\bmul\.lo\.u32\b' "$PTX" || true)"
-echo "gridfp-runtime-owner-u32limb-ptx-proof OK arch=$ARCH mul_wide_u32=$wide mul_hi_u32=$hi mul_lo_u32=$lo32 mul_u64=0 div_u64=0 rem_u64=0"
+lo32="$(grep -Ec '\b(mul|mad)\.lo\.u32\b' "$PTX" || true)"
+echo "gridfp-runtime-owner-u32limb-ptx-proof OK arch=$ARCH low_mul_u32=$lo32 mul_hi_u32=$hi wide_u32_total=$wide mul_u64=0 div_u64=0 rem_u64=0"
