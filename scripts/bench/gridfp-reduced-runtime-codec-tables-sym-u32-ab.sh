@@ -82,7 +82,8 @@ cat "$RESULT"
 
 python3 - "$RESULT" "$SUMMARY" <<'PY'
 import csv,statistics,sys
-src,dst=sys.argv[1:]; rows=list(csv.DictReader(open(src),delimiter='\t'))
+src,dst=sys.argv[1:]
+rows=list(csv.DictReader(open(src),delimiter='\t'))
 meta={
  '0':('baseline',0,0,13688),
  '1':('max_compact',1,1,1800),
@@ -91,11 +92,29 @@ meta={
  '4':('sym_choose_full_primitive',1,2,4380),
  '5':('full_shape_both',3,2,6844),
 }
+times={mode:{} for mode in meta}
+for r in rows:
+    mode=r['mode']; rep=int(r['repeat']); wall=float(r['wall_ms'])
+    if mode not in times: raise SystemExit(f'unknown mode={mode}')
+    if rep in times[mode]: raise SystemExit(f'duplicate mode={mode} repeat={rep}')
+    times[mode][rep]=wall
+base_reps=set(times['0'])
+if not base_reps: raise SystemExit('missing baseline')
 out=[]
 for mode,(name,choose,primitive,candidate_bytes) in meta.items():
-    xs=[float(r['wall_ms']) for r in rows if r['mode']==mode]
-    if not xs: raise SystemExit(f'missing mode={mode}')
-    out.append({'mode':mode,'name':name,'choose_mode':choose,'primitive_mode':primitive,'candidate_physical_bytes':candidate_bytes,'repeats':len(xs),'wall_ms_median':f'{statistics.median(xs):.9f}','wall_ms_min':f'{min(xs):.9f}','wall_ms_max':f'{max(xs):.9f}'})
+    if set(times[mode]) != base_reps:
+        raise SystemExit(f'repeat set mismatch mode={mode}')
+    xs=list(times[mode].values())
+    paired=[times['0'][r]/times[mode][r] for r in sorted(base_reps)]
+    out.append({
+        'mode':mode,'name':name,'choose_mode':choose,'primitive_mode':primitive,
+        'candidate_physical_bytes':candidate_bytes,'repeats':len(xs),
+        'wall_ms_median':f'{statistics.median(xs):.9f}',
+        'wall_ms_min':f'{min(xs):.9f}','wall_ms_max':f'{max(xs):.9f}',
+        'paired_speedup_median':f'{statistics.median(paired):.9f}',
+        'paired_speedup_min':f'{min(paired):.9f}',
+        'paired_speedup_max':f'{max(paired):.9f}',
+    })
 with open(dst,'w',newline='') as f:
     w=csv.DictWriter(f,fieldnames=out[0].keys(),delimiter='\t'); w.writeheader(); w.writerows(out)
 q={r['mode']:r for r in out}; base=float(q['0']['wall_ms_median'])
@@ -103,6 +122,14 @@ for mode in ('1','2','3','4','5'):
     cur=float(q[mode]['wall_ms_median']); name=q[mode]['name']
     print(f'runtime_codec_tables_{name}_wall_speedup={base/cur:.6f}x')
     print(f'runtime_codec_tables_{name}_wall_delta_pct={(cur/base-1)*100:.4f}%')
+    print(f'runtime_codec_tables_{name}_paired_speedup_median={q[mode]["paired_speedup_median"]}x')
+    print(f'runtime_codec_tables_{name}_paired_speedup_min={q[mode]["paired_speedup_min"]}x')
+    print(f'runtime_codec_tables_{name}_all_pairs_faster={int(float(q[mode]["paired_speedup_min"]) > 1.0)}')
+winner=max((q[m] for m in ('1','2','3','4','5')), key=lambda r: float(r['paired_speedup_median']))
+print(f'runtime_codec_tables_winner_mode={winner["mode"]}')
+print(f'runtime_codec_tables_winner_name={winner["name"]}')
+print(f'runtime_codec_tables_winner_paired_speedup_median={winner["paired_speedup_median"]}x')
+print(f'runtime_codec_tables_winner_candidate_physical_bytes={winner["candidate_physical_bytes"]}')
 print('runtime_codec_tables_old_choose_primitive_bytes=13688')
 print('runtime_codec_tables_mode1_candidate_bytes=1800')
 print('runtime_codec_tables_mode2_candidate_bytes=2640')
