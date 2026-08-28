@@ -138,18 +138,32 @@ __device__ __forceinline__ bool runtime_discover_blocked_include_preimages_forwa
 ) {
     if (is_endpoint(mget(b, p - 1))) {
         const MateID x = minsert(b, p, N);
+#if RP_RUNTIME_FAST_DISCOVERY_VALIDITY
+        // Inserting N preserves the valid path. RN/LN is exactly the inverse
+        // of the blocked NR/NL include branch, so no include recheck is needed.
+        if (!sink.emit(DeviceKey{x, 0})) return false;
+#else
         if (!runtime_discover_blocked_include_candidate_forward(
                 x, b, W, p, RP_RUNTIME_DISCOVERY_KNOWN_VALID, sink))
             return false;
+#endif
     }
 
     const MateID d = minsert(b, p - 1, N);
     if (p <= 0 || p >= W || mpair(d, p) != NN) return true;
 
+    const MateID rl = msetpair(d, p, RL);
+#if RP_RUNTIME_FAST_DISCOVERY_VALIDITY
+    // RL->NN then shrinking the inserted N is exactly b. Only the leading R
+    // can violate the ballot condition, tested by the packed prefix popcounts.
+    if (runtime_discovery_rl_candidate_valid(rl, W, p)) {
+        if (!sink.emit(DeviceKey{rl, 0})) return false;
+    }
+#else
     if (!runtime_discover_blocked_include_candidate_forward(
-            msetpair(d, p, RL), b, W, p,
-            RP_RUNTIME_DISCOVERY_RL_FROM_VALID_NN, sink))
+            rl, b, W, p, RP_RUNTIME_DISCOVERY_RL_FROM_VALID_NN, sink))
         return false;
+#endif
 
     int bal = 0;
     for (int q = p - 2; q >= 0; --q) {
@@ -158,9 +172,9 @@ __device__ __forceinline__ bool runtime_discover_blocked_include_preimages_forwa
             MateID x = msetpair(d, p, LL);
             x = mset(x, q, R);
 #if RP_RUNTIME_FAST_DISCOVERY_VALIDITY
-            // d is valid. NN->LL raises every affected prefix by two until q;
-            // L->R restores the original height there. The generation balance
-            // also makes q exactly the mate found by include_horizontal(LL).
+            // NN->LL raises every affected prefix by two until q; L->R restores
+            // the original height there. The balance condition makes q exactly
+            // the mate found by include_horizontal(LL), hence the result is b.
             if (!sink.emit(DeviceKey{x, 0})) return false;
 #else
             if (!runtime_discover_blocked_include_candidate_forward(
@@ -180,8 +194,8 @@ __device__ __forceinline__ bool runtime_discover_blocked_include_preimages_forwa
             MateID x = msetpair(d, p, RR);
             x = mset(x, q, L);
 #if RP_RUNTIME_FAST_DISCOVERY_VALIDITY
-            // Symmetrically, R->L raises prefixes until the later RR pair
-            // removes two units; q is exactly the mate chosen by the RR scan.
+            // Symmetrically R->L raises prefixes until RR removes two units;
+            // q is exactly the mate found by include_horizontal(RR).
             if (!sink.emit(DeviceKey{x, 0})) return false;
 #else
             if (!runtime_discover_blocked_include_candidate_forward(
@@ -200,9 +214,7 @@ template<class Sink>
 __device__ __forceinline__ bool runtime_discover_try_main_inverse_forward(
     MateID x, MateID dest, int W, int p, Sink& sink
 ) {
-#if !RP_RUNTIME_FAST_DISCOVERY_VALIDITY
     if (!valid_mate_device(x, W)) return true;
-#endif
     const IncludeResult z = include_horizontal(x, W, p);
     if (z.valid && !z.blocked && z.mate == dest)
         return sink.emit(DeviceKey{x, 0});
@@ -221,12 +233,20 @@ __device__ __forceinline__ bool runtime_discover_inverse_reduced_forward(
     if (!sink.emit(DeviceKey{d, 0})) return false;
 
     const MateValuePair w = mpair(d, p);
+#if RP_RUNTIME_FAST_DISCOVERY_VALIDITY
+    // These three rewrites are exact inverse pairs of the main include cases on
+    // a valid destination. Their candidates are valid and include back to d.
+    if (w == LR && !sink.emit(DeviceKey{msetpair(d, p, NN), 0})) return false;
+    if (w == NR && !sink.emit(DeviceKey{msetpair(d, p, RN), 0})) return false;
+    if (w == NL && !sink.emit(DeviceKey{msetpair(d, p, LN), 0})) return false;
+#else
     if (w == LR && !runtime_discover_try_main_inverse_forward(
             msetpair(d, p, NN), d, W, p, sink)) return false;
     if (w == NR && !runtime_discover_try_main_inverse_forward(
             msetpair(d, p, RN), d, W, p, sink)) return false;
     if (w == NL && !runtime_discover_try_main_inverse_forward(
             msetpair(d, p, LN), d, W, p, sink)) return false;
+#endif
 
     if (mget(d, p) == N && is_endpoint(mget(d, p - 1))) {
         const MateID b = mshrink(d, p);
