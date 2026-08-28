@@ -30,6 +30,8 @@ echo '=== all-legal closure ternary-delta proof ===' >&2
 N="$N" bash "$ONEESAN_ROOT/scripts/bench/closure-ternary-delta-proof.sh"
 echo '=== CROSS5 automaton proof ===' >&2
 bash "$ONEESAN_ROOT/scripts/bench/cross5-automaton-proof.sh"
+echo '=== W28 LOW rank-transition/owner proof ===' >&2
+bash "$ONEESAN_ROOT/scripts/bench/low-rank16-plan.sh"
 echo '=== CROSS5 CUDA helper equivalence, including prekey: PM 0/1 ===' >&2
 PM_ACCUM=0 ARCH="$ARCH" W=10 bash "$ONEESAN_ROOT/scripts/bench/cross5-cuda-selftest.sh"
 PM_ACCUM=1 ARCH="$ARCH" W=10 bash "$ONEESAN_ROOT/scripts/bench/cross5-cuda-selftest.sh"
@@ -75,4 +77,4 @@ if [[ "$RUN_B300_AB" == 1 ]]; then
   N="$AB_N" REPEATS="$REPEATS" DEPTHCODE_DECODE_LOAD="$DEPTHCODE_DECODE_LOAD" bash "$ONEESAN_ROOT/scripts/bench/b300-depthcode-warpstriped-ab.sh"
 fi
 
-echo "b300-depthcode-warpstriped-preflight OK n=$N arch=$ARCH run_ptxas=$RUN_PTXAS run_delta_ab=$RUN_DELTA_AB run_cross5_ab=$RUN_CROSS5_AB run_direct_ab=$RUN_DIRECT_AB run_affine_ab=$RUN_AFFINE_AB run_prekey_ab=$RUN_PREKEY_AB run_rank16_ab=$RUN_RANK16_AB run_b300_ab=$RUN_B300_AB ternary_delta_proved=1 cross5_cuda=1 direct_resolve_cuda=1 affine_rows_cuda=1 prekey_cuda=1 rank16_cuda=1" >&2
+echo "b300-depthcode-warpstriped-preflight OK n=$N arch=$ARCH run_ptxas=$RUN_PTXAS run_delta_ab=$RUN_DELTA_AB run_cross5_ab=$RUN_CROSS5_AB run_direct_ab=$RUN_DIRECT_AB run_affine_ab=$RUN_AFFINE_AB run_prekey_ab=$RUN_PREKEY_AB run_rank16_ab=$RUN_RANK16_AB run_b300_ab=$RUN_B300_AB ternary_delta_proved=1 cross5_cuda=1 low_rank_owner_proved=1 direct_resolve_cuda=1 affine_rows_cuda=1 prekey_cuda=1 rank16_cuda=1" >&2
