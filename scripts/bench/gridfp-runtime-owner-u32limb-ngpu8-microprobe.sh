@@ -40,6 +40,12 @@ grep -Fq 'gridfp-runtime-owner-u32limb-ngpu8-microprobe OK' <<<"$out"
 grep -Fq 'ngpu=8' <<<"$out"
 grep -Fq 'exact=OK' <<<"$out"
 grep -Fq 'ngpu_mul_old=1 ngpu_mul_new=0 shift_bias=3' <<<"$out"
+if [[ "$W" == 28 ]]; then
+  grep -Fq 'direct_ms=' <<<"$out"
+  grep -Fq 'direct_vs_generic_speedup=' <<<"$out"
+  grep -Fq 'direct_vs_ngpu8_speedup=' <<<"$out"
+  grep -Fq 'direct_meta_loads=0 direct_variable_shift=0 direct_product_lo=0' <<<"$out"
+fi
 
 if [[ "$PTXAS_VERBOSE" == 1 ]]; then
   echo '--- ptxas ngpu8 owner microprobe ---' >&2
