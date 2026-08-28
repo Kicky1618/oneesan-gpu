@@ -4,6 +4,14 @@
 
 namespace oneesan::gridfp::reducedprod {
 
+#ifndef RP_RUNTIME_PRIMITIVE_RANK_SETBITS
+#define RP_RUNTIME_PRIMITIVE_RANK_SETBITS 1
+#endif
+static_assert(
+    RP_RUNTIME_PRIMITIVE_RANK_SETBITS == 0 ||
+    RP_RUNTIME_PRIMITIVE_RANK_SETBITS == 1,
+    "RP_RUNTIME_PRIMITIVE_RANK_SETBITS must be 0 or 1");
+
 struct GroupedComponentContextDevice {
     int owner = -1;
     int lo = 0;
@@ -11,6 +19,41 @@ struct GroupedComponentContextDevice {
     int outer_ones = 0;
     Rank64 local_group_base = 0;
 };
+
+// primitive_rank_device scans all W frontier positions and skips N. Runtime
+// grouped ranking already has the exact support mask, so visit only occupied
+// positions from high to low. The ordering and primitive DP updates are
+// identical; only the N iterations disappear.
+__device__ __forceinline__ Rank64 runtime_primitive_rank_support_device(
+    MateID m,
+    int len,
+    int occupied,
+    std::uint32_t support
+) {
+#if RP_RUNTIME_PRIMITIVE_RANK_SETBITS
+    int h = 1;
+    int seen = 0;
+    Rank64 rank = 0;
+    std::uint32_t mask = support;
+    if (len < 32)
+        mask &= (std::uint32_t(1) << len) - 1u;
+    while (mask) {
+        const int bit = 31 - __clz(mask);
+        const MateValue c = mget(m, bit);
+        const int rem = occupied - (++seen);
+        if (c == L) {
+            if (h > 0) rank += RP_PRIMITIVE[rem][h - 1];
+            ++h;
+        } else {
+            --h;
+        }
+        mask ^= std::uint32_t(1) << bit;
+    }
+    return rank;
+#else
+    return primitive_rank_device(m, len, occupied);
+#endif
+}
 
 __device__ __forceinline__ GroupedComponentContextDevice grouped_component_context_device(
     DeviceKey seed,
@@ -60,7 +103,8 @@ __device__ __forceinline__ GroupedDeviceRank grouped_rank_in_component_device(
     const MateID full_mate = !k.blocked ? k.mate
         : (reverse ? blocked_exclude_reverse(k.mate, W, q)
                    : blocked_exclude(k.mate, q));
-    const Rank64 pr = primitive_rank_device(full_mate, W, occupied);
+    const Rank64 pr = runtime_primitive_rank_support_device(
+        full_mate, W, occupied, full);
     Rank64 within = group_local_sector_offset_device(ctx.L, ctx.outer_ones, local_ones);
 
     if (!k.blocked) {
