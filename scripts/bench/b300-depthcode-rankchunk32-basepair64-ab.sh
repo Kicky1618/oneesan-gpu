@@ -35,6 +35,10 @@ if [[ "$RUN_SELFTEST" == 1 ]]; then
     RANKSTREAM_LUT_LOAD="$RANKSTREAM_LUT_LOAD" PM_ACCUM="$PM_ACCUM" DECODE_LOAD="$DEPTHCODE_DECODE_LOAD" \
     bash "$ONEESAN_ROOT/scripts/bench/pattern10-depthcode-rankchunk32-cross5-selftest.sh" \
     >"$LOGDIR/baseline.selftest.out" 2>"$LOGDIR/baseline.selftest.err"
+  RUN_LAYOUT_PROOF=0 RANKCHUNK32_FUSED16="$RANKCHUNK32_FUSED16" \
+    RANKSTREAM_LUT_LOAD="$RANKSTREAM_LUT_LOAD" PM_ACCUM="$PM_ACCUM" DECODE_LOAD="$DEPTHCODE_DECODE_LOAD" \
+    bash "$ONEESAN_ROOT/scripts/bench/pattern10-depthcode-rankchunk32-basepair64-cross5-selftest.sh" \
+    >"$LOGDIR/basepair64.selftest.out" 2>"$LOGDIR/basepair64.selftest.err"
 fi
 
 field(){ local key="$1" line="$2"; sed -nE "s/(^|.*[[:space:]])${key}=([^[:space:]]+).*/\\2/p" <<<"$line" | tail -n1; }
