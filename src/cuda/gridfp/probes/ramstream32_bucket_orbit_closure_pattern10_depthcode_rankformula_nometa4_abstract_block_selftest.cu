@@ -13,6 +13,7 @@ int main() {
                   << " coopgroup=" << P10DC_RANKFORMULA_NOMETA_COOPGROUP
                   << " coop_unroll=" << P10DC_RANKFORMULA_NOMETA_COOP_UNROLL
                   << " select8=" << P10DC_RANKFORMULA_ABSTRACT_SELECT8
+                  << " srcpack10=" << P10DC_RANKFORMULA_ABSTRACT_SRCPACK10
                   << " max_locator_steps_bound="
                   << (P10DC_RANKFORMULA_NOMETA4_BLOCK - 1u)
                   << " depth14_15_fast_zero=1"
