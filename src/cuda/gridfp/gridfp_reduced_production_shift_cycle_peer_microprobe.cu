@@ -9,6 +9,12 @@
 
 namespace {
 
+__device__ __forceinline__ unsigned long long warp_sum_u64(unsigned long long value) {
+    for (int offset = 16; offset > 0; offset >>= 1)
+        value += __shfl_down_sync(0xffffffffu, value, offset);
+    return value;
+}
+
 __global__ void peer_shifted_tile_cycle_kernel(
     std::uint32_t* const* __restrict__ shards,
     Rank64 base_supports,
@@ -95,8 +101,7 @@ __global__ void peer_shifted_tile_cycle_kernel(
                 atomicAdd(cycles, 1ULL);
                 atomicAdd(rotated_values, static_cast<unsigned long long>(pc) * cycle_len);
             }
-            const unsigned long long warp_peer =
-                __reduce_add_sync(0xffffffffu, local_peer);
+            const unsigned long long warp_peer = warp_sum_u64(local_peer);
             if (lane == 0 && warp_peer)
                 atomicAdd(peer_values, warp_peer);
         }
