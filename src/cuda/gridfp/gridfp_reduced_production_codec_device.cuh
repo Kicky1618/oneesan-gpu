@@ -5,9 +5,15 @@
 #ifndef RP_FAST_MATERIALIZE_PRIMITIVE_SETBITS
 #define RP_FAST_MATERIALIZE_PRIMITIVE_SETBITS 1
 #endif
+#ifndef RP_FAST_SUPPORT_UNRANK_EARLY_EXIT
+#define RP_FAST_SUPPORT_UNRANK_EARLY_EXIT 1
+#endif
 static_assert(RP_FAST_MATERIALIZE_PRIMITIVE_SETBITS == 0 ||
               RP_FAST_MATERIALIZE_PRIMITIVE_SETBITS == 1,
               "RP_FAST_MATERIALIZE_PRIMITIVE_SETBITS must be 0 or 1");
+static_assert(RP_FAST_SUPPORT_UNRANK_EARLY_EXIT == 0 ||
+              RP_FAST_SUPPORT_UNRANK_EARLY_EXIT == 1,
+              "RP_FAST_SUPPORT_UNRANK_EARLY_EXIT must be 0 or 1");
 
 namespace oneesan::gridfp::reducedprod {
 
@@ -18,12 +24,29 @@ __device__ __forceinline__ int sector_of_rank_device(Rank64 rank) {
     return -1;
 }
 
+__device__ __forceinline__ std::uint32_t support_suffix_mask_device(int pos, int len) {
+    const int width = len - pos;
+    const std::uint32_t bits = width == 32
+        ? ~0u : ((std::uint32_t(1) << width) - 1u);
+    return bits << pos;
+}
+
 // Support mask uses left-to-right positions in bits 0..len-1.
 __device__ __forceinline__ std::uint32_t support_unrank_mask_device(int len, int ones, Rank64 rank) {
     std::uint32_t mask = 0;
     int left = ones;
     for (int pos = 0; pos < len; ++pos) {
+#if RP_FAST_SUPPORT_UNRANK_EARLY_EXIT
+        if (!left) break;
+        const int remaining = len - pos;
+        if (left == remaining) {
+            mask |= support_suffix_mask_device(pos, len);
+            break;
+        }
+        const int rem = remaining - 1;
+#else
         const int rem = len - pos - 1;
+#endif
         const Rank64 zero_count = RP_CHOOSE[rem][left];
         if (rank < zero_count) continue;
         rank -= zero_count;
