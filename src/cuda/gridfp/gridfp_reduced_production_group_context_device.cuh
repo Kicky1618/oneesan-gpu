@@ -273,12 +273,15 @@ __device__ __forceinline__ int runtime_owner_from_group_base_device(
             magic * static_cast<std::uint32_t>(ngpu);
         const Rank64 midpoint = group_base + group / 2;
         const std::uint32_t lo = static_cast<std::uint32_t>(midpoint);
+        const std::uint32_t product_lo = lo * scale;
+        const std::uint32_t product_hi = __umulhi(lo, scale);
         if (shift < 32) {
-            const Rank64 product = static_cast<Rank64>(lo) * scale;
-            return static_cast<int>(product >> shift);
+            const std::uint32_t q =
+                (product_lo >> shift) | (product_hi << (32 - shift));
+            return static_cast<int>(q);
         }
         const std::uint32_t hi = static_cast<std::uint32_t>(midpoint >> 32);
-        const std::uint32_t upper = hi * scale + __umulhi(lo, scale);
+        const std::uint32_t upper = hi * scale + product_hi;
         return static_cast<int>(upper >> (shift - 32));
     }
 #elif RP_RUNTIME_OWNER_FIXED52
