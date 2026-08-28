@@ -71,8 +71,9 @@ int main(int argc, char** argv) {
     const int W = argc > 1 ? std::atoi(argv[1]) : 28;
     const int K = argc > 2 ? std::atoi(argv[2]) : 13;
     const int ngpu = argc > 3 ? std::atoi(argv[3]) : 8;
+    const int list_copies = argc > 4 ? std::atoi(argv[4]) : 2;
     if (W < 8 || W > MAX_W || K < 1 || K + 2 > W ||
-        ngpu < 2 || ngpu > 64) return 2;
+        ngpu < 2 || ngpu > 64 || list_copies < 1 || list_copies > 4) return 2;
 
     const int L = K + 2;
     const int O = W - L;
@@ -132,11 +133,13 @@ int main(int argc, char** argv) {
     for (int g = 0; g < ngpu; ++g) {
         const auto& x = owner[static_cast<std::size_t>(g)];
         const double state_gib = double(x.states) * 4.0 / GiB;
-        // One packed u32 entry is sufficient for every support slab.  The
-        // actual persistent cross-segment + all-local-leader lists are strict
-        // subsets, so this is a deterministic allocation upper bound.
-        const double list_upper_mib = double(x.slabs) * 4.0 / MiB;
-        const double combined_gib = state_gib + double(x.slabs) * 4.0 / GiB;
+        // One packed u32 entry is sufficient for every support slab per
+        // direction.  Actual cross-segment + all-local-leader lists are strict
+        // subsets. list_copies=2 models forward+reverse lists resident together.
+        const double list_upper_bytes =
+            double(x.slabs) * 4.0 * double(list_copies);
+        const double list_upper_mib = list_upper_bytes / MiB;
+        const double combined_gib = state_gib + list_upper_bytes / GiB;
         const double headroom_gib = b300_gib - combined_gib;
         if (combined_gib > worst_combined) {
             worst_combined = combined_gib;
@@ -149,6 +152,7 @@ int main(int argc, char** argv) {
                   << " gpu=" << g
                   << " groups=" << x.groups
                   << " support_slabs=" << x.slabs
+                  << " persistent_list_copies=" << list_copies
                   << " state_GiB=" << state_gib
                   << " persistent_list_upper_MiB=" << list_upper_mib
                   << " state_plus_list_upper_GiB=" << combined_gib
@@ -165,8 +169,9 @@ int main(int argc, char** argv) {
               << " states=" << total_states
               << " support_slabs=" << total_slabs
               << " persistent_entry_bytes=4"
+              << " persistent_list_copies=" << list_copies
               << " persistent_list_total_upper_MiB="
-              << double(total_slabs) * 4.0 / MiB
+              << double(total_slabs) * 4.0 * double(list_copies) / MiB
               << " worst_gpu=" << worst_gpu
               << " worst_state_plus_list_upper_GiB=" << worst_combined
               << " B300_GiB=" << b300_gib
