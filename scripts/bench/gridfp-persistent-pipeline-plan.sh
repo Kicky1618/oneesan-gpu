@@ -10,18 +10,24 @@ MIN_B300_HEADROOM_GIB="${MIN_B300_HEADROOM_GIB:-18}"
 
 PLAN_SRC="$(repo_path src/cpp/probes/gridfp_reduced_production_persistent_pipeline_plan_probe.cpp)"
 ORDER_SRC="$(repo_path src/cpp/probes/gridfp_reduced_production_persistent_pipeline_order_probe.cpp)"
+RACE_SRC="$(repo_path src/cpp/probes/gridfp_reduced_production_persistent_pipeline_race_probe.cpp)"
 PLAN_BIN="$(build_path gridfp_reduced_production_persistent_pipeline_plan_probe)"
 ORDER_BIN="$(build_path gridfp_reduced_production_persistent_pipeline_order_probe)"
+RACE_BIN="$(build_path gridfp_reduced_production_persistent_pipeline_race_probe)"
 
 # shellcheck disable=SC2086
 "$CXX" $CXXFLAGS "$PLAN_SRC" -o "$PLAN_BIN"
 # shellcheck disable=SC2086
 "$CXX" $CXXFLAGS "$ORDER_SRC" -o "$ORDER_BIN"
+# shellcheck disable=SC2086
+"$CXX" $CXXFLAGS "$RACE_SRC" -o "$RACE_BIN"
 
 PLAN_OUTPUT="$($PLAN_BIN "$NODE_HBM_TBPS" "$NODE_NVLINK_TBPS")"
 ORDER_OUTPUT="$($ORDER_BIN "$NODE_HBM_TBPS" "$NODE_NVLINK_TBPS")"
+RACE_OUTPUT="$($RACE_BIN)"
 printf '%s\n' "$PLAN_OUTPUT"
 printf '%s\n' "$ORDER_OUTPUT"
+printf '%s\n' "$RACE_OUTPUT"
 
 if ! printf '%s\n' "$PLAN_OUTPUT" | grep -q 'ALL_OK production_persistent_pipeline_plan=1'; then
   echo "persistent pipeline plan missing ALL_OK" >&2
@@ -30,6 +36,10 @@ fi
 if ! printf '%s\n' "$ORDER_OUTPUT" | grep -q 'ALL_OK production_persistent_pipeline_order=1 exact_dp=1'; then
   echo "persistent pipeline order DP missing ALL_OK" >&2
   exit 5
+fi
+if ! printf '%s\n' "$RACE_OUTPUT" | grep -q 'ALL_OK persistent_pipeline_race=1'; then
+  echo "persistent pipeline race proof missing ALL_OK" >&2
+  exit 8
 fi
 
 for direction in forward reverse; do
@@ -55,4 +65,4 @@ for direction in forward reverse; do
 
 done
 
-echo "persistent-pipeline-plan exact=OK batches=16 double_scratch=1 exact_order_dp=1 node_HBM_TBps=$NODE_HBM_TBPS node_NVLink_TBps=$NODE_NVLINK_TBPS"
+echo "persistent-pipeline-plan exact=OK batches=16 double_scratch=1 exact_order_dp=1 overlap_race_proof=1 node_HBM_TBps=$NODE_HBM_TBPS node_NVLink_TBps=$NODE_NVLINK_TBPS"
