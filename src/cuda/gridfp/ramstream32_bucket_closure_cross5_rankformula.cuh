@@ -1,7 +1,7 @@
 #pragma once
 
 #include "ramstream32_bucket_closure_cross5_rankdelta8.cuh"
-#include "ramstream32_bucket_low_rankformula.cuh"
+#include "ramstream32_bucket_low_rankformula_slotrow32.cuh"
 
 #ifndef P10DC_RANKFORMULA_INLINE_CROSS
 #define P10DC_RANKFORMULA_INLINE_CROSS 0
@@ -273,9 +273,15 @@ p10dc_resolved_low_preimages_cross5_rankformula_fast(
 #if P10DC_RANKFORMULA_SLOTMETA
     const uint32_t lmask = packed_meta & (P10DC_RANKFORMULA_MASKS - 1u);
     const uint32_t slot = packed_meta >> LOW_LUT_K;
+#if P10DC_RANKFORMULA_SLOTROW32
+    const uint32_t slotrow = p10dc_low_rankformula_slotrow32(h, slot);
+    const uint32_t mask = (slotrow >> 16) & (P10DC_RANKFORMULA_MASKS - 1u);
+    const int source_rank_origin = int(rank) + int(int16_t(slotrow & 0xffffu));
+#else
     const uint32_t mask = p10dc_low_rankformula_slot_support(slot);
     const int source_rank_origin =
         int(rank) + p10dc_low_rankformula_base_delta_slot(h, slot);
+#endif
     uint32_t state = depth;
     uint32_t rem = uint32_t(__popc(mask));
     int factor_h = int(h), prefix_corr = 0;
