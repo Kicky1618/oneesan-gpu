@@ -119,9 +119,6 @@ __device__ __forceinline__ bool runtime_discover_blocked_include_candidate_forwa
     RuntimeDiscoveryValidityHint hint, Sink& sink
 ) {
 #if RP_RUNTIME_FAST_DISCOVERY_VALIDITY
-    // LL/RR generation can produce candidates which do not map to this blocked
-    // destination. Reject those with include_horizontal first, and pay the
-    // full O(W) validity scan only for candidates that otherwise match.
     if (hint == RP_RUNTIME_DISCOVERY_CHECK_FULL) {
         const IncludeResult z = include_horizontal(x, W, p);
         if (!z.valid || !z.blocked || z.mate != blocked_dest) return true;
@@ -160,9 +157,16 @@ __device__ __forceinline__ bool runtime_discover_blocked_include_preimages_forwa
         if (bal == 0 && v == L) {
             MateID x = msetpair(d, p, LL);
             x = mset(x, q, R);
+#if RP_RUNTIME_FAST_DISCOVERY_VALIDITY
+            // d is valid. NN->LL raises every affected prefix by two until q;
+            // L->R restores the original height there. The generation balance
+            // also makes q exactly the mate found by include_horizontal(LL).
+            if (!sink.emit(DeviceKey{x, 0})) return false;
+#else
             if (!runtime_discover_blocked_include_candidate_forward(
                     x, b, W, p, RP_RUNTIME_DISCOVERY_CHECK_FULL, sink))
                 return false;
+#endif
         }
         if (v == L) ++bal;
         else if (v == R) --bal;
@@ -175,9 +179,15 @@ __device__ __forceinline__ bool runtime_discover_blocked_include_preimages_forwa
         if (bal == 0 && v == R) {
             MateID x = msetpair(d, p, RR);
             x = mset(x, q, L);
+#if RP_RUNTIME_FAST_DISCOVERY_VALIDITY
+            // Symmetrically, R->L raises prefixes until the later RR pair
+            // removes two units; q is exactly the mate chosen by the RR scan.
+            if (!sink.emit(DeviceKey{x, 0})) return false;
+#else
             if (!runtime_discover_blocked_include_candidate_forward(
                     x, b, W, p, RP_RUNTIME_DISCOVERY_CHECK_FULL, sink))
                 return false;
+#endif
         }
         if (v == R) ++bal;
         else if (v == L) --bal;
