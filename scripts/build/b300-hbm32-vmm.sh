@@ -29,7 +29,6 @@ TMPDIR="$ONEESAN_TMP_DIR" nvcc \
   -DTARGET_W="$W" \
   -DLOW_LUT_K="$LOW_LUT_K" \
   -DHIGH_LUT_K="$HIGH_LUT_K" \
-  -DB300_FAST_SHARD_ADDRESS8=0 \
   "$GENSRC" -lcuda -o "$OUT"
 
 echo "built $OUT"
@@ -42,5 +41,6 @@ echo "  interval_io=direct_global_index_shard_free_compact24"
 echo "  init_answer_addressing=direct_global_index_device0_context"
 echo "  logical_shard_chunks=0"
 echo "  logical_shard_views=0"
+echo "  legacy_shard_address_scaffolding=0"
 echo "  stale_shard_symbols=0"
 echo "  stale_width_symbols=0"
