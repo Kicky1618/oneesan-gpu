@@ -12,6 +12,9 @@
 #ifndef RP_RUNTIME_OWNER_LOCAL_SECTOR_PARITY
 #define RP_RUNTIME_OWNER_LOCAL_SECTOR_PARITY 1
 #endif
+#ifndef RP_RUNTIME_OWNER_LOCAL_SECTOR_W28_TREE
+#define RP_RUNTIME_OWNER_LOCAL_SECTOR_W28_TREE 1
+#endif
 static_assert(RP_RUNTIME_OWNER_PREFIX_BINARY == 0 || RP_RUNTIME_OWNER_PREFIX_BINARY == 1,
               "RP_RUNTIME_OWNER_PREFIX_BINARY must be 0 or 1");
 static_assert(RP_RUNTIME_OWNER_LOCAL_SECTOR_TABLE == 0 ||
@@ -20,6 +23,9 @@ static_assert(RP_RUNTIME_OWNER_LOCAL_SECTOR_TABLE == 0 ||
 static_assert(RP_RUNTIME_OWNER_LOCAL_SECTOR_PARITY == 0 ||
               RP_RUNTIME_OWNER_LOCAL_SECTOR_PARITY == 1,
               "RP_RUNTIME_OWNER_LOCAL_SECTOR_PARITY must be 0 or 1");
+static_assert(RP_RUNTIME_OWNER_LOCAL_SECTOR_W28_TREE == 0 ||
+              RP_RUNTIME_OWNER_LOCAL_SECTOR_W28_TREE == 1,
+              "RP_RUNTIME_OWNER_LOCAL_SECTOR_W28_TREE must be 0 or 1");
 
 namespace oneesan::gridfp::reducedprod {
 
@@ -75,6 +81,60 @@ __device__ __forceinline__ int runtime_owner_local_sector_row_base_device(int W)
     }
 }
 
+__device__ __forceinline__ void runtime_owner_local_sector_w28_tree_device(
+    int row,
+    int first,
+    Rank64 within,
+    int& local_ones,
+    Rank64& local_within
+) {
+    // W=28,L=15 has exactly seven positive endpoints in every outer-popcount
+    // row.  A fixed 7-way lower_bound removes loop bookkeeping and, unlike the
+    // generic binary search, reuses the compared predecessor as the sector
+    // begin.  Thus sectors 1..6 avoid one extra constant-memory load.
+    const Rank64 e3 = RP_RUNTIME_OWNER_LOCAL_SECTOR_END[row + first + 6];
+    int index = 0;
+    Rank64 begin = 0;
+    if (within < e3) {
+        const Rank64 e1 = RP_RUNTIME_OWNER_LOCAL_SECTOR_END[row + first + 2];
+        if (within < e1) {
+            const Rank64 e0 = RP_RUNTIME_OWNER_LOCAL_SECTOR_END[row + first];
+            if (within < e0) {
+                index = 0;
+            } else {
+                index = 1;
+                begin = e0;
+            }
+        } else {
+            const Rank64 e2 = RP_RUNTIME_OWNER_LOCAL_SECTOR_END[row + first + 4];
+            if (within < e2) {
+                index = 2;
+                begin = e1;
+            } else {
+                index = 3;
+                begin = e2;
+            }
+        }
+    } else {
+        const Rank64 e5 = RP_RUNTIME_OWNER_LOCAL_SECTOR_END[row + first + 10];
+        if (within < e5) {
+            const Rank64 e4 = RP_RUNTIME_OWNER_LOCAL_SECTOR_END[row + first + 8];
+            if (within < e4) {
+                index = 4;
+                begin = e3;
+            } else {
+                index = 5;
+                begin = e4;
+            }
+        } else {
+            index = 6;
+            begin = e5;
+        }
+    }
+    local_ones = first + (index << 1);
+    local_within = within - begin;
+}
+
 __device__ __forceinline__ bool runtime_owner_local_sector_device(
     int W,
     int L,
@@ -93,9 +153,15 @@ __device__ __forceinline__ bool runtime_owner_local_sector_device(
         // additionally impossible because both marked local positions must be
         // occupied, so the first positive endpoint is l=1 for even outer_ones
         // and l=2 for odd outer_ones. `within` is modulo component_group and is
-        // therefore below the last positive endpoint. For W=28 this searches
-        // only 7 endpoints instead of 15, with at most 3 comparisons vs 4.
+        // therefore below the last positive endpoint.
         const int first = (outer_ones & 1) ? 2 : 1;
+#if RP_RUNTIME_OWNER_LOCAL_SECTOR_W28_TREE
+        if (W == 28 && L == 15) {
+            runtime_owner_local_sector_w28_tree_device(
+                row, first, within, local_ones, local_within);
+            return true;
+        }
+#endif
         const int count = (L - first + 1) >> 1;
         int lo = 0;
         int hi = count - 1;
