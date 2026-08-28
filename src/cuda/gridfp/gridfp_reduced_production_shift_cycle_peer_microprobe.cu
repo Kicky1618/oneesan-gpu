@@ -9,12 +9,16 @@
 
 namespace {
 
-__device__ __forceinline__ unsigned long long warp_sum_u64(unsigned long long value) {
-    for (int offset = 16; offset > 0; offset >>= 1)
-        value += __shfl_down_sync(0xffffffffu, value, offset);
-    return value;
-}
-
+// Each GPU scans the compact support space, but only executes cycles whose
+// leader belongs to that GPU.  The duplicated support scan is intentional:
+// for W=28 it is tiny compared with the hundreds of billions of primitive
+// values moved by the redistribution, and it keeps the cycle worker local to
+// at least the leader slab.
+//
+// One CTA owns one support at a time.  Thread 0 derives the complete cycle
+// route once; all threads then stream different primitive ranks through that
+// route.  This removes the old per-lane grouped-rank recomputation and gives
+// large primitive slabs a full CTA of memory parallelism.
 __global__ void peer_shifted_tile_cycle_kernel(
     std::uint32_t* const* __restrict__ shards,
     Rank64 base_supports,
@@ -27,83 +31,131 @@ __global__ void peer_shifted_tile_cycle_kernel(
     const Rank64* __restrict__ owner_begin,
     unsigned long long* __restrict__ cycles,
     unsigned long long* __restrict__ rotated_values,
-    unsigned long long* __restrict__ peer_values,
+    unsigned long long* __restrict__ logical_peer_values,
+    unsigned long long* __restrict__ remote_access_values,
     int* error
 ) {
-    const int lane = threadIdx.x & 31;
-    const int warp = threadIdx.x >> 5;
-    const Rank64 local_warp = Rank64(blockIdx.x) * WARPS_PER_BLOCK + Rank64(warp);
-    const Rank64 first = local_warp * Rank64(ngpu) + Rank64(worker_id);
-    const Rank64 stride = Rank64(gridDim.x) * WARPS_PER_BLOCK * Rank64(ngpu);
+    __shared__ EqualTileRunSeed shared_seeds[3];
+    __shared__ int shared_nr;
+    __shared__ int route_owner[RP_MAX_W];
+    __shared__ Rank64 route_local[RP_MAX_W];
+    __shared__ int route_len;
+    __shared__ Rank64 primitive_count;
+    __shared__ int logical_peer_edges;
+    __shared__ int remote_positions;
+
+    const int tid = threadIdx.x;
+    const Rank64 first = Rank64(blockIdx.x);
+    const Rank64 stride = Rank64(gridDim.x);
     const int old_start = reverse ? 1 : W - 1;
     const int q = old_start + (reverse ? S : -S);
 
     for (Rank64 base_rank = first; base_rank < base_supports; base_rank += stride) {
-        EqualTileRunSeed seeds[3]{};
-        const int nr = equal_tile_run_seeds_device(base_rank, W, q, reverse, seeds);
-        for (int ri = 0; ri < nr; ++ri) {
-            const EqualTileRunSeed run = seeds[ri];
-            const bool blocked = run.blocked != 0;
-            const int cycle_len = shift_cycle_leader_length_device(
-                run.support, blocked, W, q, Kwin, S, reverse);
-            if (cycle_len < 0) {
-                if (lane == 0) set_error(error, 171);
-                continue;
-            }
-            if (cycle_len <= 1) continue;
+        if (tid == 0) {
+            shared_nr = equal_tile_run_seeds_device(
+                base_rank, W, q, reverse, shared_seeds);
+        }
+        __syncthreads();
 
-            const DeviceKey leader = equal_run_key0_device(
-                run.support, blocked, W, q, reverse);
-            const GroupedDeviceRank lr = grouped_rank_device(
-                leader, W, q, reverse, old_start, Kwin, ngpu, owner_begin);
-            if (lr.owner < 0 || lr.owner >= ngpu) {
-                if (lane == 0) set_error(error, 172);
-                continue;
-            }
+        for (int ri = 0; ri < shared_nr; ++ri) {
+            if (tid == 0) {
+                route_len = 0;
+                primitive_count = 0;
+                logical_peer_edges = 0;
+                remote_positions = 0;
 
-            const int occupied = __popc(run.support);
-            const Rank64 pc = RP_PRIMITIVE[occupied][1];
-            unsigned long long local_peer = 0;
-
-            for (Rank64 i = Rank64(lane); i < pc; i += 32) {
-                std::uint32_t temp = shards[lr.owner][lr.local + i];
-                int prev_owner = lr.owner;
-                std::uint32_t cur_support = shift_next_support_device(
+                const EqualTileRunSeed run = shared_seeds[ri];
+                const bool blocked = run.blocked != 0;
+                const int cycle_len = shift_cycle_leader_length_device(
                     run.support, blocked, W, q, Kwin, S, reverse);
-                int hops = 1;
-                while (cur_support != run.support) {
-                    const DeviceKey cur = equal_run_key0_device(
-                        cur_support, blocked, W, q, reverse);
-                    const GroupedDeviceRank cr = grouped_rank_device(
-                        cur, W, q, reverse, old_start, Kwin, ngpu, owner_begin);
-                    if (cr.owner < 0 || cr.owner >= ngpu) {
-                        set_error(error, 173);
-                        break;
-                    }
-                    const std::uint32_t next_value = shards[cr.owner][cr.local + i];
-                    shards[cr.owner][cr.local + i] = temp;
-                    if (cr.owner != prev_owner) ++local_peer;
-                    temp = next_value;
-                    prev_owner = cr.owner;
-                    cur_support = shift_next_support_device(
-                        cur_support, blocked, W, q, Kwin, S, reverse);
-                    ++hops;
-                    if (hops > cycle_len) {
-                        set_error(error, 174);
-                        break;
+                if (cycle_len < 0) {
+                    set_error(error, 171);
+                } else if (cycle_len > RP_MAX_W) {
+                    set_error(error, 172);
+                } else if (cycle_len > 1) {
+                    const DeviceKey leader = equal_run_key0_device(
+                        run.support, blocked, W, q, reverse);
+                    const GroupedDeviceRank lr = grouped_rank_device(
+                        leader, W, q, reverse, old_start, Kwin, ngpu, owner_begin);
+
+                    // The leader owner executes the whole cycle.  All other
+                    // GPUs only paid the cheap support-enumeration cost.
+                    if (lr.owner == worker_id) {
+                        route_owner[0] = lr.owner;
+                        route_local[0] = lr.local;
+                        int hops = 1;
+                        std::uint32_t cur_support = shift_next_support_device(
+                            run.support, blocked, W, q, Kwin, S, reverse);
+                        while (cur_support != run.support && hops < cycle_len) {
+                            const DeviceKey cur = equal_run_key0_device(
+                                cur_support, blocked, W, q, reverse);
+                            const GroupedDeviceRank cr = grouped_rank_device(
+                                cur, W, q, reverse, old_start, Kwin, ngpu, owner_begin);
+                            if (cr.owner < 0 || cr.owner >= ngpu) {
+                                set_error(error, 173);
+                                break;
+                            }
+                            route_owner[hops] = cr.owner;
+                            route_local[hops] = cr.local;
+                            cur_support = shift_next_support_device(
+                                cur_support, blocked, W, q, Kwin, S, reverse);
+                            ++hops;
+                        }
+                        if (hops != cycle_len || cur_support != run.support) {
+                            set_error(error, 174);
+                        } else {
+                            const int occupied = __popc(run.support);
+                            primitive_count = RP_PRIMITIVE[occupied][1];
+                            route_len = cycle_len;
+
+                            int peer_edges = 0;
+                            int remote = 0;
+                            for (int h = 0; h < cycle_len; ++h) {
+                                const int next = h + 1 == cycle_len ? 0 : h + 1;
+                                if (route_owner[h] != route_owner[next]) ++peer_edges;
+                                if (route_owner[h] != worker_id) ++remote;
+                            }
+                            logical_peer_edges = peer_edges;
+                            remote_positions = remote;
+
+                            atomicAdd(cycles, 1ULL);
+                            atomicAdd(
+                                rotated_values,
+                                static_cast<unsigned long long>(primitive_count) * cycle_len);
+                            if (peer_edges) {
+                                atomicAdd(
+                                    logical_peer_values,
+                                    static_cast<unsigned long long>(primitive_count) * peer_edges);
+                            }
+                            if (remote) {
+                                // The direct-cycle kernel reads and writes every
+                                // nonlocal route position once per primitive.
+                                atomicAdd(
+                                    remote_access_values,
+                                    2ULL * static_cast<unsigned long long>(primitive_count) * remote);
+                            }
+                        }
                     }
                 }
-                shards[lr.owner][lr.local + i] = temp;
-                if (lr.owner != prev_owner) ++local_peer;
             }
-            __syncwarp();
-            if (lane == 0) {
-                atomicAdd(cycles, 1ULL);
-                atomicAdd(rotated_values, static_cast<unsigned long long>(pc) * cycle_len);
+            __syncthreads();
+
+            if (route_len > 1) {
+                const Rank64 pc = primitive_count;
+                for (Rank64 i = Rank64(tid); i < pc; i += Rank64(blockDim.x)) {
+                    std::uint32_t temp =
+                        shards[route_owner[0]][route_local[0] + i];
+                    for (int h = 1; h < route_len; ++h) {
+                        std::uint32_t* const dst =
+                            shards[route_owner[h]] + route_local[h] + i;
+                        const std::uint32_t next_value = *dst;
+                        *dst = temp;
+                        temp = next_value;
+                    }
+                    shards[route_owner[0]][route_local[0] + i] = temp;
+                }
             }
-            const unsigned long long warp_peer = warp_sum_u64(local_peer);
-            if (lane == 0 && warp_peer)
-                atomicAdd(peer_values, warp_peer);
+            __syncthreads();
         }
     }
 }
@@ -116,7 +168,8 @@ void enable_full_peer_mesh(int ngpu) {
             int can = 0;
             ck(cudaDeviceCanAccessPeer(&can, src, dst), "peer mesh capability");
             if (!can) {
-                std::cerr << "peer access unavailable src=" << src << " dst=" << dst << '\n';
+                std::cerr << "peer access unavailable src=" << src
+                          << " dst=" << dst << '\n';
                 std::exit(175);
             }
             const cudaError_t e = cudaDeviceEnablePeerAccess(dst, 0);
@@ -159,7 +212,8 @@ void run_peer_shift_cycle_probe(
     std::vector<Rank64*> d_owner_begin(static_cast<std::size_t>(ngpu), nullptr);
     std::vector<unsigned long long*> d_cycles(static_cast<std::size_t>(ngpu), nullptr);
     std::vector<unsigned long long*> d_rotated(static_cast<std::size_t>(ngpu), nullptr);
-    std::vector<unsigned long long*> d_peer(static_cast<std::size_t>(ngpu), nullptr);
+    std::vector<unsigned long long*> d_logical_peer(static_cast<std::size_t>(ngpu), nullptr);
+    std::vector<unsigned long long*> d_remote_access(static_cast<std::size_t>(ngpu), nullptr);
     std::vector<int*> d_error(static_cast<std::size_t>(ngpu), nullptr);
 
     for (int g = 0; g < ngpu; ++g) {
@@ -176,7 +230,7 @@ void run_peer_shift_cycle_probe(
     }
 
     // UVA pointer values are valid on every peer-enabled worker.  Keep a tiny
-    // local pointer table on each GPU so the kernel can select the owner shard.
+    // local pointer table on each GPU so the kernel can select an owner shard.
     for (int g = 0; g < ngpu; ++g) {
         ck(cudaSetDevice(g), "peer metadata set device");
         ck(cudaMalloc(&d_shard_ptrs[static_cast<std::size_t>(g)],
@@ -193,26 +247,27 @@ void run_peer_shift_cycle_probe(
            "peer alloc cycles");
         ck(cudaMalloc(&d_rotated[static_cast<std::size_t>(g)], sizeof(unsigned long long)),
            "peer alloc rotated");
-        ck(cudaMalloc(&d_peer[static_cast<std::size_t>(g)], sizeof(unsigned long long)),
-           "peer alloc peer count");
+        ck(cudaMalloc(&d_logical_peer[static_cast<std::size_t>(g)], sizeof(unsigned long long)),
+           "peer alloc logical peer");
+        ck(cudaMalloc(&d_remote_access[static_cast<std::size_t>(g)], sizeof(unsigned long long)),
+           "peer alloc remote access");
         ck(cudaMalloc(&d_error[static_cast<std::size_t>(g)], sizeof(int)),
            "peer alloc error");
         ck(cudaMemset(d_cycles[static_cast<std::size_t>(g)], 0, sizeof(unsigned long long)),
            "peer zero cycles");
         ck(cudaMemset(d_rotated[static_cast<std::size_t>(g)], 0, sizeof(unsigned long long)),
            "peer zero rotated");
-        ck(cudaMemset(d_peer[static_cast<std::size_t>(g)], 0, sizeof(unsigned long long)),
-           "peer zero peer count");
+        ck(cudaMemset(d_logical_peer[static_cast<std::size_t>(g)], 0, sizeof(unsigned long long)),
+           "peer zero logical peer");
+        ck(cudaMemset(d_remote_access[static_cast<std::size_t>(g)], 0, sizeof(unsigned long long)),
+           "peer zero remote access");
         ck(cudaMemset(d_error[static_cast<std::size_t>(g)], 0, sizeof(int)),
            "peer zero error");
     }
 
     const Rank64 base_supports = Rank64(1) << (W - 2);
-    const Rank64 warps_needed = (base_supports + Rank64(ngpu) - 1) / Rank64(ngpu);
-    const Rank64 one_pass_blocks =
-        (warps_needed + WARPS_PER_BLOCK - 1) / WARPS_PER_BLOCK;
     const unsigned blocks = static_cast<unsigned>(
-        std::max<Rank64>(1, std::min<Rank64>(requested_blocks, one_pass_blocks)));
+        std::max<Rank64>(1, std::min<Rank64>(requested_blocks, base_supports)));
 
     const auto t0 = std::chrono::steady_clock::now();
     for (int g = 0; g < ngpu; ++g) {
@@ -223,7 +278,8 @@ void run_peer_shift_cycle_probe(
             d_owner_begin[static_cast<std::size_t>(g)],
             d_cycles[static_cast<std::size_t>(g)],
             d_rotated[static_cast<std::size_t>(g)],
-            d_peer[static_cast<std::size_t>(g)],
+            d_logical_peer[static_cast<std::size_t>(g)],
+            d_remote_access[static_cast<std::size_t>(g)],
             d_error[static_cast<std::size_t>(g)]);
         ck(cudaGetLastError(), "peer shift launch");
     }
@@ -234,24 +290,30 @@ void run_peer_shift_cycle_probe(
     const double ms = std::chrono::duration<double, std::milli>(
         std::chrono::steady_clock::now() - t0).count();
 
-    unsigned long long cycles = 0, rotated = 0, peer_values = 0;
+    unsigned long long cycles = 0;
+    unsigned long long rotated = 0;
+    unsigned long long logical_peer = 0;
+    unsigned long long remote_access = 0;
     for (int g = 0; g < ngpu; ++g) {
         ck(cudaSetDevice(g), "peer counters set device");
         int error = 0;
-        unsigned long long c = 0, r = 0, p = 0;
+        unsigned long long c = 0, r = 0, p = 0, a = 0;
         ck(cudaMemcpy(&error, d_error[static_cast<std::size_t>(g)], sizeof(error),
                       cudaMemcpyDeviceToHost), "peer copy error");
         ck(cudaMemcpy(&c, d_cycles[static_cast<std::size_t>(g)], sizeof(c),
                       cudaMemcpyDeviceToHost), "peer copy cycles");
         ck(cudaMemcpy(&r, d_rotated[static_cast<std::size_t>(g)], sizeof(r),
                       cudaMemcpyDeviceToHost), "peer copy rotated");
-        ck(cudaMemcpy(&p, d_peer[static_cast<std::size_t>(g)], sizeof(p),
-                      cudaMemcpyDeviceToHost), "peer copy peer count");
+        ck(cudaMemcpy(&p, d_logical_peer[static_cast<std::size_t>(g)], sizeof(p),
+                      cudaMemcpyDeviceToHost), "peer copy logical peer");
+        ck(cudaMemcpy(&a, d_remote_access[static_cast<std::size_t>(g)], sizeof(a),
+                      cudaMemcpyDeviceToHost), "peer copy remote access");
         if (error) fail("peer shift device error=" + std::to_string(error) +
                         " gpu=" + std::to_string(g));
         cycles += c;
         rotated += r;
-        peer_values += p;
+        logical_peer += p;
+        remote_access += a;
     }
 
     std::vector<std::uint32_t> output(reference.size());
@@ -273,18 +335,24 @@ void run_peer_shift_cycle_probe(
               << " blocks_per_gpu=" << blocks
               << " cycles=" << cycles
               << " rotated_values=" << rotated
-              << " peer_hops=" << peer_values
-              << " peer_GiB=" << double(peer_values) * 4.0 / double(1ULL << 30)
+              << " logical_peer_values=" << logical_peer
+              << " logical_peer_GiB=" << double(logical_peer) * 4.0 / double(1ULL << 30)
+              << " remote_access_values=" << remote_access
+              << " remote_access_GiB=" << double(remote_access) * 4.0 / double(1ULL << 30)
               << " elapsed_ms=" << ms
               << " real_peer_allocations=1"
-              << " base_support_partitioned=1"
+              << " cycle_worker=leader_owner"
+              << " route_rank_once_per_cycle=1"
+              << " cta_per_support=1"
+              << " support_scan_replicas=" << ngpu
               << " second_state_buffer_bytes=0"
               << " run_table_bytes=0 exact=OK\n";
 
     for (int g = 0; g < ngpu; ++g) {
         ck(cudaSetDevice(g), "peer free set device");
         cudaFree(d_error[static_cast<std::size_t>(g)]);
-        cudaFree(d_peer[static_cast<std::size_t>(g)]);
+        cudaFree(d_remote_access[static_cast<std::size_t>(g)]);
+        cudaFree(d_logical_peer[static_cast<std::size_t>(g)]);
         cudaFree(d_rotated[static_cast<std::size_t>(g)]);
         cudaFree(d_cycles[static_cast<std::size_t>(g)]);
         cudaFree(d_owner_begin[static_cast<std::size_t>(g)]);
@@ -314,6 +382,8 @@ void print_peer_plan(int W, int Kwin, int S, int ngpu) {
               << " blocked_cycle_order="
               << (Kwin + S) / std::gcd(Kwin + S, S)
               << " requires_full_peer_mesh=1"
+              << " cycle_worker=leader_owner"
+              << " support_scan_replicas=" << ngpu
               << " state_buffers_per_gpu=1"
               << " run_table_bytes=0 visited_bytes=0\n";
 }
