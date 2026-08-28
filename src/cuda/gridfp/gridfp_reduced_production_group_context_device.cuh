@@ -91,13 +91,17 @@ static_assert(sizeof(RP_RUNTIME_OWNER_TOTAL) == 88);
 static_assert(sizeof(RP_RUNTIME_OWNER_TOTAL_MAGIC) == 88);
 #endif
 
+static constexpr std::uint16_t RP_RUNTIME_INVALID_SECTOR_ROW = 0xffffu;
 struct GroupedComponentContextDevice {
     int owner = -1;
     int lo = 0;
     int L = 0;
-    int outer_ones = 0;
+    std::uint16_t outer_ones = 0;
+    std::uint16_t sector_row_base = RP_RUNTIME_INVALID_SECTOR_ROW;
     Rank64 local_group_base = 0;
 };
+static_assert(sizeof(GroupedComponentContextDevice) == 24,
+              "runtime context row-base cache must not increase shared footprint");
 
 __device__ __forceinline__ std::uint32_t runtime_support_from_mate_device(
     MateID mate, int len
@@ -195,12 +199,11 @@ __device__ __forceinline__ int runtime_outer_group_row_base_device(int W) {
 }
 
 __device__ __forceinline__ Rank64 runtime_group_local_sector_offset_device(
-    int W, int L, int outer_ones, int local_ones
+    std::uint16_t sector_row_base, int L, int outer_ones, int local_ones
 ) {
 #if RP_RUNTIME_SECTOR_OFFSET_TABLE
-    const int base = runtime_sector_offset_row_base_device(W);
-    if (base >= 0 && L == W / 2 + 1) {
-        const int index = base + outer_ones * (L + 1) + local_ones;
+    if (sector_row_base != RP_RUNTIME_INVALID_SECTOR_ROW) {
+        const int index = int(sector_row_base) + outer_ones * (L + 1) + local_ones;
         return RP_RUNTIME_LOCAL_SECTOR_OFFSET[index];
     }
 #endif
@@ -287,8 +290,14 @@ __device__ __forceinline__ GroupedComponentContextDevice grouped_component_conte
     int owner = runtime_owner_from_group_base_device(
         group_base, group, W, K, ngpu, owner_begin);
     if (owner < 0) owner = weighted_outer_owner_device(outer, L, O, ngpu);
+    const int row = L == W / 2 + 1 ? runtime_sector_offset_row_base_device(W) : -1;
     return GroupedComponentContextDevice{
-        owner, lo, L, outer_ones, group_base - owner_begin[owner]};
+        owner,
+        lo,
+        L,
+        static_cast<std::uint16_t>(outer_ones),
+        row >= 0 ? static_cast<std::uint16_t>(row) : RP_RUNTIME_INVALID_SECTOR_ROW,
+        group_base - owner_begin[owner]};
 }
 
 __device__ __forceinline__ GroupedDeviceRank grouped_rank_in_component_device(
@@ -301,12 +310,12 @@ __device__ __forceinline__ GroupedDeviceRank grouped_rank_in_component_device(
     const std::uint32_t full = runtime_support_from_mate_device(full_mate, W);
     const std::uint32_t local_mask = local_window_support_device(full, ctx.lo, ctx.L);
     const int local_ones = __popc(local_mask);
-    const int occupied = ctx.outer_ones + local_ones;
+    const int occupied = int(ctx.outer_ones) + local_ones;
     const Rank64 pc = RP_PRIMITIVE[occupied][1];
 
     const Rank64 pr = runtime_primitive_rank_support_device(full_mate, W, occupied, full);
     Rank64 within = runtime_group_local_sector_offset_device(
-        W, ctx.L, ctx.outer_ones, local_ones);
+        ctx.sector_row_base, ctx.L, int(ctx.outer_ones), local_ones);
 
     if (!k.blocked) {
         const Rank64 sr = runtime_compact_support_rank_device(local_mask, ctx.L, local_ones);
