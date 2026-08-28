@@ -2,7 +2,7 @@
 
 #include "gridfp_reduced_production_runtime_small_step.cuh"
 #include "gridfp_reduced_production_owner_component_plan_device.cuh"
-#include "gridfp_reduced_production_discovery_device.cuh"
+#include "gridfp_reduced_production_runtime_shared_key.cuh"
 #include "gridfp_reduced_production_group_context_device.cuh"
 
 namespace oneesan::gridfp::reducedprod {
@@ -32,8 +32,17 @@ static constexpr int RP_RUNTIME_MAX_DESTINATIONS_PER_LANE =
     (RP_RUNTIME_MAX_PAIRS + RP_RUNTIME_SUBGROUP_WIDTH - 1) /
     RP_RUNTIME_SUBGROUP_WIDTH;
 static constexpr int RP_RUNTIME_THREADS = 32 * RP_RUNTIME_WARPS_PER_BLOCK;
+static constexpr int RP_RUNTIME_SHARED_KEY_ENTRIES_PER_BLOCK =
+    2 * RP_RUNTIME_WARPS_PER_BLOCK * RP_RUNTIME_SUBGROUPS_PER_WARP *
+    RP_RUNTIME_MAX_PAIRS;
+static constexpr int RP_RUNTIME_SHARED_KEY_BYTES_PER_BLOCK =
+    RP_RUNTIME_SHARED_KEY_ENTRIES_PER_BLOCK * int(sizeof(RuntimeSharedKey));
 static_assert(RP_RUNTIME_SUBGROUP_WIDTH == 8);
 static_assert(RP_RUNTIME_MAX_DESTINATIONS_PER_LANE == 3);
+#if RP_RUNTIME_PACK_SHARED_KEYS
+static_assert(sizeof(RuntimeSharedKey) == 8);
+static_assert(RP_RUNTIME_SHARED_KEY_BYTES_PER_BLOCK == 10240);
+#endif
 
 // RuntimeSmallTerms is formed from at most three primitive contributions.
 // Interior steps contain +1,+1,-1 and turn compression contains +1,+1, so after
@@ -152,12 +161,12 @@ __global__ void owner_component_runtime_subwarp_kernel(
     std::uint32_t mod,
     int* error
 ) {
-    __shared__ DeviceKey sh_src[RP_RUNTIME_WARPS_PER_BLOCK]
-                               [RP_RUNTIME_SUBGROUPS_PER_WARP]
-                               [RP_RUNTIME_MAX_PAIRS];
-    __shared__ DeviceKey sh_dst[RP_RUNTIME_WARPS_PER_BLOCK]
-                               [RP_RUNTIME_SUBGROUPS_PER_WARP]
-                               [RP_RUNTIME_MAX_PAIRS];
+    __shared__ RuntimeSharedKey sh_src[RP_RUNTIME_WARPS_PER_BLOCK]
+                                      [RP_RUNTIME_SUBGROUPS_PER_WARP]
+                                      [RP_RUNTIME_MAX_PAIRS];
+    __shared__ RuntimeSharedKey sh_dst[RP_RUNTIME_WARPS_PER_BLOCK]
+                                      [RP_RUNTIME_SUBGROUPS_PER_WARP]
+                                      [RP_RUNTIME_MAX_PAIRS];
     __shared__ std::uint32_t sh_value[RP_RUNTIME_WARPS_PER_BLOCK]
                                      [RP_RUNTIME_SUBGROUPS_PER_WARP]
                                      [RP_RUNTIME_MAX_PAIRS];
@@ -200,7 +209,7 @@ __global__ void owner_component_runtime_subwarp_kernel(
                 if (ctx.owner != gpu_id) {
                     runtime_set_error(error, 302);
                 } else {
-                    sh_src[warp][subgroup][0] = seed;
+                    sh_src[warp][subgroup][0] = runtime_shared_key_encode(seed);
                     sh_ns[warp][subgroup] = 1;
                     int cursor = 0;
                     while (cursor < sh_ns[warp][subgroup]) {
@@ -210,14 +219,15 @@ __global__ void owner_component_runtime_subwarp_kernel(
 #endif
                         RuntimeSmallTerms edge;
                         if (!runtime_small_step(
-                                sh_src[warp][subgroup][source_ix], W, q, reverse, edge)) {
+                                runtime_shared_key_decode(sh_src[warp][subgroup][source_ix]),
+                                W, q, reverse, edge)) {
                             runtime_set_error(error, 303);
                             break;
                         }
                         for (int ei = 0; ei < edge.n; ++ei) {
                             if (!edge.v[ei].coef) continue;
                             const DeviceKey d = edge.v[ei].key;
-                            int destination_ix = runtime_find_key(
+                            int destination_ix = runtime_find_shared_key(
                                 sh_dst[warp][subgroup], sh_nd[warp][subgroup], d);
                             if (destination_ix < 0) {
                                 if (sh_nd[warp][subgroup] >= RP_RUNTIME_MAX_PAIRS) {
@@ -226,8 +236,9 @@ __global__ void owner_component_runtime_subwarp_kernel(
                                     break;
                                 }
                                 destination_ix = sh_nd[warp][subgroup]++;
-                                sh_dst[warp][subgroup][destination_ix] = d;
-                                if (!discover_inverse_direction_to_set(
+                                sh_dst[warp][subgroup][destination_ix] =
+                                    runtime_shared_key_encode(d);
+                                if (!runtime_discover_inverse_direction_to_shared(
                                         d, W, q, reverse,
                                         sh_src[warp][subgroup], sh_ns[warp][subgroup],
                                         RP_RUNTIME_MAX_PAIRS)) {
@@ -262,7 +273,8 @@ __global__ void owner_component_runtime_subwarp_kernel(
         const GroupedComponentContextDevice ctx = sh_ctx[warp][subgroup];
         for (int i = sublane; i < ns; i += RP_RUNTIME_SUBGROUP_WIDTH) {
             const GroupedDeviceRank gr = grouped_rank_in_component_device(
-                sh_src[warp][subgroup][i], W, q, reverse, ctx);
+                runtime_shared_key_decode(sh_src[warp][subgroup][i]),
+                W, q, reverse, ctx);
             if (gr.owner != gpu_id) {
                 runtime_set_error(error, 307);
                 sh_value[warp][subgroup][i] = 0;
@@ -294,7 +306,8 @@ __global__ void owner_component_runtime_subwarp_kernel(
         int accumulator_ix = 0;
         for (int di = sublane; di < nd;
              di += RP_RUNTIME_SUBGROUP_WIDTH, ++accumulator_ix) {
-            const DeviceKey mine = sh_dst[warp][subgroup][di];
+            const DeviceKey mine =
+                runtime_shared_key_decode(sh_dst[warp][subgroup][di]);
             const GroupedDeviceRank dgr = grouped_rank_in_component_device(
                 mine, W, next, reverse, ctx);
             if (dgr.owner != gpu_id) {
@@ -305,7 +318,8 @@ __global__ void owner_component_runtime_subwarp_kernel(
         }
 #else
         for (int di = sublane; di < nd; di += RP_RUNTIME_SUBGROUP_WIDTH) {
-            const DeviceKey mine = sh_dst[warp][subgroup][di];
+            const DeviceKey mine =
+                runtime_shared_key_decode(sh_dst[warp][subgroup][di]);
             const GroupedDeviceRank dgr = grouped_rank_in_component_device(
                 mine, W, next, reverse, ctx);
             if (dgr.owner != gpu_id) {
@@ -315,7 +329,9 @@ __global__ void owner_component_runtime_subwarp_kernel(
             long long acc = 0;
             for (int si = 0; si < ns; ++si) {
                 RuntimeSmallTerms edge;
-                if (!runtime_small_step(sh_src[warp][subgroup][si], W, q, reverse, edge)) {
+                if (!runtime_small_step(
+                        runtime_shared_key_decode(sh_src[warp][subgroup][si]),
+                        W, q, reverse, edge)) {
                     runtime_set_error(error, 309);
                     continue;
                 }
