@@ -5,12 +5,18 @@
 #ifndef RP_FAST_MATERIALIZE_PRIMITIVE_SETBITS
 #define RP_FAST_MATERIALIZE_PRIMITIVE_SETBITS 1
 #endif
+#ifndef RP_FAST_MATERIALIZE_PRIMITIVE_LAST_R
+#define RP_FAST_MATERIALIZE_PRIMITIVE_LAST_R 0
+#endif
 #ifndef RP_FAST_SUPPORT_UNRANK_EARLY_EXIT
 #define RP_FAST_SUPPORT_UNRANK_EARLY_EXIT 1
 #endif
 static_assert(RP_FAST_MATERIALIZE_PRIMITIVE_SETBITS == 0 ||
               RP_FAST_MATERIALIZE_PRIMITIVE_SETBITS == 1,
               "RP_FAST_MATERIALIZE_PRIMITIVE_SETBITS must be 0 or 1");
+static_assert(RP_FAST_MATERIALIZE_PRIMITIVE_LAST_R == 0 ||
+              RP_FAST_MATERIALIZE_PRIMITIVE_LAST_R == 1,
+              "RP_FAST_MATERIALIZE_PRIMITIVE_LAST_R must be 0 or 1");
 static_assert(RP_FAST_SUPPORT_UNRANK_EARLY_EXIT == 0 ||
               RP_FAST_SUPPORT_UNRANK_EARLY_EXIT == 1,
               "RP_FAST_SUPPORT_UNRANK_EARLY_EXIT must be 0 or 1");
@@ -66,6 +72,17 @@ __device__ __forceinline__ MateID materialize_primitive_device(
     if (len < 32) support &= (std::uint32_t(1) << len) - 1u;
     while (support) {
         const int pos = __ffs(support) - 1;
+#if RP_FAST_MATERIALIZE_PRIMITIVE_LAST_R
+        // A valid primitive has odd occupied count, starts at height one, and
+        // ends at height zero without exhausting its rank early. Therefore
+        // immediately before the final occupied position its unique state is
+        // h=1, rank=0 and the last symbol is forced R. Avoid the final
+        // RP_PRIMITIVE load, comparison, rank update and height bookkeeping.
+        if ((occupied & 1) && seen + 1 == occupied) {
+            m |= MateID(R) << (2 * (len - 1 - pos));
+            break;
+        }
+#endif
         const int rem = occupied - (++seen);
         const Rank64 r_count = h > 0 ? RP_PRIMITIVE[rem][h - 1] : 0;
         MateValue v = R;
