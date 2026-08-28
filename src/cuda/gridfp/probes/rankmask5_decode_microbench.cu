@@ -5,6 +5,7 @@
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
+#include <cstring>
 #include <limits>
 #include <vector>
 
@@ -221,8 +222,13 @@ int main(int argc, char** argv) {
     const size_t n = argc > 1 ? size_t(std::strtoull(argv[1], nullptr, 10)) : (size_t(1) << 22);
     const int repeats = argc > 2 ? std::atoi(argv[2]) : 20;
     const int trials = argc > 3 ? std::atoi(argv[3]) : 5;
-    if (!n || repeats <= 0 || trials <= 0) {
-        std::fprintf(stderr, "usage: %s [n>0] [repeats>0] [trials>0]\n", argv[0]);
+    const char* mask_order = argc > 4 ? argv[4] : "ordered";
+    const bool shuffle_masks = std::strcmp(mask_order, "shuffled") == 0;
+    if (!n || repeats <= 0 || trials <= 0 ||
+        (!shuffle_masks && std::strcmp(mask_order, "ordered") != 0)) {
+        std::fprintf(stderr,
+                     "usage: %s [n>0] [repeats>0] [trials>0] [ordered|shuffled]\n",
+                     argv[0]);
         return 2;
     }
 
@@ -241,6 +247,21 @@ int main(int argc, char** argv) {
     if ((rankmask_or & 0x18u) != 0u) {
         std::fprintf(stderr, "direct3 invariant failure rankmask_or=0x%02x\n", unsigned(rankmask_or));
         return 4;
+    }
+    if (shuffle_masks) {
+        // Keep the same exact table-space histogram, but destroy state/key
+        // locality so zero-heavy masks do not accidentally form coherent warps.
+        uint32_t shuffle_rng = 0x6d2b79f5u;
+        auto next_shuffle = [&]() {
+            shuffle_rng ^= shuffle_rng << 13;
+            shuffle_rng ^= shuffle_rng >> 17;
+            shuffle_rng ^= shuffle_rng << 5;
+            return shuffle_rng;
+        };
+        for (size_t i = table_masks.size() - 1; i > 0; --i) {
+            const size_t j = size_t(next_shuffle()) % (i + 1u);
+            std::swap(table_masks[i], table_masks[j]);
+        }
     }
 
     std::vector<uint8_t> h_masks(n);
@@ -272,8 +293,8 @@ int main(int argc, char** argv) {
     ck(cudaMalloc(&d_source, kSourceN * sizeof(uint32_t)), "source alloc");
     ck(cudaMalloc(&d_partial, threads * sizeof(uint64_t)), "partial alloc");
     ck(cudaMemcpy(d_masks, h_masks.data(), n * sizeof(uint8_t), cudaMemcpyHostToDevice), "masks H2D");
-    ck(cudaMemcpy(d_ranks, h_ranks.data(), n * kChunk * sizeof(uint16_t), cudaMemcpyHostToDevice), "ranks H2D");
-    ck(cudaMemcpy(d_source, h_source.data(), kSourceN * sizeof(uint32_t), cudaMemcpyHostToDevice), "source H2D");
+    ck(cudaMemcpy(d_ranks, h_ranks.data(), n * kChunk * sizeof(uint16_t)), "ranks H2D");
+    ck(cudaMemcpy(d_source, h_source.data(), kSourceN * sizeof(uint32_t)), cudaMemcpyHostToDevice), "source H2D");
 
     rankmask5_kernel<kDecodeFfs><<<blocks, kBlock>>>(d_masks, d_ranks, d_source, n, d_partial);
     rankmask5_kernel<kDecodeUnrolled5><<<blocks, kBlock>>>(d_masks, d_ranks, d_source, n, d_partial);
@@ -321,8 +342,8 @@ int main(int argc, char** argv) {
 
     cudaDeviceProp prop{};
     ck(cudaGetDeviceProperties(&prop, 0), "device props");
-    std::printf("rankmask5-decode-microbench OK device=%s n=%zu blocks=%d threads=%zu repeats=%d trials=%d\n",
-                prop.name, n, blocks, threads, repeats, trials);
+    std::printf("rankmask5-decode-microbench OK device=%s n=%zu blocks=%d threads=%zu repeats=%d trials=%d mask_order=%s\n",
+                prop.name, n, blocks, threads, repeats, trials, mask_order);
     std::printf("table_cases=%zu popcount_hist=%llu,%llu,%llu,%llu,%llu,%llu rankmask_or=0x%02x upper_bits_zero=1 checksum_exact=1 checksum=%llu\n",
                 table_masks.size(),
                 (unsigned long long)hist[0], (unsigned long long)hist[1],
@@ -336,7 +357,8 @@ int main(int argc, char** argv) {
                 double(ffs_ms) / double(direct3_guard_ms),
                 double(unrolled_ms) / double(direct3_ms),
                 double(direct3_ms) / double(direct3_guard_ms));
-    std::printf("decode_model=rank16_then_source32 mask_source=all_state1_25_x_key0_242_repeated direct3_ordinals=0,1,2 direct3_guard=rankmask_nonzero_outer_guard\n");
+    std::printf("decode_model=rank16_then_source32 mask_source=all_state1_25_x_key0_242_repeated direct3_ordinals=0,1,2 direct3_guard=rankmask_nonzero_outer_guard mask_order=%s\n",
+                mask_order);
 
     cudaFree(d_partial);
     cudaFree(d_source);
