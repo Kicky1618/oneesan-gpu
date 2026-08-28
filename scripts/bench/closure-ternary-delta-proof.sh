@@ -31,4 +31,25 @@ printf '%s\n' "$cross_out"
 grep -Fq "gridfp-closure-ternary-delta-cross OK W=$W" <<<"$cross_out"
 grep -Fq 'cross_source_pair_exact=1 cross_delta_exact=1' <<<"$cross_out"
 
-echo "closure-ternary-delta-proof OK W=$W low=$LOW_LUT_K high=$HIGH_LUT_K phases=forward_low,reverse_low,forward_high,reverse_high cross=1" >&2
+python3 - "$phase_out" "$cross_out" <<'PY'
+import re, sys
+phase, cross = sys.argv[1:]
+def kv(text):
+    return {k:int(v) for k,v in re.findall(r'([a-z_]+)=([0-9]+)', text)}
+p=kv(phase); c=kv(cross)
+names=('forward_low','reverse_low','forward_high','reverse_high')
+states=sum(p[f'{x}_states'] for x in names)
+ordinary=sum(p[f'{x}_sources'] for x in names)
+crosses=sum(c[f'{x}_cross'] for x in names)
+canonical=ordinary+crosses
+delta=states
+saved=canonical-delta
+print(f'ternary_delta_plan_states={states}')
+print(f'ternary_delta_canonical_source_key_folds={canonical}')
+print(f'ternary_delta_base_key_folds={delta}')
+print(f'ternary_delta_source_key_folds_saved={saved}')
+print(f'ternary_delta_fold_reduction={canonical/delta:.6f}x' if delta else 'ternary_delta_fold_reduction=NA')
+print(f'ternary_delta_saved_fraction={saved/canonical:.9f}' if canonical else 'ternary_delta_saved_fraction=0')
+PY
+
+echo "closure-ternary-delta-proof OK W=$W low=$LOW_LUT_K high=$HIGH_LUT_K phases=forward_low,reverse_low,forward_high,reverse_high cross=1 fold_reduction_reported=1" >&2
