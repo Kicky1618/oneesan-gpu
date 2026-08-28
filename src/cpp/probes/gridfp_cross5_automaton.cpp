@@ -16,8 +16,17 @@ static constexpr int HALT_SHIFT = 5;
 static constexpr int MAX_RUNTIME_DEPTH = 15;
 static constexpr int MAX_FACTOR = 14;
 static constexpr int MAX_CHUNKS = 3;
-static constexpr int MAX_TABLE_INPUT_STATE = MAX_RUNTIME_DEPTH + 2 * CHUNK;
+static constexpr int FIRST_CHUNK_STATE_MAX = MAX_RUNTIME_DEPTH;
+static constexpr int SECOND_CHUNK_STATE_MAX = MAX_RUNTIME_DEPTH + CHUNK;
+static constexpr int THIRD_CHUNK_STATE_MAX = MAX_RUNTIME_DEPTH + 2 * CHUNK;
+static constexpr int MAX_TABLE_INPUT_STATE = THIRD_CHUNK_STATE_MAX;
+static_assert(FIRST_CHUNK_STATE_MAX == 15);
+static_assert(SECOND_CHUNK_STATE_MAX == 20);
+static_assert(THIRD_CHUNK_STATE_MAX == 25);
 static_assert(MAX_TABLE_INPUT_STATE == 25 && STATES == MAX_TABLE_INPUT_STATE + 1);
+static_assert(FIRST_CHUNK_STATE_MAX < STATES && SECOND_CHUNK_STATE_MAX < STATES &&
+              THIRD_CHUNK_STATE_MAX < STATES,
+              "depth4 CROSS5 must never require the scalar overflow fallback");
 
 static constexpr int pow3(int n) { return n ? 3 * pow3(n - 1) : 1; }
 
@@ -171,7 +180,10 @@ int main() {
               << " composed_cases=" << composed_cases
               << " max_table_input_state=" << max_table_state
               << " proved_table_input_state_max=" << MAX_TABLE_INPUT_STATE
+              << " chunk_state_max=" << FIRST_CHUNK_STATE_MAX << ','
+              << SECOND_CHUNK_STATE_MAX << ',' << THIRD_CHUNK_STATE_MAX
               << " max_factor=" << MAX_FACTOR << " max_chunks=" << MAX_CHUNKS
-              << " candidate_mask_exact=1 state_exact=1 halt_exact=1 metadata_per_orbit=0 compact_state_delta=1\n";
+              << " candidate_mask_exact=1 state_exact=1 halt_exact=1 metadata_per_orbit=0"
+              << " compact_state_delta=1 fallback_structurally_unreachable=1\n";
     return 0;
 }
