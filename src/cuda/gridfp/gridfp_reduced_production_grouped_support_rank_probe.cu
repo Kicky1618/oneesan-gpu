@@ -119,7 +119,7 @@ int main(int argc, char** argv) {
         ? static_cast<unsigned>(std::strtoul(argv[3], nullptr, 10)) : 256u;
     const int ngpu = argc > 4 ? std::atoi(argv[4]) : 8;
     if (W < 6 || W > 16 || Kwin < 1 || !blocks ||
-        ngpu < 2 || ngpu > P2P_MAX_GPU) return 2;
+        ngpu < 2 || ngpu > 8) return 2;
 
     int visible = 0;
     ck(cudaGetDeviceCount(&visible), "support rank device count");
