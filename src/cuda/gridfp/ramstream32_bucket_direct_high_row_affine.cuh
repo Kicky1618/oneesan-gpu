@@ -4,26 +4,27 @@
 
 // HIGH-window closure source rows have the affine form
 //   slot[owner] + block.off + rank * block.cols.
-// The fixed LOW owner is known at bind time, so pre-bind the first two terms
-// and the stride once per (HIGH owner, main block). Runtime closure resolution
-// then avoids loading a full BucketPhysicalBlock for every source.
+// For pair[HIGH owner][fixed LOW owner], block.cols depends only on block.hs
+// and the fixed LOW owner, never on the HIGH owner. Keep only row base in the
+// (owner,bid) table and bind one tiny stride-by-hs table alongside it.
 struct P10DCHighRowAffine {
     Count* base = nullptr;
-    uint32_t stride = 0;
-    uint32_t valid = 0;
 };
-static_assert(sizeof(P10DCHighRowAffine) == 16,
-              "HIGH row affine descriptor should remain one 16-byte transaction");
+static_assert(sizeof(P10DCHighRowAffine) == sizeof(Count*),
+              "HIGH row affine entry should be pointer-only");
+static_assert(sizeof(P10DCHighRowAffine) == 8,
+              "64-bit CUDA pointers are required for the compact affine table");
 
 __constant__ P10DCHighRowAffine* D_P10DC_HIGH_ROW_AFFINE;
+__constant__ uint32_t D_P10DC_HIGH_ROW_STRIDE[MAXW + 2];
 
 __device__ __forceinline__ bool p10dc_high_row_affine_resolve(
-    uint32_t owner, uint32_t bid, uint32_t rank, Count*& out
+    uint32_t owner, uint32_t bid, uint32_t rank, uint32_t hs, Count*& out
 ) {
-    if (owner >= BUCKET_NGPU || bid >= D_BKF_MAIN_NBLOCKS) return false;
+    if (owner >= BUCKET_NGPU || bid >= D_BKF_MAIN_NBLOCKS || hs >= uint32_t(MAXW + 2)) return false;
     P10DCHighRowAffine a = D_P10DC_HIGH_ROW_AFFINE[size_t(owner) * D_BKF_MAIN_NBLOCKS + bid];
-    if (!a.valid || !a.base) return false;
-    out = a.base + Code(rank) * a.stride;
+    if (!a.base) return false;
+    out = a.base + Code(rank) * D_P10DC_HIGH_ROW_STRIDE[hs];
     return true;
 }
 
@@ -50,6 +51,8 @@ struct BucketFusedDirectHighRowsTables {
     ) {
         base.bind_owner(fixed, buckets, slot);
         std::vector<P10DCHighRowAffine> h(size_t(BUCKET_NGPU) * main_nblocks);
+        std::array<uint32_t, MAXW + 2> stride{};
+        std::array<uint8_t, MAXW + 2> stride_seen{};
         for (uint32_t owner = 0; owner < BUCKET_NGPU; ++owner) {
             const auto& q = buckets.pair[owner][fixed];
             if (q.main_blocks.size() != main_nblocks) {
@@ -59,17 +62,27 @@ struct BucketFusedDirectHighRowsTables {
             }
             for (uint32_t bid = 0; bid < main_nblocks; ++bid) {
                 const BucketPhysicalBlock& b = q.main_blocks[bid];
-                auto& a = h[size_t(owner) * main_nblocks + bid];
-                if (b.valid && slot[owner]) {
-                    a.base = slot[owner] + b.off;
-                    a.stride = b.cols;
-                    a.valid = 1;
+                if (!b.valid) continue;
+                if (b.hs >= MAXW + 2) {
+                    std::cerr << "p10dc high row affine hs overflow hs=" << unsigned(b.hs) << '\n';
+                    std::exit(617);
                 }
+                if (stride_seen[b.hs] && stride[b.hs] != b.cols) {
+                    std::cerr << "p10dc high row affine stride mismatch hs=" << unsigned(b.hs)
+                              << " old=" << stride[b.hs] << " new=" << b.cols << '\n';
+                    std::exit(618);
+                }
+                stride_seen[b.hs] = 1;
+                stride[b.hs] = b.cols;
+                auto& a = h[size_t(owner) * main_nblocks + bid];
+                if (slot[owner]) a.base = slot[owner] + b.off;
             }
         }
         if (!h.empty()) ck(cudaMemcpy(high_row_affine, h.data(), h.size() * sizeof(P10DCHighRowAffine),
                                       cudaMemcpyHostToDevice),
                            "p10dc high row affine H2D");
+        ck(cudaMemcpyToSymbol(D_P10DC_HIGH_ROW_STRIDE, stride.data(), stride.size() * sizeof(uint32_t)),
+           "p10dc high row affine stride by hs");
     }
 
     void release() {
