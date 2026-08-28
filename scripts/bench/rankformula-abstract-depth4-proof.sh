@@ -10,6 +10,7 @@ out="$($BIN)"
 printf '%s\n' "$out"
 grep -Fq 'gridfp-rankformula-abstract-depth4 OK' <<<"$out"
 grep -Fq 'states=7060 exact_depth_entries=91780 table_bytes=28240 nonzero_depth_slots=19273' <<<"$out"
-grep -Fq 'max_selected_depth=13 bits_per_l_ordinal=4 packed_bits_per_state=28' <<<"$out"
+grep -Fq 'max_selected_depth=13 no_l_calls=212992 word0_loads=15411929 word1_loads=1892462' <<<"$out"
+grep -Fq 'dynamic_split_bytes=34608782 bits_per_l_ordinal=4 packed_bits_per_state=28 split16=1' <<<"$out"
 grep -Fq 'swar_exact=1 depth14_15_zero=1' <<<"$out"
-echo 'rankformula-abstract-depth4-proof OK bytes=28240 exact=91780' >&2
+echo 'rankformula-abstract-depth4-proof OK bytes=28240 dynamic_bytes=34608782 exact=91780' >&2
