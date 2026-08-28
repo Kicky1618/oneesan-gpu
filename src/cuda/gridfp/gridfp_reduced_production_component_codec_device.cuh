@@ -45,7 +45,17 @@ __device__ __forceinline__ std::uint32_t component_support_unrank_device(
     int left = ones;
     bool seen_mark = false;
     for (int pos = 0; pos < len; ++pos) {
+#if RP_FAST_SUPPORT_UNRANK_EARLY_EXIT
+        if (!left) break;
+        const int remaining = len - pos;
+        if (left == remaining) {
+            support |= support_suffix_mask_device(pos, len);
+            break;
+        }
+        const int rem = remaining - 1;
+#else
         const int rem = len - pos - 1;
+#endif
         const int future_marks = (mark0 > pos ? 1 : 0) + (mark1 > pos ? 1 : 0);
         Rank64 zero_count = choose_device(rem, left);
         if (!seen_mark) zero_count -= choose_device(rem - future_marks, left);
