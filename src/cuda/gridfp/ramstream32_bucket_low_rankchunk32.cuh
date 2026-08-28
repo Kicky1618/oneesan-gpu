@@ -28,14 +28,13 @@ static_assert(P10DC_RANKCHUNK32_BLOCK64 == 0 || P10DC_RANKCHUNK32_BLOCK64 == 1,
               "P10DC_RANKCHUNK32_BLOCK64 must be 0 or 1");
 static_assert(!P10DC_RANKCHUNK32_BLOCK64 || !P10DC_RANKCHUNK32_BYTEPACK,
               "block64 needs compact 23+9 packing");
-static_assert(!P10DC_RANKCHUNK32_BLOCK64 || !P10DC_RANKCHUNK32_ALIGN32,
-              "block64 experiment currently uses the no-padding layout");
 
 // Compact mode stores the final <=4-digit chunk in 7 bits and gives the prefix
 // 9 bits. Bytepack keeps three clean chunk bytes and uses an 8-bit prefix.
 // Legal LOW codes satisfy #L<=#R, so K<=14 implies at most 7 L digits. Thus
 // prefix bounds are 31*7=217 for block32 and 63*7=441 for compact block64.
-// ALIGN32 optionally pads block32 height starts to one-block warp stripes.
+// P10DC_RANKCHUNK32_ALIGN32 is retained as the compatibility switch name, but
+// it aligns each height to the selected metadata block (32 or 64 entries).
 static constexpr uint32_t P10DC_RANKCHUNK32_BLOCK_LOG2 = P10DC_RANKCHUNK32_BLOCK64 ? 6u : 5u;
 static constexpr uint32_t P10DC_RANKCHUNK32_BLOCK = 1u << P10DC_RANKCHUNK32_BLOCK_LOG2;
 static constexpr uint32_t P10DC_RANKCHUNK32_HEIGHT_ALIGN =
@@ -105,9 +104,10 @@ __device__ __forceinline__ void p10dc_low_rankchunk32_row(
     row = D_P10DC_LOW_RANKSTREAM + block_base + prefix;
 }
 
-// Warp-striped HIGH ranks are q*32+lane. ALIGN32 makes block32 stripes exact
-// one-block accesses. Without alignment, block32/block64 can cross at most one
-// boundary; the one-shuffle path selects lane0 or the boundary lane.
+// Warp-striped HIGH ranks are q*32+lane. With height alignment enabled the
+// selected block is 32 or 64 entries and every 32-lane stripe stays in one
+// block. Without alignment, block32/block64 can cross at most one boundary;
+// the one-shuffle path selects lane0 or the boundary lane.
 __device__ __forceinline__ void p10dc_low_rankchunk32_row_warpstripe(
     uint32_t h, uint32_t rank, uint32_t& packed_chunks, const uint16_t*& row
 ) {
