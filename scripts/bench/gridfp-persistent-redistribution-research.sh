@@ -14,11 +14,13 @@ NODE_NVLINK_TBPS="${NODE_NVLINK_TBPS:-14.4}"
 
 SEG_SRC="$(repo_path src/cpp/probes/gridfp_p2p_owner_local_segment_probe.cpp)"
 HASH_SRC="$(repo_path src/cpp/probes/gridfp_p2p_cycle_batch_hash_probe.cpp)"
+HOST_LIST_SRC="$(repo_path src/cpp/probes/gridfp_reduced_production_host_persistent_list_probe.cpp)"
 MEM_SRC="$(repo_path src/cpp/probes/gridfp_reduced_production_persistent_memory_probe.cpp)"
 EXACT_SRC="$(repo_path src/cpp/probes/gridfp_reduced_production_persistent_exact_plan_probe.cpp)"
 BW_SRC="$(repo_path src/cpp/probes/gridfp_reduced_production_persistent_bandwidth_probe.cpp)"
 SEG_BIN="$(build_path gridfp_p2p_owner_local_segment_probe)"
 HASH_BIN="$(build_path gridfp_p2p_cycle_batch_hash_probe)"
+HOST_LIST_BIN="$(build_path gridfp_reduced_production_host_persistent_list_probe)"
 MEM_BIN="$(build_path gridfp_reduced_production_persistent_memory_probe)"
 EXACT_BIN="$(build_path gridfp_reduced_production_persistent_exact_plan_probe)"
 BW_BIN="$(build_path gridfp_reduced_production_persistent_bandwidth_probe)"
@@ -27,6 +29,8 @@ BW_BIN="$(build_path gridfp_reduced_production_persistent_bandwidth_probe)"
 "$CXX" $CXXFLAGS "$SEG_SRC" -o "$SEG_BIN"
 # shellcheck disable=SC2086
 "$CXX" $CXXFLAGS "$HASH_SRC" -o "$HASH_BIN"
+# shellcheck disable=SC2086
+"$CXX" $CXXFLAGS "$HOST_LIST_SRC" -o "$HOST_LIST_BIN"
 # shellcheck disable=SC2086
 "$CXX" $CXXFLAGS "$MEM_SRC" -o "$MEM_BIN"
 # shellcheck disable=SC2086
@@ -39,6 +43,9 @@ echo "== owner-local maximal-segment proof =="
 
 echo "== cycle-closed batch hash proof =="
 "$HASH_BIN"
+
+echo "== host-built persistent-list exact coverage =="
+"$HOST_LIST_BIN"
 
 echo "== persistent-list W28 dual-direction memory bound =="
 MEM_OUTPUT="$($MEM_BIN "$W" "$K" "$NGPU" 2)"
@@ -88,4 +95,4 @@ fi
 echo "== optimistic HGX B300 redistribution bandwidth floor =="
 "$BW_BIN" "$NODE_HBM_TBPS" "$NODE_NVLINK_TBPS"
 
-echo "persistent-redistribution-research exact=OK W=$W K=$K ngpu=$NGPU B300_headroom_before_scratch_GiB=$HEADROOM exact_peak_headroom_GiB=$EXACT_HEADROOM node_HBM_TBps=$NODE_HBM_TBPS node_NVLink_TBps=$NODE_NVLINK_TBPS"
+echo "persistent-redistribution-research exact=OK W=$W K=$K ngpu=$NGPU startup_gpu_support_scan_candidate=0 B300_headroom_before_scratch_GiB=$HEADROOM exact_peak_headroom_GiB=$EXACT_HEADROOM node_HBM_TBps=$NODE_HBM_TBPS node_NVLink_TBps=$NODE_NVLINK_TBPS"
