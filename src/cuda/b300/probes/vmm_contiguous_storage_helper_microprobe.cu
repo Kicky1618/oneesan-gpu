@@ -5,7 +5,6 @@
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
-#include <numeric>
 
 using Count=std::uint32_t;
 using Code=unsigned long long;
@@ -21,8 +20,9 @@ __device__ __forceinline__ Count expected(Code g){return Count((g*2654435761ULL+
 __global__ void fill_range(Count* base,Code begin,Code end){Code i=begin+Code(blockIdx.x)*blockDim.x+threadIdx.x,stride=Code(gridDim.x)*blockDim.x;for(;i<end;i+=stride)base[i]=expected(i);}
 __global__ void verify_all(const Count* base,Code n,unsigned long long* errors){Code i=Code(blockIdx.x)*blockDim.x+threadIdx.x,stride=Code(gridDim.x)*blockDim.x;unsigned long long local=0;for(;i<n;i+=stride)local+=base[i]!=expected(i);if(local)atomicAdd(errors,local);}
 
-__device__ __forceinline__ Count logical_view_load(const Count* const* ptrs,Code chunk,Code g){int o=int(g/chunk);if(o>=D_HELPER_NGPU)o=D_HELPER_NGPU-1;return ptrs[o][g-Code(o)*chunk];}
-__global__ void verify_logical_views(Code na,Code nb,unsigned long long* errors){Code i=Code(blockIdx.x)*blockDim.x+threadIdx.x,stride=Code(gridDim.x)*blockDim.x;unsigned long long local=0;for(Code g=i;g<na;g+=stride)local+=logical_view_load(D_HELPER_A_PTR,D_HELPER_A_CHUNK,g)!=expected(g);for(Code g=i;g<nb;g+=stride)local+=logical_view_load(D_HELPER_B_PTR,D_HELPER_B_CHUNK,g)!=expected(g);if(local)atomicAdd(errors,local);}
+__device__ __forceinline__ Count logical_view_load_a(Code g){int o=int(g/D_HELPER_A_CHUNK);if(o>=D_HELPER_NGPU)o=D_HELPER_NGPU-1;return D_HELPER_A_PTR[o][g-Code(o)*D_HELPER_A_CHUNK];}
+__device__ __forceinline__ Count logical_view_load_b(Code g){int o=int(g/D_HELPER_B_CHUNK);if(o>=D_HELPER_NGPU)o=D_HELPER_NGPU-1;return D_HELPER_B_PTR[o][g-Code(o)*D_HELPER_B_CHUNK];}
+__global__ void verify_logical_views(Code na,Code nb,unsigned long long* errors){Code i=Code(blockIdx.x)*blockDim.x+threadIdx.x,stride=Code(gridDim.x)*blockDim.x;unsigned long long local=0;for(Code g=i;g<na;g+=stride)local+=logical_view_load_a(g)!=expected(g);for(Code g=i;g<nb;g+=stride)local+=logical_view_load_b(g)!=expected(g);if(local)atomicAdd(errors,local);}
 
 static void ck(cudaError_t e,const char*w){if(e!=cudaSuccess){std::fprintf(stderr,"%s: %s\n",w,cudaGetErrorString(e));std::exit(1);}}
 
