@@ -3,6 +3,12 @@
 #include "gridfp_reduced_production_owner_component_device.cuh"
 #include "gridfp_reduced_production_runtime_fastdiv64.cuh"
 
+#ifndef RP_RUNTIME_OWNER_PREFIX_BINARY
+#define RP_RUNTIME_OWNER_PREFIX_BINARY 1
+#endif
+static_assert(RP_RUNTIME_OWNER_PREFIX_BINARY == 0 || RP_RUNTIME_OWNER_PREFIX_BINARY == 1,
+              "RP_RUNTIME_OWNER_PREFIX_BINARY must be 0 or 1");
+
 namespace oneesan::gridfp::reducedprod {
 
 // Tiny O(W) per-GPU plan.  This replaces per-component weighted-owner
@@ -22,6 +28,25 @@ __device__ __forceinline__ int owner_local_index_without_missing_device(
     return physical_bit - lo - (physical_bit > missing_bit ? 1 : 0);
 }
 
+__device__ __forceinline__ int runtime_owner_prefix_sector_device(
+    const Rank64* prefix, int O, Rank64 rank
+) {
+#if RP_RUNTIME_OWNER_PREFIX_BINARY
+    int lo = 0;
+    int hi = O + 1;
+    while (lo < hi) {
+        const int mid = lo + ((hi - lo) >> 1);
+        if (rank < prefix[mid + 1]) hi = mid;
+        else lo = mid + 1;
+    }
+    return lo <= O ? lo : -1;
+#else
+    for (int r = 0; r <= O; ++r)
+        if (rank < prefix[r + 1]) return r;
+    return -1;
+#endif
+}
+
 __device__ __forceinline__ MateID owner_component_label_unrank_planned_device(
     int W,
     int p,
@@ -36,17 +61,9 @@ __device__ __forceinline__ MateID owner_component_label_unrank_planned_device(
     const int lo = reverse ? tile_start - 1 : tile_start - K - 1;
     const int hi = lo + L - 1;
 
-    int outer_ones = -1;
-    Rank64 local = 0;
-    for (int r = 0; r <= O; ++r) {
-        const Rank64 next = plan.prefix[r + 1];
-        if (rank < next) {
-            outer_ones = r;
-            local = rank - plan.prefix[r];
-            break;
-        }
-    }
+    const int outer_ones = runtime_owner_prefix_sector_device(plan.prefix, O, rank);
     if (outer_ones < 0) return 0;
+    const Rank64 local = rank - plan.prefix[outer_ones];
 
     const Rank64 component_group = plan.component_group[outer_ones];
     if (!component_group) return 0;
