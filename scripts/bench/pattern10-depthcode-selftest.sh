@@ -28,5 +28,7 @@ if grep -Fq "OK W=$W" <<<"$out"; then
   grep -Fq 'warpctx_smem_bytes_256=' <<<"$out"
   grep -Fq 'warpstriped_threads=256' <<<"$out"
   grep -Fq 'warpstriped_full_warp_required=1' <<<"$out"
+  grep -Fq 'delta_plan_exact=1' <<<"$out"
+  grep -Eq 'pattern10-depthcode-delta-plan-equivalence checked=[1-9][0-9]* mismatches=0 .* plan_exact=1' <<<"$out"
 fi
-echo "pattern10-depthcode-selftest OK W=$W pm_accum=$PM_ACCUM high_ctx=thread,resolved,warp,warpstriped decode_load=$DECODE_LOAD warpctx_dynamic_smem=1" >&2
+echo "pattern10-depthcode-selftest OK W=$W pm_accum=$PM_ACCUM high_ctx=thread,resolved,warp,warpstriped decode_load=$DECODE_LOAD warpctx_dynamic_smem=1 delta_plan_exact=1" >&2
