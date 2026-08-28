@@ -12,6 +12,7 @@ FILES=(
   scripts/bench/gridfp-codec-table-consensus-gate.sh
   scripts/bench/gridfp-codec-table-consensus-gate-proof.sh
   scripts/bench/gridfp-codec-table-w28-rank-microprobe.sh
+  scripts/bench/gridfp-codec-table-decision-suite.sh
   scripts/bench/gridfp-runtime-label-hotpath-proof-suite.sh
   scripts/bench/gridfp-runtime-w28-label-hotpath-suite.sh
   scripts/bench/gridfp-codec-table-layout-suite.sh
