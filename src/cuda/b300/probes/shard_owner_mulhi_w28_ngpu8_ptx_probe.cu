@@ -20,16 +20,28 @@ __device__ __constant__ Code B300_MAIN_SHARD_BASE_W28_G8[8] = {
     337504568296ULL,
 };
 
+__device__ __forceinline__ int shard_owner8_mulhi(Code g) {
+    return int(__umul64hi(g, B300_MAIN_MAGIC_W28_G8) >>
+               B300_MAIN_HIGH_SHIFT_W28_G8);
+}
+
 __device__ __forceinline__ ShardAddress8 shard_address8_mulhi_mul(Code g) {
-    const int owner = int(__umul64hi(g, B300_MAIN_MAGIC_W28_G8) >>
-                          B300_MAIN_HIGH_SHIFT_W28_G8);
+    const int owner = shard_owner8_mulhi(g);
     return {owner, g - Code(owner) * B300_MAIN_CHUNK_W28_G8};
 }
 
 __device__ __forceinline__ ShardAddress8 shard_address8_mulhi_table(Code g) {
-    const int owner = int(__umul64hi(g, B300_MAIN_MAGIC_W28_G8) >>
-                          B300_MAIN_HIGH_SHIFT_W28_G8);
+    const int owner = shard_owner8_mulhi(g);
     return {owner, g - B300_MAIN_SHARD_BASE_W28_G8[owner]};
+}
+
+__device__ __forceinline__ ShardAddress8 shard_address8_mulhi_mask(Code g) {
+    const int owner = shard_owner8_mulhi(g);
+    const Code u = Code(unsigned(owner));
+    const Code b0 = (Code(0) - (u & 1ULL)) & B300_MAIN_CHUNK_W28_G8;
+    const Code b1 = (Code(0) - ((u >> 1) & 1ULL)) & (B300_MAIN_CHUNK_W28_G8 << 1);
+    const Code b2 = (Code(0) - ((u >> 2) & 1ULL)) & (B300_MAIN_CHUNK_W28_G8 << 2);
+    return {owner, g - (b0 + b1 + b2)};
 }
 
 extern "C" __global__ void gridfp_b300_shard_owner_branchy_probe(
@@ -56,6 +68,15 @@ extern "C" __global__ void gridfp_b300_shard_owner_mulhi_table_probe(
 ) {
     const int tid = int(blockIdx.x * blockDim.x + threadIdx.x);
     const ShardAddress8 a = shard_address8_mulhi_table(global_index[tid]);
+    owner[tid] = a.owner;
+    local[tid] = a.local;
+}
+
+extern "C" __global__ void gridfp_b300_shard_owner_mulhi_mask_probe(
+    const Code* global_index, int* owner, Code* local
+) {
+    const int tid = int(blockIdx.x * blockDim.x + threadIdx.x);
+    const ShardAddress8 a = shard_address8_mulhi_mask(global_index[tid]);
     owner[tid] = a.owner;
     local[tid] = a.local;
 }
