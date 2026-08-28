@@ -15,6 +15,9 @@
 #ifndef RP_RUNTIME_OWNER_LOCAL_SECTOR_PARITY
 #define RP_RUNTIME_OWNER_LOCAL_SECTOR_PARITY 1
 #endif
+#ifndef RP_RUNTIME_OWNER_LOCAL_SECTOR_CARRY_BEGIN
+#define RP_RUNTIME_OWNER_LOCAL_SECTOR_CARRY_BEGIN 0
+#endif
 #ifndef RP_RUNTIME_OWNER_LOCAL_SECTOR_W28_TREE
 #define RP_RUNTIME_OWNER_LOCAL_SECTOR_W28_TREE 0
 #endif
@@ -29,6 +32,9 @@ static_assert(RP_RUNTIME_OWNER_LOCAL_SECTOR_TABLE == 0 ||
 static_assert(RP_RUNTIME_OWNER_LOCAL_SECTOR_PARITY == 0 ||
               RP_RUNTIME_OWNER_LOCAL_SECTOR_PARITY == 1,
               "RP_RUNTIME_OWNER_LOCAL_SECTOR_PARITY must be 0 or 1");
+static_assert(RP_RUNTIME_OWNER_LOCAL_SECTOR_CARRY_BEGIN == 0 ||
+              RP_RUNTIME_OWNER_LOCAL_SECTOR_CARRY_BEGIN == 1,
+              "RP_RUNTIME_OWNER_LOCAL_SECTOR_CARRY_BEGIN must be 0 or 1");
 static_assert(RP_RUNTIME_OWNER_LOCAL_SECTOR_W28_TREE == 0 ||
               RP_RUNTIME_OWNER_LOCAL_SECTOR_W28_TREE == 1,
               "RP_RUNTIME_OWNER_LOCAL_SECTOR_W28_TREE must be 0 or 1");
@@ -205,6 +211,23 @@ __device__ __forceinline__ bool runtime_owner_local_sector_device(
         const int count = (L - first + 1) >> 1;
         int lo = 0;
         int hi = count - 1;
+#if RP_RUNTIME_OWNER_LOCAL_SECTOR_CARRY_BEGIN
+        Rank64 begin = 0;
+        while (lo < hi) {
+            const int mid = lo + ((hi - lo) >> 1);
+            const int l = first + (mid << 1);
+            const Rank64 end = RP_RUNTIME_OWNER_LOCAL_SECTOR_END[row + l];
+            if (within < end) {
+                hi = mid;
+            } else {
+                lo = mid + 1;
+                begin = end;
+            }
+        }
+        const int l = first + (lo << 1);
+        local_ones = l;
+        local_within = within - begin;
+#else
         while (lo < hi) {
             const int mid = lo + ((hi - lo) >> 1);
             const int l = first + (mid << 1);
@@ -217,6 +240,7 @@ __device__ __forceinline__ bool runtime_owner_local_sector_device(
             : 0;
         local_ones = l;
         local_within = within - begin;
+#endif
 #else
         int lo = 0;
         int hi = L;
