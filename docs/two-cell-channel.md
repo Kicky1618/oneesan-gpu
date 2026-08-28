@@ -200,13 +200,9 @@ average source coordinates/component = 3.50093378807
 average source+destination vertices/component = 7.00186757614
 ```
 
-Small-width enumeration also shows very small worst components; this should be
-proved or conservatively bounded before fixing a warp layout.
-
 ### Table-free component labels
 
-There is an especially useful canonical component label. For every unrestricted
-word `u in M_{W-2}`, define the source seed
+For every unrestricted word `u in M_{W-2}`, define the source seed
 
 ```text
 S_i(u) = P_i C_i(u).
@@ -222,24 +218,171 @@ component_count = M_{W-2}
 component_table_bytes = 0
 ```
 
-Starting from this seed and alternating the local forward formula with the
-existing table-free inverse formula reconstructs the complete component using
-only local state. `two_cell_component_kernel_probe.cpp` checks that this local
-reconstruction covers every source and destination exactly once.
-
-This suggests a GPU kernel organized by components rather than by matrix
-nonzeros or destinations:
-
-```text
-component id -> unrank width-(W-2) seed
-             -> reconstruct tiny local component
-             -> load every source value once
-             -> perform all edge sums in registers/shared memory
-             -> store every destination value once
-```
-
 No global CSR, component table, or atomic accumulation is required for an
 interior step.
+
+## Exact component size from the marked face
+
+The component size is much more rigid than the forest observation alone
+suggests. There are three classes of component labels.
+
+If
+
+```text
+u[i] == N
+```
+
+the eliminated C direction is represented by a single A coordinate, so the
+component has one source coordinate.
+
+If `u[i] != N` and the local pair is not one of
+
+```text
+RN, LN, LR
+```
+
+the component has exactly three source coordinates.
+
+The remaining three patterns are the deep components. Collapse the local pair
+by
+
+```text
+RN -> R
+LN -> L
+LR -> N
+```
+
+to obtain a width-`W-3` one-defect word `v`. This collapse is a bijection from
+deep component labels to `M_{W-3}`.
+
+Let `r_i(v)` be the number of connectivity strands bordering the face incident
+to the boundary interval immediately before position `i`. In height language,
+let `h=h[i]`, extend left and right maximally while the path remains at or above
+`h`, count the level-`h` top-level excursions in that interval, and include the
+enclosing/root strand. Then exact enumeration gives
+
+```text
+deep_component_size = 4 + r_i(v).
+```
+
+A face cannot meet more strands than exist in the whole one-defect diagram. If
+`v` has `2p+1` occupied positions, it has `p` matched arcs plus the distinguished
+root strand, hence
+
+```text
+r_i(v) <= p + 1 <= floor((W-2)/2)
+```
+
+and therefore
+
+```text
+component_size <= floor(W/2) + 3.
+```
+
+For W=28 the exact bound is
+
+```text
+max face strands = 13
+max source coordinates/component = 17
+max uint32 component payload = 68 bytes
+```
+
+so one warp has enough lanes for every source coordinate of every interior
+component.
+
+At the boundary, one-defect words have the unique decomposition
+
+```text
+(N | L a R)* R b
+```
+
+where every `a` and `b` is an ordinary Motzkin path. The marked-face strand
+count is one plus the number of `L a R` atoms before the root. If `M(x)` is the
+ordinary Motzkin generating function and `D[n][r]` counts width-`n` one-defect
+words with `r` marked-face strands, then
+
+```text
+D(x,y) = x y M(x) / (1 - x - x^2 y M(x)).
+```
+
+Small-width enumeration shows the same component-size distribution at every
+interior position. For W=28 the resulting component buckets are:
+
+```text
+pairs  components
+1      16,626,415,975
+3      14,085,122,376
+5       4,945,087,837
+6       4,945,087,812
+7       3,437,713,026
+8       1,930,340,540
+9         898,275,650
+10        341,465,226
+11        102,042,591
+12         22,621,768
+13          3,441,735
+14            323,450
+15             16,027
+16                312
+17                  1
+```
+
+The weighted sum of these buckets is exactly `R_28`.
+
+## One-scan packed component reconstruction
+
+The component does not need a three-round graph search in the GPU hot path.
+Represent a word by two 32-bit masks:
+
+```text
+support : occupied positions
+left    : occupied positions carrying L; the other occupied positions are R
+```
+
+For W=28 both masks fit in 27 bits for A words. Mate lookup is replaced by a
+bounded parenthesis scan over these masks; no mate array or string state is
+needed.
+
+For a retained component label `u`, three source coordinates are immediate:
+
+```text
+C(u)
+A(insert N before u[i])
+A(insert N after  u[i])
+```
+
+For a three-coordinate component this is already complete. For a deep
+component, collapse `u` to `v` as above and construct the single central
+A-destination
+
+```text
+Dcenter = A(insert N,N immediately before v[i]).
+```
+
+Then
+
+```text
+component_sources
+  = { the three coordinates above }
+    union inverse_K(Dcenter).
+```
+
+The inverse of `Dcenter` contains the fourth fixed coordinate plus exactly one
+coordinate per marked-face strand. Thus deep reconstruction needs only one
+`inverse_K` call, which is one O(W) face scan. `two_cell_direct_component_probe`
+checks this formula against the full component closure.
+
+This gives the intended interior GPU path:
+
+```text
+component label
+  -> classify 1 / 3 / deep
+  -> construct fixed packed coordinates
+  -> deep only: one marked-face inverse scan
+  -> load each source value once
+  -> evaluate the local tree in registers/shared memory
+  -> store each destination value once
+```
 
 ## Reverse snake rows and physical row turns
 
@@ -301,12 +444,12 @@ For W=28 the largest reduced sector is p=8:
 R_28,8 = 50,950,162,120 values = 189.804 GiB/residue total.
 ```
 
-`two_cell_support_primitive_probe.cpp` verifies a support/primitive codec whose
-tables are only polynomial in W. This is the intended global GPU layout; a
-production component kernel should generate component members directly in this
-factorized rank space rather than performing string Motzkin rank/unrank.
+`two_cell_factorized_gather_probe.cpp` verifies a support/primitive codec whose
+tables are only polynomial in W. This is the current canonical global GPU
+layout; a production component kernel should generate component members
+directly in this rank space.
 
-## HBM roofline
+## HBM roofline and physical locality
 
 The original destination-gather estimate reads one source value per matrix
 nonzero and writes one destination value:
@@ -332,6 +475,14 @@ about `1.002 PB/residue`. At an aggregate 64 TB/s HBM roofline this is about
 reconstruction, and kernel inefficiencies. This is a roofline, not a hardware
 measurement.
 
+The canonical support/primitive ranks are not component-contiguous. The
+component-locality probe shows that, by W=14, an average component contains only
+about 3.36 values but touches about three distinct 128-byte rank sectors. A
+component-major dynamic layout would place almost every component in one
+128-byte sector. This makes a component-major or size-bucketed layout worth
+investigating after the first canonical-rank CUDA prototype; it is not yet the
+authoritative layout.
+
 A component-local physical row turn has more local edges, but the same ideal
 count-array HBM traffic `8 * R_28` if its component members can be reconstructed
 without extra global tables.
@@ -344,33 +495,41 @@ The current probe family separates the algebraic claims:
   coefficients, and delayed exactness.
 - `two_cell_inverse_gather_probe.cpp`: table-free inverse preimages and compact
   rank/unrank.
-- `two_cell_support_primitive_probe.cpp`: support/primitive factorized layout.
+- `two_cell_factorized_gather_probe.cpp`: support/primitive factorized layout.
 - `two_cell_reverse_channel_probe.cpp`: reflection and reverse quotient.
 - `two_cell_row_turn_probe.cpp`: exact direct physical snake turns.
 - `two_cell_forest_lifting_probe.cpp`: support-tree decomposition, unique
   matching, and constructive in-place lifting.
-- `two_cell_component_kernel_probe.cpp`: component reconstruction from the
-  width-`W-2` seed with one global source load and destination store.
+- `two_cell_component_kernel_probe.cpp`: table-free local component partition.
 - `two_cell_turn_component_probe.cpp`: persistence of the component partition
   across physical row turns.
+- `two_cell_component_depth_probe.cpp`: fixed three-round closure bound observed
+  through the exhaustive widths.
+- `two_cell_packed_component_probe.cpp`: packed forward/inverse operators and
+  fixed-round component reconstruction without strings or mate arrays.
+- `two_cell_component_size_distribution_probe.cpp`: exact small-width component
+  size distribution and boundary generating function.
+- `two_cell_component_face_probe.cpp`: marked-face size formula and W=28
+  seventeen-source bound.
+- `two_cell_direct_component_probe.cpp`: one-scan direct source reconstruction.
+- `two_cell_component_locality_probe.cpp`: canonical-rank transaction locality.
 
 The probes are intended for explicit local execution, not repeated GitHub
 Actions runs.
 
 ## Remaining implementation gates
 
-- Turn the observed interior support-forest structure and one-seed-per-component
-  property into a combinatorial proof.
-- Derive a direct support/primitive formula for all members and edges of a
-  component, eliminating the temporary string/`std::set` exploration used by
-  the CPU probes.
-- Derive the analogous table-free local reconstruction for physical row-turn
+- Turn the observed interior support-forest and one-seed-per-component
+  properties into a clean combinatorial proof independent of exhaustive widths.
+- Prove the marked-face component formula directly from the local seven-tile
+  relations; the current probes verify it exhaustively on the explored widths.
+- Convert the one-scan packed reconstruction into a CUDA device header using
+  fixed arrays of at most 17 source coordinates and no dynamic allocation.
+- Derive the analogous one-scan reconstruction for physical row-turn
   components, which are small but cyclic and have coefficients `1`/`2`.
-- Decide whether to keep canonical destination ordering with a component-local
-  double buffer first, or absorb the unique matching permutation into the next
-  rank layout and use the in-place lifting form.
-- Implement a CUDA component microkernel and measure rank-generation cost,
-  occupancy, register pressure, and achieved HBM traffic before integrating it
-  into the B300 backend.
+- Benchmark canonical factorized ranks first, then test a component-major or
+  component-size-bucketed layout if scattered HBM transactions dominate.
 - Compare a complete CPU reduced snake solver against the existing exact grid
   solver on small n before treating the new representation as authoritative.
+- Integrate only the winning CUDA microkernel into the B300 backend; keep the
+  existing exact path as the reference until the full-snake comparison passes.
