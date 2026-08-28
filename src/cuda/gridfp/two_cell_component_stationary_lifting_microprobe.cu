@@ -4,6 +4,8 @@
 #include "two_cell_component_stationary_tiledbase_microprobe.cu"
 #pragma pop_macro("main")
 
+#include "../../common/two_cell_component_matching.cuh"
+
 namespace {
 
 __device__ __forceinline__ std::uint32_t add_mod_u32(
@@ -30,16 +32,17 @@ __global__ void two_cell_stationary_lifting_kernel(
     unsigned long long* processed,
     unsigned long long* primitive_scans,
     unsigned long long* support_base_builds,
-    unsigned long long* shear_ops,
+    unsigned long long* residual_adds,
+    unsigned long long* nonidentity_matchings,
     int* error
 ) {
     __shared__ PackedKey sh_src[WARPS_PER_BLOCK][MAX_STATES];
     __shared__ std::uint32_t sh_value[WARPS_PER_BLOCK][MAX_STATES];
+    __shared__ std::uint32_t sh_output[WARPS_PER_BLOCK][MAX_STATES];
     __shared__ Rank sh_rank[WARPS_PER_BLOCK][MAX_STATES];
-    __shared__ std::int8_t sh_to[WARPS_PER_BLOCK][MAX_STATES][2];
-    __shared__ std::uint8_t sh_nto[WARPS_PER_BLOCK][MAX_STATES];
     __shared__ std::uint32_t sh_support[WARPS_PER_BLOCK];
     __shared__ oneesan::twocell::StationaryComponentBases sh_bases[WARPS_PER_BLOCK];
+    __shared__ oneesan::twocell::ComponentMatching sh_matching[WARPS_PER_BLOCK];
     __shared__ int sh_ns[WARPS_PER_BLOCK];
 
     const int lane = threadIdx.x & 31;
@@ -84,7 +87,18 @@ __global__ void two_cell_stationary_lifting_kernel(
                 } else {
                     sh_ns[warp] = src.size;
                     for (int s = 0; s < src.size; ++s) sh_src[warp][s] = src.value[s];
-                    atomicAdd(processed, 1ULL);
+                    const auto matching = oneesan::twocell::build_component_matching(
+                        sh_src[warp], src.size, W, i);
+                    if (!matching.ok) {
+                        set_error(error, 183);
+                    } else {
+                        sh_matching[warp] = matching;
+                        bool nonidentity = false;
+                        for (int s = 0; s < src.size; ++s)
+                            nonidentity |= matching.src_to_dst[s] != s;
+                        if (nonidentity) atomicAdd(nonidentity_matchings, 1ULL);
+                        atomicAdd(processed, 1ULL);
+                    }
                 }
             }
             __syncwarp();
@@ -105,93 +119,31 @@ __global__ void two_cell_stationary_lifting_kernel(
                 const Rank r = oneesan::twocell::stationary_component_source_base(
                     bases, lane) + primitive;
                 sh_rank[warp][lane] = r;
-                sh_nto[warp][lane] = 0;
                 if (r >= state_count) {
                     sh_value[warp][lane] = 0;
                     set_error(error, 182);
                 } else {
                     sh_value[warp][lane] = values[r];
-                    const auto edges = oneesan::twocell::K_step(source, W, i);
-                    if (edges.overflow || edges.size < 1 || edges.size > 3) {
-                        set_error(error, 183);
-                    } else {
-                        const PackedKey diagonal = oneesan::twocell::recouple_coordinate(source, i);
-                        bool found_diagonal = false;
-                        int ne = 0;
-                        for (int e = 0; e < edges.size; ++e) {
-                            const PackedKey d = edges.value[e];
-                            if (oneesan::twocell::equal(d, diagonal)) {
-                                found_diagonal = true;
-                                continue;
-                            }
-                            int target = -1;
-                            for (int t = 0; t < ns; ++t) {
-                                const PackedKey candidate = oneesan::twocell::recouple_coordinate(
-                                    sh_src[warp][t], i);
-                                if (oneesan::twocell::equal(d, candidate)) {
-                                    target = t;
-                                    break;
-                                }
-                            }
-                            if (target < 0 || ne >= 2) {
-                                set_error(error, 184);
-                                continue;
-                            }
-                            sh_to[warp][lane][ne++] = static_cast<std::int8_t>(target);
-                        }
-                        sh_nto[warp][lane] = static_cast<std::uint8_t>(ne);
-                        if (!found_diagonal) set_error(error, 185);
-                    }
                 }
             }
             __syncwarp();
 
-            // The diagonal matching is implicit identity. The remaining n-1
-            // edges form a directed tree on stationary coordinates. Lane zero
-            // removes sinks and executes each shear exactly once. A sink's value
-            // is still original because no incoming source can have been removed
-            // earlier while that edge pointed to a live vertex.
             if (lane == 0 && ns > 0) {
-                std::uint32_t alive = oneesan::twocell::low_mask(ns);
-                int removed = 0;
-                int local_shears = 0;
-                while (alive) {
-                    std::uint32_t sinks = 0;
-                    for (int v = 0; v < ns; ++v) {
-                        if (!((alive >> v) & 1u)) continue;
-                        bool has_live_out = false;
-                        const int ne = sh_nto[warp][v];
-                        for (int e = 0; e < ne; ++e) {
-                            const int t = sh_to[warp][v][e];
-                            has_live_out |= ((alive >> t) & 1u) != 0;
-                        }
-                        if (!has_live_out) sinks |= std::uint32_t(1) << v;
-                    }
-                    if (!sinks) {
-                        set_error(error, 186);
-                        break;
-                    }
-
-                    for (int v = 0; v < ns; ++v) {
-                        if (!((sinks >> v) & 1u)) continue;
-                        const std::uint32_t value = sh_value[warp][v];
-                        const int ne = sh_nto[warp][v];
-                        for (int e = 0; e < ne; ++e) {
-                            const int t = sh_to[warp][v][e];
-                            sh_value[warp][t] = add_mod_u32(
-                                sh_value[warp][t], value, mod);
-                            ++local_shears;
-                        }
-                        ++removed;
-                    }
-                    alive &= ~sinks;
+                const auto matching = sh_matching[warp];
+                if (!oneesan::twocell::apply_component_matching(
+                        matching, sh_value[warp], sh_output[warp], mod)) {
+                    set_error(error, 184);
+                } else {
+                    atomicAdd(residual_adds,
+                              static_cast<unsigned long long>(matching.residual_edges));
                 }
-                if (removed != ns || local_shears != ns - 1)
-                    set_error(error, 187);
-                atomicAdd(shear_ops, static_cast<unsigned long long>(local_shears));
             }
             __syncwarp();
 
+            // Destination coordinate index t is recouple(src[t]); stationary
+            // source and destination ranks are identical, so the result for
+            // destination index t is written to the already-computed source
+            // address sh_rank[t]. The matrix matching itself may be nonidentity.
             if (lane < ns) {
                 const Rank r = sh_rank[warp][lane];
                 const unsigned long long component_id =
@@ -201,8 +153,8 @@ __global__ void two_cell_stationary_lifting_kernel(
                 const unsigned long long previous = atomicCAS(
                     owner + r, empty, component_id);
                 if (previous != empty && previous != component_id)
-                    set_error(error, 188);
-                values[r] = sh_value[warp][lane];
+                    set_error(error, 185);
+                values[r] = sh_output[warp][lane];
             }
             __syncwarp();
         }
@@ -247,7 +199,8 @@ void run_stationary_lifting_position(
     unsigned long long* d_processed = nullptr;
     unsigned long long* d_primitive_scans = nullptr;
     unsigned long long* d_support_base_builds = nullptr;
-    unsigned long long* d_shear_ops = nullptr;
+    unsigned long long* d_residual_adds = nullptr;
+    unsigned long long* d_nonidentity = nullptr;
     int* d_error = nullptr;
     ck(cudaMalloc(&d_values, states * sizeof(std::uint32_t)), "lifting alloc values");
     ck(cudaMalloc(&d_lut, host_lut.value.size() * sizeof(std::uint32_t)), "lifting alloc lut");
@@ -255,7 +208,8 @@ void run_stationary_lifting_position(
     ck(cudaMalloc(&d_processed, sizeof(unsigned long long)), "lifting alloc processed");
     ck(cudaMalloc(&d_primitive_scans, sizeof(unsigned long long)), "lifting alloc primitive scans");
     ck(cudaMalloc(&d_support_base_builds, sizeof(unsigned long long)), "lifting alloc support builds");
-    ck(cudaMalloc(&d_shear_ops, sizeof(unsigned long long)), "lifting alloc shears");
+    ck(cudaMalloc(&d_residual_adds, sizeof(unsigned long long)), "lifting alloc residual adds");
+    ck(cudaMalloc(&d_nonidentity, sizeof(unsigned long long)), "lifting alloc nonidentity");
     ck(cudaMalloc(&d_error, sizeof(int)), "lifting alloc error");
     ck(cudaMemcpy(d_values, input.data(), states * sizeof(std::uint32_t), cudaMemcpyHostToDevice),
        "lifting copy input");
@@ -266,7 +220,8 @@ void run_stationary_lifting_position(
     ck(cudaMemset(d_processed, 0, sizeof(unsigned long long)), "lifting zero processed");
     ck(cudaMemset(d_primitive_scans, 0, sizeof(unsigned long long)), "lifting zero primitive scans");
     ck(cudaMemset(d_support_base_builds, 0, sizeof(unsigned long long)), "lifting zero support builds");
-    ck(cudaMemset(d_shear_ops, 0, sizeof(unsigned long long)), "lifting zero shears");
+    ck(cudaMemset(d_residual_adds, 0, sizeof(unsigned long long)), "lifting zero residual adds");
+    ck(cudaMemset(d_nonidentity, 0, sizeof(unsigned long long)), "lifting zero nonidentity");
     ck(cudaMemset(d_error, 0, sizeof(int)), "lifting zero error");
 
     cudaEvent_t begin{}, end{};
@@ -284,7 +239,7 @@ void run_stationary_lifting_position(
             d_values, d_owner, d_lut + host_lut.offset[occupied],
             supports, pc, states, occupied, W, i, mod,
             d_processed, d_primitive_scans, d_support_base_builds,
-            d_shear_ops, d_error);
+            d_residual_adds, d_nonidentity, d_error);
         ck(cudaGetLastError(), "lifting launch sector");
     }
     ck(cudaEventRecord(end), "lifting record end");
@@ -296,7 +251,8 @@ void run_stationary_lifting_position(
     unsigned long long processed = 0;
     unsigned long long primitive_scans = 0;
     unsigned long long support_base_builds = 0;
-    unsigned long long shear_ops = 0;
+    unsigned long long residual_adds = 0;
+    unsigned long long nonidentity = 0;
     int error = 0;
     ck(cudaMemcpy(output.data(), d_values, states * sizeof(std::uint32_t), cudaMemcpyDeviceToHost),
        "lifting copy output");
@@ -306,14 +262,16 @@ void run_stationary_lifting_position(
        "lifting copy primitive scans");
     ck(cudaMemcpy(&support_base_builds, d_support_base_builds, sizeof(support_base_builds), cudaMemcpyDeviceToHost),
        "lifting copy support builds");
-    ck(cudaMemcpy(&shear_ops, d_shear_ops, sizeof(shear_ops), cudaMemcpyDeviceToHost),
-       "lifting copy shears");
+    ck(cudaMemcpy(&residual_adds, d_residual_adds, sizeof(residual_adds), cudaMemcpyDeviceToHost),
+       "lifting copy residual adds");
+    ck(cudaMemcpy(&nonidentity, d_nonidentity, sizeof(nonidentity), cudaMemcpyDeviceToHost),
+       "lifting copy nonidentity");
     ck(cudaMemcpy(&error, d_error, sizeof(error), cudaMemcpyDeviceToHost), "lifting copy error");
-    if (error || processed != components || shear_ops != states - components) {
+    if (error || processed != components || residual_adds != states - components) {
         std::cerr << "FAIL lifting error=" << error
                   << " processed=" << processed << " expected=" << components
-                  << " shears=" << shear_ops << " expected_shears=" << (states - components)
-                  << '\n';
+                  << " residual_adds=" << residual_adds
+                  << " expected_adds=" << (states - components) << '\n';
         std::exit(190);
     }
     for (Rank r = 0; r < states; ++r) {
@@ -324,20 +282,21 @@ void run_stationary_lifting_position(
         }
     }
 
-    std::cout << "two-cell-stationary-lifting-microprobe"
+    std::cout << "two-cell-stationary-matching-microprobe"
               << " W=" << W
               << " i=" << i
               << " states=" << states
               << " components=" << components
-              << " shear_ops=" << shear_ops
-              << " sparse_nnz_baseline=" << (states + shear_ops)
-              << " explicit_edge_fraction="
-              << double(shear_ops) / double(states + shear_ops)
+              << " residual_adds=" << residual_adds
+              << " sparse_nnz_baseline=" << (states + residual_adds)
+              << " explicit_add_fraction="
+              << double(residual_adds) / double(states + residual_adds)
+              << " nonidentity_matchings=" << nonidentity
               << " primitive_scans=" << primitive_scans
               << " support_base_builds=" << support_base_builds
               << " kernel_ms=" << ms
-              << " value_vectors=1 destination_rank_calls=0"
-              << " destination_accumulation_scan=0 arithmetic=OK\n";
+              << " value_vectors=1 matching_table_bytes=0"
+              << " destination_rank_calls=0 arithmetic=OK\n";
 
     cudaEventDestroy(begin);
     cudaEventDestroy(end);
@@ -347,7 +306,8 @@ void run_stationary_lifting_position(
     cudaFree(d_processed);
     cudaFree(d_primitive_scans);
     cudaFree(d_support_base_builds);
-    cudaFree(d_shear_ops);
+    cudaFree(d_residual_adds);
+    cudaFree(d_nonidentity);
     cudaFree(d_error);
 }
 
@@ -366,29 +326,27 @@ int main(int argc, char** argv) {
     const StationaryRankTables st = oneesan::twocell::make_stationary_rank_tables(rt);
     const Rank states = st.total[W];
     const Rank components = oneesan::twocell::component_label_count(W, rt);
-    const Rank shears = states - components;
+    const Rank residual = states - components;
     if (plan_only) {
         Rank lut_entries = 0;
         for (int occupied = 1; occupied <= W - 2; occupied += 2)
             lut_entries += rt.primitive[occupied][1];
-        std::cout << "two-cell-stationary-lifting-microprobe-plan"
+        std::cout << "two-cell-stationary-matching-microprobe-plan"
                   << " W=" << W
                   << " states=" << states
                   << " components=" << components
-                  << " shear_ops=" << shears
-                  << " sparse_nnz_baseline=" << (states + shears)
-                  << " explicit_edge_fraction="
-                  << double(shears) / double(states + shears)
-                  << " value_vectors=1 destination_rank_calls=0"
-                  << " destination_accumulation_scan=0"
+                  << " residual_adds=" << residual
+                  << " sparse_nnz_baseline=" << (states + residual)
+                  << " value_vectors=1 matching_table_bytes=0"
+                  << " destination_rank_calls=0"
                   << " primitive_lut_MiB="
                   << double(lut_entries * sizeof(std::uint32_t)) / double(1ULL << 20)
                   << "\n";
         if (W == 28) {
             std::cout << "W=28 one_vector_GiB="
                       << double(states * 4ULL) / double(1ULL << 30)
-                      << " diagonal_edges_elided=" << states
-                      << " explicit_shears=" << shears
+                      << " matching_permutation_edges=" << states
+                      << " residual_adds=" << residual
                       << "\n";
         }
         return 0;
@@ -407,6 +365,6 @@ int main(int argc, char** argv) {
     const PrimitiveLut lut = build_primitive_lut(W, rt);
     for (int i = 1; i <= W - 5; ++i)
         run_stationary_lifting_position(W, i, rt, st, lut, mod, blocks);
-    std::cout << "ALL_OK two_cell_stationary_lifting_cuda=1 W=" << W << '\n';
+    std::cout << "ALL_OK two_cell_stationary_matching_cuda=1 W=" << W << '\n';
     return 0;
 }
