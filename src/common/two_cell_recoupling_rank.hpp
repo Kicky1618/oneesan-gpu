@@ -46,6 +46,18 @@ ONEESAN_TC_HD int popcount32(std::uint32_t x) {
 #endif
 }
 
+ONEESAN_TC_HD int ctz32(std::uint32_t x) {
+#if defined(__CUDA_ARCH__)
+    return __ffs(static_cast<int>(x)) - 1;
+#elif defined(__GNUG__) || defined(__clang__)
+    return __builtin_ctz(x);
+#else
+    int n = 0;
+    while (!(x & 1u)) { x >>= 1; ++n; }
+    return n;
+#endif
+}
+
 ONEESAN_TC_HD std::uint32_t low_mask(int bits) {
     return bits <= 0 ? 0u : ((std::uint32_t(1) << bits) - 1u);
 }
@@ -83,7 +95,9 @@ ONEESAN_TC_HD std::uint32_t state_outer_mask_C(
     return remove_support_window(support, window, 3);
 }
 
-ONEESAN_TC_HD Rank primitive_rank(
+// Reference scan retained for probes. It walks every physical slot and is
+// intentionally not used by the production rank helpers below.
+ONEESAN_TC_HD Rank primitive_rank_scan(
     std::uint32_t support,
     std::uint32_t left,
     int len,
@@ -103,6 +117,35 @@ ONEESAN_TC_HD Rank primitive_rank(
         } else {
             --h;
         }
+    }
+    return rank;
+}
+
+// R-first primitive lexicographic rank using only L endpoints. If the m-th L
+// occurs at occupied ordinal j_m, the height before it is 1+2m-j_m. Choosing L
+// skips exactly primitive[occupied-j_m-1][2m-j_m] valid R-first suffixes when
+// that height is positive. A valid width<=28 one-defect word has at most 13 L
+// endpoints, so this halves the worst production scan from 27 slots to 13
+// ffs+popc+table-add iterations.
+ONEESAN_TC_HD Rank primitive_rank(
+    std::uint32_t support,
+    std::uint32_t left,
+    int len,
+    const RankTables& t
+) {
+    const std::uint32_t active = support & low_mask(len);
+    std::uint32_t lbits = left & active;
+    const int occupied = popcount32(active);
+    Rank rank = 0;
+    int m = 0;
+    while (lbits) {
+        const int pos = ctz32(lbits);
+        const int j = popcount32(active & low_mask(pos));
+        const int h_minus_one = 2 * m - j;
+        if (h_minus_one >= 0)
+            rank += t.primitive[occupied - j - 1][h_minus_one];
+        lbits &= lbits - 1;
+        ++m;
     }
     return rank;
 }
