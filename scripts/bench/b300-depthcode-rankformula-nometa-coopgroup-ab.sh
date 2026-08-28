@@ -96,7 +96,9 @@ print('block=8')
 print('warpshare_table_loads_model=544003')
 print('coopgroup_table_loads_model=361431')
 print('coopgroup_successor_loads_model=60845')
-print('coopgroup_fixed_ballot_rounds=7')
+print('coopgroup_early_ballots_model=72285')
+print('coopgroup_avg_early_ballots_per_warp=1.921043')
+print('coopgroup_warp_uniform_early_exit=1')
 print('group64_selfindexed=1')
 PY
 
