@@ -18,6 +18,9 @@ grep -Fq 'Count global_load_main(Code g){return D_MAIN_VBASE[g];}' "$OUT"
 grep -Fq 'Count global_load_block(Code g){return D_BLOCK_VBASE[g];}' "$OUT"
 grep -Fq 'void global_store_main(Code g,Count v){D_MAIN_VBASE[g]=v;}' "$OUT"
 grep -Fq 'void global_store_block(Code g,Count v){D_BLOCK_VBASE[g]=v;}' "$OUT"
+grep -Fq 'VMM exposes one contiguous authoritative VA' "$OUT"
+grep -Fq 'tiled.push_back({x.global+off,x.local+off,take,0,0});' "$OUT"
+grep -Fq 'Count*peer=(BLOCK?D_BLOCK_VBASE:D_MAIN_VBASE)+x.remote;' "$OUT"
 grep -Fq 'b300_vmm::ContiguousStorage main_store,block_store;' "$OUT"
 grep -Fq 'block_store.create(blockN,ng,int(main_store.mapped_units%size_t(ng)),"auth block");' "$OUT"
 grep -Fq 'main_store.granularity!=block_store.granularity' "$OUT"
@@ -37,5 +40,13 @@ if grep -Fq 'cudaFree(mp[d])' "$OUT" || grep -Fq 'cudaFree(bp[d])' "$OUT"; then
   echo "generated VMM source still cudaFrees VMM logical views" >&2
   exit 4
 fi
+if grep -Fq 'Every shard boundary can split at most one globally ordered interval.' "$OUT" || grep -Fq 'int owner=int(g/chunk)' "$OUT"; then
+  echo "generated VMM interval planner still performs logical shard splitting" >&2
+  exit 5
+fi
+if grep -Fq 'Count*peer=(BLOCK?D_BLOCK_PTR[x.owner]:D_MAIN_PTR[x.owner])+x.remote;' "$OUT"; then
+  echo "generated VMM interval kernel still selects a logical shard pointer" >&2
+  exit 6
+fi
 
-echo "b300-vmm-production-generate-proof OK count_bytes=4 direct_global_index=1 logical_shard_views=1 authoritative_cudaMalloc=0 authoritative_cudaFree=0 balanced_physical_rotation=1 combined_imbalance_le_one_granularity=1 runtime_physical_balance_guard=1"
+echo "b300-vmm-production-generate-proof OK count_bytes=4 direct_global_index=1 shard_free_interval_io=1 interval_host_owner_div=0 interval_device_ptr_index=0 logical_shard_views=1 authoritative_cudaMalloc=0 authoritative_cudaFree=0 balanced_physical_rotation=1 combined_imbalance_le_one_granularity=1 runtime_physical_balance_guard=1"
