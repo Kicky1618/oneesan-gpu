@@ -8,7 +8,9 @@ static constexpr uint32_t P10DC_RANKFORMULA_NOMETA4_HEIGHTS = LOW_LUT_K + 2u;
 static_assert(LOW_LUT_K <= 14, "rankformula nometa4 assumes LOW_LUT_K<=14");
 static_assert(P10DC_RANKFORMULA_NOMETA4_HEIGHTS <= uint32_t(MAXW + 2));
 
-// group64: [15:0] local group start, [29:16] support mask,
+// Once the owner/height group is resolved, the physical support positions no
+// longer affect the ballot word or L->R local ranks.  Store only n=popcount(mask).
+// group64: [15:0] local group start, [19:16] support count n,
 // [47:32] signed (source_base-dest_base), [63:48] group count.
 __constant__ uint64_t* D_P10DC_LOW_RANKFORMULA_NOMETA4_GROUP64;
 __constant__ uint16_t* D_P10DC_LOW_RANKFORMULA_NOMETA4_BLOCK16;
@@ -18,8 +20,8 @@ __constant__ uint32_t D_P10DC_LOW_RANKFORMULA_NOMETA4_BOFF[MAXW + 2];
 __device__ __forceinline__ uint32_t p10dc_rankformula_nometa4_group_start(uint64_t x) {
     return uint32_t(x) & 0xffffu;
 }
-__device__ __forceinline__ uint32_t p10dc_rankformula_nometa4_group_mask(uint64_t x) {
-    return uint32_t(x >> 16) & (P10DC_RANKFORMULA_NOMETA4_MASKS - 1u);
+__device__ __forceinline__ uint32_t p10dc_rankformula_nometa4_group_n(uint64_t x) {
+    return uint32_t(x >> 16) & 0x0fu;
 }
 __device__ __forceinline__ int p10dc_rankformula_nometa4_group_delta(uint64_t x) {
     return int(int16_t(uint16_t(x >> 32)));
@@ -29,7 +31,7 @@ __device__ __forceinline__ uint32_t p10dc_rankformula_nometa4_group_count(uint64
 }
 
 struct P10DCRankFormulaNometa4Resolved {
-    uint32_t mask = 0;
+    uint32_t n = 0;
     uint32_t start = 0;
     int base_delta = 0;
 };
@@ -49,7 +51,7 @@ p10dc_low_rankformula_nometa4_resolve(uint32_t h, uint32_t rank) {
         e = D_P10DC_LOW_RANKFORMULA_NOMETA4_GROUP64[gi];
     }
     return P10DCRankFormulaNometa4Resolved{
-        p10dc_rankformula_nometa4_group_mask(e),
+        p10dc_rankformula_nometa4_group_n(e),
         p10dc_rankformula_nometa4_group_start(e),
         p10dc_rankformula_nometa4_group_delta(e)};
 }
@@ -70,12 +72,12 @@ struct BucketFusedDirectHighRowsRankFormulaNometa4Tables
         return mask;
     }
 
-    static uint64_t pack_group(uint32_t start, uint32_t mask, int delta, uint32_t count) {
-        if (start >= 65536u || mask >= P10DC_RANKFORMULA_NOMETA4_MASKS ||
+    static uint64_t pack_group(uint32_t start, uint32_t n, int delta, uint32_t count) {
+        if (start >= 65536u || n > uint32_t(LOW_LUT_K) || n > 15u ||
             delta < -32768 || delta > 32767 || count == 0u || count >= 65536u)
             std::exit(760);
         return uint64_t(uint16_t(start)) |
-               (uint64_t(mask) << 16) |
+               (uint64_t(n) << 16) |
                (uint64_t(uint16_t(int16_t(delta))) << 32) |
                (uint64_t(uint16_t(count)) << 48);
     }
@@ -164,7 +166,8 @@ struct BucketFusedDirectHighRowsRankFormulaNometa4Tables
                         ++delta_rows;
                     }
                 }
-                groups.push_back(pack_group(z.start, z.mask, delta, count));
+                const uint32_t n = uint32_t(__builtin_popcount(uint32_t(z.mask)));
+                groups.push_back(pack_group(z.start, n, delta, count));
                 ++real_groups;
             }
 
@@ -277,7 +280,9 @@ struct BucketFusedDirectHighRowsRankFormulaNometa4Tables
                   << " delta_rows=" << delta_rows
                   << " min_base_delta=" << (delta_rows ? min_delta : 0)
                   << " max_base_delta=" << (delta_rows ? max_delta : 0)
-                  << " group_load_bytes=8 block_load_bytes=2 old_prekey_freed=1\n";
+                  << " group_load_bytes=8 block_load_bytes=2"
+                  << " group_n_bits=4 support_positions_runtime=0"
+                  << " old_prekey_freed=1\n";
     }
 
     void release() {
