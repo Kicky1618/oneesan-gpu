@@ -412,6 +412,38 @@ __device__ __forceinline__ bool runtime_turn_discover_inverse(
     return discover_inverse_reduced_forward(dest, W, W - 1, sink);
 }
 
+__device__ __forceinline__ bool runtime_turn_discover_inverse_indexed(
+    DeviceKey dest,
+    int W,
+    bool high,
+    bool expand,
+    RuntimeSharedKey* source_set,
+    int& source_count,
+    int capacity,
+    std::uint64_t& source_occupancy,
+    RuntimeFindIndexCache& source_cache
+) {
+    RuntimeIndexedSharedKeySetSink base{
+        source_set, &source_count, capacity, &source_occupancy, &source_cache};
+    if (!high && !expand)
+        return runtime_turn_discover_compress_low(dest, W, base);
+
+    if (high && !expand) {
+        RuntimeMirrorSink<RuntimeIndexedSharedKeySetSink> sink{base, W, false};
+        return runtime_turn_discover_compress_low(
+            mirror_key_device(dest, W), W, sink);
+    }
+
+    if (!high && expand) {
+        RuntimeMirrorSink<RuntimeIndexedSharedKeySetSink> sink{base, W, true};
+        return discover_inverse_reduced_forward(
+            mirror_key_device(dest, W), W, W - 1, sink);
+    }
+
+    RuntimeMainOnlySink<RuntimeIndexedSharedKeySetSink> sink{base};
+    return discover_inverse_reduced_forward(dest, W, W - 1, sink);
+}
+
 // Counter-free turn kernel for both physical row edges and both phases.
 // Compression enumerates M_{W-1} components; expansion enumerates the ordinary
 // reduced component set M_{W-1}-M_{W-3}. Four independent components share a
@@ -448,6 +480,12 @@ __global__ void owner_turn_runtime_subwarp_kernel(
 #if RP_RUNTIME_CACHE_EDGES
     __shared__ RuntimeEdgeCache sh_edge[RP_RUNTIME_WARPS_PER_BLOCK]
                                        [RP_RUNTIME_SUBGROUPS_PER_WARP];
+#endif
+#if RP_RUNTIME_FIND_INDEX_CACHE
+    __shared__ RuntimeFindIndexCache sh_src_find[RP_RUNTIME_WARPS_PER_BLOCK]
+                                            [RP_RUNTIME_SUBGROUPS_PER_WARP];
+    __shared__ RuntimeFindIndexCache sh_dst_find[RP_RUNTIME_WARPS_PER_BLOCK]
+                                            [RP_RUNTIME_SUBGROUPS_PER_WARP];
 #endif
 
     const int lane = threadIdx.x & 31;
@@ -495,12 +533,19 @@ __global__ void owner_turn_runtime_subwarp_kernel(
             if (ctx.owner != gpu_id) {
                 runtime_set_error(error, 321);
             } else {
-#if RP_RUNTIME_FIND_SIGNATURE_FILTER
+#if RP_RUNTIME_FIND_INDEX_CACHE
+                std::uint64_t source_occupancy = 0;
+                std::uint64_t destination_occupancy = 0;
+#elif RP_RUNTIME_FIND_SIGNATURE_FILTER
                 std::uint64_t source_signature = runtime_shared_key_signature_bit(seed);
                 std::uint64_t destination_signature = 0;
 #endif
                 sh_src[warp][subgroup][0] = runtime_shared_key_encode(seed);
                 sh_ns[warp][subgroup] = 1;
+#if RP_RUNTIME_FIND_INDEX_CACHE
+                runtime_find_index_record(
+                    sh_src_find[warp][subgroup], source_occupancy, seed, 0);
+#endif
                 int cursor = 0;
                 while (cursor < sh_ns[warp][subgroup]) {
                     const int source_ix = cursor++;
@@ -517,7 +562,11 @@ __global__ void owner_turn_runtime_subwarp_kernel(
                     for (int ei = 0; ei < edge.n; ++ei) {
                         if (!edge.v[ei].coef) continue;
                         const DeviceKey d = edge.v[ei].key;
-#if RP_RUNTIME_FIND_SIGNATURE_FILTER
+#if RP_RUNTIME_FIND_INDEX_CACHE
+                        int destination_ix = runtime_find_shared_key_indexed(
+                            sh_dst[warp][subgroup], sh_nd[warp][subgroup], d,
+                            destination_occupancy, sh_dst_find[warp][subgroup]);
+#elif RP_RUNTIME_FIND_SIGNATURE_FILTER
                         int destination_ix = runtime_find_shared_key_filtered(
                             sh_dst[warp][subgroup], sh_nd[warp][subgroup], d,
                             destination_signature);
@@ -534,7 +583,16 @@ __global__ void owner_turn_runtime_subwarp_kernel(
                             destination_ix = sh_nd[warp][subgroup]++;
                             sh_dst[warp][subgroup][destination_ix] =
                                 runtime_shared_key_encode(d);
-#if RP_RUNTIME_FIND_SIGNATURE_FILTER
+#if RP_RUNTIME_FIND_INDEX_CACHE
+                            runtime_find_index_record(
+                                sh_dst_find[warp][subgroup], destination_occupancy,
+                                d, destination_ix);
+                            if (!runtime_turn_discover_inverse_indexed(
+                                    d, W, high, expand,
+                                    sh_src[warp][subgroup], sh_ns[warp][subgroup],
+                                    RP_RUNTIME_MAX_PAIRS, source_occupancy,
+                                    sh_src_find[warp][subgroup])) {
+#elif RP_RUNTIME_FIND_SIGNATURE_FILTER
                             destination_signature |= runtime_shared_key_signature_bit(d);
                             if (!runtime_turn_discover_inverse(
                                     d, W, high, expand,
