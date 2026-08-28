@@ -13,6 +13,10 @@ static inline bool p10dc_warpstriped_threads_ok(int threads) {
     return threads > 0 && threads <= 1024 && (threads & 31) == 0;
 }
 
+#ifndef P10DC_WARPSTRIPED_CTX
+#define P10DC_WARPSTRIPED_CTX P10DCHighResolvedCtx
+#define P10DC_WARPSTRIPED_CTX_LOCAL 1
+#endif
 #ifndef P10DC_WARPSTRIPED_PREPARE_FORWARD
 #define P10DC_WARPSTRIPED_PREPARE_FORWARD(c,payload,loc,p,ss,js,ds,sr,jr,dr) do { \
     (c).plan = p10dc_forward_high((payload),(loc),(c).db,(p)); \
@@ -34,13 +38,13 @@ __global__ void bucket_high_orbit_closure_pattern10_depthcode_warpstriped_kernel
     uint32_t pi = uint32_t((TARGET_W - 1) - p);
     uint32_t oi = uint32_t(size_t(pi) * D_BKF_HIGH_PITCH + bid);
     extern __shared__ unsigned long long warp_ctx_storage[];
-    auto* warp_ctx = reinterpret_cast<P10DCHighResolvedCtx*>(warp_ctx_storage);
+    auto* warp_ctx = reinterpret_cast<P10DC_WARPSTRIPED_CTX*>(warp_ctx_storage);
 
     const uint32_t lane = uint32_t(threadIdx.x) & 31u;
     const uint32_t warp = uint32_t(threadIdx.x) >> 5;
     const uint32_t nwarps = uint32_t(blockDim.x) >> 5;
     const unsigned active = __activemask();
-    P10DCHighResolvedCtx& c = warp_ctx[warp];
+    P10DC_WARPSTRIPED_CTX& c = warp_ctx[warp];
 
     if (lane == 0) {
         uint32_t na = D_BKF_HIGH_NN_OFF[oi], nb = D_BKF_HIGH_NN_OFF[oi + 1];
@@ -120,13 +124,13 @@ __global__ void bucket_reverse_high_pattern10_depthcode_warpstriped_kernel(int p
     uint32_t oi = uint32_t(size_t(pi) * D_RS54_PITCH + bid);
     const bool edge = p == TARGET_W - 1;
     extern __shared__ unsigned long long warp_ctx_storage[];
-    auto* warp_ctx = reinterpret_cast<P10DCHighResolvedCtx*>(warp_ctx_storage);
+    auto* warp_ctx = reinterpret_cast<P10DC_WARPSTRIPED_CTX*>(warp_ctx_storage);
 
     const uint32_t lane = uint32_t(threadIdx.x) & 31u;
     const uint32_t warp = uint32_t(threadIdx.x) >> 5;
     const uint32_t nwarps = uint32_t(blockDim.x) >> 5;
     const unsigned active = __activemask();
-    P10DCHighResolvedCtx& c = warp_ctx[warp];
+    P10DC_WARPSTRIPED_CTX& c = warp_ctx[warp];
 
     if (lane == 0) {
         uint32_t na = D_RS54_HIGH_NN_OFF[oi], nb = D_RS54_HIGH_NN_OFF[oi + 1];
@@ -217,4 +221,8 @@ __global__ void bucket_reverse_high_pattern10_depthcode_warpstriped_kernel(int p
 #ifdef P10DC_WARPSTRIPED_PREPARE_FORWARD_LOCAL
 #undef P10DC_WARPSTRIPED_PREPARE_FORWARD_LOCAL
 #undef P10DC_WARPSTRIPED_PREPARE_FORWARD
+#endif
+#ifdef P10DC_WARPSTRIPED_CTX_LOCAL
+#undef P10DC_WARPSTRIPED_CTX_LOCAL
+#undef P10DC_WARPSTRIPED_CTX
 #endif
