@@ -3,34 +3,26 @@
 #include "ramstream32_bucket_closure_cross5_rankstream.cuh"
 #include "ramstream32_bucket_low_rankchunk32.cuh"
 
-// Warp-striped rankchunk32 rows may span up to three 16-code metadata blocks.
-// The first lane of each span is active whenever any lane needs that block.
-// Let every span source load its own block base, then select that source with
-// one shuffle per lane instead of issuing up to three broadcast shuffles.
+// Height-local rankchunk metadata is 32-entry aligned.  A warp stripe therefore
+// covers at most the two fixed 16-entry blocks sourced by lanes 0 and 16.
+// Each source lane loads one block base and every active lane selects its half
+// with a single variable-source shuffle.
 __device__ __forceinline__ void p10dc_low_rankchunk32_row_warpstripe_oneshfl(
     uint32_t h, uint32_t rank, uint32_t& packed_chunks, const uint16_t*& row
 ) {
     const uint32_t lane = uint32_t(threadIdx.x) & 31u;
     const unsigned active = __activemask();
-    const uint32_t compact = D_P10DC_LOW_PREKEY_HOFF[h] + rank;
+    const uint32_t compact = D_P10DC_LOW_RANKCHUNK_HOFF[h] + rank;
     const uint32_t meta = D_P10DC_LOW_RANKCHUNKMETA32[compact];
     packed_chunks = meta & P10DC_RANKCHUNK32_CHUNK_MASK;
     const uint32_t prefix = meta >> P10DC_RANKCHUNK32_CHUNK_BITS;
 
-    const uint32_t first_compact = compact - lane;
-    const uint32_t first_block = first_compact >> P10DC_RANKCHUNK32_BLOCK_LOG2;
-    const uint32_t first_off = first_compact & (P10DC_RANKCHUNK32_BLOCK - 1u);
-    const uint32_t split1 = P10DC_RANKCHUNK32_BLOCK - first_off;
-    const uint32_t split2 = split1 + P10DC_RANKCHUNK32_BLOCK;
-
-    const uint32_t after1 = uint32_t(lane >= split1);
-    const uint32_t after2 = uint32_t(lane >= split2);
-    const uint32_t block_delta = after1 + after2;
-    const uint32_t source_lane = after2 ? split2 : (after1 ? split1 : 0u);
-
+    const uint32_t first_block = (compact - lane) >> P10DC_RANKCHUNK32_BLOCK_LOG2;
+    const uint32_t source_lane = lane & P10DC_RANKCHUNK32_BLOCK;
     uint32_t local_base = 0;
-    if (lane == source_lane)
-        local_base = D_P10DC_LOW_RANKCHUNKBLOCK16[first_block + block_delta];
+    if ((lane & (P10DC_RANKCHUNK32_BLOCK - 1u)) == 0u)
+        local_base = D_P10DC_LOW_RANKCHUNKBLOCK16[
+            first_block + (lane >> P10DC_RANKCHUNK32_BLOCK_LOG2)];
     const uint32_t block_base = __shfl_sync(active, local_base, int(source_lane));
     row = D_P10DC_LOW_RANKSTREAM + block_base + prefix;
 }
