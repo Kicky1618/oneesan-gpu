@@ -6,6 +6,9 @@ ARCH="${ARCH:-native}"
 PROOF_W="${PROOF_W:-11}"
 PROOF_K="${PROOF_K:-4}"
 PROOF_BLOCKS="${PROOF_BLOCKS:-256}"
+OWNER_SUPPORT_W="${OWNER_SUPPORT_W:-14}"
+OWNER_SUPPORT_K="${OWNER_SUPPORT_K:-6}"
+OWNER_SUPPORT_BLOCKS="${OWNER_SUPPORT_BLOCKS:-256}"
 TOKEN_W="${TOKEN_W:-10}"
 TOKEN_K="${TOKEN_K:-4}"
 TOKEN_S="${TOKEN_S:-3}"
@@ -33,7 +36,9 @@ RUN_TOKEN_PLAN="${RUN_TOKEN_PLAN:-1}"
 RUN_PAIR_QUEUE="${RUN_PAIR_QUEUE:-1}"
 RUN_SCRATCH_CYCLE="${RUN_SCRATCH_CYCLE:-1}"
 RUN_SCRATCH_FULL="${RUN_SCRATCH_FULL:-1}"
+RUN_SCRATCH_OWNER="${RUN_SCRATCH_OWNER:-1}"
 RUN_SCRATCH_PLAN="${RUN_SCRATCH_PLAN:-1}"
+RUN_OWNER_SUPPORT="${RUN_OWNER_SUPPORT:-1}"
 NGPU="${NGPU:-8}"
 MAX_DIRECT_OVER_LOGICAL="${MAX_DIRECT_OVER_LOGICAL:-0}"
 
@@ -45,7 +50,9 @@ TOKEN_PLAN_BIN="$(build_path gridfp_reduced_component_p2p-token-plan)"
 PAIR_QUEUE_BIN="$(build_path gridfp_reduced_component_p2p-pair-queue)"
 SCRATCH_CYCLE_BIN="$(build_path gridfp_reduced_component_p2p-scratch-cycle)"
 SCRATCH_FULL_BIN="$(build_path gridfp_reduced_component_p2p-scratch-full)"
+SCRATCH_OWNER_BIN="$(build_path gridfp_reduced_component_p2p-scratch-owner)"
 SCRATCH_PLAN_BIN="$(build_path gridfp_reduced_component_p2p-scratch-plan)"
+OWNER_SUPPORT_BIN="$(build_path gridfp_reduced_component_owner-support)"
 PROOF_BIN="$(build_path gridfp_reduced_component_support-rank)"
 LUT_BIN="$(build_path gridfp_reduced_component_p2p-owner-lut)"
 TRAFFIC_BIN="$(build_path gridfp_reduced_component_p2p-traffic)"
@@ -60,6 +67,10 @@ for spec in \
   bin="${spec#*:}"
   MODE="$mode" ARCH="$ARCH" OUT="$(basename "$bin")" bash "$BUILD_SCRIPT"
 done
+if [[ "$RUN_OWNER_SUPPORT" == 1 ]]; then
+  MODE=owner-support ARCH="$ARCH" OUT="$(basename "$OWNER_SUPPORT_BIN")" \
+    bash "$BUILD_SCRIPT"
+fi
 if [[ "$RUN_MAILBOX" == 1 ]]; then
   MODE=p2p-mailbox ARCH="$ARCH" OUT="$(basename "$MAILBOX_BIN")" \
     bash "$BUILD_SCRIPT"
@@ -82,6 +93,10 @@ if [[ "$RUN_SCRATCH_CYCLE" == 1 ]]; then
 fi
 if [[ "$RUN_SCRATCH_FULL" == 1 ]]; then
   MODE=p2p-scratch-full ARCH="$ARCH" OUT="$(basename "$SCRATCH_FULL_BIN")" \
+    bash "$BUILD_SCRIPT"
+fi
+if [[ "$RUN_SCRATCH_OWNER" == 1 ]]; then
+  MODE=p2p-scratch-owner ARCH="$ARCH" OUT="$(basename "$SCRATCH_OWNER_BIN")" \
     bash "$BUILD_SCRIPT"
 fi
 if [[ "$RUN_SCRATCH_PLAN" == 1 ]]; then
@@ -140,13 +155,25 @@ if [[ "$RUN_SCRATCH_CYCLE" == 1 ]]; then
 fi
 
 if [[ "$RUN_SCRATCH_FULL" == 1 ]]; then
-  echo "== full small-W two-phase scratch redistribution =="
+  echo "== full small-W replicated-scan two-phase scratch redistribution =="
   "$SCRATCH_FULL_BIN" "$SCRATCH_FULL_W" "$SCRATCH_FULL_K" \
+    "$SCRATCH_FULL_S" "$SCRATCH_FULL_BLOCKS" "$NGPU"
+fi
+
+if [[ "$RUN_SCRATCH_OWNER" == 1 ]]; then
+  echo "== full small-W owner-local two-phase scratch redistribution =="
+  "$SCRATCH_OWNER_BIN" "$SCRATCH_FULL_W" "$SCRATCH_FULL_K" \
     "$SCRATCH_FULL_S" "$SCRATCH_FULL_BLOCKS" "$NGPU"
 fi
 
 echo "== support-only slab-rank equivalence =="
 "$PROOF_BIN" "$PROOF_W" "$PROOF_K" "$PROOF_BLOCKS" "$NGPU"
+
+if [[ "$RUN_OWNER_SUPPORT" == 1 ]]; then
+  echo "== owner-local support-slab exact coverage =="
+  "$OWNER_SUPPORT_BIN" "$OWNER_SUPPORT_W" "$OWNER_SUPPORT_K" \
+    "$OWNER_SUPPORT_BLOCKS" "$NGPU"
+fi
 
 echo "== production owner-LUT equivalence =="
 "$LUT_BIN" "$TRAFFIC_W" "$TRAFFIC_K" "$PROOF_BLOCKS" "$NGPU"
@@ -196,7 +223,7 @@ else
   echo "p2p-recommendation token-mailbox-native-atomic candidate=0 reason=no-full-native-atomic-mesh"
 fi
 
-echo "p2p-recommendation two-phase-local-scratch candidate=1 native_atomic_required=0 remote_state_reads=0"
+echo "p2p-recommendation two-phase-local-scratch candidate=1 native_atomic_required=0 remote_state_reads=0 owner_local_scan=1"
 
 if awk -v limit="$MAX_DIRECT_OVER_LOGICAL" -v got="$MAX_OVERHEAD" \
   'BEGIN { exit !(limit > 0 && got > limit) }'; then
