@@ -2,6 +2,13 @@
 
 #include "gridfp_reduced_production_device.cuh"
 
+#ifndef RP_FAST_MATERIALIZE_PRIMITIVE_SETBITS
+#define RP_FAST_MATERIALIZE_PRIMITIVE_SETBITS 1
+#endif
+static_assert(RP_FAST_MATERIALIZE_PRIMITIVE_SETBITS == 0 ||
+              RP_FAST_MATERIALIZE_PRIMITIVE_SETBITS == 1,
+              "RP_FAST_MATERIALIZE_PRIMITIVE_SETBITS must be 0 or 1");
+
 namespace oneesan::gridfp::reducedprod {
 
 __device__ __forceinline__ int sector_of_rank_device(Rank64 rank) {
@@ -32,13 +39,30 @@ __device__ __forceinline__ MateID materialize_primitive_device(
     MateID m = 0;
     int h = 1;
     int seen = 0;
+#if RP_FAST_MATERIALIZE_PRIMITIVE_SETBITS
+    if (len < 32) support &= (std::uint32_t(1) << len) - 1u;
+    while (support) {
+        const int pos = __ffs(support) - 1;
+        const int rem = occupied - (++seen);
+        const Rank64 r_count = h > 0 ? RP_PRIMITIVE[rem][h - 1] : 0;
+        MateValue v = R;
+        if (rank < r_count) {
+            --h;
+        } else {
+            rank -= r_count;
+            v = L;
+            ++h;
+        }
+        m |= MateID(v) << (2 * (len - 1 - pos));
+        support &= support - 1u;
+    }
+#else
     for (int pos = 0; pos < len; ++pos) {
         if (((support >> pos) & 1u) == 0) continue;
         const int rem = occupied - (++seen);
         const Rank64 r_count = h > 0 ? RP_PRIMITIVE[rem][h - 1] : 0;
         MateValue v = R;
         if (rank < r_count) {
-            v = R;
             --h;
         } else {
             rank -= r_count;
@@ -47,6 +71,7 @@ __device__ __forceinline__ MateID materialize_primitive_device(
         }
         m |= MateID(v) << (2 * (len - 1 - pos));
     }
+#endif
     return m;
 }
 
