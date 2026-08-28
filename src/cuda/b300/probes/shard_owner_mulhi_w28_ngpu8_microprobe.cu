@@ -15,8 +15,8 @@
 #ifndef B300_SHARD_OWNER_MODE
 #define B300_SHARD_OWNER_MODE 0
 #endif
-static_assert(B300_SHARD_OWNER_MODE >= 0 && B300_SHARD_OWNER_MODE <= 2,
-              "B300_SHARD_OWNER_MODE must be 0..2");
+static_assert(B300_SHARD_OWNER_MODE >= 0 && B300_SHARD_OWNER_MODE <= 3,
+              "B300_SHARD_OWNER_MODE must be 0..3");
 
 namespace {
 
@@ -36,14 +36,27 @@ __device__ __constant__ Code MAIN_BASE[8] = {
     337504568296ULL,
 };
 
+__device__ __forceinline__ int mulhi_owner(Code g) {
+    return int(__umul64hi(g, MAIN_MAGIC) >> MAIN_HIGH_SHIFT);
+}
+
 __device__ __forceinline__ ShardAddress8 mulhi_mul_address(Code g) {
-    const int owner = int(__umul64hi(g, MAIN_MAGIC) >> MAIN_HIGH_SHIFT);
+    const int owner = mulhi_owner(g);
     return {owner, g - Code(owner) * MAIN_CHUNK};
 }
 
 __device__ __forceinline__ ShardAddress8 mulhi_table_address(Code g) {
-    const int owner = int(__umul64hi(g, MAIN_MAGIC) >> MAIN_HIGH_SHIFT);
+    const int owner = mulhi_owner(g);
     return {owner, g - MAIN_BASE[owner]};
+}
+
+__device__ __forceinline__ ShardAddress8 mulhi_mask_address(Code g) {
+    const int owner = mulhi_owner(g);
+    const Code u = Code(unsigned(owner));
+    const Code b0 = (Code(0) - (u & 1ULL)) & MAIN_CHUNK;
+    const Code b1 = (Code(0) - ((u >> 1) & 1ULL)) & (MAIN_CHUNK << 1);
+    const Code b2 = (Code(0) - ((u >> 2) & 1ULL)) & (MAIN_CHUNK << 2);
+    return {owner, g - (b0 + b1 + b2)};
 }
 
 __device__ __forceinline__ ShardAddress8 candidate_address(Code g) {
@@ -51,8 +64,10 @@ __device__ __forceinline__ ShardAddress8 candidate_address(Code g) {
     return shard_address8(g, MAIN_CHUNK);
 #elif B300_SHARD_OWNER_MODE == 1
     return mulhi_mul_address(g);
-#else
+#elif B300_SHARD_OWNER_MODE == 2
     return mulhi_table_address(g);
+#else
+    return mulhi_mask_address(g);
 #endif
 }
 
