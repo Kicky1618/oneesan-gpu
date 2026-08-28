@@ -27,9 +27,10 @@ extract() {
 extract gridfp_b300_shard_owner_branchy_probe "$OUTDIR/branchy.body.ptx"
 extract gridfp_b300_shard_owner_mulhi_mul_probe "$OUTDIR/mulhi_mul.body.ptx"
 extract gridfp_b300_shard_owner_mulhi_table_probe "$OUTDIR/mulhi_table.body.ptx"
+extract gridfp_b300_shard_owner_mulhi_mask_probe "$OUTDIR/mulhi_mask.body.ptx"
 
 metric(){ local re="$1" file="$2"; grep -Ec "$re" "$file" || true; }
-for mode in branchy mulhi_mul mulhi_table; do
+for mode in branchy mulhi_mul mulhi_table mulhi_mask; do
   body="$OUTDIR/${mode}.body.ptx"
   div="$(metric '\b(div|rem)\.u64\b' "$body")"
   mulhi="$(metric '\bmul\.hi\.u64\b' "$body")"
@@ -48,9 +49,14 @@ for mode in branchy mulhi_mul mulhi_table; do
     echo "$mode missing expected mul.hi.u64" >&2
     exit 5
   fi
+  if [[ "$mode" == mulhi_mask ]] && (( mullo != 0 || mulwide != 0 || ldconst != 0 )); then
+    echo "mulhi_mask unexpectedly uses u64 low/wide multiply or constant-table load" >&2
+    grep -En '\bmul\.(lo|wide)\.u64\b|\bld\.const\..*\.u64\b' "$body" >&2 || true
+    exit 6
+  fi
   printf '%s_divrem_u64=%s\n%s_mulhi_u64=%s\n%s_mullo_u64=%s\n%s_mulwide_u64=%s\n%s_setp_u64=%s\n%s_sub_u64=%s\n%s_bra=%s\n%s_selp=%s\n%s_ldconst_u64=%s\n' \
     "$mode" "$div" "$mode" "$mulhi" "$mode" "$mullo" "$mode" "$mulwide" \
     "$mode" "$setp" "$mode" "$sub" "$mode" "$bra" "$mode" "$selp" "$mode" "$ldconst"
 done
 
-echo "gridfp-b300-shard-owner-mulhi-w28-ngpu8-ptx-proof OK arch=$ARCH main_magic=195888106327 main_high_shift=9 block_magic=139905900989 block_high_shift=7 exact_proof=1"
+echo "gridfp-b300-shard-owner-mulhi-w28-ngpu8-ptx-proof OK arch=$ARCH main_magic=195888106327 main_high_shift=9 block_magic=139905900989 block_high_shift=7 masked_base_mul64=0 masked_base_table=0 exact_proof=1"
