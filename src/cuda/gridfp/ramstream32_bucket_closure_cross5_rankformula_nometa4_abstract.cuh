@@ -208,13 +208,14 @@ p10dc_resolved_low_preimages_cross5_rankformula_nometa4_abstract_fixed(
         p10dc_low_rankformula_nometa_resolve_active(h, rank);
     const uint32_t local = rank - z.start;
     const uint32_t di = uint32_t(D_P10DC_RANKFORMULA_ABSTRACT_OFF[z.n * 16u + h]) + local;
-    const uint32_t source_base = uint32_t(int(z.start) + z.base_delta);
-    BkczCrossAccum sum = 0;
 
 #if P10DC_RANKFORMULA_ABSTRACT_SELECT8
-    const uint32_t rp = p10dc_rankformula_abstract_roff_load(di);
     uint32_t select = p10dc_rankformula_abstract_select_load(
         (depth - 1u) * P10DC_RANKFORMULA_ABSTRACT_DESC_N + di);
+    if (!select) return BkczCrossAccum(0);
+    const uint32_t rp = p10dc_rankformula_abstract_roff_load(di);
+    const uint32_t source_base = uint32_t(int(z.start) + z.base_delta);
+    BkczCrossAccum sum = 0;
     while (select) {
         const uint32_t li = uint32_t(__ffs(int(select)) - 1);
         select &= select - 1u;
@@ -223,6 +224,8 @@ p10dc_resolved_low_preimages_cross5_rankformula_nometa4_abstract_fixed(
     }
     return sum;
 #else
+    const uint32_t source_base = uint32_t(int(z.start) + z.base_delta);
+    BkczCrossAccum sum = 0;
     const uint32_t d = p10dc_rankformula_abstract_desc_load(di);
     const uint32_t lp = d & ((1u << P10DC_RANKFORMULA_ABSTRACT_LP_BITS) - 1u);
     uint32_t rp = d >> P10DC_RANKFORMULA_ABSTRACT_LP_BITS;
