@@ -60,6 +60,16 @@ __device__ __forceinline__ bool runtime_project_reverse(
            runtime_small_add(z, DeviceKey{msetpair(nn, q, LR), 0}, -1);
 }
 
+__device__ __forceinline__ bool runtime_reverse_p1_project_q2_blocked_direct(
+    MateID blocked_mate, int W, RuntimeSmallTerms& z
+) {
+    if (mget(blocked_mate, 1) != N)
+        return runtime_small_add(z, DeviceKey{blocked_mate, 1}, 1);
+    const MateID nn = blocked_exclude_reverse(blocked_mate, W, 2);
+    return runtime_small_add(z, DeviceKey{nn, 0}, 1) &&
+           runtime_small_add(z, DeviceKey{msetpair(nn, 2, LR), 0}, -1);
+}
+
 // Exact specialization of the direct reverse step for p=1 and a main source.
 // This is the low-row expansion hotspot: expand the local reverse transition
 // and Q_2 projection directly instead of constructing IncludeResult and then
@@ -77,20 +87,20 @@ __device__ __forceinline__ bool runtime_small_step_reverse_p1_main_direct(
         return runtime_small_add(z, DeviceKey{msetpair(mate, 1, LN), 0}, 1);
     case NR:
         return runtime_small_add(z, DeviceKey{msetpair(mate, 1, RN), 0}, 1);
-    case LN: case RN: {
-        const MateID b = mshrink(mate, 0);
-        return runtime_project_reverse(DeviceKey{b, 1}, W, 2, z);
-    }
+    case LN: case RN:
+        return runtime_reverse_p1_project_q2_blocked_direct(
+            mshrink(mate, 0), W, z);
     case RR: {
         MateID t = msetpair(mate, 1, NN);
         const int q = closure_match_right(t, W, 1);
         if (q < 0) return true;
         t = mset(t, q, R);
-        return runtime_project_reverse(DeviceKey{mshrink(t, 1), 1}, W, 2, z);
+        return runtime_reverse_p1_project_q2_blocked_direct(
+            mshrink(t, 1), W, z);
     }
     case RL:
-        return runtime_project_reverse(
-            DeviceKey{mshrink(msetpair(mate, 1, NN), 1), 1}, W, 2, z);
+        return runtime_reverse_p1_project_q2_blocked_direct(
+            mshrink(msetpair(mate, 1, NN), 1), W, z);
     default:
         return true;
     }
