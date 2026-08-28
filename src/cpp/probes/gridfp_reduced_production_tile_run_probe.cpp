@@ -106,6 +106,40 @@ ExactRunStats verify_split_runs(
     return st;
 }
 
+struct RunOwnerHist {
+    std::vector<std::vector<Rank>> by_owner_ones;
+};
+
+RunOwnerHist run_owner_hist_for_common(
+    std::uint32_t common_mask,
+    int common_bits,
+    int exclusive_bits,
+    int L,
+    int ngpu
+) {
+    const int O = common_bits + exclusive_bits;
+    RunOwnerHist h;
+    h.by_owner_ones.assign(
+        static_cast<std::size_t>(ngpu),
+        std::vector<Rank>(static_cast<std::size_t>(exclusive_bits + 1), 0));
+    const Rank count = Rank(1) << exclusive_bits;
+    for (Rank x = 0; x < count; ++x) {
+        const std::uint32_t compact = common_mask | (std::uint32_t(x) << common_bits);
+        const int owner = weighted_owner(compact, L, O, ngpu);
+        ++h.by_owner_ones[static_cast<std::size_t>(owner)]
+                         [static_cast<std::size_t>(__builtin_popcountll(x))];
+    }
+    return h;
+}
+
+Rank run_overlap_state_weight(int base_occupied) {
+    if (base_occupied & 1) {
+        return catalan((base_occupied + 1) / 2) +
+               catalan((base_occupied + 3) / 2);
+    }
+    return 3 * catalan((base_occupied + 2) / 2);
+}
+
 struct RunTraffic {
     Rank total_states = 0;
     Rank moved_states = 0;
@@ -125,8 +159,8 @@ RunTraffic run_traffic_model(int W, int Kold, int ngpu) {
 
     RunTraffic out;
     for (std::uint32_t c = 0; c < 2; ++c) {
-        const OwnerHist old_hist = owner_hist_for_common(c, 1, Knew, Lold, ngpu);
-        const OwnerHist new_hist = owner_hist_for_common(c, 1, Kold, Lnew, ngpu);
+        const RunOwnerHist old_hist = run_owner_hist_for_common(c, 1, Knew, Lold, ngpu);
+        const RunOwnerHist new_hist = run_owner_hist_for_common(c, 1, Kold, Lnew, ngpu);
         for (int so = 0; so < ngpu; ++so) {
             for (int bo = 0; bo <= Knew; ++bo) {
                 const Rank cb = old_hist.by_owner_ones[static_cast<std::size_t>(so)]
@@ -138,7 +172,7 @@ RunTraffic run_traffic_model(int W, int Kold, int ngpu) {
                                                           [static_cast<std::size_t>(ao)];
                         if (!ca) continue;
                         const int base_occupied = int(c) + bo + ao;
-                        const Rank state_weight = overlap_state_weight(base_occupied);
+                        const Rank state_weight = run_overlap_state_weight(base_occupied);
                         const Rank run_weight = (base_occupied & 1) ? 2 : 3;
                         const Rank pairs = cb * ca;
                         const Rank states = pairs * state_weight;
