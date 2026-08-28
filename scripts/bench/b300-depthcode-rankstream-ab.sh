@@ -47,6 +47,7 @@ visible="$(nvidia-smi --query-gpu=index --format=csv,noheader | wc -l)"
 mkdir -p "$(dirname "$RESULT")" "$LOGDIR"
 
 bash "$ONEESAN_ROOT/scripts/bench/cross5-automaton-proof.sh"
+bash "$ONEESAN_ROOT/scripts/bench/cross5-rankmask-proof.sh"
 
 field() {
   local key="$1" line="$2"
