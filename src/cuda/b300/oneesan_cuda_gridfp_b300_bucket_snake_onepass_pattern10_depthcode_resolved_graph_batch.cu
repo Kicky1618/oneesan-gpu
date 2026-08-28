@@ -1,6 +1,14 @@
 #ifndef BUCKET_SNAKE_REVERSE_FUSED
 #define BUCKET_SNAKE_REVERSE_FUSED 1
 #endif
+#ifndef P10DC_SOURCE_KEY4
+#define P10DC_SOURCE_KEY4 0
+#endif
+static_assert(P10DC_SOURCE_KEY4 == 0 || P10DC_SOURCE_KEY4 == 1,
+              "P10DC_SOURCE_KEY4 must be 0 or 1");
+#if P10DC_SOURCE_KEY4
+#include "../gridfp/ramstream32_bucket_orbit_closure_pattern10_depthcode_sourcekey4.cuh"
+#endif
 #include "../gridfp/ramstream32_bucket_orbit_closure_pattern10_depthcode_resolved_graph.cuh"
 #include "../gridfp/ramstream32_reverse_build_release.hpp"
 
