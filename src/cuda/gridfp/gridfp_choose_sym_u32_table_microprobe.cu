@@ -11,8 +11,8 @@
 #ifndef RP_CHOOSE_TABLE_MODE
 #define RP_CHOOSE_TABLE_MODE 0
 #endif
-static_assert(RP_CHOOSE_TABLE_MODE == 0 || RP_CHOOSE_TABLE_MODE == 1,
-              "RP_CHOOSE_TABLE_MODE must be 0 or 1");
+static_assert(RP_CHOOSE_TABLE_MODE >= 0 && RP_CHOOSE_TABLE_MODE <= 2,
+              "RP_CHOOSE_TABLE_MODE must be 0, 1, or 2");
 
 namespace rp = oneesan::gridfp::reducedprod;
 
@@ -21,7 +21,11 @@ namespace {
 __device__ __constant__ std::uint32_t RP_CHOOSE_SYM_U32_PROBE[225] = {
 #include "gridfp_reduced_production_choose_sym_u32_values.inc"
 };
+__device__ __constant__ std::uint32_t RP_CHOOSE_TRI_U32_PROBE[435] = {
+#include "gridfp_reduced_production_choose_tri_u32_values.inc"
+};
 static_assert(sizeof(RP_CHOOSE_SYM_U32_PROBE) == 900);
+static_assert(sizeof(RP_CHOOSE_TRI_U32_PROBE) == 1740);
 
 void cuda_check(cudaError_t err, const char* what) {
     if (err != cudaSuccess) {
@@ -48,14 +52,19 @@ __device__ __forceinline__ int choose_sym_row_base(int n) {
     const int m = n >> 1;
     return (n & 1) ? (m + 1) * (m + 1) : m * (m + 1);
 }
+__device__ __forceinline__ int choose_tri_row_base(int n) {
+    return n * (n + 1) / 2;
+}
 
 __device__ __forceinline__ rp::Rank64 choose_probe(int n, int k) {
 #if RP_CHOOSE_TABLE_MODE == 0
     return rp::RP_CHOOSE[n][k];
-#else
+#elif RP_CHOOSE_TABLE_MODE == 1
     const int mirror = n - k;
     if (k > mirror) k = mirror;
     return RP_CHOOSE_SYM_U32_PROBE[choose_sym_row_base(n) + k];
+#else
+    return RP_CHOOSE_TRI_U32_PROBE[choose_tri_row_base(n) + k];
 #endif
 }
 
