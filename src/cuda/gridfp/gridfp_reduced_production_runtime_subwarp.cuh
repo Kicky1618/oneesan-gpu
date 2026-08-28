@@ -13,10 +13,15 @@ namespace oneesan::gridfp::reducedprod {
 #ifndef RP_RUNTIME_FAST_P32M5_MOD
 #define RP_RUNTIME_FAST_P32M5_MOD 1
 #endif
+#ifndef RP_RUNTIME_POLL_GLOBAL_ERROR
+#define RP_RUNTIME_POLL_GLOBAL_ERROR 0
+#endif
 static_assert(RP_RUNTIME_CACHE_EDGES == 0 || RP_RUNTIME_CACHE_EDGES == 1,
               "RP_RUNTIME_CACHE_EDGES must be 0 or 1");
 static_assert(RP_RUNTIME_FAST_P32M5_MOD == 0 || RP_RUNTIME_FAST_P32M5_MOD == 1,
               "RP_RUNTIME_FAST_P32M5_MOD must be 0 or 1");
+static_assert(RP_RUNTIME_POLL_GLOBAL_ERROR == 0 || RP_RUNTIME_POLL_GLOBAL_ERROR == 1,
+              "RP_RUNTIME_POLL_GLOBAL_ERROR must be 0 or 1");
 
 static constexpr int RP_RUNTIME_WARPS_PER_BLOCK = 8;
 static constexpr int RP_RUNTIME_SUBGROUPS_PER_WARP = 4;
@@ -217,6 +222,7 @@ __global__ void owner_component_runtime_subwarp_kernel(
                             if (destination_ix < 0) {
                                 if (sh_nd[warp][subgroup] >= RP_RUNTIME_MAX_PAIRS) {
                                     runtime_set_error(error, 304);
+                                    cursor = RP_RUNTIME_MAX_PAIRS;
                                     break;
                                 }
                                 destination_ix = sh_nd[warp][subgroup]++;
@@ -226,6 +232,7 @@ __global__ void owner_component_runtime_subwarp_kernel(
                                         sh_src[warp][subgroup], sh_ns[warp][subgroup],
                                         RP_RUNTIME_MAX_PAIRS)) {
                                     runtime_set_error(error, 305);
+                                    cursor = RP_RUNTIME_MAX_PAIRS;
                                     break;
                                 }
                             }
@@ -234,11 +241,14 @@ __global__ void owner_component_runtime_subwarp_kernel(
                                     sh_edge[warp][subgroup], source_ix,
                                     destination_ix, int(edge.v[ei].coef))) {
                                 runtime_set_error(error, 310);
+                                cursor = RP_RUNTIME_MAX_PAIRS;
                                 break;
                             }
 #endif
                         }
+#if RP_RUNTIME_POLL_GLOBAL_ERROR
                         if (error && *error) break;
+#endif
                     }
                     if (sh_ns[warp][subgroup] != sh_nd[warp][subgroup])
                         runtime_set_error(error, 306);
