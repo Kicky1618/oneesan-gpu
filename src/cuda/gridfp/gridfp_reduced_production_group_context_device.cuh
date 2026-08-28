@@ -10,6 +10,9 @@ namespace oneesan::gridfp::reducedprod {
 #ifndef RP_RUNTIME_BROADWORD_SUPPORT
 #define RP_RUNTIME_BROADWORD_SUPPORT 1
 #endif
+#ifndef RP_RUNTIME_OWNER_FROM_BOUNDARIES
+#define RP_RUNTIME_OWNER_FROM_BOUNDARIES 1
+#endif
 static_assert(
     RP_RUNTIME_PRIMITIVE_RANK_SETBITS == 0 ||
     RP_RUNTIME_PRIMITIVE_RANK_SETBITS == 1,
@@ -17,6 +20,9 @@ static_assert(
 static_assert(
     RP_RUNTIME_BROADWORD_SUPPORT == 0 || RP_RUNTIME_BROADWORD_SUPPORT == 1,
     "RP_RUNTIME_BROADWORD_SUPPORT must be 0 or 1");
+static_assert(
+    RP_RUNTIME_OWNER_FROM_BOUNDARIES == 0 || RP_RUNTIME_OWNER_FROM_BOUNDARIES == 1,
+    "RP_RUNTIME_OWNER_FROM_BOUNDARIES must be 0 or 1");
 
 struct GroupedComponentContextDevice {
     int owner = -1;
@@ -26,8 +32,6 @@ struct GroupedComponentContextDevice {
     Rank64 local_group_base = 0;
 };
 
-// Collapse the nonzero predicate of each 2-bit MateValue into one support bit.
-// This replaces W calls to mget() with a fixed broadword shuffle network.
 __device__ __forceinline__ std::uint32_t runtime_support_from_mate_device(
     MateID mate,
     int len
@@ -63,10 +67,6 @@ __device__ __forceinline__ std::uint32_t runtime_full_support_device(
     return runtime_support_from_mate_device(full, W);
 }
 
-// primitive_rank_device scans all W frontier positions and skips N. Runtime
-// grouped ranking already has the exact support mask, so visit only occupied
-// positions from high to low. The ordering and primitive DP updates are
-// identical; only the N iterations disappear.
 __device__ __forceinline__ Rank64 runtime_primitive_rank_support_device(
     MateID m,
     int len,
@@ -98,6 +98,28 @@ __device__ __forceinline__ Rank64 runtime_primitive_rank_support_device(
 #endif
 }
 
+__device__ __forceinline__ int runtime_owner_from_group_base_device(
+    Rank64 group_base,
+    int W,
+    int K,
+    int ngpu,
+    const Rank64* owner_begin
+) {
+#if RP_RUNTIME_OWNER_FROM_BOUNDARIES
+    if (W >= 8 && W <= RP_MAX_W && !(W & 1) && K == (W - 2) / 2) {
+        int owner = 0;
+        for (int g = 1; g < ngpu; ++g) {
+            const Rank64 begin = owner_begin[g];
+            if (!begin) continue;
+            if (begin > group_base) break;
+            owner = g;
+        }
+        return owner;
+    }
+#endif
+    return -1;
+}
+
 __device__ __forceinline__ GroupedComponentContextDevice grouped_component_context_device(
     DeviceKey seed,
     int W,
@@ -121,15 +143,15 @@ __device__ __forceinline__ GroupedComponentContextDevice grouped_component_conte
     for (int t = 0; t < outer_ones; ++t)
         prefix += choose_device(O, t) * outer_group_size_device(L, t);
     const Rank64 group_base = prefix + sr_outer * group;
-    const int owner = weighted_outer_owner_device(outer, L, O, ngpu);
+
+    int owner = runtime_owner_from_group_base_device(
+        group_base, W, K, ngpu, owner_begin);
+    if (owner < 0)
+        owner = weighted_outer_owner_device(outer, L, O, ngpu);
     return GroupedComponentContextDevice{
         owner, lo, L, outer_ones, group_base - owner_begin[owner]};
 }
 
-// Fast rank inside one already reconstructed production component.  The outer
-// support, its weighted owner, group prefix and outer support rank are invariant
-// across the component, so they are supplied by ctx instead of recomputed for
-// every source and destination lane.
 __device__ __forceinline__ GroupedDeviceRank grouped_rank_in_component_device(
     DeviceKey k,
     int W,
