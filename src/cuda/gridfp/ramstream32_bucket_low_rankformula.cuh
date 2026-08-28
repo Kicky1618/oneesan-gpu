@@ -58,6 +58,33 @@ __device__ __forceinline__ uint32_t p10dc_low_rankformula_base(
 #endif
 }
 
+// HIGH closure always needs the destination mask-group base at h and the
+// corresponding L->R source base at h+2. Resolve sparse mask->slot once rather
+// than issuing two identical mask-slot loads and let both base loads share the
+// same compile-time stride.
+__device__ __forceinline__ void p10dc_low_rankformula_base_pair(
+    uint32_t h, uint32_t mask, uint32_t& dest_base, uint32_t& source_base
+) {
+#if P10DC_RANKFORMULA_SPARSE_BASE
+    const uint32_t slot = uint32_t(D_P10DC_LOW_RANKFORMULA_MASK_SLOT16[mask]);
+    const uint16_t* row = D_P10DC_LOW_RANKFORMULA_BASE16 +
+        size_t(slot) * P10DC_RANKFORMULA_HEIGHTS;
+    dest_base = h < P10DC_RANKFORMULA_HEIGHTS ? uint32_t(row[h]) : 0u;
+    const uint32_t sh = h + 2u;
+    source_base = sh < P10DC_RANKFORMULA_HEIGHTS ? uint32_t(row[sh]) : 0u;
+#else
+    dest_base = h < P10DC_RANKFORMULA_HEIGHTS
+        ? uint32_t(D_P10DC_LOW_RANKFORMULA_BASE16[
+              size_t(h) * P10DC_RANKFORMULA_MASKS + mask])
+        : 0u;
+    const uint32_t sh = h + 2u;
+    source_base = sh < P10DC_RANKFORMULA_HEIGHTS
+        ? uint32_t(D_P10DC_LOW_RANKFORMULA_BASE16[
+              size_t(sh) * P10DC_RANKFORMULA_MASKS + mask])
+        : 0u;
+#endif
+}
+
 struct BucketFusedDirectHighRowsRankFormulaTables
     : BucketFusedDirectHighRowsPrekeyTables {
     uint32_t* low_rankformula_meta32 = nullptr;
@@ -282,6 +309,7 @@ struct BucketFusedDirectHighRowsRankFormulaTables
                   << " rankstream_bytes=0"
                   << " sparse_base=" << P10DC_RANKFORMULA_SPARSE_BASE
                   << " base_layout=" << (P10DC_RANKFORMULA_SPARSE_BASE ? "slot-major" : "height-major")
+                  << " base_pair_slot_loads=" << (P10DC_RANKFORMULA_SPARSE_BASE ? 1 : 0)
                   << " meta_mode=" << (P10DC_RANKFORMULA_RAWCODE ? "raw2bit" : "ternary23")
                   << " meta_bits=" << (P10DC_RANKFORMULA_RAWCODE ? P10DC_RANKFORMULA_RAWCODE_BITS : 23u)
                   << " bytes_per_code_meta=4 old_prekey_freed=1\n";
