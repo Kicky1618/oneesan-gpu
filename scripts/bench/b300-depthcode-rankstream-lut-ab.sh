@@ -50,6 +50,7 @@ visible="$(nvidia-smi --query-gpu=index --format=csv,noheader | wc -l)"
 mkdir -p "$(dirname "$RESULT")" "$LOGDIR"
 
 bash "$ONEESAN_ROOT/scripts/bench/cross5-rankmask-proof.sh"
+bash "$ONEESAN_ROOT/scripts/bench/cross5-rankstream-projection-proof.sh"
 if [[ "$RUN_SELFTEST" == 1 ]]; then
   for mode in constant ldg; do
     LUT_LOAD="$mode" PM_ACCUM="$PM_ACCUM" DECODE_LOAD="$DEPTHCODE_DECODE_LOAD" \
@@ -146,6 +147,8 @@ if all(q[x][m] != 'NA' for x in ('constant', 'ldg') for m in ('forward_high_s', 
 print('rankstream_lut_bytes=6561')
 print('rankstream_lut_constant_mode=constant_cache')
 print('rankstream_lut_ldg_mode=readonly_global_l1')
+print('production_state_checks=0')
+print('production_fallback=0')
 print(f'summary={dst}')
 PY
 
