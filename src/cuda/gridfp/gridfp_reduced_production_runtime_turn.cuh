@@ -194,8 +194,9 @@ __device__ __forceinline__ bool runtime_turn_discover_compress_low(
     return true;
 }
 
+template<class Sink>
 struct RuntimeMirrorSink {
-    DeviceKeySetSink sink{};
+    Sink sink{};
     int W = 0;
     bool main_only = false;
 
@@ -206,8 +207,9 @@ struct RuntimeMirrorSink {
     }
 };
 
+template<class Sink>
 struct RuntimeMainOnlySink {
-    DeviceKeySetSink sink{};
+    Sink sink{};
     __device__ __forceinline__ bool emit(DeviceKey k) {
         if (k.blocked) return true;
         return sink.emit(k);
@@ -219,27 +221,27 @@ __device__ __forceinline__ bool runtime_turn_discover_inverse(
     int W,
     bool high,
     bool expand,
-    DeviceKey* source_set,
+    RuntimeSharedKey* source_set,
     int& source_count,
     int capacity
 ) {
-    DeviceKeySetSink base{source_set, &source_count, capacity};
+    RuntimeSharedKeySetSink base{source_set, &source_count, capacity};
     if (!high && !expand)
         return runtime_turn_discover_compress_low(dest, W, base);
 
     if (high && !expand) {
-        RuntimeMirrorSink sink{base, W, false};
+        RuntimeMirrorSink<RuntimeSharedKeySetSink> sink{base, W, false};
         return runtime_turn_discover_compress_low(
             mirror_key_device(dest, W), W, sink);
     }
 
     if (!high && expand) {
-        RuntimeMirrorSink sink{base, W, true};
+        RuntimeMirrorSink<RuntimeSharedKeySetSink> sink{base, W, true};
         return discover_inverse_reduced_forward(
             mirror_key_device(dest, W), W, W - 1, sink);
     }
 
-    RuntimeMainOnlySink sink{base};
+    RuntimeMainOnlySink<RuntimeSharedKeySetSink> sink{base};
     return discover_inverse_reduced_forward(dest, W, W - 1, sink);
 }
 
@@ -263,12 +265,12 @@ __global__ void owner_turn_runtime_subwarp_kernel(
     std::uint32_t mod,
     int* error
 ) {
-    __shared__ DeviceKey sh_src[RP_RUNTIME_WARPS_PER_BLOCK]
-                               [RP_RUNTIME_SUBGROUPS_PER_WARP]
-                               [RP_RUNTIME_MAX_PAIRS];
-    __shared__ DeviceKey sh_dst[RP_RUNTIME_WARPS_PER_BLOCK]
-                               [RP_RUNTIME_SUBGROUPS_PER_WARP]
-                               [RP_RUNTIME_MAX_PAIRS];
+    __shared__ RuntimeSharedKey sh_src[RP_RUNTIME_WARPS_PER_BLOCK]
+                                      [RP_RUNTIME_SUBGROUPS_PER_WARP]
+                                      [RP_RUNTIME_MAX_PAIRS];
+    __shared__ RuntimeSharedKey sh_dst[RP_RUNTIME_WARPS_PER_BLOCK]
+                                      [RP_RUNTIME_SUBGROUPS_PER_WARP]
+                                      [RP_RUNTIME_MAX_PAIRS];
     __shared__ std::uint32_t sh_value[RP_RUNTIME_WARPS_PER_BLOCK]
                                      [RP_RUNTIME_SUBGROUPS_PER_WARP]
                                      [RP_RUNTIME_MAX_PAIRS];
@@ -326,7 +328,7 @@ __global__ void owner_turn_runtime_subwarp_kernel(
             if (ctx.owner != gpu_id) {
                 runtime_set_error(error, 321);
             } else {
-                sh_src[warp][subgroup][0] = seed;
+                sh_src[warp][subgroup][0] = runtime_shared_key_encode(seed);
                 sh_ns[warp][subgroup] = 1;
                 int cursor = 0;
                 while (cursor < sh_ns[warp][subgroup]) {
@@ -336,14 +338,15 @@ __global__ void owner_turn_runtime_subwarp_kernel(
 #endif
                     RuntimeSmallTerms edge;
                     if (!runtime_turn_step(
-                            sh_src[warp][subgroup][source_ix], W, high, expand, edge)) {
+                            runtime_shared_key_decode(sh_src[warp][subgroup][source_ix]),
+                            W, high, expand, edge)) {
                         runtime_set_error(error, 322);
                         break;
                     }
                     for (int ei = 0; ei < edge.n; ++ei) {
                         if (!edge.v[ei].coef) continue;
                         const DeviceKey d = edge.v[ei].key;
-                        int destination_ix = runtime_find_key(
+                        int destination_ix = runtime_find_shared_key(
                             sh_dst[warp][subgroup], sh_nd[warp][subgroup], d);
                         if (destination_ix < 0) {
                             if (sh_nd[warp][subgroup] >= RP_RUNTIME_MAX_PAIRS) {
@@ -352,7 +355,8 @@ __global__ void owner_turn_runtime_subwarp_kernel(
                                 break;
                             }
                             destination_ix = sh_nd[warp][subgroup]++;
-                            sh_dst[warp][subgroup][destination_ix] = d;
+                            sh_dst[warp][subgroup][destination_ix] =
+                                runtime_shared_key_encode(d);
                             if (!runtime_turn_discover_inverse(
                                     d, W, high, expand,
                                     sh_src[warp][subgroup], sh_ns[warp][subgroup],
@@ -385,7 +389,8 @@ __global__ void owner_turn_runtime_subwarp_kernel(
         const GroupedComponentContextDevice ctx = sh_ctx[warp][subgroup];
         for (int i = sublane; i < ns; i += RP_RUNTIME_SUBGROUP_WIDTH) {
             const GroupedDeviceRank gr = grouped_rank_in_component_device(
-                sh_src[warp][subgroup][i], W, source_q, source_reverse, ctx);
+                runtime_shared_key_decode(sh_src[warp][subgroup][i]),
+                W, source_q, source_reverse, ctx);
             if (gr.owner != gpu_id) {
                 runtime_set_error(error, 325);
                 sh_value[warp][subgroup][i] = 0;
@@ -413,7 +418,8 @@ __global__ void owner_turn_runtime_subwarp_kernel(
         int accumulator_ix = 0;
         for (int di = sublane; di < nd;
              di += RP_RUNTIME_SUBGROUP_WIDTH, ++accumulator_ix) {
-            const DeviceKey mine = sh_dst[warp][subgroup][di];
+            const DeviceKey mine =
+                runtime_shared_key_decode(sh_dst[warp][subgroup][di]);
             const GroupedDeviceRank dgr = grouped_rank_in_component_device(
                 mine, W, destination_q, source_reverse, ctx);
             if (dgr.owner != gpu_id) {
@@ -424,7 +430,8 @@ __global__ void owner_turn_runtime_subwarp_kernel(
         }
 #else
         for (int di = sublane; di < nd; di += RP_RUNTIME_SUBGROUP_WIDTH) {
-            const DeviceKey mine = sh_dst[warp][subgroup][di];
+            const DeviceKey mine =
+                runtime_shared_key_decode(sh_dst[warp][subgroup][di]);
             const GroupedDeviceRank dgr = grouped_rank_in_component_device(
                 mine, W, destination_q, source_reverse, ctx);
             if (dgr.owner != gpu_id) {
@@ -435,7 +442,8 @@ __global__ void owner_turn_runtime_subwarp_kernel(
             for (int si = 0; si < ns; ++si) {
                 RuntimeSmallTerms edge;
                 if (!runtime_turn_step(
-                        sh_src[warp][subgroup][si], W, high, expand, edge)) {
+                        runtime_shared_key_decode(sh_src[warp][subgroup][si]),
+                        W, high, expand, edge)) {
                     runtime_set_error(error, 327);
                     continue;
                 }
