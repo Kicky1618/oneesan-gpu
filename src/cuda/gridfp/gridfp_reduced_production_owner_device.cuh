@@ -4,6 +4,13 @@
 
 namespace oneesan::gridfp::reducedprod {
 
+#ifndef RP_FAST_COMPACT_OUTSIDE_WINDOW
+#define RP_FAST_COMPACT_OUTSIDE_WINDOW 1
+#endif
+static_assert(RP_FAST_COMPACT_OUTSIDE_WINDOW == 0 ||
+              RP_FAST_COMPACT_OUTSIDE_WINDOW == 1,
+              "RP_FAST_COMPACT_OUTSIDE_WINDOW must be 0 or 1");
+
 __device__ __forceinline__ Rank64 outer_group_size_device(int L, int outer_ones) {
     Rank64 total = 0;
     for (int local = 0; local <= L; ++local) {
@@ -54,6 +61,20 @@ __device__ __forceinline__ std::uint32_t compact_outside_window_device(
     int lo,
     int hi
 ) {
+#if RP_FAST_COMPACT_OUTSIDE_WINDOW
+    if (W >= 0 && W <= 32 && lo >= 0 && lo <= hi && hi < W) {
+        const std::uint32_t width_mask = W == 32
+            ? ~0u
+            : ((std::uint32_t(1) << W) - 1u);
+        full &= width_mask;
+        const std::uint32_t low_mask = lo
+            ? ((std::uint32_t(1) << lo) - 1u)
+            : 0u;
+        const std::uint32_t low = full & low_mask;
+        const std::uint32_t high = hi == 31 ? 0u : (full >> (hi + 1));
+        return low | (high << lo);
+    }
+#endif
     std::uint32_t compact = 0;
     int q = 0;
     for (int bit = 0; bit < W; ++bit) {
