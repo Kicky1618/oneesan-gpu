@@ -36,9 +36,13 @@ if grep -Fq 'rankmask5-decode-microbench OK' <<<"$out"; then
   grep -Fq 'rankmask_or=0x07 upper_bits_zero=1 checksum_exact=1' <<<"$out"
   grep -Fq 'decode_model=rank16_then_source32' <<<"$out"
   grep -Fq 'direct3_ordinals=0,1,2' <<<"$out"
+  grep -Fq 'direct3_guard=rankmask_nonzero_outer_guard' <<<"$out"
+  grep -Fq 'direct3_guard_ms=' <<<"$out"
   grep -Fq 'ffs_to_unrolled5_speedup=' <<<"$out"
   grep -Fq 'ffs_to_direct3_speedup=' <<<"$out"
+  grep -Fq 'ffs_to_direct3_guard_speedup=' <<<"$out"
   grep -Fq 'unrolled5_to_direct3_speedup=' <<<"$out"
+  grep -Fq 'direct3_to_guard_speedup=' <<<"$out"
 fi
 
-echo "rankmask5-decode-microbench done arch=$ARCH n=$N repeats=$REPEATS trials=$TRIALS modes=ffs,unrolled5,direct3 ptxas_verbose=$PTXAS_VERBOSE" >&2
+echo "rankmask5-decode-microbench done arch=$ARCH n=$N repeats=$REPEATS trials=$TRIALS modes=ffs,unrolled5,direct3,direct3_guard ptxas_verbose=$PTXAS_VERBOSE" >&2
