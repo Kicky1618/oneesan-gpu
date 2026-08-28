@@ -2,50 +2,21 @@
 set -euo pipefail
 source "$(dirname -- "${BASH_SOURCE[0]}")/../lib/common.sh"
 
-W="${W:-10}"
-NGPU="${NGPU:-2}"
-BLOCKS="${BLOCKS:-256}"
-MOD="${MOD:-4294967291}"
-REPEATS="${REPEATS:-7}"
-WARMUP="${WARMUP:-1}"
-ARCH="${ARCH:-native}"
-PTXAS_VERBOSE="${PTXAS_VERBOSE:-1}"
-INDEX_STORAGE="${INDEX_STORAGE:-${INDEX_BUCKETS:-64}}"
-INDEX_WAYS="${INDEX_WAYS:-2}"
-
-if (( W < 8 || W > 10 || W % 2 != 0 || NGPU < 2 || NGPU > 8 ||
-      BLOCKS < 1 || REPEATS < 1 || WARMUP < 0 )); then
-  echo "full runtime fast-stack A/B execution supports even W=8..10; production-width owner arithmetic uses gridfp-runtime-owner-u32limb-ngpu8-microprobe.sh" >&2
-  exit 2
-fi
+W="${W:-10}"; NGPU="${NGPU:-2}"; BLOCKS="${BLOCKS:-256}"; MOD="${MOD:-4294967291}"
+REPEATS="${REPEATS:-7}"; WARMUP="${WARMUP:-1}"; ARCH="${ARCH:-native}"; PTXAS_VERBOSE="${PTXAS_VERBOSE:-1}"
+INDEX_STORAGE="${INDEX_STORAGE:-${INDEX_BUCKETS:-64}}"; INDEX_WAYS="${INDEX_WAYS:-2}"
+if (( W < 8 || W > 10 || W % 2 != 0 || NGPU < 2 || NGPU > 8 || BLOCKS < 1 || REPEATS < 1 || WARMUP < 0 )); then echo "full runtime fast-stack A/B execution supports even W=8..10; production-width owner arithmetic uses gridfp-runtime-owner-u32limb-ngpu8-microprobe.sh" >&2; exit 2; fi
 if [[ "$INDEX_STORAGE" != 16 && "$INDEX_STORAGE" != 32 && "$INDEX_STORAGE" != 64 ]]; then echo "INDEX_STORAGE must be 16, 32, or 64" >&2; exit 2; fi
 if [[ "$INDEX_WAYS" != 1 && "$INDEX_WAYS" != 2 && "$INDEX_WAYS" != 4 ]]; then echo "INDEX_WAYS must be 1, 2, or 4" >&2; exit 2; fi
 if (( INDEX_STORAGE % INDEX_WAYS != 0 )); then echo "INDEX_STORAGE must divide evenly by INDEX_WAYS" >&2; exit 2; fi
-INDEX_HASH_BUCKETS=$((INDEX_STORAGE / INDEX_WAYS))
-if [[ "$INDEX_HASH_BUCKETS" != 16 && "$INDEX_HASH_BUCKETS" != 32 && "$INDEX_HASH_BUCKETS" != 64 ]]; then echo "index hash bucket count must be 16, 32, or 64" >&2; exit 2; fi
+INDEX_HASH_BUCKETS=$((INDEX_STORAGE / INDEX_WAYS)); if [[ "$INDEX_HASH_BUCKETS" != 16 && "$INDEX_HASH_BUCKETS" != 32 && "$INDEX_HASH_BUCKETS" != 64 ]]; then echo "index hash bucket count must be 16, 32, or 64" >&2; exit 2; fi
 if [[ "$MOD" != 4294967291 ]]; then echo "full runtime fast-stack A/B requires MOD=4294967291" >&2; exit 2; fi
 if ! command -v nvcc >/dev/null || ! command -v nvidia-smi >/dev/null; then echo "nvcc and nvidia-smi are required" >&2; exit 2; fi
 visible="$(nvidia-smi --query-gpu=index --format=csv,noheader | wc -l)"; (( visible >= NGPU )) || { echo "need $NGPU GPUs, visible=$visible" >&2; exit 2; }
 
-PREFIX="${PREFIX:-$ONEESAN_ROOT/work/gridfp_reduced_runtime_stack_ab_w${W}_g${NGPU}_b${BLOCKS}_s${INDEX_STORAGE}w${INDEX_WAYS}}"
-RESULT="${RESULT:-${PREFIX}.tsv}"
-SUMMARY="${SUMMARY:-${PREFIX}_summary.tsv}"
-LOGDIR="${LOGDIR:-${PREFIX}_logs}"
-mkdir -p "$(dirname "$RESULT")" "$LOGDIR"
-
-for proof in \
-  edgecache p32m5-mod sharedkey fastdiv64 primitive-rank-setbits \
-  broadword-support owner-boundary owner-reciprocal owner-fixed54 owner-fixed52 \
-  owner-prefix-binary owner-local-sector-table owner-local-sector-parity \
-  turn-local-sector-table support-rank-setbits support-unrank-early-exit \
-  rank-fusion blocked-rank-direct sector-offset-table sector-row-cache \
-  outer-group-table bitcompact discovery-validity discovery-shrink-validity \
-  discovery-llrr discovery-roundtrip discovery-endpoint-scan reverse-small-step-direct; do
-  bash "$ONEESAN_ROOT/scripts/bench/gridfp-runtime-${proof}-proof.sh" >"$LOGDIR/${proof}-proof.out" 2>"$LOGDIR/${proof}-proof.err"
-done
-bash "$ONEESAN_ROOT/scripts/bench/gridfp-runtime-turn-discovery-nonn-scan-proof.sh" >"$LOGDIR/turn-discovery-nonn-scan-proof.out" 2>"$LOGDIR/turn-discovery-nonn-scan-proof.err"
-bash "$ONEESAN_ROOT/scripts/bench/gridfp-runtime-turn-direct-compress-inverse-proof.sh" >"$LOGDIR/turn-direct-compress-inverse-proof.out" 2>"$LOGDIR/turn-direct-compress-inverse-proof.err"
-bash "$ONEESAN_ROOT/scripts/bench/gridfp-runtime-turn-direct-high-compress-step-proof.sh" >"$LOGDIR/turn-direct-high-compress-step-proof.out" 2>"$LOGDIR/turn-direct-high-compress-step-proof.err"
+PREFIX="${PREFIX:-$ONEESAN_ROOT/work/gridfp_reduced_runtime_stack_ab_w${W}_g${NGPU}_b${BLOCKS}_s${INDEX_STORAGE}w${INDEX_WAYS}}"; RESULT="${RESULT:-${PREFIX}.tsv}"; SUMMARY="${SUMMARY:-${PREFIX}_summary.tsv}"; LOGDIR="${LOGDIR:-${PREFIX}_logs}"; mkdir -p "$(dirname "$RESULT")" "$LOGDIR"
+for proof in edgecache p32m5-mod sharedkey fastdiv64 primitive-rank-setbits broadword-support owner-boundary owner-reciprocal owner-fixed54 owner-fixed52 owner-prefix-binary owner-local-sector-table owner-local-sector-parity turn-local-sector-table support-rank-setbits support-unrank-early-exit rank-fusion blocked-rank-direct sector-offset-table sector-row-cache outer-group-table bitcompact discovery-validity discovery-shrink-validity discovery-llrr discovery-roundtrip discovery-endpoint-scan reverse-small-step-direct; do bash "$ONEESAN_ROOT/scripts/bench/gridfp-runtime-${proof}-proof.sh" >"$LOGDIR/${proof}-proof.out" 2>"$LOGDIR/${proof}-proof.err"; done
+for proof in turn-discovery-nonn-scan turn-direct-compress-inverse turn-direct-high-compress-step turn-direct-low-compress-step turn-direct-high-compress-inverse; do bash "$ONEESAN_ROOT/scripts/bench/gridfp-runtime-${proof}-proof.sh" >"$LOGDIR/${proof}-proof.out" 2>"$LOGDIR/${proof}-proof.err"; done
 bash "$ONEESAN_ROOT/scripts/bench/gridfp-runtime-constant-budget-proof.sh" >"$LOGDIR/constant-budget-proof.out" 2>"$LOGDIR/constant-budget-proof.err"
 bash "$ONEESAN_ROOT/scripts/bench/gridfp-runtime-shared-budget-proof.sh" >"$LOGDIR/shared-budget-proof.out" 2>"$LOGDIR/shared-budget-proof.err"
 MAX_W=10 bash "$ONEESAN_ROOT/scripts/bench/gridfp-runtime-discovery-find-work.sh" >"$LOGDIR/discovery-find-work.out" 2>"$LOGDIR/discovery-find-work.err"
@@ -60,174 +31,43 @@ bash "$ONEESAN_ROOT/scripts/bench/gridfp-closure-nonn-scan-proof.sh" >"$LOGDIR/c
 bash "$ONEESAN_ROOT/scripts/bench/gridfp-owner-support-bitpack-proof.sh" >"$LOGDIR/owner-support-bitpack-proof.out" 2>"$LOGDIR/owner-support-bitpack-proof.err"
 bash "$ONEESAN_ROOT/scripts/bench/gridfp-materialize-primitive-setbits-proof.sh" >"$LOGDIR/materialize-primitive-setbits-proof.out" 2>"$LOGDIR/materialize-primitive-setbits-proof.err"
 
-build_one() {
-  local mode="$1" bin="$2"
-  local cache fast poll packed fastdiv primitive materialize unrank broadword
-  local boundary recip fixed54 fixed52 ownersupport ownerprefix ownerlocal
-  local turnlocal turnnonn turndirect turnhighdirect
-  local support fuse directrank sector rowcache outer outside erase discovery endpoint
-  local closurescan recent signature indexcache fastmirror reverseinclude reverseblocked reversesmall
-  if [[ "$mode" == baseline ]]; then
-    cache=0; fast=0; poll=1; packed=0; fastdiv=0; primitive=0; materialize=0
-    unrank=0; broadword=0; boundary=0; recip=0; fixed54=0; fixed52=0
-    ownersupport=0; ownerprefix=0; ownerlocal=0
-    turnlocal=0; turnnonn=0; turndirect=0; turnhighdirect=0
-    support=0; fuse=0; directrank=0; sector=0; rowcache=0; outer=0; outside=0
-    erase=0; discovery=0; endpoint=0; closurescan=0; recent=0; signature=0; indexcache=0
-    fastmirror=0; reverseinclude=0; reverseblocked=0; reversesmall=0
-  else
-    cache=1; fast=1; poll=0; packed=1; fastdiv=1; primitive=1; materialize=1
-    unrank=1; broadword=1; boundary=1; recip=1; fixed54=0; fixed52=1
-    ownersupport=1; ownerprefix=1; ownerlocal=1
-    turnlocal=1; turnnonn=1; turndirect=1; turnhighdirect=1
-    support=1; fuse=1; directrank=1; sector=1; rowcache=1; outer=1; outside=1
-    erase=1; discovery=1; endpoint=1; closurescan=1; recent=1; signature=0; indexcache=1
-    fastmirror=1; reverseinclude=1; reverseblocked=1; reversesmall=1
-  fi
-  MODE=two-row-runtime-multigpu \
-    RUNTIME_CACHE_EDGES="$cache" RUNTIME_FAST_P32M5_MOD="$fast" \
-    RUNTIME_POLL_GLOBAL_ERROR="$poll" RUNTIME_PACK_SHARED_KEYS="$packed" \
-    RUNTIME_FAST_DIV64="$fastdiv" RUNTIME_PRIMITIVE_RANK_SETBITS="$primitive" \
-    RUNTIME_MATERIALIZE_PRIMITIVE_SETBITS="$materialize" RUNTIME_SUPPORT_UNRANK_EARLY_EXIT="$unrank" \
-    RUNTIME_BROADWORD_SUPPORT="$broadword" RUNTIME_OWNER_FROM_BOUNDARIES="$boundary" \
-    RUNTIME_OWNER_RECIPROCAL="$recip" RUNTIME_OWNER_FIXED54="$fixed54" RUNTIME_OWNER_FIXED52="$fixed52" \
-    RUNTIME_OWNER_U32LIMB=0 RUNTIME_OWNER_W28_NGPU8_DIRECT=0 \
-    RUNTIME_OWNER_SUPPORT_BITPACK="$ownersupport" RUNTIME_OWNER_PREFIX_BINARY="$ownerprefix" \
-    RUNTIME_OWNER_LOCAL_SECTOR_TABLE="$ownerlocal" RUNTIME_OWNER_LOCAL_SECTOR_PARITY="$ownerlocal" \
-    RUNTIME_OWNER_LOCAL_SECTOR_W28_TREE=0 RUNTIME_TURN_LOCAL_SECTOR_TABLE="$turnlocal" \
-    RUNTIME_TURN_LOCAL_SECTOR_W28_TREE=0 RUNTIME_TURN_DISCOVERY_NONN_SCAN="$turnnonn" \
-    RUNTIME_TURN_DIRECT_COMPRESS_INVERSE="$turndirect" \
-    RUNTIME_TURN_DIRECT_HIGH_COMPRESS_STEP="$turnhighdirect" \
-    RUNTIME_SUPPORT_RANK_SETBITS="$support" RUNTIME_FUSE_PRIMITIVE_SUPPORT_RANK="$fuse" \
-    RUNTIME_DIRECT_BLOCKED_RANK="$directrank" RUNTIME_SECTOR_OFFSET_TABLE="$sector" \
-    RUNTIME_CACHE_SECTOR_ROW_BASE="$rowcache" RUNTIME_OUTER_GROUP_TABLE="$outer" \
-    RUNTIME_FAST_OUTSIDE_COMPACT="$outside" RUNTIME_FAST_ERASE_TWO_BITS="$erase" \
-    RUNTIME_FAST_DISCOVERY_VALIDITY="$discovery" RUNTIME_DISCOVERY_ENDPOINT_SCAN="$endpoint" \
-    RUNTIME_FAST_CLOSURE_NONN_SCAN="$closurescan" RUNTIME_FIND_RECENT_FIRST="$recent" \
-    RUNTIME_FIND_SIGNATURE_FILTER="$signature" RUNTIME_FIND_INDEX_CACHE="$indexcache" \
-    RUNTIME_FIND_INDEX_BUCKETS="$INDEX_STORAGE" RUNTIME_FIND_INDEX_WAYS="$INDEX_WAYS" \
-    RUNTIME_FAST_MIRROR_MATE="$fastmirror" RUNTIME_FAST_INCLUDE_HORIZONTAL_REVERSE="$reverseinclude" \
-    RUNTIME_FAST_BLOCKED_EXCLUDE_REVERSE="$reverseblocked" RUNTIME_DIRECT_REVERSE_SMALL_STEP="$reversesmall" \
-    ARCH="$ARCH" PTXAS_VERBOSE="$PTXAS_VERBOSE" OUT="$bin" \
-    bash "$ONEESAN_ROOT/scripts/build/gridfp-reduced-component-probe.sh" >"$LOGDIR/${mode}.build.out" 2>"$LOGDIR/${mode}.build.err"
+build_one(){
+ local mode="$1" bin="$2"
+ local cache fast poll packed fastdiv primitive materialize unrank broadword boundary recip fixed54 fixed52 ownersupport ownerprefix ownerlocal turnlocal turnnonn turndirect turnhighstep turnlowstep turnhighinverse support fuse directrank sector rowcache outer outside erase discovery endpoint closurescan recent signature indexcache fastmirror reverseinclude reverseblocked reversesmall
+ if [[ "$mode" == baseline ]]; then
+  cache=0;fast=0;poll=1;packed=0;fastdiv=0;primitive=0;materialize=0;unrank=0;broadword=0;boundary=0;recip=0;fixed54=0;fixed52=0;ownersupport=0;ownerprefix=0;ownerlocal=0;turnlocal=0;turnnonn=0;turndirect=0;turnhighstep=0;turnlowstep=0;turnhighinverse=0;support=0;fuse=0;directrank=0;sector=0;rowcache=0;outer=0;outside=0;erase=0;discovery=0;endpoint=0;closurescan=0;recent=0;signature=0;indexcache=0;fastmirror=0;reverseinclude=0;reverseblocked=0;reversesmall=0
+ else
+  cache=1;fast=1;poll=0;packed=1;fastdiv=1;primitive=1;materialize=1;unrank=1;broadword=1;boundary=1;recip=1;fixed54=0;fixed52=1;ownersupport=1;ownerprefix=1;ownerlocal=1;turnlocal=1;turnnonn=1;turndirect=1;turnhighstep=1;turnlowstep=1;turnhighinverse=1;support=1;fuse=1;directrank=1;sector=1;rowcache=1;outer=1;outside=1;erase=1;discovery=1;endpoint=1;closurescan=1;recent=1;signature=0;indexcache=1;fastmirror=1;reverseinclude=1;reverseblocked=1;reversesmall=1
+ fi
+ MODE=two-row-runtime-multigpu RUNTIME_CACHE_EDGES="$cache" RUNTIME_FAST_P32M5_MOD="$fast" RUNTIME_POLL_GLOBAL_ERROR="$poll" RUNTIME_PACK_SHARED_KEYS="$packed" RUNTIME_FAST_DIV64="$fastdiv" RUNTIME_PRIMITIVE_RANK_SETBITS="$primitive" RUNTIME_MATERIALIZE_PRIMITIVE_SETBITS="$materialize" RUNTIME_SUPPORT_UNRANK_EARLY_EXIT="$unrank" RUNTIME_BROADWORD_SUPPORT="$broadword" RUNTIME_OWNER_FROM_BOUNDARIES="$boundary" RUNTIME_OWNER_RECIPROCAL="$recip" RUNTIME_OWNER_FIXED54="$fixed54" RUNTIME_OWNER_FIXED52="$fixed52" RUNTIME_OWNER_U32LIMB=0 RUNTIME_OWNER_W28_NGPU8_DIRECT=0 RUNTIME_OWNER_SUPPORT_BITPACK="$ownersupport" RUNTIME_OWNER_PREFIX_BINARY="$ownerprefix" RUNTIME_OWNER_LOCAL_SECTOR_TABLE="$ownerlocal" RUNTIME_OWNER_LOCAL_SECTOR_PARITY="$ownerlocal" RUNTIME_OWNER_LOCAL_SECTOR_W28_TREE=0 RUNTIME_TURN_LOCAL_SECTOR_TABLE="$turnlocal" RUNTIME_TURN_LOCAL_SECTOR_W28_TREE=0 RUNTIME_TURN_DISCOVERY_NONN_SCAN="$turnnonn" RUNTIME_TURN_DIRECT_COMPRESS_INVERSE="$turndirect" RUNTIME_TURN_DIRECT_HIGH_COMPRESS_STEP="$turnhighstep" RUNTIME_TURN_DIRECT_LOW_COMPRESS_STEP="$turnlowstep" RUNTIME_TURN_DIRECT_HIGH_COMPRESS_INVERSE="$turnhighinverse" RUNTIME_SUPPORT_RANK_SETBITS="$support" RUNTIME_FUSE_PRIMITIVE_SUPPORT_RANK="$fuse" RUNTIME_DIRECT_BLOCKED_RANK="$directrank" RUNTIME_SECTOR_OFFSET_TABLE="$sector" RUNTIME_CACHE_SECTOR_ROW_BASE="$rowcache" RUNTIME_OUTER_GROUP_TABLE="$outer" RUNTIME_FAST_OUTSIDE_COMPACT="$outside" RUNTIME_FAST_ERASE_TWO_BITS="$erase" RUNTIME_FAST_DISCOVERY_VALIDITY="$discovery" RUNTIME_DISCOVERY_ENDPOINT_SCAN="$endpoint" RUNTIME_FAST_CLOSURE_NONN_SCAN="$closurescan" RUNTIME_FIND_RECENT_FIRST="$recent" RUNTIME_FIND_SIGNATURE_FILTER="$signature" RUNTIME_FIND_INDEX_CACHE="$indexcache" RUNTIME_FIND_INDEX_BUCKETS="$INDEX_STORAGE" RUNTIME_FIND_INDEX_WAYS="$INDEX_WAYS" RUNTIME_FAST_MIRROR_MATE="$fastmirror" RUNTIME_FAST_INCLUDE_HORIZONTAL_REVERSE="$reverseinclude" RUNTIME_FAST_BLOCKED_EXCLUDE_REVERSE="$reverseblocked" RUNTIME_DIRECT_REVERSE_SMALL_STEP="$reversesmall" ARCH="$ARCH" PTXAS_VERBOSE="$PTXAS_VERBOSE" OUT="$bin" bash "$ONEESAN_ROOT/scripts/build/gridfp-reduced-component-probe.sh" >"$LOGDIR/${mode}.build.out" 2>"$LOGDIR/${mode}.build.err"
 }
-
-BASE="$ONEESAN_BUILD_DIR/gridfp_reduced_runtime_stack_baseline_w${W}_g${NGPU}_b${BLOCKS}_s${INDEX_STORAGE}w${INDEX_WAYS}"
-FAST="$ONEESAN_BUILD_DIR/gridfp_reduced_runtime_stack_fast_w${W}_g${NGPU}_b${BLOCKS}_s${INDEX_STORAGE}w${INDEX_WAYS}"
-build_one baseline "$BASE"; build_one fast "$FAST"
-
-run_one() {
-  local mode="$1" bin="$2" rep="$3" phase="$4"
-  local out="$LOGDIR/${mode}_${phase}${rep}.out" err="$LOGDIR/${mode}_${phase}${rep}.err"
-  "$bin" "$W" "$NGPU" "$BLOCKS" "$MOD" >"$out" 2>"$err"
-  local line; line="$(grep '^gridfp-reduced-two-row-runtime-multigpu ' "$out" | tail -n1 || true)"
-  [[ -n "$line" ]] || { cat "$out" >&2 || true; cat "$err" >&2 || true; exit 3; }
-  grep -Fq ' exact=OK' <<<"$line" || { echo "$line" >&2; exit 4; }
-  if [[ "$phase" == run ]]; then
-    local wall; wall="$(sed -nE 's/.* wall_ms=([^[:space:]]+).*/\1/p' <<<"$line")"; [[ -n "$wall" ]] || exit 5
-    printf '%s\t%s\t%s\n' "$mode" "$rep" "$wall" >>"$RESULT"
-  fi
-}
+BASE="$ONEESAN_BUILD_DIR/gridfp_reduced_runtime_stack_baseline_w${W}_g${NGPU}_b${BLOCKS}_s${INDEX_STORAGE}w${INDEX_WAYS}"; FAST="$ONEESAN_BUILD_DIR/gridfp_reduced_runtime_stack_fast_w${W}_g${NGPU}_b${BLOCKS}_s${INDEX_STORAGE}w${INDEX_WAYS}"; build_one baseline "$BASE"; build_one fast "$FAST"
+run_one(){ local mode="$1" bin="$2" rep="$3" phase="$4" out="$LOGDIR/${mode}_${phase}${rep}.out" err="$LOGDIR/${mode}_${phase}${rep}.err"; "$bin" "$W" "$NGPU" "$BLOCKS" "$MOD" >"$out" 2>"$err"; local line; line="$(grep '^gridfp-reduced-two-row-runtime-multigpu ' "$out" | tail -n1 || true)"; [[ -n "$line" ]] || { cat "$out" >&2 || true; cat "$err" >&2 || true; exit 3; }; grep -Fq ' exact=OK' <<<"$line" || { echo "$line" >&2; exit 4; }; if [[ "$phase" == run ]]; then local wall; wall="$(sed -nE 's/.* wall_ms=([^[:space:]]+).*/\1/p' <<<"$line")"; printf '%s\t%s\t%s\n' "$mode" "$rep" "$wall" >>"$RESULT"; fi; }
 for ((r=1;r<=WARMUP;++r)); do run_one baseline "$BASE" "$r" warmup; run_one fast "$FAST" "$r" warmup; done
 printf 'runtime_stack\trepeat\twall_ms\n' >"$RESULT"
-for ((r=1;r<=REPEATS;++r)); do
-  if ((r&1)); then order=(baseline fast); else order=(fast baseline); fi
-  for mode in "${order[@]}"; do
-    [[ "$mode" == baseline ]] && bin="$BASE" || bin="$FAST"
-    echo "=== runtime stack=$mode index_storage=$INDEX_STORAGE ways=$INDEX_WAYS run $r/$REPEATS ===" >&2
-    run_one "$mode" "$bin" "$r" run
-  done
-done
+for ((r=1;r<=REPEATS;++r)); do if ((r&1)); then order=(baseline fast); else order=(fast baseline); fi; for mode in "${order[@]}"; do [[ "$mode" == baseline ]] && bin="$BASE" || bin="$FAST"; echo "=== runtime stack=$mode index_storage=$INDEX_STORAGE ways=$INDEX_WAYS run $r/$REPEATS ===" >&2; run_one "$mode" "$bin" "$r" run; done; done
 cat "$RESULT"
 
 python3 - "$RESULT" "$SUMMARY" "$INDEX_STORAGE" "$INDEX_WAYS" <<'PY'
 import csv,statistics,sys
-src,dst,storage_s,ways_s=sys.argv[1:]
-storage=int(storage_s); ways=int(ways_s); hash_buckets=storage//ways
+src,dst,storage_s,ways_s=sys.argv[1:]; storage=int(storage_s); ways=int(ways_s); hash_buckets=storage//ways
 rows=list(csv.DictReader(open(src),delimiter='\t')); out=[]
 for mode in ('baseline','fast'):
-    xs=[float(r['wall_ms']) for r in rows if r['runtime_stack']==mode]
-    if not xs: raise SystemExit(f'missing runtime_stack={mode}')
-    out.append({'runtime_stack':mode,'repeats':len(xs),'wall_ms_median':f'{statistics.median(xs):.9f}','wall_ms_min':f'{min(xs):.9f}','wall_ms_max':f'{max(xs):.9f}'})
+ xs=[float(r['wall_ms']) for r in rows if r['runtime_stack']==mode]
+ if not xs: raise SystemExit(f'missing runtime_stack={mode}')
+ out.append({'runtime_stack':mode,'repeats':len(xs),'wall_ms_median':f'{statistics.median(xs):.9f}','wall_ms_min':f'{min(xs):.9f}','wall_ms_max':f'{max(xs):.9f}'})
 with open(dst,'w',newline='') as f:
-    w=csv.DictWriter(f,fieldnames=('runtime_stack','repeats','wall_ms_median','wall_ms_min','wall_ms_max'),delimiter='\t'); w.writeheader(); w.writerows(out)
-q={r['runtime_stack']:r for r in out}; old=float(q['baseline']['wall_ms_median']); new=float(q['fast']['wall_ms_median'])
-index_shared=64*storage; net_shared=-7680+index_shared
-print(f'runtime_fast_stack_wall_speedup={old/new:.6f}x')
-print(f'runtime_fast_stack_wall_delta_pct={(new/old-1)*100:.4f}%')
-print('runtime_fast_stack_baseline=edge_cache0,fast_mod0,error_poll1,packed_keys0,fast_div640,primitive_setbits0,materialize_primitive_setbits0,support_unrank_early_exit0,broadword_support0,owner_boundaries0,owner_reciprocal0,owner_fixed540,owner_fixed520,owner_u32limb0,owner_support_bitpack0,owner_prefix_binary0,owner_local_sector_table0,owner_local_sector_parity0,turn_local_sector_table0,turn_discovery_nonn_scan0,turn_direct_compress_inverse0,turn_direct_high_compress_step0,support_setbits0,rank_fusion0,direct_blocked_rank0,sector_table0,sector_row_cache0,outer_group_table0,outside_compact0,erase_two_bits0,discovery_validity0,endpoint_scan0,closure_nonn_scan0,find_recent_first0,find_signature_filter0,find_index_cache0,fast_mirror0,direct_reverse_include0,direct_reverse_blocked0,direct_reverse_small_step0')
-print(f'runtime_fast_stack_fast=edge_cache1,fast_mod1,error_poll0,packed_keys1,fast_div641,primitive_setbits1,materialize_primitive_setbits1,support_unrank_early_exit1,broadword_support1,owner_boundaries1,owner_reciprocal1,owner_fixed540,owner_fixed521,owner_u32limb0,owner_support_bitpack1,owner_prefix_binary1,owner_local_sector_table1,owner_local_sector_parity1,turn_local_sector_table1,turn_discovery_nonn_scan1,turn_direct_compress_inverse1,turn_direct_high_compress_step1,support_setbits1,rank_fusion1,direct_blocked_rank1,sector_table1,sector_row_cache1,outer_group_table1,outside_compact1,erase_two_bits1,discovery_validity1,endpoint_scan1,closure_nonn_scan1,find_recent_first1,find_signature_filter0,find_index_cache1,find_index_storage{storage},find_index_ways{ways},fast_mirror1,direct_reverse_include1,direct_reverse_blocked1,direct_reverse_small_step1')
-print('runtime_fast_stack_key_shared_bytes_saved_per_block=10240')
-print('runtime_fast_stack_edge_cache_shared_bytes_added_per_block=2560')
-print(f'runtime_fast_stack_find_index_cache_shared_bytes_added_per_block={index_shared}')
-print(f'runtime_fast_stack_net_known_shared_bytes_delta_per_block={net_shared}')
-print('runtime_fast_stack_find_order=recent_first_unrolled')
-print(f'runtime_fast_stack_find_index_storage_bytes_per_set={storage}')
-print(f'runtime_fast_stack_find_index_ways={ways}')
-print(f'runtime_fast_stack_find_index_hash_buckets={hash_buckets}')
-print('runtime_fast_stack_find_index_cache_set_associative=1')
-print('runtime_fast_stack_find_index_cache_overflow_state=packed_high_bit')
-print('runtime_fast_stack_find_index_cache_extra_overflow_registers=0')
-print('runtime_fast_stack_find_index_cache_stale_byte_clear_required=0')
-print('runtime_fast_stack_find_index_cache_nonoverflow_mismatch=exact_miss_no_scan')
-print('runtime_fast_stack_find_index_cache_overflow_fallback=exact_recent_first')
-print('runtime_fast_stack_find_index_cache_false_negative=0')
-print('runtime_fast_stack_find_index_cache_interior_and_turn=1')
-print('runtime_fast_stack_find_signature_filter=superseded_by_index_cache')
-print('runtime_fast_stack_find_global_defaults=recent0_signature0_index0_storage64_ways1_pending_gpu_ab')
-print('runtime_fast_stack_turn_discovery_scan=non_n_setbits_only')
-print('runtime_fast_stack_turn_direct_compress_inverse_full_validity_scans_per_candidate=0')
-print('runtime_fast_stack_turn_direct_compress_inverse_include_rechecks_per_candidate=0')
-print('runtime_fast_stack_turn_direct_compress_inverse_nn_rl_candidate=eliminated')
-print('runtime_fast_stack_turn_direct_compress_inverse_blocked_NR=direct')
-print('runtime_fast_stack_turn_high_compress_source_mirror_passes=0')
-print('runtime_fast_stack_turn_high_compress_result_mirror_passes=0')
-print('runtime_fast_stack_turn_high_compress_main=include_horizontal_reverse')
-print('runtime_fast_stack_turn_high_compress_blocked=blocked_exclude_reverse')
-print('runtime_fast_stack_support_unrank_tail=early_exit_or_forced_suffix')
-print('runtime_fast_stack_owner_support_linear_placement_scans_per_component=0')
-print('runtime_fast_stack_owner_support_placement=mask_shift_insert_brev')
-print('runtime_fast_stack_owner_prefix_search=binary')
-print('runtime_fast_stack_owner_prefix_W28_max_comparisons=4')
-print('runtime_fast_stack_owner_local_sector_search=constant_end_table_positive_sector_binary')
-print('runtime_fast_stack_owner_local_sector_W28_candidates=7')
-print('runtime_fast_stack_owner_local_sector_W28_max_comparisons=3')
-print('runtime_fast_stack_turn_local_sector_search=active_parity_constant_end_table_binary')
-print('runtime_fast_stack_turn_local_sector_W28_candidates=8')
-print('runtime_fast_stack_turn_local_sector_W28_max_comparisons=3')
-print('runtime_fast_stack_primitive_materialize_scan=occupied_support_setbits')
-print('runtime_fast_stack_primitive_rank_scan=occupied')
-print('runtime_fast_stack_support_extraction=fixed_6_stage_broadword')
-print('runtime_fast_stack_owner_lookup=fixed52_midpoint_mul_shift')
-print('runtime_fast_stack_primitive_support_rank_passes_per_state=1')
-print('runtime_fast_stack_support_rank_scan=fused_with_primitive')
-print('runtime_fast_stack_sector_offset=constant_lookup')
-print('runtime_fast_stack_sector_row_base=once_per_component')
-print('runtime_fast_stack_context_bytes=24')
-print('runtime_fast_stack_outer_group_context=two_constant_loads')
-print('runtime_fast_stack_outside_support_compaction=mask_shift')
-print('runtime_fast_stack_blocked_rank_full_mate_reconstruct_calls=0')
-print('runtime_fast_stack_blocked_rank_erase_two_bits_calls=0')
-print('runtime_fast_stack_discovery_full_validity_scans=0')
-print('runtime_fast_stack_discovery_structural_include_rechecks=0')
-print('runtime_fast_stack_discovery_rl_validity=two_popcounts')
-print('runtime_fast_stack_discovery_ll_rr_validity=structural')
-print('runtime_fast_stack_discovery_balance_scan=endpoints_only')
-print('runtime_fast_stack_closure_scan=non_n_setbits_only')
-print('runtime_fast_stack_mirror_mate=device_brevll_shift')
-print('runtime_fast_stack_reverse_include=direct_coordinate')
-print('runtime_fast_stack_reverse_blocked_exclude=direct_insert')
-print('runtime_fast_stack_reverse_small_step=direct_coordinate')
-print('runtime_fast_stack_constant_table_bytes_added=12672')
-print('runtime_fast_stack_known_constant_bytes_total=36408')
-print('runtime_fast_stack_constant_headroom_bytes=29128')
-print('runtime_fast_stack_full_runtime_W_max=10')
-print(f'summary={dst}')
+ w=csv.DictWriter(f,fieldnames=('runtime_stack','repeats','wall_ms_median','wall_ms_min','wall_ms_max'),delimiter='\t'); w.writeheader(); w.writerows(out)
+q={r['runtime_stack']:r for r in out}; old=float(q['baseline']['wall_ms_median']); new=float(q['fast']['wall_ms_median']); index_shared=64*storage; net_shared=-7680+index_shared
+print(f'runtime_fast_stack_wall_speedup={old/new:.6f}x'); print(f'runtime_fast_stack_wall_delta_pct={(new/old-1)*100:.4f}%')
+print('runtime_fast_stack_baseline=edge_cache0,fast_mod0,error_poll1,packed_keys0,fast_div640,primitive_setbits0,materialize_primitive_setbits0,support_unrank_early_exit0,broadword_support0,owner_boundaries0,owner_reciprocal0,owner_fixed540,owner_fixed520,owner_u32limb0,owner_support_bitpack0,owner_prefix_binary0,owner_local_sector_table0,owner_local_sector_parity0,turn_local_sector_table0,turn_discovery_nonn_scan0,turn_direct_compress_inverse0,turn_direct_high_compress_step0,turn_direct_low_compress_step0,turn_direct_high_compress_inverse0,support_setbits0,rank_fusion0,direct_blocked_rank0,sector_table0,sector_row_cache0,outer_group_table0,outside_compact0,erase_two_bits0,discovery_validity0,endpoint_scan0,closure_nonn_scan0,find_recent_first0,find_signature_filter0,find_index_cache0,fast_mirror0,direct_reverse_include0,direct_reverse_blocked0,direct_reverse_small_step0')
+print(f'runtime_fast_stack_fast=edge_cache1,fast_mod1,error_poll0,packed_keys1,fast_div641,primitive_setbits1,materialize_primitive_setbits1,support_unrank_early_exit1,broadword_support1,owner_boundaries1,owner_reciprocal1,owner_fixed540,owner_fixed521,owner_u32limb0,owner_support_bitpack1,owner_prefix_binary1,owner_local_sector_table1,owner_local_sector_parity1,turn_local_sector_table1,turn_discovery_nonn_scan1,turn_direct_compress_inverse1,turn_direct_high_compress_step1,turn_direct_low_compress_step1,turn_direct_high_compress_inverse1,support_setbits1,rank_fusion1,direct_blocked_rank1,sector_table1,sector_row_cache1,outer_group_table1,outside_compact1,erase_two_bits1,discovery_validity1,endpoint_scan1,closure_nonn_scan1,find_recent_first1,find_signature_filter0,find_index_cache1,find_index_storage{storage},find_index_ways{ways},fast_mirror1,direct_reverse_include1,direct_reverse_blocked1,direct_reverse_small_step1')
+print('runtime_fast_stack_key_shared_bytes_saved_per_block=10240'); print('runtime_fast_stack_edge_cache_shared_bytes_added_per_block=2560'); print(f'runtime_fast_stack_find_index_cache_shared_bytes_added_per_block={index_shared}'); print(f'runtime_fast_stack_net_known_shared_bytes_delta_per_block={net_shared}')
+print('runtime_fast_stack_find_order=recent_first_unrolled'); print(f'runtime_fast_stack_find_index_storage_bytes_per_set={storage}'); print(f'runtime_fast_stack_find_index_ways={ways}'); print(f'runtime_fast_stack_find_index_hash_buckets={hash_buckets}'); print('runtime_fast_stack_find_index_cache_set_associative=1'); print('runtime_fast_stack_find_index_cache_overflow_state=packed_high_bit'); print('runtime_fast_stack_find_index_cache_extra_overflow_registers=0'); print('runtime_fast_stack_find_index_cache_stale_byte_clear_required=0'); print('runtime_fast_stack_find_index_cache_nonoverflow_mismatch=exact_miss_no_scan'); print('runtime_fast_stack_find_index_cache_overflow_fallback=exact_recent_first'); print('runtime_fast_stack_find_index_cache_false_negative=0'); print('runtime_fast_stack_find_index_cache_interior_and_turn=1'); print('runtime_fast_stack_find_global_defaults=recent0_signature0_index0_storage64_ways1_pending_gpu_ab')
+print('runtime_fast_stack_turn_discovery_scan=non_n_setbits_only'); print('runtime_fast_stack_turn_low_inverse_full_validity_scans_per_candidate=0'); print('runtime_fast_stack_turn_low_inverse_include_rechecks_per_candidate=0'); print('runtime_fast_stack_turn_low_step_generic_include_calls=0'); print('runtime_fast_stack_turn_low_step_rr=closure_match_right'); print('runtime_fast_stack_turn_high_step_source_mirror_passes=0'); print('runtime_fast_stack_turn_high_step_result_mirror_passes=0'); print('runtime_fast_stack_turn_high_inverse_destination_mirror_passes=0'); print('runtime_fast_stack_turn_high_inverse_source_mirror_passes=0'); print('runtime_fast_stack_turn_high_inverse_nn=ll_closure_scan'); print('runtime_fast_stack_turn_high_inverse_blocked=LN_direct')
+print('runtime_fast_stack_support_unrank_tail=early_exit_or_forced_suffix'); print('runtime_fast_stack_owner_support_linear_placement_scans_per_component=0'); print('runtime_fast_stack_owner_support_placement=mask_shift_insert_brev'); print('runtime_fast_stack_owner_prefix_search=binary'); print('runtime_fast_stack_owner_prefix_W28_max_comparisons=4'); print('runtime_fast_stack_owner_local_sector_search=constant_end_table_positive_sector_binary'); print('runtime_fast_stack_owner_local_sector_W28_candidates=7'); print('runtime_fast_stack_owner_local_sector_W28_max_comparisons=3'); print('runtime_fast_stack_turn_local_sector_search=active_parity_constant_end_table_binary'); print('runtime_fast_stack_turn_local_sector_W28_candidates=8'); print('runtime_fast_stack_turn_local_sector_W28_max_comparisons=3')
+print('runtime_fast_stack_primitive_materialize_scan=occupied_support_setbits'); print('runtime_fast_stack_primitive_rank_scan=occupied'); print('runtime_fast_stack_support_extraction=fixed_6_stage_broadword'); print('runtime_fast_stack_owner_lookup=fixed52_midpoint_mul_shift'); print('runtime_fast_stack_primitive_support_rank_passes_per_state=1'); print('runtime_fast_stack_support_rank_scan=fused_with_primitive'); print('runtime_fast_stack_sector_offset=constant_lookup'); print('runtime_fast_stack_sector_row_base=once_per_component'); print('runtime_fast_stack_context_bytes=24'); print('runtime_fast_stack_outer_group_context=two_constant_loads'); print('runtime_fast_stack_outside_support_compaction=mask_shift'); print('runtime_fast_stack_blocked_rank_full_mate_reconstruct_calls=0'); print('runtime_fast_stack_blocked_rank_erase_two_bits_calls=0'); print('runtime_fast_stack_discovery_full_validity_scans=0'); print('runtime_fast_stack_discovery_structural_include_rechecks=0'); print('runtime_fast_stack_discovery_rl_validity=two_popcounts'); print('runtime_fast_stack_discovery_ll_rr_validity=structural'); print('runtime_fast_stack_discovery_balance_scan=endpoints_only'); print('runtime_fast_stack_closure_scan=non_n_setbits_only'); print('runtime_fast_stack_mirror_mate=device_brevll_shift'); print('runtime_fast_stack_reverse_include=direct_coordinate'); print('runtime_fast_stack_reverse_blocked_exclude=direct_insert'); print('runtime_fast_stack_reverse_small_step=direct_coordinate')
+print('runtime_fast_stack_constant_table_bytes_added=12672'); print('runtime_fast_stack_known_constant_bytes_total=36408'); print('runtime_fast_stack_constant_headroom_bytes=29128'); print('runtime_fast_stack_full_runtime_W_max=10'); print(f'summary={dst}')
 PY
-
-if [[ "$PTXAS_VERBOSE" == 1 ]]; then
-  echo '--- ptxas baseline ---' >&2; grep -E 'Used .* registers|bytes smem|bytes cmem' "$LOGDIR/baseline.build.err" >&2 || true
-  echo '--- ptxas fast ---' >&2; grep -E 'Used .* registers|bytes smem|bytes cmem' "$LOGDIR/fast.build.err" >&2 || true
-fi
-
+if [[ "$PTXAS_VERBOSE" == 1 ]]; then echo '--- ptxas baseline ---' >&2; grep -E 'Used .* registers|bytes smem|bytes cmem' "$LOGDIR/baseline.build.err" >&2 || true; echo '--- ptxas fast ---' >&2; grep -E 'Used .* registers|bytes smem|bytes cmem' "$LOGDIR/fast.build.err" >&2 || true; fi
 echo "gridfp-reduced-runtime-stack-ab OK W=$W ngpu=$NGPU blocks=$BLOCKS index_storage=$INDEX_STORAGE index_ways=$INDEX_WAYS repeats=$REPEATS result=$RESULT" >&2
