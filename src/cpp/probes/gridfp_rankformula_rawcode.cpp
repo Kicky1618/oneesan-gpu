@@ -1,3 +1,4 @@
+#include <algorithm>
 #include <cstdint>
 #include <iostream>
 
@@ -50,7 +51,7 @@ static uint32_t key_fast5(uint32_t code10) {
 }
 
 static uint32_t mask_bits(int len) {
-    return len == 16 ? 0xffffffffu : ((1u << (2 * len)) - 1u);
+    return (1u << (2 * len)) - 1u;
 }
 
 int main() {
