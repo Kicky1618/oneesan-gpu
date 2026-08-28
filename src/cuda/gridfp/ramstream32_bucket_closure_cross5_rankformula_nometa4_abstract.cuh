@@ -20,8 +20,13 @@ static constexpr uint32_t P10DC_RANKFORMULA_ABSTRACT_SELECT_N =
     P10DC_RANKFORMULA_ABSTRACT_DESC_N * P10DC_RANKFORMULA_ABSTRACT_SELECT_DEPTHS;
 static_assert(LOW_LUT_K <= int(P10DC_RANKFORMULA_ABSTRACT_MAX_K));
 
+#if P10DC_RANKFORMULA_ABSTRACT_SELECT8
+__device__ __align__(128) uint16_t
+    D_P10DC_RANKFORMULA_ABSTRACT_ROFF[P10DC_RANKFORMULA_ABSTRACT_DESC_N];
+#else
 __device__ __align__(128) uint32_t
     D_P10DC_RANKFORMULA_ABSTRACT_DESC[P10DC_RANKFORMULA_ABSTRACT_DESC_N];
+#endif
 __device__ __align__(128) uint16_t
     D_P10DC_RANKFORMULA_ABSTRACT_SRC[P10DC_RANKFORMULA_ABSTRACT_RANK_N];
 #if P10DC_RANKFORMULA_ABSTRACT_SELECT8
@@ -90,7 +95,11 @@ static uint8_t p10dc_rankformula_abstract_select_host(uint32_t lp, int n, uint32
 
 struct P10DCRankFormulaAbstractHost {
     std::array<uint16_t, P10DC_RANKFORMULA_ABSTRACT_OFF_N> off{};
+#if P10DC_RANKFORMULA_ABSTRACT_SELECT8
+    std::array<uint16_t, P10DC_RANKFORMULA_ABSTRACT_DESC_N> roff{};
+#else
     std::array<uint32_t, P10DC_RANKFORMULA_ABSTRACT_DESC_N> desc{};
+#endif
     std::array<uint16_t, P10DC_RANKFORMULA_ABSTRACT_RANK_N> src{};
 #if P10DC_RANKFORMULA_ABSTRACT_SELECT8
     std::array<uint8_t, P10DC_RANKFORMULA_ABSTRACT_SELECT_N> select{};
@@ -110,10 +119,10 @@ static P10DCRankFormulaAbstractHost p10dc_rankformula_abstract_build_host() {
                     rn >= (1u << 15)) std::exit(769);
                 const uint32_t lp = p10dc_rankformula_abstract_lpattern_host(n, h, j);
                 if (lp == 0xffffffffu || lp >= (1u << P10DC_RANKFORMULA_ABSTRACT_MAX_K)) std::exit(770);
-                const uint32_t di = dn;
+                const uint32_t di = dn++;
                 const uint32_t roff = rn;
-                out.desc[dn++] = lp | (roff << P10DC_RANKFORMULA_ABSTRACT_LP_BITS);
 #if P10DC_RANKFORMULA_ABSTRACT_SELECT8
+                out.roff[di] = uint16_t(roff);
                 for (uint32_t depth = 1; depth <= P10DC_RANKFORMULA_ABSTRACT_SELECT_DEPTHS; ++depth) {
                     out.select[size_t(di) * P10DC_RANKFORMULA_ABSTRACT_SELECT_DEPTHS + size_t(depth - 1u)] =
                         p10dc_rankformula_abstract_select_host(lp, n, depth);
@@ -121,6 +130,8 @@ static P10DCRankFormulaAbstractHost p10dc_rankformula_abstract_build_host() {
                 if (p10dc_rankformula_abstract_select_host(lp, n, 14u) != 0u ||
                     p10dc_rankformula_abstract_select_host(lp, n, 15u) != 0u)
                     std::exit(775);
+#else
+                out.desc[di] = lp | (roff << P10DC_RANKFORMULA_ABSTRACT_LP_BITS);
 #endif
                 for (int ord = 0; ord < n; ++ord) {
                     if (((lp >> ord) & 1u) == 0u) continue;
@@ -147,9 +158,15 @@ static void p10dc_install_rankformula_abstract_lut() {
     ck(cudaMemcpyToSymbol(D_P10DC_RANKFORMULA_ABSTRACT_OFF,
                           t.off.data(), t.off.size() * sizeof(uint16_t)),
        "p10dc abstract off LUT");
+#if P10DC_RANKFORMULA_ABSTRACT_SELECT8
+    ck(cudaMemcpyToSymbol(D_P10DC_RANKFORMULA_ABSTRACT_ROFF,
+                          t.roff.data(), t.roff.size() * sizeof(uint16_t)),
+       "p10dc abstract roff16 LUT");
+#else
     ck(cudaMemcpyToSymbol(D_P10DC_RANKFORMULA_ABSTRACT_DESC,
                           t.desc.data(), t.desc.size() * sizeof(uint32_t)),
        "p10dc abstract descriptor LUT");
+#endif
     ck(cudaMemcpyToSymbol(D_P10DC_RANKFORMULA_ABSTRACT_SRC,
                           t.src.data(), t.src.size() * sizeof(uint16_t)),
        "p10dc abstract source-rank LUT");
@@ -160,9 +177,15 @@ static void p10dc_install_rankformula_abstract_lut() {
 #endif
 }
 
+#if P10DC_RANKFORMULA_ABSTRACT_SELECT8
+__device__ __forceinline__ uint32_t p10dc_rankformula_abstract_roff_load(uint32_t ix) {
+    return uint32_t(__ldg(D_P10DC_RANKFORMULA_ABSTRACT_ROFF + ix));
+}
+#else
 __device__ __forceinline__ uint32_t p10dc_rankformula_abstract_desc_load(uint32_t ix) {
     return __ldg(D_P10DC_RANKFORMULA_ABSTRACT_DESC + ix);
 }
+#endif
 __device__ __forceinline__ uint32_t p10dc_rankformula_abstract_src_load(uint32_t ix) {
     return uint32_t(__ldg(D_P10DC_RANKFORMULA_ABSTRACT_SRC + ix));
 }
@@ -183,12 +206,11 @@ p10dc_resolved_low_preimages_cross5_rankformula_nometa4_abstract_fixed(
         p10dc_low_rankformula_nometa_resolve_active(h, rank);
     const uint32_t local = rank - z.start;
     const uint32_t di = uint32_t(D_P10DC_RANKFORMULA_ABSTRACT_OFF[z.n * 16u + h]) + local;
-    const uint32_t d = p10dc_rankformula_abstract_desc_load(di);
-    uint32_t rp = d >> P10DC_RANKFORMULA_ABSTRACT_LP_BITS;
     const uint32_t source_base = uint32_t(int(z.start) + z.base_delta);
     BkczCrossAccum sum = 0;
 
 #if P10DC_RANKFORMULA_ABSTRACT_SELECT8
+    const uint32_t rp = p10dc_rankformula_abstract_roff_load(di);
     uint32_t select = p10dc_rankformula_abstract_select_load(
         di * P10DC_RANKFORMULA_ABSTRACT_SELECT_DEPTHS + (depth - 1u));
     while (select) {
@@ -199,7 +221,9 @@ p10dc_resolved_low_preimages_cross5_rankformula_nometa4_abstract_fixed(
     }
     return sum;
 #else
+    const uint32_t d = p10dc_rankformula_abstract_desc_load(di);
     const uint32_t lp = d & ((1u << P10DC_RANKFORMULA_ABSTRACT_LP_BITS) - 1u);
+    uint32_t rp = d >> P10DC_RANKFORMULA_ABSTRACT_LP_BITS;
     uint32_t state = depth;
     // The abstract word is indexed by support ordinal, not physical position.
     // Group64 already stores n, so no runtime popcount or clz scan remains.
