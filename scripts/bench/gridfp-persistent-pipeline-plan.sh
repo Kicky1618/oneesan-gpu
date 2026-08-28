@@ -1,0 +1,58 @@
+#!/usr/bin/env bash
+set -euo pipefail
+source "$(dirname -- "${BASH_SOURCE[0]}")/../lib/common.sh"
+
+CXX="${CXX:-g++}"
+CXXFLAGS="${CXXFLAGS:--O3 -std=c++17}"
+NODE_HBM_TBPS="${NODE_HBM_TBPS:-64}"
+NODE_NVLINK_TBPS="${NODE_NVLINK_TBPS:-14.4}"
+MIN_B300_HEADROOM_GIB="${MIN_B300_HEADROOM_GIB:-18}"
+
+PLAN_SRC="$(repo_path src/cpp/probes/gridfp_reduced_production_persistent_pipeline_plan_probe.cpp)"
+ORDER_SRC="$(repo_path src/cpp/probes/gridfp_reduced_production_persistent_pipeline_order_probe.cpp)"
+PLAN_BIN="$(build_path gridfp_reduced_production_persistent_pipeline_plan_probe)"
+ORDER_BIN="$(build_path gridfp_reduced_production_persistent_pipeline_order_probe)"
+
+# shellcheck disable=SC2086
+"$CXX" $CXXFLAGS "$PLAN_SRC" -o "$PLAN_BIN"
+# shellcheck disable=SC2086
+"$CXX" $CXXFLAGS "$ORDER_SRC" -o "$ORDER_BIN"
+
+PLAN_OUTPUT="$($PLAN_BIN "$NODE_HBM_TBPS" "$NODE_NVLINK_TBPS")"
+ORDER_OUTPUT="$($ORDER_BIN "$NODE_HBM_TBPS" "$NODE_NVLINK_TBPS")"
+printf '%s\n' "$PLAN_OUTPUT"
+printf '%s\n' "$ORDER_OUTPUT"
+
+if ! printf '%s\n' "$PLAN_OUTPUT" | grep -q 'ALL_OK production_persistent_pipeline_plan=1'; then
+  echo "persistent pipeline plan missing ALL_OK" >&2
+  exit 4
+fi
+if ! printf '%s\n' "$ORDER_OUTPUT" | grep -q 'ALL_OK production_persistent_pipeline_order=1 exact_dp=1'; then
+  echo "persistent pipeline order DP missing ALL_OK" >&2
+  exit 5
+fi
+
+for direction in forward reverse; do
+  HEADROOM="$(printf '%s\n' "$PLAN_OUTPUT" | awk -v want="$direction" '
+    /persistent-pipeline-plan/ {
+      have=0; value="";
+      for(i=1;i<=NF;++i){
+        if($i=="direction=" want) have=1;
+        if($i~/^B300_headroom_GiB=/){split($i,a,"=");value=a[2];}
+      }
+      if(have&&value!=""){print value;exit}
+    }
+  ')"
+  if [[ -z "$HEADROOM" ]]; then
+    echo "pipeline plan missing headroom direction=$direction" >&2
+    exit 6
+  fi
+  if ! awk -v got="$HEADROOM" -v want="$MIN_B300_HEADROOM_GIB" \
+      'BEGIN { exit !(got + 0 >= want + 0) }'; then
+    echo "pipeline B300 headroom too small direction=$direction got=$HEADROOM want>=$MIN_B300_HEADROOM_GIB" >&2
+    exit 7
+  fi
+
+done
+
+echo "persistent-pipeline-plan exact=OK batches=16 double_scratch=1 exact_order_dp=1 node_HBM_TBps=$NODE_HBM_TBPS node_NVLink_TBps=$NODE_NVLINK_TBPS"
