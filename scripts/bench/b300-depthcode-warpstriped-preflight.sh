@@ -46,8 +46,12 @@ echo '=== rankchunk32 compact block64 align64 proof ===' >&2
 bash "$ONEESAN_ROOT/scripts/bench/rankchunk32-block64-align-proof.sh"
 echo '=== rankchunk32 bytepack basepair64 proof ===' >&2
 bash "$ONEESAN_ROOT/scripts/bench/rankchunk32-basepair64-proof.sh"
+echo '=== rankchunk32 basepair64 unaligned warp routing proof ===' >&2
+bash "$ONEESAN_ROOT/scripts/bench/rankchunk32-basepair64-warp-proof.sh"
 echo '=== rankchunk32 K14 CUDA device codec: compact + bytepack ===' >&2
 ARCH="$ARCH" bash "$ONEESAN_ROOT/scripts/bench/rankchunk32-codec-cuda-selftest.sh"
+echo '=== rankchunk32 basepair64 warp CUDA: packed + aligned ===' >&2
+RUN_HOST_PROOF=0 ARCH="$ARCH" bash "$ONEESAN_ROOT/scripts/bench/rankchunk32-basepair64-warp-cuda-selftest.sh"
 echo '=== CROSS5 CUDA helper equivalence, including prekey: PM 0/1 ===' >&2
 PM_ACCUM=0 ARCH="$ARCH" W=10 bash "$ONEESAN_ROOT/scripts/bench/cross5-cuda-selftest.sh"
 PM_ACCUM=1 ARCH="$ARCH" W=10 bash "$ONEESAN_ROOT/scripts/bench/cross5-cuda-selftest.sh"
@@ -102,4 +106,4 @@ if [[ "$RUN_RANK16_AB" == 1 ]]; then N="$AB_N" REPEATS="$REPEATS" DEPTHCODE_DECO
 if [[ "$RUN_RANK_BACKENDS_AB" == 1 ]]; then N="$AB_N" REPEATS="$REPEATS" DEPTHCODE_DECODE_LOAD="$DEPTHCODE_DECODE_LOAD" bash "$ONEESAN_ROOT/scripts/bench/b300-depthcode-rank-backends-ab.sh"; fi
 if [[ "$RUN_B300_AB" == 1 ]]; then N="$AB_N" REPEATS="$REPEATS" DEPTHCODE_DECODE_LOAD="$DEPTHCODE_DECODE_LOAD" bash "$ONEESAN_ROOT/scripts/bench/b300-depthcode-warpstriped-ab.sh"; fi
 
-echo "b300-depthcode-warpstriped-preflight OK n=$N arch=$ARCH run_ptxas=$RUN_PTXAS run_delta_ab=$RUN_DELTA_AB run_cross5_ab=$RUN_CROSS5_AB run_direct_ab=$RUN_DIRECT_AB run_affine_ab=$RUN_AFFINE_AB run_prekey_ab=$RUN_PREKEY_AB run_rank16_ab=$RUN_RANK16_AB run_rank_backends_ab=$RUN_RANK_BACKENDS_AB run_b300_ab=$RUN_B300_AB ternary_delta_proved=1 cross5_cuda=1 low_rank_owner_proved=1 rankstream32_pack_proved=1 rankstream32_warpbase_proved=1 rankchunk32_warpbase_proved=1 rankchunk32_bytepack_prefix_proved=1 rankchunk32_align32_proved=1 rankchunk32_block64_proved=1 rankchunk32_block64_align64_proved=1 rankchunk32_basepair64_proved=1 rankchunk32_k14_codec_cuda_both=1 rankchunk32_bytepack_high_cuda=1 rankchunk32_align32_high_cuda=1 rankchunk32_block64_high_cuda=1 rankchunk32_block64_align64_high_cuda=1 rankchunk32_basepair64_cuda=1 direct_resolve_cuda=1 affine_rows_cuda=1 prekey_cuda=1 rank16_cuda=1 rankstream_cuda=1 rankstream32_cuda=1 rankchunk32_cuda=1 rankchunk32_ldg256_cuda=1" >&2
+echo "b300-depthcode-warpstriped-preflight OK n=$N arch=$ARCH run_ptxas=$RUN_PTXAS run_delta_ab=$RUN_DELTA_AB run_cross5_ab=$RUN_CROSS5_AB run_direct_ab=$RUN_DIRECT_AB run_affine_ab=$RUN_AFFINE_AB run_prekey_ab=$RUN_PREKEY_AB run_rank16_ab=$RUN_RANK16_AB run_rank_backends_ab=$RUN_RANK_BACKENDS_AB run_b300_ab=$RUN_B300_AB ternary_delta_proved=1 cross5_cuda=1 low_rank_owner_proved=1 rankstream32_pack_proved=1 rankstream32_warpbase_proved=1 rankchunk32_warpbase_proved=1 rankchunk32_bytepack_prefix_proved=1 rankchunk32_align32_proved=1 rankchunk32_block64_proved=1 rankchunk32_block64_align64_proved=1 rankchunk32_basepair64_proved=1 rankchunk32_basepair64_unaligned_warp_proved=1 rankchunk32_basepair64_warp_cuda=1 rankchunk32_k14_codec_cuda_both=1 rankchunk32_bytepack_high_cuda=1 rankchunk32_align32_high_cuda=1 rankchunk32_block64_high_cuda=1 rankchunk32_block64_align64_high_cuda=1 rankchunk32_basepair64_cuda=1 direct_resolve_cuda=1 affine_rows_cuda=1 prekey_cuda=1 rank16_cuda=1 rankstream_cuda=1 rankstream32_cuda=1 rankchunk32_cuda=1 rankchunk32_ldg256_cuda=1" >&2
