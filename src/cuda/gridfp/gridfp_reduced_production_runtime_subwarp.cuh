@@ -2,7 +2,7 @@
 
 #include "gridfp_reduced_production_runtime_small_step.cuh"
 #include "gridfp_reduced_production_owner_component_plan_device.cuh"
-#include "gridfp_reduced_production_runtime_shared_key.cuh"
+#include "gridfp_reduced_production_runtime_find_index_cache.cuh"
 #include "gridfp_reduced_production_group_context_device.cuh"
 
 namespace oneesan::gridfp::reducedprod {
@@ -37,8 +37,12 @@ static constexpr int RP_RUNTIME_SHARED_KEY_ENTRIES_PER_BLOCK =
     RP_RUNTIME_MAX_PAIRS;
 static constexpr int RP_RUNTIME_SHARED_KEY_BYTES_PER_BLOCK =
     RP_RUNTIME_SHARED_KEY_ENTRIES_PER_BLOCK * int(sizeof(RuntimeSharedKey));
+static constexpr int RP_RUNTIME_FIND_INDEX_CACHE_BYTES_PER_BLOCK =
+    RP_RUNTIME_FIND_INDEX_CACHE_BYTES_PER_SUBGROUP *
+    RP_RUNTIME_WARPS_PER_BLOCK * RP_RUNTIME_SUBGROUPS_PER_WARP;
 static_assert(RP_RUNTIME_SUBGROUP_WIDTH == 8);
 static_assert(RP_RUNTIME_MAX_DESTINATIONS_PER_LANE == 3);
+static_assert(RP_RUNTIME_FIND_INDEX_CACHE_BYTES_PER_BLOCK == 4096);
 #if RP_RUNTIME_PACK_SHARED_KEYS
 static_assert(sizeof(RuntimeSharedKey) == 8);
 static_assert(RP_RUNTIME_SHARED_KEY_BYTES_PER_BLOCK == 10240);
@@ -178,6 +182,12 @@ __global__ void owner_component_runtime_subwarp_kernel(
     __shared__ RuntimeEdgeCache sh_edge[RP_RUNTIME_WARPS_PER_BLOCK]
                                        [RP_RUNTIME_SUBGROUPS_PER_WARP];
 #endif
+#if RP_RUNTIME_FIND_INDEX_CACHE
+    __shared__ RuntimeFindIndexCache sh_src_find[RP_RUNTIME_WARPS_PER_BLOCK]
+                                            [RP_RUNTIME_SUBGROUPS_PER_WARP];
+    __shared__ RuntimeFindIndexCache sh_dst_find[RP_RUNTIME_WARPS_PER_BLOCK]
+                                            [RP_RUNTIME_SUBGROUPS_PER_WARP];
+#endif
 
     const int lane = threadIdx.x & 31;
     const int warp = threadIdx.x >> 5;
@@ -209,12 +219,19 @@ __global__ void owner_component_runtime_subwarp_kernel(
                 if (ctx.owner != gpu_id) {
                     runtime_set_error(error, 302);
                 } else {
-#if RP_RUNTIME_FIND_SIGNATURE_FILTER
+#if RP_RUNTIME_FIND_INDEX_CACHE
+                    std::uint64_t source_occupancy = 0;
+                    std::uint64_t destination_occupancy = 0;
+#elif RP_RUNTIME_FIND_SIGNATURE_FILTER
                     std::uint64_t source_signature = runtime_shared_key_signature_bit(seed);
                     std::uint64_t destination_signature = 0;
 #endif
                     sh_src[warp][subgroup][0] = runtime_shared_key_encode(seed);
                     sh_ns[warp][subgroup] = 1;
+#if RP_RUNTIME_FIND_INDEX_CACHE
+                    runtime_find_index_record(
+                        sh_src_find[warp][subgroup], source_occupancy, seed, 0);
+#endif
                     int cursor = 0;
                     while (cursor < sh_ns[warp][subgroup]) {
                         const int source_ix = cursor++;
@@ -231,7 +248,11 @@ __global__ void owner_component_runtime_subwarp_kernel(
                         for (int ei = 0; ei < edge.n; ++ei) {
                             if (!edge.v[ei].coef) continue;
                             const DeviceKey d = edge.v[ei].key;
-#if RP_RUNTIME_FIND_SIGNATURE_FILTER
+#if RP_RUNTIME_FIND_INDEX_CACHE
+                            int destination_ix = runtime_find_shared_key_indexed(
+                                sh_dst[warp][subgroup], sh_nd[warp][subgroup], d,
+                                destination_occupancy, sh_dst_find[warp][subgroup]);
+#elif RP_RUNTIME_FIND_SIGNATURE_FILTER
                             int destination_ix = runtime_find_shared_key_filtered(
                                 sh_dst[warp][subgroup], sh_nd[warp][subgroup], d,
                                 destination_signature);
@@ -248,7 +269,16 @@ __global__ void owner_component_runtime_subwarp_kernel(
                                 destination_ix = sh_nd[warp][subgroup]++;
                                 sh_dst[warp][subgroup][destination_ix] =
                                     runtime_shared_key_encode(d);
-#if RP_RUNTIME_FIND_SIGNATURE_FILTER
+#if RP_RUNTIME_FIND_INDEX_CACHE
+                                runtime_find_index_record(
+                                    sh_dst_find[warp][subgroup], destination_occupancy,
+                                    d, destination_ix);
+                                if (!runtime_discover_inverse_direction_to_shared_indexed(
+                                        d, W, q, reverse,
+                                        sh_src[warp][subgroup], sh_ns[warp][subgroup],
+                                        RP_RUNTIME_MAX_PAIRS, source_occupancy,
+                                        sh_src_find[warp][subgroup])) {
+#elif RP_RUNTIME_FIND_SIGNATURE_FILTER
                                 destination_signature |= runtime_shared_key_signature_bit(d);
                                 if (!runtime_discover_inverse_direction_to_shared(
                                         d, W, q, reverse,
