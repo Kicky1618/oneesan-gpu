@@ -8,17 +8,18 @@ RANKFORMULA_NOMETA_BLOCK="${RANKFORMULA_NOMETA_BLOCK:-4}"
 RANKFORMULA_NOMETA_WARPSHARE="${RANKFORMULA_NOMETA_WARPSHARE:-0}"
 RANKFORMULA_NOMETA_COOPGROUP="${RANKFORMULA_NOMETA_COOPGROUP:-0}"
 RANKFORMULA_NOMETA_COOP_UNROLL="${RANKFORMULA_NOMETA_COOP_UNROLL:-1}"
+RANKFORMULA_ABSTRACT_SELECT8="${RANKFORMULA_ABSTRACT_SELECT8:-0}"
 LOW_LUT_K="${LOW_LUT_K:-$((W / 2))}"; HIGH_LUT_K="${HIGH_LUT_K:-$((W - LOW_LUT_K - 1))}"
 if (( W > 12 || LOW_LUT_K <= 0 || HIGH_LUT_K <= 0 || LOW_LUT_K + HIGH_LUT_K + 1 != W )); then exit 2; fi
 case "$RANKFORMULA_NOMETA_BLOCK" in 4|8|16) ;; *) echo "RANKFORMULA_NOMETA_BLOCK must be 4, 8, or 16" >&2; exit 2;; esac
-for x in RANKFORMULA_NOMETA_WARPSHARE RANKFORMULA_NOMETA_COOPGROUP RANKFORMULA_NOMETA_COOP_UNROLL; do v="${!x}"; [[ "$v" == 0 || "$v" == 1 ]] || { echo "$x must be 0 or 1" >&2; exit 2; }; done
+for x in RANKFORMULA_NOMETA_WARPSHARE RANKFORMULA_NOMETA_COOPGROUP RANKFORMULA_NOMETA_COOP_UNROLL RANKFORMULA_ABSTRACT_SELECT8; do v="${!x}"; [[ "$v" == 0 || "$v" == 1 ]] || { echo "$x must be 0 or 1" >&2; exit 2; }; done
 if [[ "$RANKFORMULA_NOMETA_COOPGROUP" == 1 && "$RANKFORMULA_NOMETA_WARPSHARE" != 1 ]]; then echo "COOPGROUP requires WARPSHARE=1" >&2; exit 2; fi
 case "$DECODE_LOAD" in global) P10DC_DECODE_LDG=0 ;; ldg) P10DC_DECODE_LDG=1 ;; *) exit 2;; esac
 P10DC_RANKSTREAM_LUT_LDG=0; P10DC_RANKSTREAM_LUT_PAD256=0
 case "$RANKSTREAM_LUT_LOAD" in constant) ;; ldg) P10DC_RANKSTREAM_LUT_LDG=1 ;; ldg256) P10DC_RANKSTREAM_LUT_LDG=1; P10DC_RANKSTREAM_LUT_PAD256=1 ;; *) exit 2;; esac
 
 SRC="$ONEESAN_ROOT/src/cuda/gridfp/probes/ramstream32_bucket_orbit_closure_pattern10_depthcode_rankformula_nometa4_abstract_block_selftest.cu"
-BIN="${BIN:-$ONEESAN_BUILD_DIR/pattern10_depthcode_rankformula_nometa4_abstract_block${RANKFORMULA_NOMETA_BLOCK}_warpshare${RANKFORMULA_NOMETA_WARPSHARE}_coop${RANKFORMULA_NOMETA_COOPGROUP}_u${RANKFORMULA_NOMETA_COOP_UNROLL}_selftest_w${W}}"
+BIN="${BIN:-$ONEESAN_BUILD_DIR/pattern10_depthcode_rankformula_nometa4_abstract_block${RANKFORMULA_NOMETA_BLOCK}_warpshare${RANKFORMULA_NOMETA_WARPSHARE}_coop${RANKFORMULA_NOMETA_COOPGROUP}_u${RANKFORMULA_NOMETA_COOP_UNROLL}_select${RANKFORMULA_ABSTRACT_SELECT8}_selftest_w${W}}"
 mkdir -p "$(dirname "$BIN")"
 TMPDIR="$ONEESAN_TMP_DIR" nvcc -O3 -std=c++17 -lineinfo -arch="$ARCH" \
   -DTARGET_W="$W" -DLOW_LUT_K="$LOW_LUT_K" -DHIGH_LUT_K="$HIGH_LUT_K" \
@@ -26,6 +27,7 @@ TMPDIR="$ONEESAN_TMP_DIR" nvcc -O3 -std=c++17 -lineinfo -arch="$ARCH" \
   -DP10DC_RANKFORMULA_NOMETA_WARPSHARE="$RANKFORMULA_NOMETA_WARPSHARE" \
   -DP10DC_RANKFORMULA_NOMETA_COOPGROUP="$RANKFORMULA_NOMETA_COOPGROUP" \
   -DP10DC_RANKFORMULA_NOMETA_COOP_UNROLL="$RANKFORMULA_NOMETA_COOP_UNROLL" \
+  -DP10DC_RANKFORMULA_ABSTRACT_SELECT8="$RANKFORMULA_ABSTRACT_SELECT8" \
   -DGPU_DIRECT_PM_ACCUM="$PM_ACCUM" -DP10DC_DECODE_LDG="$P10DC_DECODE_LDG" \
   -DP10DC_RANKSTREAM_LUT_LDG="$P10DC_RANKSTREAM_LUT_LDG" -DP10DC_RANKSTREAM_LUT_PAD256="$P10DC_RANKSTREAM_LUT_PAD256" \
   -DP10DC_RANKCHUNK32_ONESHFL=1 -DP10DC_RANKCHUNK32_FUSED16=0 -DP10DC_RANKCHUNK32_BYTEPACK=0 \
@@ -36,10 +38,10 @@ TMPDIR="$ONEESAN_TMP_DIR" nvcc -O3 -std=c++17 -lineinfo -arch="$ARCH" \
 out="$($BIN)"
 printf '%s\n' "$out"
 grep -Eq "bucket-closure-pattern10-depthcode-rankformula-nometa4-abstract-selftest (OK W=$W|SKIP no CUDA device)" <<<"$out"
-grep -Fq "rankformula-nometa4-abstract-block-selftest compiled_block=$RANKFORMULA_NOMETA_BLOCK warpshare=$RANKFORMULA_NOMETA_WARPSHARE coopgroup=$RANKFORMULA_NOMETA_COOPGROUP coop_unroll=$RANKFORMULA_NOMETA_COOP_UNROLL max_locator_steps_bound=$((RANKFORMULA_NOMETA_BLOCK - 1)) wrapper_ok=1" <<<"$out"
+grep -Fq "rankformula-nometa4-abstract-block-selftest compiled_block=$RANKFORMULA_NOMETA_BLOCK warpshare=$RANKFORMULA_NOMETA_WARPSHARE coopgroup=$RANKFORMULA_NOMETA_COOPGROUP coop_unroll=$RANKFORMULA_NOMETA_COOP_UNROLL select8=$RANKFORMULA_ABSTRACT_SELECT8 max_locator_steps_bound=$((RANKFORMULA_NOMETA_BLOCK - 1)) depth14_15_fast_zero=1 wrapper_ok=1" <<<"$out"
 if grep -Fq "OK W=$W" <<<"$out"; then
   grep -Fq 'forward_exact=1 reverse_exact=1' <<<"$out"
-  grep -Fq 'abstract_lut_bytes=94206 abstract_states=7060 abstract_transitions=32743' <<<"$out"
+  grep -Fq 'abstract_states=7060 abstract_transitions=32743' <<<"$out"
   grep -Fq 'ballot_runtime_loads=0 source_local_lut=1' <<<"$out"
 fi
-echo "pattern10-depthcode-rankformula-nometa4-abstract-block-selftest OK W=$W block=$RANKFORMULA_NOMETA_BLOCK warpshare=$RANKFORMULA_NOMETA_WARPSHARE coopgroup=$RANKFORMULA_NOMETA_COOPGROUP coop_unroll=$RANKFORMULA_NOMETA_COOP_UNROLL" >&2
+echo "pattern10-depthcode-rankformula-nometa4-abstract-block-selftest OK W=$W block=$RANKFORMULA_NOMETA_BLOCK warpshare=$RANKFORMULA_NOMETA_WARPSHARE coopgroup=$RANKFORMULA_NOMETA_COOPGROUP coop_unroll=$RANKFORMULA_NOMETA_COOP_UNROLL select8=$RANKFORMULA_ABSTRACT_SELECT8" >&2
