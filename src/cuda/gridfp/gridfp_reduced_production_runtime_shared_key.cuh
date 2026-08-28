@@ -16,6 +16,9 @@ namespace oneesan::gridfp::reducedprod {
 #ifndef RP_RUNTIME_FIND_RECENT_FIRST
 #define RP_RUNTIME_FIND_RECENT_FIRST 0
 #endif
+#ifndef RP_RUNTIME_FIND_RECENT_UNROLLED
+#define RP_RUNTIME_FIND_RECENT_UNROLLED 1
+#endif
 static_assert(RP_RUNTIME_PACK_SHARED_KEYS == 0 || RP_RUNTIME_PACK_SHARED_KEYS == 1,
               "RP_RUNTIME_PACK_SHARED_KEYS must be 0 or 1");
 static_assert(RP_RUNTIME_FAST_DISCOVERY_VALIDITY == 0 ||
@@ -26,6 +29,9 @@ static_assert(RP_RUNTIME_DISCOVERY_ENDPOINT_SCAN == 0 ||
               "RP_RUNTIME_DISCOVERY_ENDPOINT_SCAN must be 0 or 1");
 static_assert(RP_RUNTIME_FIND_RECENT_FIRST == 0 || RP_RUNTIME_FIND_RECENT_FIRST == 1,
               "RP_RUNTIME_FIND_RECENT_FIRST must be 0 or 1");
+static_assert(RP_RUNTIME_FIND_RECENT_UNROLLED == 0 ||
+              RP_RUNTIME_FIND_RECENT_UNROLLED == 1,
+              "RP_RUNTIME_FIND_RECENT_UNROLLED must be 0 or 1");
 
 static constexpr std::uint64_t RP_RUNTIME_SHARED_BLOCKED_BIT = 1ULL << 63;
 static constexpr std::uint64_t RP_RUNTIME_SHARED_MATE_MASK =
@@ -64,6 +70,30 @@ __device__ __forceinline__ int runtime_find_shared_key(
 #if RP_RUNTIME_PACK_SHARED_KEYS
     const RuntimeSharedKey needle = runtime_shared_key_encode(k);
 #if RP_RUNTIME_FIND_RECENT_FIRST
+#if RP_RUNTIME_FIND_RECENT_UNROLLED
+    // Runtime components are capped at 20 pairs. A fallthrough switch preserves
+    // exact recent-first order while removing loop counter/back-edge control.
+    if (n <= 20) {
+#define RP_RUNTIME_FIND_CHECK(I) \
+        case I: if (a[(I) - 1] == needle) return (I) - 1; [[fallthrough]]
+        switch (n) {
+        RP_RUNTIME_FIND_CHECK(20); RP_RUNTIME_FIND_CHECK(19);
+        RP_RUNTIME_FIND_CHECK(18); RP_RUNTIME_FIND_CHECK(17);
+        RP_RUNTIME_FIND_CHECK(16); RP_RUNTIME_FIND_CHECK(15);
+        RP_RUNTIME_FIND_CHECK(14); RP_RUNTIME_FIND_CHECK(13);
+        RP_RUNTIME_FIND_CHECK(12); RP_RUNTIME_FIND_CHECK(11);
+        RP_RUNTIME_FIND_CHECK(10); RP_RUNTIME_FIND_CHECK(9);
+        RP_RUNTIME_FIND_CHECK(8); RP_RUNTIME_FIND_CHECK(7);
+        RP_RUNTIME_FIND_CHECK(6); RP_RUNTIME_FIND_CHECK(5);
+        RP_RUNTIME_FIND_CHECK(4); RP_RUNTIME_FIND_CHECK(3);
+        RP_RUNTIME_FIND_CHECK(2); RP_RUNTIME_FIND_CHECK(1);
+        case 0: break;
+        default: break;
+        }
+#undef RP_RUNTIME_FIND_CHECK
+        return -1;
+    }
+#endif
     for (int i = n - 1; i >= 0; --i)
         if (a[i] == needle) return i;
 #else
