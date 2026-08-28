@@ -4,6 +4,13 @@
 
 namespace oneesan::gridfp::reducedprod {
 
+#ifndef RP_FAST_ERASE_TWO_LOCAL_BITS
+#define RP_FAST_ERASE_TWO_LOCAL_BITS 1
+#endif
+static_assert(RP_FAST_ERASE_TWO_LOCAL_BITS == 0 ||
+              RP_FAST_ERASE_TWO_LOCAL_BITS == 1,
+              "RP_FAST_ERASE_TWO_LOCAL_BITS must be 0 or 1");
+
 struct GroupedDeviceRank {
     int owner = -1;
     Rank64 local = 0;
@@ -39,6 +46,27 @@ __device__ __forceinline__ std::uint32_t erase_two_local_bits_device(
     int a,
     int b
 ) {
+#if RP_FAST_ERASE_TWO_LOCAL_BITS
+    if (L >= 2 && L <= 32 && a >= 0 && a < L && b >= 0 && b < L && a != b) {
+        const int lo = a < b ? a : b;
+        const int hi = a < b ? b : a;
+        const std::uint32_t width_mask = L == 32
+            ? ~0u
+            : ((std::uint32_t(1) << L) - 1u);
+        local &= width_mask;
+        const std::uint32_t low_mask = lo
+            ? ((std::uint32_t(1) << lo) - 1u)
+            : 0u;
+        const int middle_width = hi - lo - 1;
+        const std::uint32_t middle_mask = middle_width
+            ? ((std::uint32_t(1) << middle_width) - 1u)
+            : 0u;
+        const std::uint32_t low = local & low_mask;
+        const std::uint32_t middle = (local >> (lo + 1)) & middle_mask;
+        const std::uint32_t high = hi == 31 ? 0u : (local >> (hi + 1));
+        return low | (middle << lo) | (high << (hi - 1));
+    }
+#endif
     std::uint32_t compact = 0;
     int q = 0;
     for (int pos = 0; pos < L; ++pos) {
