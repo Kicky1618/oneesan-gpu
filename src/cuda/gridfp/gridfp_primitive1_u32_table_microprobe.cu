@@ -11,8 +11,8 @@
 #ifndef RP_PRIMITIVE1_TABLE_MODE
 #define RP_PRIMITIVE1_TABLE_MODE 0
 #endif
-static_assert(RP_PRIMITIVE1_TABLE_MODE >= 0 && RP_PRIMITIVE1_TABLE_MODE <= 2,
-              "RP_PRIMITIVE1_TABLE_MODE must be 0, 1, or 2");
+static_assert(RP_PRIMITIVE1_TABLE_MODE >= 0 && RP_PRIMITIVE1_TABLE_MODE <= 3,
+              "RP_PRIMITIVE1_TABLE_MODE must be 0, 1, 2, or 3");
 
 namespace rp = oneesan::gridfp::reducedprod;
 
@@ -46,13 +46,35 @@ PrimitiveTable make_primitive_table() {
     return p;
 }
 
+__device__ __forceinline__ rp::Rank64 primitive1_switch_count(int occupied) {
+    switch (occupied) {
+    case 1: return 1u;
+    case 3: return 2u;
+    case 5: return 5u;
+    case 7: return 14u;
+    case 9: return 42u;
+    case 11: return 132u;
+    case 13: return 429u;
+    case 15: return 1430u;
+    case 17: return 4862u;
+    case 19: return 16796u;
+    case 21: return 58786u;
+    case 23: return 208012u;
+    case 25: return 742900u;
+    case 27: return 2674440u;
+    default: return 0u;
+    }
+}
+
 __device__ __forceinline__ rp::Rank64 primitive1_count(int occupied) {
 #if RP_PRIMITIVE1_TABLE_MODE == 0
     return rp::RP_PRIMITIVE[occupied][1];
 #elif RP_PRIMITIVE1_TABLE_MODE == 1
     return rp::RP_SECTOR_PRIMITIVE[occupied >> 1];
-#else
+#elif RP_PRIMITIVE1_TABLE_MODE == 2
     return RP_PRIMITIVE1_U32_PROBE[occupied >> 1];
+#else
+    return primitive1_switch_count(occupied);
 #endif
 }
 
