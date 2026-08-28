@@ -1,0 +1,2 @@
+#define BUCKET_TRANSPOSE_EVENTS 1
+#include "oneesan_cuda_gridfp_b300_bucket_snake_onepass_pattern10_depthcode_warpstriped_delta_direct_affine_rankchunk32_cross5_graph_batch.cu"
