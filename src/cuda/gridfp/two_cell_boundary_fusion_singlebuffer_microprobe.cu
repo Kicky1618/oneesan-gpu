@@ -35,9 +35,9 @@ __global__ void two_cell_boundary_fusion_kernel(
     extern __shared__ std::uint32_t block_values[];
     __shared__ oneesan::twocell::PackedKey sh_state[FUSION_WARPS][FUSION_MAX_COMPONENT];
     __shared__ std::uint32_t sh_value[FUSION_WARPS][FUSION_MAX_COMPONENT];
+    __shared__ std::uint32_t sh_output[FUSION_WARPS][FUSION_MAX_COMPONENT];
     __shared__ Rank sh_rank[FUSION_WARPS][FUSION_MAX_COMPONENT];
-    __shared__ std::int8_t sh_to[FUSION_WARPS][FUSION_MAX_COMPONENT][2];
-    __shared__ std::uint8_t sh_nto[FUSION_WARPS][FUSION_MAX_COMPONENT];
+    __shared__ oneesan::twocell::ComponentMatching sh_matching[FUSION_WARPS];
     __shared__ int sh_ns[FUSION_WARPS];
     __shared__ int sh_singular[FUSION_WARPS];
 
@@ -77,7 +77,9 @@ __global__ void two_cell_boundary_fusion_kernel(
         }
         __syncthreads();
 
-        // Operator 1: final forward interior K_{W-4}, in stationary tree form.
+        // Operator 1: final forward interior K_{W-4}. recouple identifies the
+        // destination coordinates, while the actual unique matrix matching is
+        // reconstructed locally from K edges by leaf peeling.
         for (Rank cr = warp; cr < nc; cr += FUSION_WARPS) {
             if (lane == 0) {
                 sh_ns[warp] = 0;
@@ -93,7 +95,14 @@ __global__ void two_cell_boundary_fusion_kernel(
                     } else {
                         sh_ns[warp] = src.size;
                         for (int q = 0; q < src.size; ++q) sh_state[warp][q] = src.value[q];
-                        atomicAdd(processed_components, 1ULL);
+                        const auto m = oneesan::twocell::build_component_matching(
+                            sh_state[warp], src.size, W, start);
+                        if (!m.ok) {
+                            set_error(error, 286);
+                        } else {
+                            sh_matching[warp] = m;
+                            atomicAdd(processed_components, 1ULL);
+                        }
                     }
                 }
             }
@@ -109,88 +118,35 @@ __global__ void two_cell_boundary_fusion_kernel(
                     source, start, BOUNDARY_STEPS, start, outer_ones,
                     primitive, TC_RANK_TABLES);
                 sh_rank[warp][lane] = lr;
-                sh_nto[warp][lane] = 0;
                 if (lr >= n) {
                     sh_value[warp][lane] = 0;
                     set_error(error, 285);
                 } else {
                     sh_value[warp][lane] = block_values[lr];
-                    const auto edges = oneesan::twocell::K_step(source, W, start);
-                    if (edges.overflow || edges.size < 1 || edges.size > 3) {
-                        set_error(error, 286);
-                    } else {
-                        const auto diagonal = oneesan::twocell::recouple_coordinate(source, start);
-                        bool found_diagonal = false;
-                        int ne = 0;
-                        for (int e = 0; e < edges.size; ++e) {
-                            const auto d = edges.value[e];
-                            if (oneesan::twocell::equal(d, diagonal)) {
-                                found_diagonal = true;
-                                continue;
-                            }
-                            int target = -1;
-                            for (int t = 0; t < ns; ++t) {
-                                const auto candidate = oneesan::twocell::recouple_coordinate(
-                                    sh_state[warp][t], start);
-                                if (oneesan::twocell::equal(d, candidate)) {
-                                    target = t;
-                                    break;
-                                }
-                            }
-                            if (target < 0 || ne >= 2) {
-                                set_error(error, 287);
-                                continue;
-                            }
-                            sh_to[warp][lane][ne++] = static_cast<std::int8_t>(target);
-                        }
-                        sh_nto[warp][lane] = static_cast<std::uint8_t>(ne);
-                        if (!found_diagonal) set_error(error, 288);
-                    }
                 }
             }
             __syncwarp();
 
             if (lane == 0 && ns > 0) {
-                std::uint32_t alive = oneesan::twocell::low_mask(ns);
-                int removed = 0, adds = 0;
-                while (alive) {
-                    std::uint32_t sinks = 0;
-                    for (int v = 0; v < ns; ++v) {
-                        if (!((alive >> v) & 1u)) continue;
-                        bool live = false;
-                        for (int e = 0; e < sh_nto[warp][v]; ++e)
-                            live |= ((alive >> sh_to[warp][v][e]) & 1u) != 0;
-                        if (!live) sinks |= std::uint32_t(1) << v;
-                    }
-                    if (!sinks) {
-                        set_error(error, 289);
-                        break;
-                    }
-                    for (int v = 0; v < ns; ++v) {
-                        if (!((sinks >> v) & 1u)) continue;
-                        const std::uint32_t x = sh_value[warp][v];
-                        for (int e = 0; e < sh_nto[warp][v]; ++e) {
-                            const int t = sh_to[warp][v][e];
-                            sh_value[warp][t] = fusion_add_mod(sh_value[warp][t], x, mod);
-                            ++adds;
-                        }
-                        ++removed;
-                    }
-                    alive &= ~sinks;
+                const auto m = sh_matching[warp];
+                if (!oneesan::twocell::apply_component_matching(
+                        m, sh_value[warp], sh_output[warp], mod)) {
+                    set_error(error, 287);
+                } else {
+                    atomicAdd(local_adds,
+                              static_cast<unsigned long long>(m.residual_edges));
                 }
-                if (removed != ns || adds != ns - 1) set_error(error, 290);
-                atomicAdd(local_adds, static_cast<unsigned long long>(adds));
             }
             __syncwarp();
             if (lane < ns && sh_rank[warp][lane] < n)
-                block_values[sh_rank[warp][lane]] = sh_value[warp][lane];
+                block_values[sh_rank[warp][lane]] = sh_output[warp][lane];
             __syncwarp();
         }
         __syncthreads();
 
-        // Operator 2: physical right row turn.  It uses the same unrestricted
-        // labels and the same union outer mask, but its cyclic support component
-        // has the closed alpha/beta/passive arithmetic instead of tree shears.
+        // Operator 2: physical right row turn. This closed cyclic block has its
+        // own exact alpha/beta/passive arithmetic and does not use the interior
+        // matching assumption.
         for (Rank cr = warp; cr < nc; cr += FUSION_WARPS) {
             if (lane == 0) {
                 sh_ns[warp] = 0;
@@ -352,7 +308,7 @@ void print_boundary_singlebuffer_plan(
               << " max_fused_outer_ones=" << max_o
               << " fused_state_fraction=" << f
               << " HBM_reduction_for_interior_plus_turn=" << 0.5 * f
-              << "\n";
+              << " matching=leaf_peeling\n";
 }
 
 } // namespace
@@ -490,6 +446,7 @@ int main(int argc, char** argv) {
               << " global_loads=" << loads
               << " global_stores=" << stores
               << " local_adds=" << adds
+              << " matching=leaf_peeling"
               << " second_global_vector_bytes=0"
               << " arithmetic=" << (fit_states == states ? "OK" : "PARTIAL")
               << "\n";
