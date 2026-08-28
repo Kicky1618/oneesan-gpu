@@ -3,7 +3,7 @@ set -euo pipefail
 source "$(dirname -- "${BASH_SOURCE[0]}")/../lib/common.sh"
 
 W="${W:-10}"; NGPU="${NGPU:-2}"; BLOCKS="${BLOCKS:-256}"; MOD="${MOD:-4294967291}"
-REPEATS="${REPEATS:-7}"; WARMUP="${WARMUP:-1}"; ARCH="${ARCH:-native}"; PTXAS_VERBOSE="${PTXAS_VERBOSE:-1}"
+REPEATS="${REPEATS:-7}"; WARMUP="${WARMUP:-1}"; ARCH="${ARCH:-native}"; PTX_ARCH="${PTX_ARCH:-sm_80}"; PTXAS_VERBOSE="${PTXAS_VERBOSE:-1}"
 if (( W < 8 || W > 28 || W % 2 != 0 || NGPU < 2 || NGPU > 8 || BLOCKS < 1 || REPEATS < 1 || WARMUP < 0 )); then
   echo "invalid W/NGPU/BLOCKS/REPEATS/WARMUP" >&2; exit 2
 fi
@@ -21,6 +21,8 @@ bash "$ONEESAN_ROOT/scripts/bench/gridfp-runtime-owner-fixed52-proof.sh" \
   >"$LOGDIR/fixed52-proof.out" 2>"$LOGDIR/fixed52-proof.err"
 bash "$ONEESAN_ROOT/scripts/bench/gridfp-runtime-owner-u32limb-proof.sh" \
   >"$LOGDIR/u32limb-proof.out" 2>"$LOGDIR/u32limb-proof.err"
+ARCH="$PTX_ARCH" bash "$ONEESAN_ROOT/scripts/bench/gridfp-runtime-owner-u32limb-ptx-proof.sh" \
+  >"$LOGDIR/u32limb-ptx-proof.out" 2>"$LOGDIR/u32limb-ptx-proof.err"
 
 build_one() {
   local u32limb="$1" bin="$2"
