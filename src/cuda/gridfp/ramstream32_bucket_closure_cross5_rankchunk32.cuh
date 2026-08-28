@@ -9,6 +9,12 @@
 static_assert(P10DC_RANKCHUNK32_FUSED16 == 0 || P10DC_RANKCHUNK32_FUSED16 == 1,
               "P10DC_RANKCHUNK32_FUSED16 must be 0 or 1");
 
+#ifndef P10DC_RANKCHUNK32_DIRECT3
+#define P10DC_RANKCHUNK32_DIRECT3 0
+#endif
+static_assert(P10DC_RANKCHUNK32_DIRECT3 == 0 || P10DC_RANKCHUNK32_DIRECT3 == 1,
+              "P10DC_RANKCHUNK32_DIRECT3 must be 0 or 1");
+
 #if P10DC_RANKCHUNK32_FUSED16
 #if P10DC_RANKSTREAM_LUT_LDG
 __device__ __align__(128) uint16_t
@@ -76,13 +82,33 @@ __device__ __forceinline__ uint32_t p10dc_cross5_apply_rankchunk32(
     const uint8_t e = p10dc_rankstream_entry_load(
         size_t(state) * P10DC_RANKSTREAM_LUT_STRIDE + chunk);
 #endif
-    uint8_t rankmask = uint8_t(e & P10DC_CROSS5_MASK_MASK);
-    while (rankmask) {
-        const int ordinal = __ffs(int(rankmask)) - 1;
-        rankmask = uint8_t(rankmask & uint8_t(rankmask - 1));
+    const uint8_t rankmask = uint8_t(e & P10DC_CROSS5_MASK_MASK);
+#if P10DC_RANKCHUNK32_DIRECT3
+    // Exhaustive CROSS5 shape proof over all 25*243 production table inputs:
+    // rankmask is always one of {0,1,2,3,5,7}; bits 3 and 4 are unreachable.
+    // Avoid the dependent ffs/clear loop and test the only three ordinals that
+    // can occur. Keep this behind an A/B switch until measured on B300.
+    if (rankmask & 0x01u) {
+        const uint16_t source_rank = rank_row[lbase];
+        sum = bkcz_cross_add(sum, source_row[uint32_t(source_rank)]);
+    }
+    if (rankmask & 0x02u) {
+        const uint16_t source_rank = rank_row[lbase + 1u];
+        sum = bkcz_cross_add(sum, source_row[uint32_t(source_rank)]);
+    }
+    if (rankmask & 0x04u) {
+        const uint16_t source_rank = rank_row[lbase + 2u];
+        sum = bkcz_cross_add(sum, source_row[uint32_t(source_rank)]);
+    }
+#else
+    uint8_t pending = rankmask;
+    while (pending) {
+        const int ordinal = __ffs(int(pending)) - 1;
+        pending = uint8_t(pending & uint8_t(pending - 1));
         const uint16_t source_rank = rank_row[lbase + uint32_t(ordinal)];
         sum = bkcz_cross_add(sum, source_row[uint32_t(source_rank)]);
     }
+#endif
     if (((e >> P10DC_CROSS5_HALT_SHIFT) & 1u) != 0) return 1u;
 
 #if P10DC_RANKCHUNK32_FUSED16
