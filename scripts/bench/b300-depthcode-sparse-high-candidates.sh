@@ -44,8 +44,8 @@ bash "$ONEESAN_ROOT/scripts/bench/rankdelta8-plan.sh"
 bash "$ONEESAN_ROOT/scripts/bench/rankformula-plan.sh"
 bash "$ONEESAN_ROOT/scripts/bench/rankformula-sparse-base-proof.sh"
 bash "$ONEESAN_ROOT/scripts/bench/rankformula-base-delta-proof.sh"
-bash "$ONEESAN_ROOT/scripts/bench/rankformula-rawcode-proof.sh"
 bash "$ONEESAN_ROOT/scripts/bench/rankformula-inline-cross-proof.sh"
+bash "$ONEESAN_ROOT/scripts/bench/rankformula-slotmeta-proof.sh"
 
 if [[ "$RUN_SELFTEST" == 1 ]]; then
   ARCH="$ARCH" W=10 DECODE_LOAD="$DEPTHCODE_DECODE_LOAD" RANKSTREAM_LUT_LOAD="$RANKSTREAM_LUT_LOAD" \
@@ -60,9 +60,8 @@ if [[ "$RUN_SELFTEST" == 1 ]]; then
     >"$LOGDIR/rankdelta8.selftest.out" 2>"$LOGDIR/rankdelta8.selftest.err"
 
   ARCH="$ARCH" W=10 DECODE_LOAD="$DEPTHCODE_DECODE_LOAD" RANKSTREAM_LUT_LOAD="$RANKSTREAM_LUT_LOAD" \
-    RANKFORMULA_SPARSE_BASE=1 RANKFORMULA_BASE_DELTA=1 RANKFORMULA_RAWCODE=1 RANKFORMULA_INLINE_CROSS=1 \
     RANKDELTA8_FUSED13="$RANKDELTA8_FUSED13" PM_ACCUM="$PM_ACCUM" \
-    bash "$ONEESAN_ROOT/scripts/bench/pattern10-depthcode-rankformula-cross5-selftest.sh" \
+    bash "$ONEESAN_ROOT/scripts/bench/pattern10-depthcode-rankformula-slotmeta-selftest.sh" \
     >"$LOGDIR/rankformula.selftest.out" 2>"$LOGDIR/rankformula.selftest.err"
 fi
 
@@ -80,7 +79,7 @@ build_one(){
     DEPTHCODE_DECODE_LOAD="$DEPTHCODE_DECODE_LOAD" RANKSTREAM_LUT_LOAD="$RANKSTREAM_LUT_LOAD" \
     RANKCHUNK32_ONESHFL=1 RANKCHUNK32_FUSED16="$RANKCHUNK32_FUSED16" RANKCHUNK32_BYTEPACK=0 RANKCHUNK32_ALIGN32=1 RANKCHUNK32_BLOCK64=0 \
     RANKDELTA8_ALIGN32=1 RANKDELTA8_FUSED13="$RANKDELTA8_FUSED13" \
-    RANKFORMULA_SPARSE_BASE=1 RANKFORMULA_BASE_DELTA=1 RANKFORMULA_RAWCODE=1 RANKFORMULA_INLINE_CROSS=1 \
+    RANKFORMULA_SLOTMETA=1 \
     TRANSPOSE_MODE="$TRANSPOSE_MODE" PM_ACCUM="$PM_ACCUM" TERNARY_KEY4="$TERNARY_KEY4" PTXAS_VERBOSE="$RUN_PTXAS" \
     bash "$ONEESAN_ROOT/scripts/build/b300-bucket-snake-pattern10-depthcode-graph-batch.sh" \
     >"$LOGDIR/$mode.build.out" 2>"$LOGDIR/$mode.build.err"
@@ -161,7 +160,7 @@ if run_ptxas=='1':
         print(f'{mode}_high_spill_load_bytes={sum(sl) if sl else "NA"}')
 print('rankchunk32_candidate=compact23_align32_oneshfl_fused16')
 print('rankdelta8_candidate=align32_fused13')
-print('rankformula_candidate=sparse_base_int16_delta_raw2bit_inline_cross')
+print('rankformula_candidate=sparse_int16_delta_slot_lmask_inline_cross')
 PY
 
 echo "b300-depthcode-sparse-high-candidates OK n=$N repeats=$REPEATS result=$RESULT" >&2
