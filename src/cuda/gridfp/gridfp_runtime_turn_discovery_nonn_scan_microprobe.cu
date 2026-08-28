@@ -1,8 +1,10 @@
 #include <cuda_runtime.h>
 
+#include <array>
 #include <cstdint>
 #include <cstdlib>
 #include <iostream>
+#include <string>
 #include <vector>
 
 #include "../../common/gridfp_transition.hpp"
@@ -20,6 +22,10 @@ namespace {
 
 constexpr std::uint32_t INPUT_COUNT = 1u << 16;
 constexpr std::uint32_t INPUT_MASK = INPUT_COUNT - 1u;
+constexpr int WIDTH = 28;
+constexpr int FREE_WIDTH = WIDTH - 2;
+using Count64 = std::uint64_t;
+using MotzkinTable = std::array<std::array<Count64, WIDTH + 2>, WIDTH + 1>;
 
 void cuda_check(cudaError_t err, const char* what) {
     if (err != cudaSuccess) {
@@ -59,10 +65,57 @@ __device__ __forceinline__ std::uint32_t scan_turn_nn(
     return candidates;
 }
 
-gp::MateID make_host_mate(std::uint32_t seed, int nonn_percent) {
+std::uint64_t splitmix64(std::uint64_t x) {
+    x += 0x9e3779b97f4a7c15ULL;
+    x = (x ^ (x >> 30)) * 0xbf58476d1ce4e5b9ULL;
+    x = (x ^ (x >> 27)) * 0x94d049bb133111ebULL;
+    return x ^ (x >> 31);
+}
+
+MotzkinTable make_motzkin_table() {
+    MotzkinTable table{};
+    table[0][0] = 1;
+    for (int rem = 1; rem <= WIDTH; ++rem) {
+        for (int h = 0; h <= WIDTH; ++h) {
+            Count64 count = table[rem - 1][h];
+            if (h > 0) count += table[rem - 1][h - 1];
+            count += table[rem - 1][h + 1];
+            table[rem][h] = count;
+        }
+    }
+    return table;
+}
+
+gp::MateID make_motzkin_nn_mate(
+    Count64 rank,
+    const MotzkinTable& table
+) {
     gp::MateID mate = 0;
-    mate = gp::msetpair(mate, 1, gp::NN);
-    for (int q = 2; q < 28; ++q) {
+    int h = 1;
+    for (int pos = 0; pos < FREE_WIDTH; ++pos) {
+        const int q = WIDTH - 1 - pos;
+        const int rem = FREE_WIDTH - pos - 1;
+
+        const Count64 n_count = table[rem][h];
+        if (rank < n_count) continue;
+        rank -= n_count;
+
+        const Count64 r_count = h > 0 ? table[rem][h - 1] : 0;
+        if (rank < r_count) {
+            mate = gp::mset(mate, q, gp::R);
+            --h;
+            continue;
+        }
+        rank -= r_count;
+        mate = gp::mset(mate, q, gp::L);
+        ++h;
+    }
+    return mate;
+}
+
+gp::MateID make_bernoulli_mate(std::uint32_t seed, int nonn_percent) {
+    gp::MateID mate = 0;
+    for (int q = 2; q < WIDTH; ++q) {
         seed = seed * 1664525u + 1013904223u;
         const bool occupied = (seed % 100u) < std::uint32_t(nonn_percent);
         if (!occupied) continue;
@@ -85,7 +138,7 @@ __global__ void probe_kernel(
         seed = seed * 1664525u + 1013904223u;
         const gp::MateID mate = inputs[seed & INPUT_MASK];
         int balance = 0;
-        const std::uint32_t candidates = scan_turn_nn(mate, 28, balance);
+        const std::uint32_t candidates = scan_turn_nn(mate, WIDTH, balance);
         const std::uint64_t value =
             (std::uint64_t(candidates) << 32) ^ std::uint32_t(balance);
         acc ^= value + 0x9e3779b97f4a7c15ULL + (acc << 6) + (acc >> 2);
@@ -99,24 +152,49 @@ int main(int argc, char** argv) {
     const int blocks = argc > 1 ? std::atoi(argv[1]) : 4096;
     const int threads = argc > 2 ? std::atoi(argv[2]) : 256;
     const int iterations = argc > 3 ? std::atoi(argv[3]) : 128;
-    const int nonn_percent = argc > 4 ? std::atoi(argv[4]) : 50;
+    const std::string input_case = argc > 4 ? argv[4] : "motzkin";
     const int warmup = argc > 5 ? std::atoi(argv[5]) : 2;
     if (blocks <= 0 || threads <= 0 || threads > 1024 || iterations <= 0 ||
-        nonn_percent < 0 || nonn_percent > 100 || warmup < 0) {
+        warmup < 0) {
         std::cerr << "usage: probe [blocks>0] [threads=1..1024] [iterations>0] "
-                     "[nonn_percent=0..100] [warmup>=0]\n";
+                     "[motzkin|nonn_percent=0..100] [warmup>=0]\n";
+        return 2;
+    }
+
+    bool motzkin = input_case == "motzkin";
+    int nonn_percent = -1;
+    if (!motzkin) {
+        char* end = nullptr;
+        const long parsed = std::strtol(input_case.c_str(), &end, 10);
+        if (!end || *end != '\0' || parsed < 0 || parsed > 100) {
+            std::cerr << "input case must be 'motzkin' or an integer 0..100\n";
+            return 2;
+        }
+        nonn_percent = int(parsed);
+    }
+
+    const MotzkinTable motzkin_table = make_motzkin_table();
+    const Count64 motzkin_count = motzkin_table[FREE_WIDTH][1];
+    if (!motzkin_count) {
+        std::cerr << "empty Motzkin input space\n";
         return 2;
     }
 
     std::vector<gp::MateID> inputs(INPUT_COUNT);
     std::uint64_t occupied_total = 0;
     for (std::uint32_t i = 0; i < INPUT_COUNT; ++i) {
-        inputs[i] = make_host_mate(i * 747796405u + 2891336453u, nonn_percent);
+        if (motzkin) {
+            const Count64 rank = splitmix64(i) % motzkin_count;
+            inputs[i] = make_motzkin_nn_mate(rank, motzkin_table);
+        } else {
+            inputs[i] = make_bernoulli_mate(
+                i * 747796405u + 2891336453u, nonn_percent);
+        }
         occupied_total += std::uint64_t(__builtin_popcount(
-            gp::mate_non_n_mask(inputs[i], 28) & ~std::uint32_t(3u)));
+            gp::mate_non_n_mask(inputs[i], WIDTH) & ~std::uint32_t(3u)));
     }
     const double actual_nonn_fraction =
-        double(occupied_total) / double(std::uint64_t(INPUT_COUNT) * 26u);
+        double(occupied_total) / double(std::uint64_t(INPUT_COUNT) * FREE_WIDTH);
 
     gp::MateID* d_inputs = nullptr;
     std::uint64_t* d_output = nullptr;
@@ -163,8 +241,10 @@ int main(int argc, char** argv) {
     const double ns_per_call = double(elapsed_ms) * 1.0e6 / double(calls);
     std::cout << "gridfp-runtime-turn-discovery-nonn-scan-microprobe"
               << " nonn_scan=" << RP_RUNTIME_TURN_DISCOVERY_NONN_SCAN
-              << " W=28 nonn_percent=" << nonn_percent
+              << " W=" << WIDTH
+              << " input_case=" << input_case
               << " actual_nonn_fraction=" << actual_nonn_fraction
+              << " motzkin_count=" << motzkin_count
               << " input_count=" << INPUT_COUNT
               << " blocks=" << blocks
               << " threads=" << threads
