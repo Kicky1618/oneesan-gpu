@@ -23,15 +23,11 @@ __device__ __forceinline__ std::uint32_t cycle_batch_main_hash(
     std::uint32_t support,
     int W
 ) {
-    const std::uint32_t mask = (std::uint32_t(1) << W) - 1u;
-    const auto rot = [=] __device__ (int d) {
-        return ((support << d) | (support >> (W - d))) & mask;
-    };
     std::uint32_t h = __popc(support) * 0x9e3779b1u;
-    h ^= __popc(support & rot(1)) * 0x85ebca6bu;
-    h ^= __popc(support & rot(3)) * 0xc2b2ae35u;
-    h ^= __popc(support & rot(5)) * 0x27d4eb2fu;
-    h ^= __popc(support & rot(7)) * 0x165667b1u;
+    h ^= __popc(support & shift_rotate_bits_device(support, W, 1)) * 0x85ebca6bu;
+    h ^= __popc(support & shift_rotate_bits_device(support, W, 3)) * 0xc2b2ae35u;
+    h ^= __popc(support & shift_rotate_bits_device(support, W, 5)) * 0x27d4eb2fu;
+    h ^= __popc(support & shift_rotate_bits_device(support, W, 7)) * 0x165667b1u;
     return cycle_batch_mix32(h);
 }
 
@@ -60,8 +56,8 @@ __device__ __forceinline__ std::uint32_t cycle_batch_blocked_hash(
     const std::uint32_t half_mask = (std::uint32_t(1) << Kwin) - 1u;
     const std::uint32_t a = compact & half_mask;
     const std::uint32_t b = (compact >> Kwin) & half_mask;
-    const std::uint32_t lo = min(a, b);
-    const std::uint32_t hi = max(a, b);
+    const std::uint32_t lo = a < b ? a : b;
+    const std::uint32_t hi = a < b ? b : a;
     std::uint32_t h = lo * 0x9e3779b1u;
     h ^= hi * 0x85ebca6bu;
     h ^= __popc(support) * 0xc2b2ae35u;
@@ -241,26 +237,32 @@ void run_cycle_batch_plan(
     for (int g = 0; g < ngpu; ++g) {
         unsigned long long owner_words = 0;
         unsigned long long owner_segments = 0;
-        unsigned long long max_words = 0;
-        unsigned long long max_segments = 0;
+        double max_batch_extra_gib = 0.0;
+        double max_batch_scratch_gib = 0.0;
+        double max_batch_descriptor_gib = 0.0;
         int max_batch = -1;
         for (int b = 0; b < batches; ++b) {
             const std::size_t ix = static_cast<std::size_t>(g * batches + b);
             owner_words += words[ix];
             owner_segments += segments[ix];
-            if (words[ix] > max_words) {
-                max_words = words[ix];
-                max_segments = segments[ix];
+            const double scratch_gib =
+                double(words[ix]) * 4.0 / double(1ULL << 30);
+            const double descriptor_gib =
+                double(segments[ix]) * CYCLE_BATCH_DESCRIPTOR_BYTES /
+                double(1ULL << 30);
+            const double extra_gib = scratch_gib + descriptor_gib;
+            if (extra_gib > max_batch_extra_gib) {
+                max_batch_extra_gib = extra_gib;
+                max_batch_scratch_gib = scratch_gib;
+                max_batch_descriptor_gib = descriptor_gib;
                 max_batch = b;
-            } else if (words[ix] == max_words) {
-                max_segments = std::max(max_segments, segments[ix]);
             }
             std::cout << "cycle-batch-cell"
                       << " direction=" << (reverse ? "reverse" : "forward")
                       << " gpu=" << g
                       << " batch=" << b
-                      << " scratch_GiB="
-                      << double(words[ix]) * 4.0 / double(1ULL << 30)
+                      << " scratch_GiB=" << scratch_gib
+                      << " descriptor_GiB=" << descriptor_gib
                       << " segments=" << segments[ix] << '\n';
         }
         total_words += owner_words;
@@ -268,19 +270,13 @@ void run_cycle_batch_plan(
         const double state_gib =
             double(host_plan.owner_size[static_cast<std::size_t>(g)]) * 4.0 /
             double(1ULL << 30);
-        const double scratch_gib =
-            double(max_words) * 4.0 / double(1ULL << 30);
-        const double descriptor_gib =
-            double(max_segments) * CYCLE_BATCH_DESCRIPTOR_BYTES /
-            double(1ULL << 30);
         const double list_gib =
             double(owner_segments) * CYCLE_BATCH_LIST_BYTES /
             double(1ULL << 30);
-        const double peak_gib =
-            state_gib + scratch_gib + descriptor_gib + list_gib;
+        const double peak_gib = state_gib + list_gib + max_batch_extra_gib;
         if (peak_gib > worst_peak_gib) {
             worst_peak_gib = peak_gib;
-            worst_scratch_gib = scratch_gib;
+            worst_scratch_gib = max_batch_scratch_gib;
             worst_gpu = g;
             worst_batch = max_batch;
         }
@@ -291,8 +287,9 @@ void run_cycle_batch_plan(
                   << " total_outgoing_GiB="
                   << double(owner_words) * 4.0 / double(1ULL << 30)
                   << " total_segments=" << owner_segments
-                  << " max_batch_scratch_GiB=" << scratch_gib
-                  << " max_batch_descriptor_GiB=" << descriptor_gib
+                  << " max_batch=" << max_batch
+                  << " max_batch_scratch_GiB=" << max_batch_scratch_gib
+                  << " max_batch_descriptor_GiB=" << max_batch_descriptor_gib
                   << " packed_segment_list_GiB=" << list_gib
                   << " conservative_peak_GiB=" << peak_gib
                   << " B300_headroom_GiB=" << (b300_gib - peak_gib)
