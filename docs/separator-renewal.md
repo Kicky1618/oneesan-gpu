@@ -141,7 +141,7 @@ field products.  At row 11 this is about `1.287e16` products per residue.
 
 Therefore this line only becomes useful if the final contraction is performed directly in factor/channel form.
 
-## Candidate canonical channel basis
+## Renewal-gap model
 
 A111960 is a renewal array.  Equivalently
 
@@ -149,23 +149,134 @@ A111960 is a renewal array.  Equivalently
 C(r,h) = sum_{n_0+...+n_h=r-h} prod_j T(n_j),
 ```
 
-where `T(n)` is the central trinomial coefficient.  This suggests a separator-tangle normal form consisting of `h+1` neutral blocks separated by `h` renewal events.
+where `T(n)` is the central trinomial coefficient.  Since `T(n)` counts ternary words in `{-1,0,+1}^n` with total sum zero, a channel of type `(r,h)` can be counted explicitly as
 
-The row sum A111961 also has a Motzkin-path interpretation: it counts Motzkin paths with a marking/color choice on steps returning to height zero.  This is promising because it may turn the numerical Schmidt basis into a combinatorial, sparse-update basis and remove Gaussian recompression entirely.
+```text
+w_0 | w_1 | ... | w_h
+```
+
+where every `w_i` is a zero-sum ternary word and the sum of their lengths is `r-h`.  Diagrammatically, the proposed interpretation is that `h` propagating separator strands divide the strip into `h+1` independent neutral gaps.
+
+This is already an explicit combinatorial labelling of the correct cardinality, but appending a row is not obviously local in this representation because a new ternary letter can temporarily unbalance the last neutral word.
+
+## Colored-Motzkin channel model
+
+The continued fraction recorded for A111960 has the Jacobi form
+
+```text
+1 / (1 - (1+y)x - 2x^2/(1-x-x^2/(1-x-x^2/(...))))
+```
+
+which gives a more useful local path model.
+
+A channel is represented by a Motzkin path of length `r` with the following colors:
+
+- an up step has one color;
+- a horizontal step above height zero has one color;
+- a down step landing above height zero has one color;
+- a down step from height one to zero has two colors;
+- a horizontal step at height zero has two colors, one ordinary and one distinguished/marked.
+
+Then `C(r,h)` is the number of such colored paths having exactly `h` distinguished ground-horizontal steps.  For example, at length two:
+
+```text
+HH contributes (1+y)^2
+UD contributes 2
+=> 3 + 2y + y^2
+```
+
+so the row is `3,2,1` exactly.
+
+This model is checked independently by
+
+```text
+src/cpp/probes/separator_colored_motzkin_probe.cpp
+```
+
+against the coefficient formula for A111960.
+
+This is a substantially better candidate for an actual separator basis than the renewal-gap words: one additional grid row corresponds to appending one local Motzkin step and at most choosing one of two colors.  The remaining problem is to construct the linear map from an actual separator tangle to this colored path basis and prove triangularity/non-singularity.
+
+## Production matrix and alternating Catalans
+
+Writing the Riordan array as `(g,f)=(G,xG)`, its Riordan `A` and `Z` series are
+
+```text
+A(y) = y / f^{-1}(y) = y + sqrt(1+4y^2)
+Z(y) = (A(y)-1)/y.
+```
+
+Therefore
+
+```text
+A(y) = 1 + y + 2y^2 - 2y^4 + 4y^6 - 10y^8 + ...
+Z(y) = 1 + 2y - 2y^3 + 4y^5 - 10y^7 + ...
+```
+
+and the nontrivial coefficients are
+
+```text
+2*(-1)^(m-1)*Catalan(m-1).
+```
+
+Consequently the dimension triangle obeys a fixed Hessenberg-Toeplitz production rule.  For `h>=1`,
+
+```text
+C(r+1,h)
+ = C(r,h-1) + C(r,h)
+ + sum_{m>=1} 2*(-1)^(m-1)*Cat(m-1)*C(r,h+2m-1),
+```
+
+with the analogous first-column `Z` rule for `h=0`.
+
+The alternating Catalan tail is highly suggestive of the beta=0 Temperley-Lieb basis changes already found in the odd-TL midpoint work: lowering a large separator height amounts to closing nested noncrossing strands, and Catalan coefficients are the natural noncrossing inversion coefficients.
+
+## Pascal times pure-connectivity factorisation
+
+OEIS also records
+
+```text
+A111960 = Pascal * A111959,
+```
+
+where A111959 is the renewal array for the aerated central binomial coefficients,
+
+```text
+(1/sqrt(1-4x^2), x/sqrt(1-4x^2)).
+```
+
+This separates the ternary channel into a binomial/vacancy part and a pure pair-connectivity part.  A111959 is especially structured: its infinitesimal generator has only one nonzero subdiagonal,
+
+```text
+B[k+2,k] = 2*(k+1),
+```
+
+so formally
+
+```text
+A111959 = exp(B).
+```
+
+Pascal itself is `exp(A)` with `A[k+1,k]=k+1`.  Hence the channel-dimension array factors into two extremely local raising generators.  This may be the algebraic route to an explicit basis: one generator inserts a neutral/vacancy event, while the other inserts a pair-connectivity event.
+
+## Relation to Motzkin / dilute-TL diagrams
+
+The appearance of Motzkin paths is structurally plausible rather than merely numerical.  The standard basis diagrams of the Motzkin algebra and dilute Temperley-Lieb algebra coincide as diagram sets, although their multiplications differ.  Therefore no argument should identify the two algebras outright, but a Motzkin path basis for the separator module is compatible with the underlying dilute-TL diagram combinatorics.
 
 ## Next mathematical task
 
-Construct an explicit map
+Construct an explicit linear map
 
 ```text
-separator tangle <-> A111960 renewal/colored-Motzkin channel
+separator tangle <-> colored Motzkin channel
 ```
 
 and prove:
 
-1. the channels span the row-boundary coefficient matrix;
-2. distinct channels are linearly independent until a side dimension saturates;
-3. one additional grid row acts by a sparse local rule on channel labels;
-4. the point-symmetry / beta=0 Gram closure can be evaluated directly on the channel factors without reconstructing the full `W=28` frontier vector.
+1. the colored paths span the row-boundary Schmidt space;
+2. distinct paths are linearly independent until a side dimension saturates;
+3. one additional grid row acts by a sparse local rule on colored-path labels;
+4. the alternating-Catalan production matrix is the matrix of the same local rule after eliminating the hidden Motzkin height;
+5. the point-symmetry / beta=0 Gram closure can be evaluated directly in channel coordinates without reconstructing the full `W=28` frontier vector.
 
-The fourth item is essential.  A successful direct closure would make this more than a memory compression trick; it could remove most of the first-half full-frontier work before the odd-TL midpoint join.
+A concrete route for item 1 is to compute lexicographic pivot bases of the exact small-width Schmidt matrices, recursively label the new pivots by colored-Motzkin extensions, and test whether the resulting basis-change matrices become triangular with unit or small-integer diagonal.  If that pattern stabilizes, it should expose the required diagrammatic map.
