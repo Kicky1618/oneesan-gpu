@@ -17,6 +17,7 @@ RANKCHUNK32_BYTEPACK="${RANKCHUNK32_BYTEPACK:-0}"
 RANKCHUNK32_ALIGN32_EXPLICIT="${RANKCHUNK32_ALIGN32+x}"
 RANKCHUNK32_ALIGN32="${RANKCHUNK32_ALIGN32:-0}"
 RANKCHUNK32_BLOCK64="${RANKCHUNK32_BLOCK64:-0}"
+RANKDELTA8_ALIGN32="${RANKDELTA8_ALIGN32:-1}"
 PM_ACCUM="${PM_ACCUM:-0}"
 TERNARY_KEY4="${TERNARY_KEY4:-1}"
 PTXAS_VERBOSE="${PTXAS_VERBOSE:-0}"
@@ -24,7 +25,7 @@ PTXAS_VERBOSE="${PTXAS_VERBOSE:-0}"
 if (( LOW_LUT_K <= 0 || HIGH_LUT_K <= 0 || LOW_LUT_K + HIGH_LUT_K + 1 != W )); then echo "invalid factor split" >&2; exit 2; fi
 if (( LOW_LUT_K > 14 || HIGH_LUT_K > 14 )); then echo "pattern10 depthcode requires half widths <=14" >&2; exit 2; fi
 case "$HIGH_CTX" in
-  thread|resolved|resolved_delta|warp|warpstriped|warpstriped_delta|warpstriped_delta_cross5|warpstriped_delta_direct_cross5|warpstriped_delta_direct_affine_cross5|warpstriped_delta_direct_affine_prekey_cross5|warpstriped_delta_direct_affine_prekey_rank16_cross5|warpstriped_delta_direct_affine_prekey_rankstream_cross5|warpstriped_delta_direct_affine_rankstream32_cross5|warpstriped_delta_direct_affine_rankchunk32_cross5|warpstriped_delta_direct_affine_rankchunk32_basepair64_cross5) ;;
+  thread|resolved|resolved_delta|warp|warpstriped|warpstriped_delta|warpstriped_delta_cross5|warpstriped_delta_direct_cross5|warpstriped_delta_direct_affine_cross5|warpstriped_delta_direct_affine_prekey_cross5|warpstriped_delta_direct_affine_prekey_rank16_cross5|warpstriped_delta_direct_affine_prekey_rankstream_cross5|warpstriped_delta_direct_affine_rankstream32_cross5|warpstriped_delta_direct_affine_rankchunk32_cross5|warpstriped_delta_direct_affine_rankchunk32_basepair64_cross5|warpstriped_delta_direct_affine_rankdelta8_cross5) ;;
   *) echo "invalid HIGH_CTX=$HIGH_CTX" >&2; exit 2;;
 esac
 case "$DEPTHCODE_DECODE_LOAD" in global|ldg) ;; *) echo "DEPTHCODE_DECODE_LOAD must be global or ldg" >&2; exit 2;; esac
@@ -34,7 +35,7 @@ if [[ "$HIGH_CTX" == warpstriped_delta_direct_affine_rankchunk32_basepair64_cros
   RANKCHUNK32_BLOCK64=0
   [[ -z "$RANKCHUNK32_ALIGN32_EXPLICIT" ]] && RANKCHUNK32_ALIGN32=1
 fi
-for x in RANKCHUNK32_ONESHFL RANKCHUNK32_FUSED16 RANKCHUNK32_BYTEPACK RANKCHUNK32_ALIGN32 RANKCHUNK32_BLOCK64 PM_ACCUM TERNARY_KEY4 PTXAS_VERBOSE; do
+for x in RANKCHUNK32_ONESHFL RANKCHUNK32_FUSED16 RANKCHUNK32_BYTEPACK RANKCHUNK32_ALIGN32 RANKCHUNK32_BLOCK64 RANKDELTA8_ALIGN32 PM_ACCUM TERNARY_KEY4 PTXAS_VERBOSE; do
   v="${!x}"
   if [[ "$v" != 0 && "$v" != 1 ]]; then echo "$x must be 0 or 1" >&2; exit 2; fi
 done
@@ -55,6 +56,7 @@ base="oneesan_cuda_gridfp_b300_bucket_snake_onepass_pattern10_depthcode"
 [[ "$HIGH_CTX" == warpstriped_delta_direct_affine_rankstream32_cross5 ]] && base="${base}_warpstriped_delta_direct_affine_rankstream32_cross5"
 [[ "$HIGH_CTX" == warpstriped_delta_direct_affine_rankchunk32_cross5 ]] && base="${base}_warpstriped_delta_direct_affine_rankchunk32_cross5"
 [[ "$HIGH_CTX" == warpstriped_delta_direct_affine_rankchunk32_basepair64_cross5 ]] && base="${base}_warpstriped_delta_direct_affine_rankchunk32_basepair64_cross5"
+[[ "$HIGH_CTX" == warpstriped_delta_direct_affine_rankdelta8_cross5 ]] && base="${base}_warpstriped_delta_direct_affine_rankdelta8_cross5"
 case "$TRANSPOSE_MODE" in
   sync) SRC_NAME="${base}_graph_batch.cu" ;;
   events) SRC_NAME="${base}_graph_batch_events.cu" ;;
@@ -77,6 +79,7 @@ SUFFIX="_payload_${HIGH_CTX}_${TRANSPOSE_MODE}"
 [[ "$RANKCHUNK32_BYTEPACK" == 1 ]] && SUFFIX="${SUFFIX}_rankchunkbytepack"
 [[ "$RANKCHUNK32_ALIGN32" == 1 ]] && SUFFIX="${SUFFIX}_rankchunkalign32"
 [[ "$RANKCHUNK32_BLOCK64" == 1 ]] && SUFFIX="${SUFFIX}_rankchunkblock64"
+[[ "$HIGH_CTX" == warpstriped_delta_direct_affine_rankdelta8_cross5 && "$RANKDELTA8_ALIGN32" == 0 ]] && SUFFIX="${SUFFIX}_rankdelta8packed"
 [[ "$PM_ACCUM" == 1 ]] && SUFFIX="${SUFFIX}_pm"
 [[ "$TERNARY_KEY4" == 0 ]] && SUFFIX="${SUFFIX}_keyscalar"
 SRC="$(repo_path "src/cuda/b300/$SRC_NAME")"
@@ -99,6 +102,7 @@ TMPDIR="$ONEESAN_TMP_DIR" nvcc -O3 -std=c++17 -lineinfo -arch="$ARCH" \
   -DP10DC_RANKCHUNK32_BYTEPACK="$RANKCHUNK32_BYTEPACK" \
   -DP10DC_RANKCHUNK32_ALIGN32="$RANKCHUNK32_ALIGN32" \
   -DP10DC_RANKCHUNK32_BLOCK64="$RANKCHUNK32_BLOCK64" \
+  -DP10DC_RANKDELTA8_ALIGN32="$RANKDELTA8_ALIGN32" \
   "$SRC" -o "$OUT"
 
-echo "built $OUT (closure=pattern10-depthcode sidecar_bytes_per_orbit=0 temporary_depth_bytes=0 decode=payload-masks runtime_unrank=0 high_ctx=$HIGH_CTX decode_load=$DEPTHCODE_DECODE_LOAD rankstream_lut_load=$RANKSTREAM_LUT_LOAD rankchunk32_oneshfl=$RANKCHUNK32_ONESHFL rankchunk32_fused16=$RANKCHUNK32_FUSED16 rankchunk32_bytepack=$RANKCHUNK32_BYTEPACK rankchunk32_align32=$RANKCHUNK32_ALIGN32 rankchunk32_block64=$RANKCHUNK32_BLOCK64 window=graph transpose=$TRANSPOSE_MODE pm_accum=$PM_ACCUM ternary_key4=$TERNARY_KEY4 ptxas_verbose=$PTXAS_VERBOSE)"
+echo "built $OUT (closure=pattern10-depthcode sidecar_bytes_per_orbit=0 temporary_depth_bytes=0 decode=payload-masks runtime_unrank=0 high_ctx=$HIGH_CTX decode_load=$DEPTHCODE_DECODE_LOAD rankstream_lut_load=$RANKSTREAM_LUT_LOAD rankchunk32_oneshfl=$RANKCHUNK32_ONESHFL rankchunk32_fused16=$RANKCHUNK32_FUSED16 rankchunk32_bytepack=$RANKCHUNK32_BYTEPACK rankchunk32_align32=$RANKCHUNK32_ALIGN32 rankchunk32_block64=$RANKCHUNK32_BLOCK64 rankdelta8_align32=$RANKDELTA8_ALIGN32 window=graph transpose=$TRANSPOSE_MODE pm_accum=$PM_ACCUM ternary_key4=$TERNARY_KEY4 ptxas_verbose=$PTXAS_VERBOSE)"
