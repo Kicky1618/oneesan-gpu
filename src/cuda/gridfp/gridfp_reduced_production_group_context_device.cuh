@@ -269,15 +269,16 @@ __device__ __forceinline__ int runtime_owner_from_group_base_device(
         const std::uint32_t meta = RP_RUNTIME_OWNER_U32_META[wi];
         const unsigned shift = meta >> 16;
         const std::uint32_t magic = meta & 0xffffu;
-        const Rank64 numerator =
-            (group_base + group / 2) * static_cast<Rank64>(ngpu);
-        const std::uint32_t lo = static_cast<std::uint32_t>(numerator);
+        const std::uint32_t scale =
+            magic * static_cast<std::uint32_t>(ngpu);
+        const Rank64 midpoint = group_base + group / 2;
+        const std::uint32_t lo = static_cast<std::uint32_t>(midpoint);
         if (shift < 32) {
-            const Rank64 product = static_cast<Rank64>(lo) * magic;
+            const Rank64 product = static_cast<Rank64>(lo) * scale;
             return static_cast<int>(product >> shift);
         }
-        const std::uint32_t hi = static_cast<std::uint32_t>(numerator >> 32);
-        const std::uint32_t upper = hi * magic + __umulhi(lo, magic);
+        const std::uint32_t hi = static_cast<std::uint32_t>(midpoint >> 32);
+        const std::uint32_t upper = hi * scale + __umulhi(lo, scale);
         return static_cast<int>(upper >> (shift - 32));
     }
 #elif RP_RUNTIME_OWNER_FIXED52
