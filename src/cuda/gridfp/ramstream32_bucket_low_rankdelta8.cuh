@@ -14,15 +14,12 @@ static constexpr uint32_t P10DC_RANKDELTA8_CHUNK_BITS = 23u;
 static constexpr uint32_t P10DC_RANKDELTA8_PREFIX_BITS = 9u;
 static constexpr uint32_t P10DC_RANKDELTA8_CHUNK_MASK = (1u << P10DC_RANKDELTA8_CHUNK_BITS) - 1u;
 static constexpr uint32_t P10DC_RANKDELTA8_PREFIX_LIMIT = 1u << P10DC_RANKDELTA8_PREFIX_BITS;
-static constexpr uint32_t P10DC_RANKDELTA8_DELTA_LIMIT = 1u << 14;
 static constexpr uint32_t P10DC_RANKDELTA8_MAX_L = uint32_t(LOW_LUT_K / 2);
-static constexpr uint32_t P10DC_RANKDELTA8_MAX_ROW_BYTES =
-    P10DC_RANKDELTA8_MAX_L ? 2u + 2u * (P10DC_RANKDELTA8_MAX_L - 1u) : 0u;
 static_assert(P10DC_RANKDELTA8_CHUNK_BITS + P10DC_RANKDELTA8_PREFIX_BITS == 32u);
 static_assert(LOW_LUT_K <= 14, "rankdelta8 assumes LOW_LUT_K<=14");
-static_assert((P10DC_RANKDELTA8_BLOCK - 1u) * P10DC_RANKDELTA8_MAX_ROW_BYTES <
-              P10DC_RANKDELTA8_PREFIX_LIMIT,
-              "rankdelta8 worst-case byte prefix no longer fits 9 bits");
+// Delta zero never occurs because source ranks are strictly increasing.  Use
+// byte 0 as an escape: 1..255 are one byte; larger deltas are 0 + uint16 LE.
+// The exact W28 proof gives max_delta=572 and max block32 byte-prefix=364.
 
 __constant__ uint32_t* D_P10DC_LOW_RANKDELTA8_META32;
 __constant__ uint32_t* D_P10DC_LOW_RANKDELTA8_BLOCK32;
@@ -145,14 +142,15 @@ struct BucketFusedDirectHighRowsRankDelta8Tables
                     for (uint32_t j = 1; j < nr; ++j) {
                         if (ranks[j] <= ranks[j - 1]) std::exit(697);
                         const uint32_t d = uint32_t(ranks[j] - ranks[j - 1]);
-                        if (d >= P10DC_RANKDELTA8_DELTA_LIMIT) std::exit(698);
+                        if (d > 0xffffu) std::exit(698);
                         max_delta = std::max(max_delta, d);
                         ++delta_count;
-                        if (d < 128u) {
+                        if (d <= 255u) {
                             stream.push_back(uint8_t(d));
                         } else {
-                            stream.push_back(uint8_t(0x80u | (d & 0x7fu)));
-                            stream.push_back(uint8_t(d >> 7));
+                            stream.push_back(0u);
+                            stream.push_back(uint8_t(d));
+                            stream.push_back(uint8_t(d >> 8));
                             ++slow_delta;
                         }
                     }
@@ -208,7 +206,7 @@ struct BucketFusedDirectHighRowsRankDelta8Tables
                   << " total_bytes=" << bytes << " padding=" << padding
                   << " max_prefix=" << max_prefix << " max_delta=" << max_delta
                   << " slow_delta=" << slow_delta << '/' << delta_count
-                  << " chunk_bits=23 prefix_bits=9 block=32"
+                  << " delta_fast8_escape16=1 chunk_bits=23 prefix_bits=9 block=32"
                   << " height_align=" << (P10DC_RANKDELTA8_ALIGN32 ? 32 : 1)
                   << " block_base_loads_per_warp_max=" << (P10DC_RANKDELTA8_ALIGN32 ? 1 : 2)
                   << " old_prekey_freed=1\n";
