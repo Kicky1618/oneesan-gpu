@@ -55,14 +55,15 @@ printf 'backend\tkernel\tregisters\tstack_bytes\tspill_store_bytes\tspill_load_b
   build_one warpstriped_delta_direct_affine_prekey_rank16_cross5 ldg
   build_one warpstriped_delta_direct_affine_prekey_rankstream_cross5
   build_one warpstriped_delta_direct_affine_prekey_rankstream_cross5 ldg
+  build_one warpstriped_delta_direct_affine_rankstream32_cross5
+  build_one warpstriped_delta_direct_affine_rankstream32_cross5 ldg
 } >>"$OUT"
 
 cat "$OUT"
 python3 - "$OUT" <<'PY'
 import csv, sys
 rows=list(csv.DictReader(open(sys.argv[1]),delimiter='\t'))
-def ints(group,key):
-    return [int(r[key]) for r in group if r[key] != 'NA']
+def ints(group,key): return [int(r[key]) for r in group if r[key] != 'NA']
 backends=(
     'depthcode_payload_thread','depthcode_payload_resolved','depthcode_payload_resolved_delta',
     'depthcode_payload_warp','depthcode_payload_warp_ldg',
@@ -73,38 +74,33 @@ backends=(
     'depthcode_payload_warpstriped_delta_direct_affine_cross5','depthcode_payload_warpstriped_delta_direct_affine_cross5_ldg',
     'depthcode_payload_warpstriped_delta_direct_affine_prekey_cross5','depthcode_payload_warpstriped_delta_direct_affine_prekey_cross5_ldg',
     'depthcode_payload_warpstriped_delta_direct_affine_prekey_rank16_cross5','depthcode_payload_warpstriped_delta_direct_affine_prekey_rank16_cross5_ldg',
-    'depthcode_payload_warpstriped_delta_direct_affine_prekey_rankstream_cross5','depthcode_payload_warpstriped_delta_direct_affine_prekey_rankstream_cross5_ldg')
+    'depthcode_payload_warpstriped_delta_direct_affine_prekey_rankstream_cross5','depthcode_payload_warpstriped_delta_direct_affine_prekey_rankstream_cross5_ldg',
+    'depthcode_payload_warpstriped_delta_direct_affine_rankstream32_cross5','depthcode_payload_warpstriped_delta_direct_affine_rankstream32_cross5_ldg')
 for backend in backends:
-    all_rows=[r for r in rows if r['backend']==backend]
-    high=[r for r in all_rows if 'high' in r['kernel'].lower()]
-    if not high:
-        continue
-    regs=ints(high,'registers'); smem=ints(high,'smem_bytes')
-    stores=ints(high,'spill_store_bytes'); loads=ints(high,'spill_load_bytes')
-    cmem=ints(all_rows,'cmem0_bytes')
+    all_rows=[r for r in rows if r['backend']==backend]; high=[r for r in all_rows if 'high' in r['kernel'].lower()]
+    if not high: continue
+    regs=ints(high,'registers'); smem=ints(high,'smem_bytes'); stores=ints(high,'spill_store_bytes'); loads=ints(high,'spill_load_bytes'); cmem=ints(all_rows,'cmem0_bytes')
     print(f'{backend}_high_max_registers={max(regs) if regs else "NA"}')
     print(f'{backend}_high_max_static_smem_bytes={max(smem) if smem else "NA"}')
     print(f'{backend}_high_spill_store_bytes={sum(stores) if stores else "NA"}')
     print(f'{backend}_high_spill_load_bytes={sum(loads) if loads else "NA"}')
     print(f'{backend}_max_cmem0_bytes={max(cmem) if cmem else "NA"}')
-    if cmem and max(cmem) >= 60*1024:
-        print(f'{backend}_cmem0_headroom_warning=1')
+    if cmem and max(cmem) >= 60*1024: print(f'{backend}_cmem0_headroom_warning=1')
 print('warp_dynamic_smem_note=warp-striped variants allocate one runtime HIGH context per warp; direct variants use the compact context without BkczPlan')
 print('cross5_constant_table_bytes=6561')
 print('direct_resolve_intermediate_local_descriptors=0')
 print('affine_high_row_descriptor_bytes=8')
 print('affine_high_row_base_storage=constant_memory')
-print('affine_high_row_stride_storage=constant_by_hs')
-print('prekey_low_key_bytes_per_code=4')
 print('prekey_scope=fixed_owner')
 print('prekey_cross_runtime_ternary_fold=0')
-print('prekey_hot_code_load=0')
-print('prekey_hot_code_off_load=0')
-print('rank16_bytes_per_low_code=2*LOW_LUT_K')
 print('rank16_cross_runtime_direct_lookup=0')
 print('rankstream_model=offset32+rank16_per_L')
 print('rankstream_cross_runtime_direct_lookup=0')
+print('rankstream32_model=key23+prefix9_per_code+blockbase32+rank16_per_L')
+print('rankstream32_per_code_meta_bytes=4')
+print('rankstream32_block_base_bytes_per_code=0.125')
+print('rankstream32_cross_runtime_direct_lookup=0')
 print('rankstream_extra_constant_lmask_bytes=243')
 PY
 
-echo "depthcode-highctx-ptxas OK n=$N arch=$ARCH transpose=$TRANSPOSE_MODE result=$OUT logs=$LOGDIR ternary_delta=1 cross5=1 direct_resolve=1 affine_rows=1 prekey=1 rank16=1 rankstream=1" >&2
+echo "depthcode-highctx-ptxas OK n=$N arch=$ARCH transpose=$TRANSPOSE_MODE result=$OUT logs=$LOGDIR ternary_delta=1 cross5=1 direct_resolve=1 affine_rows=1 prekey=1 rank16=1 rankstream=1 rankstream32=1" >&2
