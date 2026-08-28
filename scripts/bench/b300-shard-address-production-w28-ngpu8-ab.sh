@@ -28,7 +28,7 @@ BINS=()
 for mode in 1 2; do
   BINS[$mode]="$ONEESAN_BUILD_DIR/oneesan_cuda_gridfp_b300_hbm32_n27_shardmode${mode}"
   N=27 SHARD_ADDRESS_MODE="$mode" ARCH="$ARCH" OUT="${BINS[$mode]}" \
-    "$ONEESAN_ROOT/scripts/build/b300-hbm32-shard-address-mode.sh" \
+    bash "$ONEESAN_ROOT/scripts/build/b300-hbm32-shard-address-mode.sh" \
     >"$LOGDIR/mode_${mode}.build.out" 2>"$LOGDIR/mode_${mode}.build.err"
 done
 
