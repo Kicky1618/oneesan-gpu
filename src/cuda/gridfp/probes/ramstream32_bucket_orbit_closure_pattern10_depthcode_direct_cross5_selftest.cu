@@ -91,7 +91,7 @@ int main() {
     std::unordered_map<MateID, size_t> mi, di;
     for (size_t i = 0; i < ms.size(); ++i) mi.emplace(ms[i], i);
     for (size_t i = 0; i < bs.size(); ++i) di.emplace(bs[i], i);
-    std::mt19937_64 rng(0x1618d1rectULL);
+    std::mt19937_64 rng(0x1618d1ec7ULL);
     std::vector<Count> im(ms.size()), ib(bs.size());
     for (auto& x : im) x = Count(rng() % mod);
     for (auto& x : ib) x = Count(rng() % mod);
