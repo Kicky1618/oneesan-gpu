@@ -10,18 +10,19 @@ fi
 TARGET_MIB="${TARGET_MIB:-16384}"; MAX_WINDOW="${MAX_WINDOW:-14}"
 TRANSPOSE_MODE="${TRANSPOSE_MODE:-pipeline}"; DEPTHCODE_DECODE_LOAD="${DEPTHCODE_DECODE_LOAD:-ldg}"; RANKSTREAM_LUT_LOAD="${RANKSTREAM_LUT_LOAD:-ldg}"
 RANKDELTA8_ALIGN32="${RANKDELTA8_ALIGN32:-1}"; RANKDELTA8_FUSED13="${RANKDELTA8_FUSED13:-1}"
-RANKFORMULA_SPARSE_BASE="${RANKFORMULA_SPARSE_BASE:-1}"; RANKFORMULA_RAWCODE="${RANKFORMULA_RAWCODE:-1}"; RANKFORMULA_INLINE_CROSS="${RANKFORMULA_INLINE_CROSS:-1}"
+RANKFORMULA_SPARSE_BASE="${RANKFORMULA_SPARSE_BASE:-1}"; RANKFORMULA_RAWCODE="${RANKFORMULA_RAWCODE:-1}"
+RANKFORMULA_INLINE_CROSS="${RANKFORMULA_INLINE_CROSS:-1}"; RANKFORMULA_BASE_DELTA="${RANKFORMULA_BASE_DELTA:-1}"
 PM_ACCUM="${PM_ACCUM:-0}"; TERNARY_KEY4="${TERNARY_KEY4:-1}"
 BUCKET_THREADS="${BUCKET_THREADS:-256}"; BUCKET_GRID_X="${BUCKET_GRID_X:-16}"; BUCKET_GRID_Y="${BUCKET_GRID_Y:-8}"
 REPEATS="${REPEATS:-3}"; RUN_SELFTEST="${RUN_SELFTEST:-1}"; RUN_PTXAS="${RUN_PTXAS:-1}"
-PREFIX="${PREFIX:-$ONEESAN_ROOT/work/b300_depthcode_rankformula_ab_n${N}_${TRANSPOSE_MODE}_${DEPTHCODE_DECODE_LOAD}_${RANKSTREAM_LUT_LOAD}_fused${RANKDELTA8_FUSED13}_sparse${RANKFORMULA_SPARSE_BASE}_raw${RANKFORMULA_RAWCODE}_inline${RANKFORMULA_INLINE_CROSS}_pm${PM_ACCUM}_t${BUCKET_THREADS}_gx${BUCKET_GRID_X}_gy${BUCKET_GRID_Y}}"
+PREFIX="${PREFIX:-$ONEESAN_ROOT/work/b300_depthcode_rankformula_ab_n${N}_${TRANSPOSE_MODE}_${DEPTHCODE_DECODE_LOAD}_${RANKSTREAM_LUT_LOAD}_fused${RANKDELTA8_FUSED13}_sparse${RANKFORMULA_SPARSE_BASE}_raw${RANKFORMULA_RAWCODE}_inline${RANKFORMULA_INLINE_CROSS}_basedelta${RANKFORMULA_BASE_DELTA}_pm${PM_ACCUM}_t${BUCKET_THREADS}_gx${BUCKET_GRID_X}_gy${BUCKET_GRID_Y}}"
 RESULT="${RESULT:-${PREFIX}.tsv}"; SUMMARY="${SUMMARY:-${PREFIX}_summary.tsv}"; RESOURCE="${RESOURCE:-${PREFIX}_ptxas.tsv}"; LOGDIR="${LOGDIR:-${PREFIX}_logs}"
 PARSER="$ONEESAN_ROOT/scripts/bench/parse-ptxas-resources.py"
 
 case "$TRANSPOSE_MODE" in sync|events|pipeline) ;; *) echo invalid TRANSPOSE_MODE >&2; exit 2;; esac
 case "$DEPTHCODE_DECODE_LOAD" in global|ldg) ;; *) echo invalid DEPTHCODE_DECODE_LOAD >&2; exit 2;; esac
 case "$RANKSTREAM_LUT_LOAD" in constant|ldg|ldg256) ;; *) echo invalid RANKSTREAM_LUT_LOAD >&2; exit 2;; esac
-for x in RANKDELTA8_ALIGN32 RANKDELTA8_FUSED13 RANKFORMULA_SPARSE_BASE RANKFORMULA_RAWCODE RANKFORMULA_INLINE_CROSS PM_ACCUM TERNARY_KEY4 RUN_SELFTEST RUN_PTXAS; do
+for x in RANKDELTA8_ALIGN32 RANKDELTA8_FUSED13 RANKFORMULA_SPARSE_BASE RANKFORMULA_RAWCODE RANKFORMULA_INLINE_CROSS RANKFORMULA_BASE_DELTA PM_ACCUM TERNARY_KEY4 RUN_SELFTEST RUN_PTXAS; do
   v="${!x}"; [[ "$v" == 0 || "$v" == 1 ]] || { echo "$x must be 0 or 1" >&2; exit 2; }
 done
 if (( NGPU != 8 || REPEATS < 1 || BUCKET_THREADS < 32 || BUCKET_THREADS > 1024 || BUCKET_THREADS % 32 != 0 || BUCKET_GRID_X < 1 || BUCKET_GRID_Y < 1 )); then echo invalid launch/A-B parameters >&2; exit 2; fi
@@ -32,6 +33,7 @@ mkdir -p "$(dirname "$RESULT")" "$LOGDIR"
 bash "$ONEESAN_ROOT/scripts/bench/rankdelta8-plan.sh"
 bash "$ONEESAN_ROOT/scripts/bench/rankformula-plan.sh"
 [[ "$RANKFORMULA_SPARSE_BASE" == 1 ]] && bash "$ONEESAN_ROOT/scripts/bench/rankformula-sparse-base-proof.sh"
+[[ "$RANKFORMULA_BASE_DELTA" == 1 ]] && bash "$ONEESAN_ROOT/scripts/bench/rankformula-base-delta-proof.sh"
 [[ "$RANKFORMULA_RAWCODE" == 1 ]] && bash "$ONEESAN_ROOT/scripts/bench/rankformula-rawcode-proof.sh"
 [[ "$RANKFORMULA_INLINE_CROSS" == 1 ]] && bash "$ONEESAN_ROOT/scripts/bench/rankformula-inline-cross-proof.sh"
 if [[ "$RUN_SELFTEST" == 1 ]]; then
@@ -40,8 +42,9 @@ if [[ "$RUN_SELFTEST" == 1 ]]; then
     bash "$ONEESAN_ROOT/scripts/bench/pattern10-depthcode-rankdelta8-cross5-selftest.sh" \
     >"$LOGDIR/rankdelta8.selftest.out" 2>"$LOGDIR/rankdelta8.selftest.err"
   RANKFORMULA_SPARSE_BASE="$RANKFORMULA_SPARSE_BASE" RANKFORMULA_RAWCODE="$RANKFORMULA_RAWCODE" \
-    RANKFORMULA_INLINE_CROSS="$RANKFORMULA_INLINE_CROSS" RANKDELTA8_FUSED13="$RANKDELTA8_FUSED13" \
-    RANKSTREAM_LUT_LOAD="$RANKSTREAM_LUT_LOAD" PM_ACCUM="$PM_ACCUM" DECODE_LOAD="$DEPTHCODE_DECODE_LOAD" \
+    RANKFORMULA_INLINE_CROSS="$RANKFORMULA_INLINE_CROSS" RANKFORMULA_BASE_DELTA="$RANKFORMULA_BASE_DELTA" \
+    RANKDELTA8_FUSED13="$RANKDELTA8_FUSED13" RANKSTREAM_LUT_LOAD="$RANKSTREAM_LUT_LOAD" \
+    PM_ACCUM="$PM_ACCUM" DECODE_LOAD="$DEPTHCODE_DECODE_LOAD" \
     bash "$ONEESAN_ROOT/scripts/bench/pattern10-depthcode-rankformula-cross5-selftest.sh" \
     >"$LOGDIR/rankformula.selftest.out" 2>"$LOGDIR/rankformula.selftest.err"
 fi
@@ -54,7 +57,8 @@ build_one(){
   N="$N" OUT="$bin" HIGH_CTX="$highctx" DEPTHCODE_DECODE_LOAD="$DEPTHCODE_DECODE_LOAD" RANKSTREAM_LUT_LOAD="$RANKSTREAM_LUT_LOAD" \
     RANKCHUNK32_FUSED16=0 RANKCHUNK32_BYTEPACK=0 RANKCHUNK32_BLOCK64=0 \
     RANKDELTA8_ALIGN32="$RANKDELTA8_ALIGN32" RANKDELTA8_FUSED13="$RANKDELTA8_FUSED13" \
-    RANKFORMULA_SPARSE_BASE="$RANKFORMULA_SPARSE_BASE" RANKFORMULA_RAWCODE="$RANKFORMULA_RAWCODE" RANKFORMULA_INLINE_CROSS="$RANKFORMULA_INLINE_CROSS" \
+    RANKFORMULA_SPARSE_BASE="$RANKFORMULA_SPARSE_BASE" RANKFORMULA_RAWCODE="$RANKFORMULA_RAWCODE" \
+    RANKFORMULA_INLINE_CROSS="$RANKFORMULA_INLINE_CROSS" RANKFORMULA_BASE_DELTA="$RANKFORMULA_BASE_DELTA" \
     TRANSPOSE_MODE="$TRANSPOSE_MODE" PM_ACCUM="$PM_ACCUM" TERNARY_KEY4="$TERNARY_KEY4" PTXAS_VERBOSE="$RUN_PTXAS" \
     bash "$ONEESAN_ROOT/scripts/build/b300-bucket-snake-pattern10-depthcode-graph-batch.sh" \
     >"$LOGDIR/${mode}.build.out" 2>"$LOGDIR/${mode}.build.err"
@@ -80,9 +84,9 @@ for mode in rankdelta8 rankformula; do
 done
 cat "$RESULT"
 
-python3 - "$RESULT" "$SUMMARY" "$RESOURCE" "$RUN_PTXAS" "$LOGDIR" "$RANKFORMULA_SPARSE_BASE" "$RANKFORMULA_RAWCODE" "$RANKFORMULA_INLINE_CROSS" <<'PY'
+python3 - "$RESULT" "$SUMMARY" "$RESOURCE" "$RUN_PTXAS" "$LOGDIR" "$RANKFORMULA_SPARSE_BASE" "$RANKFORMULA_RAWCODE" "$RANKFORMULA_INLINE_CROSS" "$RANKFORMULA_BASE_DELTA" <<'PY'
 import csv,pathlib,re,statistics,sys
-src,dst,resource,run_ptxas,logdir,sparse,raw,inline=sys.argv[1:]
+src,dst,resource,run_ptxas,logdir,sparse,raw,inline,base_delta=sys.argv[1:]
 rows=list(csv.DictReader(open(src),delimiter='\t')); metrics=('wall_s','forward_high_s','reverse_high_s','forward_low_s','reverse_low_s','transpose_s'); out=[]
 for mode in ('rankdelta8','rankformula'):
  g=[r for r in rows if r['mode']==mode]; z={'mode':mode,'repeats':str(len(g))}
@@ -124,12 +128,14 @@ print('rankformula_meta_bytes_per_code=4')
 print(f'rankformula_sparse_base={sparse}')
 print(f'rankformula_rawcode={raw}')
 print(f'rankformula_inline_cross={inline}')
+print(f'rankformula_base_delta={base_delta}')
 print(f'rankformula_chunkinfo_elided={raw}')
 print(f'rankformula_cross_lut_elided={inline}')
+print(f'rankformula_base_values_per_lookup={1 if base_delta=="1" else 2}')
 print('rankformula_dense_base_bytes_per_gpu_w28=524288')
 print('rankformula_sparse_base_bytes_per_gpu_max_w28=98368')
 print('rankformula_source_height_delta=2')
 print(f'summary={dst}')
 PY
 
-echo "b300-depthcode-rankformula-ab OK n=$N repeats=$REPEATS lut=$RANKSTREAM_LUT_LOAD fused13=$RANKDELTA8_FUSED13 sparse_base=$RANKFORMULA_SPARSE_BASE rawcode=$RANKFORMULA_RAWCODE inline_cross=$RANKFORMULA_INLINE_CROSS result=$RESULT" >&2
+echo "b300-depthcode-rankformula-ab OK n=$N repeats=$REPEATS lut=$RANKSTREAM_LUT_LOAD fused13=$RANKDELTA8_FUSED13 sparse_base=$RANKFORMULA_SPARSE_BASE rawcode=$RANKFORMULA_RAWCODE inline_cross=$RANKFORMULA_INLINE_CROSS base_delta=$RANKFORMULA_BASE_DELTA result=$RESULT" >&2
