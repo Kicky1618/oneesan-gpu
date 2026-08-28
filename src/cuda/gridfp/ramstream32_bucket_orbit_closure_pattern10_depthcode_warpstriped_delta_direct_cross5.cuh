@@ -2,6 +2,7 @@
 
 #include "ramstream32_bucket_closure_pattern10_depthcode_delta_direct_resolved.cuh"
 
+#define P10DC_WARPSTRIPED_CTX P10DCDirectHighResolvedCtx
 #define P10DC_WARPSTRIPED_PREPARE_FORWARD(c,payload,loc,p,ss,js,ds,sr,jr,dr) \
     p10dc_prepare_forward_high_delta_direct((c),(payload),(loc),(p),(ss),(js),(ds),(sr),(jr),(dr))
 #define P10DC_WARPSTRIPED_PREPARE_REVERSE(c,payload,loc,plan_db,p,edge,ss,js,ds,sr,jr,dr) \
@@ -17,3 +18,4 @@
 #undef p10dc_resolved_high_plan_sum
 #undef P10DC_WARPSTRIPED_PREPARE_REVERSE
 #undef P10DC_WARPSTRIPED_PREPARE_FORWARD
+#undef P10DC_WARPSTRIPED_CTX
