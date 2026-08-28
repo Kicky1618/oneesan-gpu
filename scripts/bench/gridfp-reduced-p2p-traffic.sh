@@ -9,6 +9,9 @@ PROOF_BLOCKS="${PROOF_BLOCKS:-256}"
 TOKEN_W="${TOKEN_W:-10}"
 TOKEN_K="${TOKEN_K:-4}"
 TOKEN_S="${TOKEN_S:-3}"
+SCRATCH_W="${SCRATCH_W:-$TOKEN_W}"
+SCRATCH_K="${SCRATCH_K:-$TOKEN_K}"
+SCRATCH_S="${SCRATCH_S:-$TOKEN_S}"
 TRAFFIC_W="${TRAFFIC_W:-28}"
 TRAFFIC_K="${TRAFFIC_K:-13}"
 TRAFFIC_S="${TRAFFIC_S:-13}"
@@ -24,6 +27,7 @@ RUN_MAILBOX="${RUN_MAILBOX:-1}"
 RUN_TOKEN_CYCLE="${RUN_TOKEN_CYCLE:-1}"
 RUN_TOKEN_PLAN="${RUN_TOKEN_PLAN:-1}"
 RUN_PAIR_QUEUE="${RUN_PAIR_QUEUE:-1}"
+RUN_SCRATCH_CYCLE="${RUN_SCRATCH_CYCLE:-1}"
 RUN_SCRATCH_PLAN="${RUN_SCRATCH_PLAN:-1}"
 NGPU="${NGPU:-8}"
 MAX_DIRECT_OVER_LOGICAL="${MAX_DIRECT_OVER_LOGICAL:-0}"
@@ -34,6 +38,7 @@ MAILBOX_BIN="$(build_path gridfp_reduced_component_p2p-mailbox)"
 TOKEN_BIN="$(build_path gridfp_reduced_component_p2p-token-cycle)"
 TOKEN_PLAN_BIN="$(build_path gridfp_reduced_component_p2p-token-plan)"
 PAIR_QUEUE_BIN="$(build_path gridfp_reduced_component_p2p-pair-queue)"
+SCRATCH_CYCLE_BIN="$(build_path gridfp_reduced_component_p2p-scratch-cycle)"
 SCRATCH_PLAN_BIN="$(build_path gridfp_reduced_component_p2p-scratch-plan)"
 PROOF_BIN="$(build_path gridfp_reduced_component_support-rank)"
 LUT_BIN="$(build_path gridfp_reduced_component_p2p-owner-lut)"
@@ -63,6 +68,10 @@ if [[ "$RUN_TOKEN_PLAN" == 1 ]]; then
 fi
 if [[ "$RUN_PAIR_QUEUE" == 1 ]]; then
   MODE=p2p-pair-queue ARCH="$ARCH" OUT="$(basename "$PAIR_QUEUE_BIN")" \
+    bash "$BUILD_SCRIPT"
+fi
+if [[ "$RUN_SCRATCH_CYCLE" == 1 ]]; then
+  MODE=p2p-scratch-cycle ARCH="$ARCH" OUT="$(basename "$SCRATCH_CYCLE_BIN")" \
     bash "$BUILD_SCRIPT"
 fi
 if [[ "$RUN_SCRATCH_PLAN" == 1 ]]; then
@@ -113,6 +122,11 @@ if [[ "$RUN_TOKEN_CYCLE" == 1 ]]; then
   else
     echo "SKIP real GridFP token cycle: full native atomic mesh unavailable"
   fi
+fi
+
+if [[ "$RUN_SCRATCH_CYCLE" == 1 ]]; then
+  echo "== real GridFP two-phase local-scratch shift cycle =="
+  "$SCRATCH_CYCLE_BIN" "$SCRATCH_W" "$SCRATCH_K" "$SCRATCH_S" "$NGPU"
 fi
 
 echo "== support-only slab-rank equivalence =="
