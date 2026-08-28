@@ -7,10 +7,16 @@ namespace oneesan::gridfp::reducedprod {
 #ifndef RP_RUNTIME_PRIMITIVE_RANK_SETBITS
 #define RP_RUNTIME_PRIMITIVE_RANK_SETBITS 1
 #endif
+#ifndef RP_RUNTIME_BROADWORD_SUPPORT
+#define RP_RUNTIME_BROADWORD_SUPPORT 1
+#endif
 static_assert(
     RP_RUNTIME_PRIMITIVE_RANK_SETBITS == 0 ||
     RP_RUNTIME_PRIMITIVE_RANK_SETBITS == 1,
     "RP_RUNTIME_PRIMITIVE_RANK_SETBITS must be 0 or 1");
+static_assert(
+    RP_RUNTIME_BROADWORD_SUPPORT == 0 || RP_RUNTIME_BROADWORD_SUPPORT == 1,
+    "RP_RUNTIME_BROADWORD_SUPPORT must be 0 or 1");
 
 struct GroupedComponentContextDevice {
     int owner = -1;
@@ -19,6 +25,43 @@ struct GroupedComponentContextDevice {
     int outer_ones = 0;
     Rank64 local_group_base = 0;
 };
+
+// Collapse the nonzero predicate of each 2-bit MateValue into one support bit.
+// This replaces W calls to mget() with a fixed broadword shuffle network.
+__device__ __forceinline__ std::uint32_t runtime_support_from_mate_device(
+    MateID mate,
+    int len
+) {
+#if RP_RUNTIME_BROADWORD_SUPPORT
+    std::uint64_t x = (std::uint64_t(mate) | (std::uint64_t(mate) >> 1)) &
+                      0x5555555555555555ULL;
+    x = (x | (x >> 1)) & 0x3333333333333333ULL;
+    x = (x | (x >> 2)) & 0x0f0f0f0f0f0f0f0fULL;
+    x = (x | (x >> 4)) & 0x00ff00ff00ff00ffULL;
+    x = (x | (x >> 8)) & 0x0000ffff0000ffffULL;
+    x = (x | (x >> 16)) & 0x00000000ffffffffULL;
+    std::uint32_t out = static_cast<std::uint32_t>(x);
+    if (len < 32) out &= (std::uint32_t(1) << len) - 1u;
+    return out;
+#else
+    std::uint32_t out = 0;
+    for (int bit = 0; bit < len; ++bit)
+        if (mget(mate, bit) != N) out |= std::uint32_t(1) << bit;
+    return out;
+#endif
+}
+
+__device__ __forceinline__ std::uint32_t runtime_full_support_device(
+    DeviceKey k,
+    int W,
+    int q,
+    bool reverse
+) {
+    const MateID full = !k.blocked ? k.mate
+        : (reverse ? blocked_exclude_reverse(k.mate, W, q)
+                   : blocked_exclude(k.mate, q));
+    return runtime_support_from_mate_device(full, W);
+}
 
 // primitive_rank_device scans all W frontier positions and skips N. Runtime
 // grouped ranking already has the exact support mask, so visit only occupied
@@ -69,7 +112,7 @@ __device__ __forceinline__ GroupedComponentContextDevice grouped_component_conte
     const int O = W - L;
     const int lo = reverse ? tile_start - 1 : tile_start - K - 1;
     const int hi = lo + L - 1;
-    const std::uint32_t full = full_support_device(seed, W, q, reverse);
+    const std::uint32_t full = runtime_full_support_device(seed, W, q, reverse);
     const std::uint32_t outer = compact_outside_window_device(full, W, lo, hi);
     const int outer_ones = __popc(outer);
     const Rank64 group = outer_group_size_device(L, outer_ones);
@@ -94,15 +137,15 @@ __device__ __forceinline__ GroupedDeviceRank grouped_rank_in_component_device(
     bool reverse,
     const GroupedComponentContextDevice& ctx
 ) {
-    const std::uint32_t full = full_support_device(k, W, q, reverse);
+    const MateID full_mate = !k.blocked ? k.mate
+        : (reverse ? blocked_exclude_reverse(k.mate, W, q)
+                   : blocked_exclude(k.mate, q));
+    const std::uint32_t full = runtime_support_from_mate_device(full_mate, W);
     const std::uint32_t local_mask = local_window_support_device(full, ctx.lo, ctx.L);
     const int local_ones = __popc(local_mask);
     const int occupied = ctx.outer_ones + local_ones;
     const Rank64 pc = RP_PRIMITIVE[occupied][1];
 
-    const MateID full_mate = !k.blocked ? k.mate
-        : (reverse ? blocked_exclude_reverse(k.mate, W, q)
-                   : blocked_exclude(k.mate, q));
     const Rank64 pr = runtime_primitive_rank_support_device(
         full_mate, W, occupied, full);
     Rank64 within = group_local_sector_offset_device(ctx.L, ctx.outer_ones, local_ones);
