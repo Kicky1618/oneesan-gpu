@@ -49,17 +49,31 @@ done
 cat "$RESULT"
 python3 - "$RESULT" "$SUMMARY" <<'PY'
 import csv,statistics,sys
-src,dst=sys.argv[1:]; rows=list(csv.DictReader(open(src),delimiter='\t'))
-names={'0':'full_u64','1':'compact_u32','2':'full_u32'}; out=[]
+src,dst=sys.argv[1:]
+rows=list(csv.DictReader(open(src),delimiter='\t'))
+names={'0':'full_u64','1':'compact_u32','2':'full_u32'}
+times={m:{} for m in names}
+for r in rows:
+ m=r['mode']; rep=int(r['repeat']); wall=float(r['wall_ms'])
+ if m not in times: raise SystemExit(f'unknown mode={m}')
+ if rep in times[m]: raise SystemExit(f'duplicate mode={m} repeat={rep}')
+ times[m][rep]=wall
+base_reps=set(times['0'])
+if not base_reps: raise SystemExit('missing baseline')
+out=[]
 for mode,name in names.items():
- xs=[float(r['wall_ms']) for r in rows if r['mode']==mode]
- if not xs: raise SystemExit(f'missing mode={mode}')
- out.append({'mode':mode,'name':name,'repeats':len(xs),'wall_ms_median':f'{statistics.median(xs):.9f}','wall_ms_min':f'{min(xs):.9f}','wall_ms_max':f'{max(xs):.9f}'})
+ if set(times[mode])!=base_reps: raise SystemExit(f'repeat set mismatch mode={mode}')
+ xs=list(times[mode].values()); paired=[times['0'][r]/times[mode][r] for r in sorted(base_reps)]
+ out.append({'mode':mode,'name':name,'repeats':len(xs),'wall_ms_median':f'{statistics.median(xs):.9f}','wall_ms_min':f'{min(xs):.9f}','wall_ms_max':f'{max(xs):.9f}','paired_speedup_median':f'{statistics.median(paired):.9f}','paired_speedup_min':f'{min(paired):.9f}','paired_speedup_max':f'{max(paired):.9f}'})
 with open(dst,'w',newline='') as f:
  w=csv.DictWriter(f,fieldnames=out[0].keys(),delimiter='\t'); w.writeheader(); w.writerows(out)
 q={r['mode']:r for r in out}; old=float(q['0']['wall_ms_median'])
 for mode in ('1','2'):
- new=float(q[mode]['wall_ms_median']); name=names[mode]; print(f'runtime_primitive_{name}_wall_speedup={old/new:.6f}x'); print(f'runtime_primitive_{name}_wall_delta_pct={(new/old-1)*100:.4f}%')
+ new=float(q[mode]['wall_ms_median']); name=names[mode]
+ print(f'runtime_primitive_{name}_wall_speedup={old/new:.6f}x'); print(f'runtime_primitive_{name}_wall_delta_pct={(new/old-1)*100:.4f}%')
+ print(f'runtime_primitive_{name}_paired_speedup_median={q[mode]["paired_speedup_median"]}x'); print(f'runtime_primitive_{name}_paired_speedup_min={q[mode]["paired_speedup_min"]}x'); print(f'runtime_primitive_{name}_all_pairs_faster={int(float(q[mode]["paired_speedup_min"])>1.0)}')
+winner=max((q[m] for m in ('1','2')), key=lambda r: float(r['paired_speedup_median']))
+print(f'runtime_primitive_winner_mode={winner["mode"]}'); print(f'runtime_primitive_winner_name={winner["name"]}'); print(f'runtime_primitive_winner_paired_speedup_median={winner["paired_speedup_median"]}x')
 print('runtime_primitive_mode0_bytes=6960'); print('runtime_primitive_mode1_compact_bytes=900'); print('runtime_primitive_mode2_full_u32_bytes=3480')
 print('runtime_primitive_compact_saved_bytes=6060'); print('runtime_primitive_full_u32_saved_bytes=3480')
 print('runtime_primitive_signature_filter=0'); print('runtime_primitive_index_cache=0'); print('runtime_primitive_exact=1'); print(f'summary={dst}')
