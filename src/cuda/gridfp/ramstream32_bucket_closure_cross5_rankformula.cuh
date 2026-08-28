@@ -8,6 +8,10 @@
 #endif
 static_assert(P10DC_RANKFORMULA_INLINE_CROSS == 0 || P10DC_RANKFORMULA_INLINE_CROSS == 1,
               "P10DC_RANKFORMULA_INLINE_CROSS must be 0 or 1");
+static_assert(!P10DC_RANKFORMULA_SLOTMETA || P10DC_RANKFORMULA_INLINE_CROSS,
+              "rankformula slotmeta requires inline CROSS scan");
+static_assert(!P10DC_RANKFORMULA_SLOTMETA || !P10DC_RANKFORMULA_RAWCODE,
+              "rankformula slotmeta replaces raw 2-bit metadata");
 
 static constexpr uint32_t P10DC_RANKFORMULA_CHUNKINFO_CODE_MASK = 0x03ffu;
 static constexpr uint32_t P10DC_RANKFORMULA_CHUNKINFO_SUPPORT_SHIFT = 10u;
@@ -30,7 +34,7 @@ static constexpr uint32_t p10dc_rankformula_ballot_host(int n, int h) {
            p10dc_rankformula_choose_host(n, ups - 1);
 }
 
-#if !P10DC_RANKFORMULA_RAWCODE
+#if !P10DC_RANKFORMULA_RAWCODE && !P10DC_RANKFORMULA_SLOTMETA
 static constexpr uint16_t p10dc_rankformula_chunkinfo_host(uint32_t key) {
     uint32_t code = 0, support = 0;
     for (int pos = 0; pos < P10DC_CROSS5_CHUNK; ++pos) {
@@ -53,20 +57,20 @@ static constexpr uint32_t p10dc_rankformula_ballot_pair_host(uint32_t rem, uint3
 }
 
 #if P10DC_RANKSTREAM_LUT_LDG
-#if !P10DC_RANKFORMULA_RAWCODE
+#if !P10DC_RANKFORMULA_RAWCODE && !P10DC_RANKFORMULA_SLOTMETA
 __device__ __align__(128) uint16_t D_P10DC_RANKFORMULA_CHUNKINFO[P10DC_CROSS5_KEYS];
 #endif
 __device__ __align__(128) uint32_t
     D_P10DC_RANKFORMULA_BALLOT[(LOW_LUT_K + 1) * P10DC_RANKFORMULA_BALLOT_STRIDE];
 #else
-#if !P10DC_RANKFORMULA_RAWCODE
+#if !P10DC_RANKFORMULA_RAWCODE && !P10DC_RANKFORMULA_SLOTMETA
 __constant__ uint16_t D_P10DC_RANKFORMULA_CHUNKINFO[P10DC_CROSS5_KEYS];
 #endif
 __constant__ uint32_t
     D_P10DC_RANKFORMULA_BALLOT[(LOW_LUT_K + 1) * P10DC_RANKFORMULA_BALLOT_STRIDE];
 #endif
 
-#if !P10DC_RANKFORMULA_RAWCODE
+#if !P10DC_RANKFORMULA_RAWCODE && !P10DC_RANKFORMULA_SLOTMETA
 static std::array<uint16_t, P10DC_CROSS5_KEYS> p10dc_rankformula_chunkinfo_table() {
     std::array<uint16_t, P10DC_CROSS5_KEYS> out{};
     for (uint32_t k = 0; k < P10DC_CROSS5_KEYS; ++k)
@@ -91,7 +95,7 @@ static void p10dc_install_rankformula_lut() {
 #if !P10DC_RANKFORMULA_INLINE_CROSS
     p10dc_install_rankdelta8_lut();
 #endif
-#if !P10DC_RANKFORMULA_RAWCODE
+#if !P10DC_RANKFORMULA_RAWCODE && !P10DC_RANKFORMULA_SLOTMETA
     static const auto chunkinfo = p10dc_rankformula_chunkinfo_table();
     ck(cudaMemcpyToSymbol(D_P10DC_RANKFORMULA_CHUNKINFO, chunkinfo.data(),
                           chunkinfo.size() * sizeof(uint16_t)),
@@ -103,7 +107,7 @@ static void p10dc_install_rankformula_lut() {
        "p10dc rankformula ballot table");
 }
 
-#if !P10DC_RANKFORMULA_RAWCODE
+#if !P10DC_RANKFORMULA_RAWCODE && !P10DC_RANKFORMULA_SLOTMETA
 __device__ __forceinline__ uint16_t p10dc_rankformula_chunkinfo_load(uint32_t chunk) {
 #if P10DC_RANKSTREAM_LUT_LDG
     return __ldg(D_P10DC_RANKFORMULA_CHUNKINFO + chunk);
@@ -222,6 +226,41 @@ __device__ __forceinline__ uint32_t p10dc_cross5_apply_rankformula(
 #endif
 }
 
+#if P10DC_RANKFORMULA_SLOTMETA
+template<int LEN>
+__device__ __forceinline__ uint32_t p10dc_cross5_apply_rankformula_slotmeta(
+    uint32_t support_bits, uint32_t lmask_bits, uint32_t& state,
+    const Count* source_row, int source_rank_origin,
+    int& factor_h, uint32_t& rem, int& prefix_corr, BkczCrossAccum& sum
+) {
+    static_assert(LEN >= 1 && LEN <= P10DC_CROSS5_CHUNK);
+#pragma unroll
+    for (int bit = LEN - 1; bit >= 0; --bit) {
+        const uint32_t b = 1u << bit;
+        if ((support_bits & b) == 0u) continue;
+        if (lmask_bits & b) {
+            const uint32_t bp = p10dc_rankformula_ballot_load(rem, uint32_t(factor_h));
+            const uint32_t dest_contrib = bp & 0xffffu;
+            const int diff = int(int16_t(bp >> 16));
+            if (state == 1u) {
+                const int source_rank = source_rank_origin + prefix_corr - int(dest_contrib);
+                sum = bkcz_cross_add(sum, source_row[uint32_t(source_rank)]);
+            }
+            prefix_corr += diff;
+            ++factor_h;
+            --rem;
+            ++state;
+        } else {
+            if (state == 1u) return 1u;
+            --state;
+            --factor_h;
+            --rem;
+        }
+    }
+    return 0u;
+}
+#endif
+
 __device__ __forceinline__ BkczCrossAccum
 p10dc_resolved_low_preimages_cross5_rankformula_fast(
     uint32_t packed_meta, uint32_t h, uint32_t rank, uint32_t depth,
@@ -231,6 +270,46 @@ p10dc_resolved_low_preimages_cross5_rankformula_fast(
     constexpr int L0 = LOW_LUT_K >= P10DC_CROSS5_CHUNK ? P10DC_CROSS5_CHUNK : LOW_LUT_K;
     constexpr int S0 = LOW_LUT_K - L0;
 
+#if P10DC_RANKFORMULA_SLOTMETA
+    const uint32_t lmask = packed_meta & (P10DC_RANKFORMULA_MASKS - 1u);
+    const uint32_t slot = packed_meta >> LOW_LUT_K;
+    const uint32_t mask = p10dc_low_rankformula_slot_support(slot);
+    const int source_rank_origin =
+        int(rank) + p10dc_low_rankformula_base_delta_slot(h, slot);
+    uint32_t state = depth;
+    uint32_t rem = uint32_t(__popc(mask));
+    int factor_h = int(h), prefix_corr = 0;
+    BkczCrossAccum sum = 0;
+
+    constexpr uint32_t M0 = (1u << L0) - 1u;
+    uint32_t st = p10dc_cross5_apply_rankformula_slotmeta<L0>(
+        (mask >> S0) & M0, (lmask >> S0) & M0,
+        state, source_row, source_rank_origin,
+        factor_h, rem, prefix_corr, sum);
+    if (st == 1u) return sum;
+
+    if constexpr (S0 > 0) {
+        constexpr int L1 = S0 >= P10DC_CROSS5_CHUNK ? P10DC_CROSS5_CHUNK : S0;
+        constexpr int S1 = S0 - L1;
+        constexpr uint32_t M1 = (1u << L1) - 1u;
+        st = p10dc_cross5_apply_rankformula_slotmeta<L1>(
+            (mask >> S1) & M1, (lmask >> S1) & M1,
+            state, source_row, source_rank_origin,
+            factor_h, rem, prefix_corr, sum);
+        if (st == 1u) return sum;
+        if constexpr (S1 > 0) {
+            constexpr int L2 = S1 >= P10DC_CROSS5_CHUNK ? P10DC_CROSS5_CHUNK : S1;
+            constexpr int S2 = S1 - L2;
+            static_assert(S2 == 0, "rankformula K<=14 must fit in three chunks");
+            constexpr uint32_t M2 = (1u << L2) - 1u;
+            p10dc_cross5_apply_rankformula_slotmeta<L2>(
+                mask & M2, lmask & M2,
+                state, source_row, source_rank_origin,
+                factor_h, rem, prefix_corr, sum);
+        }
+    }
+    return sum;
+#else
     uint32_t c0 = 0, c1 = 0, c2 = 0;
     uint32_t x0 = 0, x1 = 0, x2 = 0;
     uint32_t mask = 0;
@@ -314,6 +393,7 @@ p10dc_resolved_low_preimages_cross5_rankformula_fast(
         }
     }
     return sum;
+#endif
 }
 
 __device__ __forceinline__ BkczCrossAccum
