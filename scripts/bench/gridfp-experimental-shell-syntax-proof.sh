@@ -7,6 +7,8 @@ FILES=(
   scripts/bench/gridfp-runtime-ab-env-proof.sh
   scripts/bench/gridfp-runtime-experimental-ab-isolation-proof.sh
   scripts/bench/gridfp-codec-table-proxy-coverage-proof.sh
+  scripts/bench/gridfp-codec-table-layout-selection-gate.sh
+  scripts/bench/gridfp-codec-table-layout-selection-gate-proof.sh
   scripts/bench/gridfp-runtime-label-hotpath-proof-suite.sh
   scripts/bench/gridfp-runtime-w28-label-hotpath-suite.sh
   scripts/bench/gridfp-codec-table-layout-suite.sh
