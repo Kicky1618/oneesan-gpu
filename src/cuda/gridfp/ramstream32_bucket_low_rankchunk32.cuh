@@ -15,14 +15,23 @@ static_assert(P10DC_RANKCHUNK32_ONESHFL == 0 || P10DC_RANKCHUNK32_ONESHFL == 1,
 static_assert(P10DC_RANKCHUNK32_BYTEPACK == 0 || P10DC_RANKCHUNK32_BYTEPACK == 1,
               "P10DC_RANKCHUNK32_BYTEPACK must be 0 or 1");
 
+#ifndef P10DC_RANKCHUNK32_ALIGN32
+#define P10DC_RANKCHUNK32_ALIGN32 0
+#endif
+static_assert(P10DC_RANKCHUNK32_ALIGN32 == 0 || P10DC_RANKCHUNK32_ALIGN32 == 1,
+              "P10DC_RANKCHUNK32_ALIGN32 must be 0 or 1");
+
 // Both layouts use 32-code blocks. Compact mode stores the final <=4-digit
 // chunk in 7 bits and gives the prefix 9 bits. Bytepack mode keeps three clean
 // chunk bytes and uses an 8-bit prefix. Legal LOW codes satisfy #L<=#R, so a
 // K<=14 code contains at most floor(K/2)<=7 L digits; therefore the largest
 // prefix before the 32nd code is 31*7=217 and still fits in 8 bits.
+// ALIGN32 optionally pads each height start to a metadata-block boundary. A
+// warp stripe then lies in exactly one block and needs one block-base load.
 static constexpr uint32_t P10DC_RANKCHUNK32_BLOCK_LOG2 = 5u;
 static constexpr uint32_t P10DC_RANKCHUNK32_BLOCK = 1u << P10DC_RANKCHUNK32_BLOCK_LOG2;
-static constexpr uint32_t P10DC_RANKCHUNK32_HEIGHT_ALIGN = 1u; // compatibility: no padding
+static constexpr uint32_t P10DC_RANKCHUNK32_HEIGHT_ALIGN =
+    P10DC_RANKCHUNK32_ALIGN32 ? P10DC_RANKCHUNK32_BLOCK : 1u;
 static constexpr uint32_t P10DC_RANKCHUNK32_CHUNK_BITS = P10DC_RANKCHUNK32_BYTEPACK ? 24u : 23u;
 static constexpr uint32_t P10DC_RANKCHUNK32_PREFIX_BITS = 32u - P10DC_RANKCHUNK32_CHUNK_BITS;
 static constexpr uint32_t P10DC_RANKCHUNK32_CHUNK_MASK = (1u << P10DC_RANKCHUNK32_CHUNK_BITS) - 1u;
@@ -37,6 +46,8 @@ static_assert(
     "rankchunk32 within-block prefix no longer fits selected packing");
 static_assert(p10dc_cross5_pow3_host(4) <= (1u << 7),
               "rankchunk32 four-digit tail no longer fits 7 value bits");
+static_assert(P10DC_RANKCHUNK32_HEIGHT_ALIGN == 1u ||
+              P10DC_RANKCHUNK32_HEIGHT_ALIGN == P10DC_RANKCHUNK32_BLOCK);
 
 static constexpr uint32_t p10dc_rankchunk32_pack_host(uint32_t key) {
     constexpr int L0 = LOW_LUT_K >= P10DC_CROSS5_CHUNK ? P10DC_CROSS5_CHUNK : LOW_LUT_K;
@@ -75,8 +86,6 @@ static constexpr uint32_t p10dc_rankchunk32_unpack_host(uint32_t packed) {
 __constant__ uint32_t* D_P10DC_LOW_RANKCHUNKMETA32;
 // Historical symbol name retained to avoid touching callers; blocks are now 32 codes.
 __constant__ uint32_t* D_P10DC_LOW_RANKCHUNKBLOCK16;
-// Kept as a compatibility/verification table. With padding removed these are
-// exactly the compact fixed-owner height offsets.
 __constant__ uint32_t D_P10DC_LOW_RANKCHUNK_HOFF[MAXW + 2];
 
 __device__ __forceinline__ void p10dc_low_rankchunk32_row(
@@ -91,11 +100,10 @@ __device__ __forceinline__ void p10dc_low_rankchunk32_row(
     row = D_P10DC_LOW_RANKSTREAM + block_base + prefix;
 }
 
-// A contiguous 32-lane stripe can intersect at most two 32-code metadata
-// blocks even when a height begins at an arbitrary compact index. At most two
-// lanes load block bases. In the default path every lane chooses lane 0 or the
-// boundary lane as its source in one variable-index shuffle. The two-shuffle
-// form remains available as an A/B baseline.
+// Warp-striped HIGH ranks are q*32+lane. With ALIGN32 the height offset is also
+// a multiple of 32, so every stripe is one metadata block: lane 0 loads the
+// base and broadcasts once. Without alignment an arbitrary height offset can
+// make the stripe cross one boundary; keep the existing one-/two-shuffle A/B.
 __device__ __forceinline__ void p10dc_low_rankchunk32_row_warpstripe(
     uint32_t h, uint32_t rank, uint32_t& packed_chunks, const uint16_t*& row
 ) {
@@ -105,12 +113,16 @@ __device__ __forceinline__ void p10dc_low_rankchunk32_row_warpstripe(
     const uint32_t meta = D_P10DC_LOW_RANKCHUNKMETA32[compact];
     packed_chunks = meta & P10DC_RANKCHUNK32_CHUNK_MASK;
     const uint32_t prefix = meta >> P10DC_RANKCHUNK32_CHUNK_BITS;
-
     const uint32_t first_compact = compact - lane;
     const uint32_t first_block = first_compact >> P10DC_RANKCHUNK32_BLOCK_LOG2;
+
+#if P10DC_RANKCHUNK32_ALIGN32
+    uint32_t b0_local = 0;
+    if (lane == 0u) b0_local = D_P10DC_LOW_RANKCHUNKBLOCK16[first_block];
+    const uint32_t block_base = __shfl_sync(active, b0_local, 0);
+#else
     const uint32_t first_off = first_compact & (P10DC_RANKCHUNK32_BLOCK - 1u);
     const uint32_t split_lane = P10DC_RANKCHUNK32_BLOCK - first_off; // [1,32]
-
 #if P10DC_RANKCHUNK32_ONESHFL
     uint32_t local_base = 0;
     if (lane == 0u)
@@ -134,6 +146,7 @@ __device__ __forceinline__ void p10dc_low_rankchunk32_row_warpstripe(
             if (lane >= split_lane) block_base = b1;
         }
     }
+#endif
 #endif
     row = D_P10DC_LOW_RANKSTREAM + block_base + prefix;
 }
@@ -161,12 +174,20 @@ struct BucketFusedDirectHighRowsRankChunk32Tables
 
         std::array<uint32_t, MAXW + 2> hoff{};
         std::vector<uint32_t> meta, blocks;
-        meta.reserve(low_prekey_count);
-        blocks.reserve((low_prekey_count + P10DC_RANKCHUNK32_BLOCK - 1u) /
-                       P10DC_RANKCHUNK32_BLOCK);
+        constexpr size_t PAD_BOUND = size_t(MAXW + 2) * (P10DC_RANKCHUNK32_BLOCK - 1u);
+        meta.reserve(low_prekey_count + (P10DC_RANKCHUNK32_ALIGN32 ? PAD_BOUND : 0u));
+        blocks.reserve((low_prekey_count + (P10DC_RANKCHUNK32_ALIGN32 ? PAD_BOUND : 0u) +
+                        P10DC_RANKCHUNK32_BLOCK - 1u) / P10DC_RANKCHUNK32_BLOCK);
         uint32_t stream_cursor = 0, block_base = 0;
+        size_t actual_codes = 0, padding = 0;
 
         for (uint32_t h = 0; h < uint32_t(MAXW + 2); ++h) {
+#if P10DC_RANKCHUNK32_ALIGN32
+            while ((meta.size() & (P10DC_RANKCHUNK32_BLOCK - 1u)) != 0u) {
+                meta.push_back(0u);
+                ++padding;
+            }
+#endif
             hoff[h] = uint32_t(meta.size());
             const uint32_t a = f.low_code_off[owner_base + h];
             const uint32_t b = h + 1u < uint32_t(MAXW + 2)
@@ -194,19 +215,32 @@ struct BucketFusedDirectHighRowsRankChunk32Tables
                     std::exit(662);
                 }
                 meta.push_back(chunks | (prefix << P10DC_RANKCHUNK32_CHUNK_BITS));
+                ++actual_codes;
                 stream_cursor += lcount;
             }
         }
-        if (meta.size() != low_prekey_count || stream_cursor != low_rankstream_count) {
-            std::cerr << "p10dc rankchunk32 size mismatch meta=" << meta.size()
-                      << '/' << low_prekey_count << " stream=" << stream_cursor
+        if (actual_codes != low_prekey_count ||
+            meta.size() != actual_codes + padding ||
+            stream_cursor != low_rankstream_count) {
+            std::cerr << "p10dc rankchunk32 size mismatch actual=" << actual_codes
+                      << '/' << low_prekey_count << " meta=" << meta.size()
+                      << " padding=" << padding << " stream=" << stream_cursor
                       << '/' << low_rankstream_count << '\n';
             std::exit(663);
+        }
+        if constexpr (P10DC_RANKCHUNK32_ALIGN32) {
+            for (uint32_t h = 0; h < uint32_t(MAXW + 2); ++h) {
+                if ((hoff[h] & (P10DC_RANKCHUNK32_BLOCK - 1u)) != 0u) {
+                    std::cerr << "p10dc rankchunk32 height alignment failure h=" << h
+                              << " hoff=" << hoff[h] << '\n';
+                    std::exit(664);
+                }
+            }
         }
 
         low_rankchunkmeta32_count = meta.size();
         low_rankchunkblock16_count = blocks.size();
-        low_rankchunk_padding_count = 0;
+        low_rankchunk_padding_count = padding;
         if (low_rankchunkmeta32_count > low_rankchunkmeta32_capacity) {
             if (low_rankchunkmeta32) cudaFree(low_rankchunkmeta32);
             low_rankchunkmeta32 = nullptr;
@@ -243,16 +277,17 @@ struct BucketFusedDirectHighRowsRankChunk32Tables
         const size_t bytes = meta.size() * sizeof(uint32_t) + blocks.size() * sizeof(uint32_t) +
                              low_rankstream_count * sizeof(uint16_t);
         std::cerr << "p10dc_low_rankchunk32 fixed_owner=" << fixed
-                  << " codes=" << meta.size() << " blocks=" << blocks.size()
+                  << " codes=" << actual_codes << " blocks=" << blocks.size()
                   << " l_ranks=" << low_rankstream_count << " bytes=" << bytes
-                  << " meta_entries=" << meta.size() << " padding=0"
+                  << " meta_entries=" << meta.size() << " padding=" << padding
                   << " chunk_bits=" << P10DC_RANKCHUNK32_CHUNK_BITS
                   << " prefix_bits=" << P10DC_RANKCHUNK32_PREFIX_BITS
-                  << " block=32 height_align=1"
+                  << " block=32 height_align=" << P10DC_RANKCHUNK32_HEIGHT_ALIGN
                   << " byte_aligned_chunks=" << P10DC_RANKCHUNK32_BYTEPACK
                   << " max_l_per_legal_code=" << P10DC_RANKCHUNK32_MAX_L_PER_LEGAL_CODE
-                  << " block_base_loads_per_warp_max=2"
-                  << " block_base_shuffles_per_warp=" << (P10DC_RANKCHUNK32_ONESHFL ? 1 : 2)
+                  << " block_base_loads_per_warp_max=" << (P10DC_RANKCHUNK32_ALIGN32 ? 1 : 2)
+                  << " block_base_shuffles_per_warp="
+                  << (P10DC_RANKCHUNK32_ALIGN32 ? 1 : (P10DC_RANKCHUNK32_ONESHFL ? 1 : 2))
                   << " chunk_div_runtime=0 chunk_mod_runtime=0"
                   << " old_prekey_offset_arrays_freed=1 direct_lookup_runtime=0\n";
     }
