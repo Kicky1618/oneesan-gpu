@@ -48,18 +48,23 @@ Rank64 group_size(
     return s;
 }
 
+std::uint32_t mul_hi_u32(std::uint32_t a, std::uint32_t b) {
+    return static_cast<std::uint32_t>((Rank64(a) * b) >> 32);
+}
+
 Rank64 owner_u32limb(Rank64 midpoint, int ngpu, std::uint32_t meta) {
     const unsigned shift = meta >> 16;
     const std::uint32_t magic = meta & 0xffffu;
-    // Reassociate midpoint * ngpu * magic so the 64-bit midpoint never takes
-    // part in an integer multiply. scale is at most 17 bits for ngpu<=8.
     const std::uint32_t scale = magic * static_cast<std::uint32_t>(ngpu);
     const std::uint32_t lo = static_cast<std::uint32_t>(midpoint);
-    if (shift < 32)
-        return (Rank64(lo) * scale) >> shift; // logical 32x32 -> 64 wide multiply
+    const std::uint32_t product_lo = lo * scale;
+    const std::uint32_t product_hi = mul_hi_u32(lo, scale);
+    if (shift < 32) {
+        return (product_lo >> shift) |
+               (Rank64(product_hi) << (32 - shift));
+    }
     const std::uint32_t hi = static_cast<std::uint32_t>(midpoint >> 32);
-    const std::uint32_t upper =
-        hi * scale + static_cast<std::uint32_t>((Rank64(lo) * scale) >> 32);
+    const std::uint32_t upper = hi * scale + product_hi;
     return upper >> (shift - 32);
 }
 }  // namespace
@@ -112,8 +117,7 @@ int main() {
                     if (shift >= 32) {
                         const std::uint32_t lo = static_cast<std::uint32_t>(midpoint);
                         const std::uint32_t hi = static_cast<std::uint32_t>(midpoint >> 32);
-                        const std::uint32_t upper = hi * scale +
-                            static_cast<std::uint32_t>((Rank64(lo) * scale) >> 32);
+                        const std::uint32_t upper = hi * scale + mul_hi_u32(lo, scale);
                         max_upper = std::max(max_upper, upper);
                     } else if (midpoint >> 32) {
                         return 5;
@@ -148,6 +152,7 @@ int main() {
               << " max_upper_bits=23"
               << " table_entries=" << META.size()
               << " table_bytes=" << META.size() * sizeof(std::uint32_t)
-              << " midpoint_mul64=0 mul64_general=0 clamp_required=0 exact=1\n";
+              << " midpoint_mul64=0 mul_wide_u32=0 pure_u32=1"
+              << " clamp_required=0 exact=1\n";
     return 0;
 }
