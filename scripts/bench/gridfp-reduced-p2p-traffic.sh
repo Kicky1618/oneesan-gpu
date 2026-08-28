@@ -14,6 +14,7 @@ TRAFFIC_K="${TRAFFIC_K:-13}"
 TRAFFIC_S="${TRAFFIC_S:-13}"
 TRAFFIC_BLOCKS="${TRAFFIC_BLOCKS:-4096}"
 MATRIX_BLOCKS="${MATRIX_BLOCKS:-4096}"
+SCRATCH_BASE_BATCH="${SCRATCH_BASE_BATCH:-65536}"
 PAIR_QUEUE_WORDS="${PAIR_QUEUE_WORDS:-1024}"
 PAIR_QUEUE_MESSAGES="${PAIR_QUEUE_MESSAGES:-256}"
 PAIR_QUEUE_BATCH="${PAIR_QUEUE_BATCH:-8}"
@@ -23,6 +24,7 @@ RUN_MAILBOX="${RUN_MAILBOX:-1}"
 RUN_TOKEN_CYCLE="${RUN_TOKEN_CYCLE:-1}"
 RUN_TOKEN_PLAN="${RUN_TOKEN_PLAN:-1}"
 RUN_PAIR_QUEUE="${RUN_PAIR_QUEUE:-1}"
+RUN_SCRATCH_PLAN="${RUN_SCRATCH_PLAN:-1}"
 NGPU="${NGPU:-8}"
 MAX_DIRECT_OVER_LOGICAL="${MAX_DIRECT_OVER_LOGICAL:-0}"
 
@@ -32,6 +34,7 @@ MAILBOX_BIN="$(build_path gridfp_reduced_component_p2p-mailbox)"
 TOKEN_BIN="$(build_path gridfp_reduced_component_p2p-token-cycle)"
 TOKEN_PLAN_BIN="$(build_path gridfp_reduced_component_p2p-token-plan)"
 PAIR_QUEUE_BIN="$(build_path gridfp_reduced_component_p2p-pair-queue)"
+SCRATCH_PLAN_BIN="$(build_path gridfp_reduced_component_p2p-scratch-plan)"
 PROOF_BIN="$(build_path gridfp_reduced_component_support-rank)"
 LUT_BIN="$(build_path gridfp_reduced_component_p2p-owner-lut)"
 TRAFFIC_BIN="$(build_path gridfp_reduced_component_p2p-traffic)"
@@ -60,6 +63,10 @@ if [[ "$RUN_TOKEN_PLAN" == 1 ]]; then
 fi
 if [[ "$RUN_PAIR_QUEUE" == 1 ]]; then
   MODE=p2p-pair-queue ARCH="$ARCH" OUT="$(basename "$PAIR_QUEUE_BIN")" \
+    bash "$BUILD_SCRIPT"
+fi
+if [[ "$RUN_SCRATCH_PLAN" == 1 ]]; then
+  MODE=p2p-scratch-plan ARCH="$ARCH" OUT="$(basename "$SCRATCH_PLAN_BIN")" \
     bash "$BUILD_SCRIPT"
 fi
 if [[ "$RUN_MATRIX" == 1 ]]; then
@@ -120,6 +127,12 @@ if [[ "$RUN_TOKEN_PLAN" == 1 ]]; then
     "$TRAFFIC_BLOCKS" "$NGPU"
 fi
 
+if [[ "$RUN_SCRATCH_PLAN" == 1 ]]; then
+  echo "== production-width bounded scratch plan =="
+  "$SCRATCH_PLAN_BIN" "$TRAFFIC_W" "$TRAFFIC_K" "$TRAFFIC_S" \
+    "$SCRATCH_BASE_BATCH" "$TRAFFIC_BLOCKS" "$NGPU"
+fi
+
 echo "== production-width P2P traffic =="
 OUTPUT="$($TRAFFIC_BIN "$TRAFFIC_W" "$TRAFFIC_K" "$TRAFFIC_S" \
   "$TRAFFIC_BLOCKS" "$NGPU")"
@@ -152,6 +165,8 @@ if [[ "${NATIVE_FASTPATH:-0}" == 1 ]]; then
 else
   echo "p2p-recommendation token-mailbox-native-atomic candidate=0 reason=no-full-native-atomic-mesh"
 fi
+
+echo "p2p-recommendation two-phase-local-scratch candidate=1 native_atomic_required=0 remote_state_reads=0"
 
 if awk -v limit="$MAX_DIRECT_OVER_LOGICAL" -v got="$MAX_OVERHEAD" \
   'BEGIN { exit !(limit > 0 && got > limit) }'; then
