@@ -22,6 +22,10 @@ if [[ -z "$HIGH_LUT_K" ]]; then
   if (( N >= 27 )); then HIGH_LUT_K=13; else HIGH_LUT_K=0; fi
 fi
 
+if [[ "$FAST_SHARD_ADDRESS8" == 1 ]]; then
+  bash "$ONEESAN_ROOT/scripts/bench/b300-shard-address8-proof.sh"
+fi
+
 TMPDIR="$ONEESAN_TMP_DIR" nvcc \
   -O3 -std=c++17 -lineinfo \
   -arch="$ARCH" \
