@@ -142,7 +142,9 @@ int main() {
               << " base16=1 formula_ballot=1"
               << " sparse_base=" << P10DC_RANKFORMULA_SPARSE_BASE
               << " rawcode=" << P10DC_RANKFORMULA_RAWCODE
-              << " chunkinfo_loads=" << (P10DC_RANKFORMULA_RAWCODE ? 0 : 3)
+              << " chunkinfo_elided=" << P10DC_RANKFORMULA_RAWCODE
+              << " inline_cross=" << P10DC_RANKFORMULA_INLINE_CROSS
+              << " cross_lut_elided=" << P10DC_RANKFORMULA_INLINE_CROSS
               << " fused13=" << P10DC_RANKDELTA8_FUSED13
               << " cross_runtime_div=0 cross_runtime_mod=0\n";
     return 0;
