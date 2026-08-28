@@ -2,8 +2,6 @@
 #include "gridfp_low_rank16_plan.cpp"
 #undef main
 
-#include <limits>
-
 static uint32_t lcount_code(uint32_t code) {
     uint32_t n = 0;
     for (int p = 0; p < L; ++p) if (((code >> (2 * p)) & 3u) == uint32_t(LL)) ++n;
@@ -59,18 +57,12 @@ int main() {
             if (nr) {
                 bytes = 2;
                 for (uint32_t i = 1; i < nr; ++i) {
-                    if (ranks[i] <= ranks[i - 1]) {
-                        std::cerr << "rankdelta8 non-monotone owner=" << g
-                                  << " h=" << unsigned(z.h) << " i=" << i
-                                  << " prev=" << ranks[i - 1] << " cur=" << ranks[i] << '\n';
-                        return 6;
-                    }
+                    if (ranks[i] <= ranks[i - 1]) return 6;
                     uint32_t d = uint32_t(ranks[i] - ranks[i - 1]);
                     max_delta = std::max(max_delta, d);
                     ++total_delta;
-                    if (d >= 128u) ++total_slow_delta;
-                    if (d >= (1u << 14)) return 7;
-                    bytes += d < 128u ? 1u : 2u;
+                    if (d > 255u) ++total_slow_delta;
+                    bytes += d <= 255u ? 1u : 3u;
                 }
             }
             row_bytes[z.h].push_back(bytes);
@@ -102,8 +94,8 @@ int main() {
 
     const uint64_t original_bytes = total_ranks * sizeof(uint16_t);
     if (max_local_rank >= (1u << 15) || max_owner_ranks >= (1u << 19) ||
-        max_owner_bytes >= (1u << 20) || max_prefix_packed >= (1u << 9) ||
-        max_prefix_align32 >= (1u << 9)) return 8;
+        max_owner_bytes >= (1u << 20) || max_delta > 65535u ||
+        max_prefix_packed >= (1u << 9) || max_prefix_align32 >= (1u << 9)) return 8;
 
     std::cout << "gridfp-rankdelta8-plan OK"
               << " W=" << W << " low_k=" << L
@@ -118,6 +110,6 @@ int main() {
               << " max_prefix_packed=" << max_prefix_packed
               << " max_prefix_align32=" << max_prefix_align32
               << " local_rank_bits=15 owner_rank_bits=19 owner_byte_bits=20"
-              << " delta_bits=14 prefix_bits=9 block=32\n";
+              << " fast_delta_bits=8 escape_delta_bits=16 prefix_bits=9 block=32\n";
     return 0;
 }
