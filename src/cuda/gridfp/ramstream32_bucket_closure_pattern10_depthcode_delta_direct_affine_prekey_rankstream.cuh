@@ -1,6 +1,11 @@
 #pragma once
 
+// This variant supplies its own sparse-rank CROSS5 executor.  Suppress the
+// ordinary CROSS5 sum while instantiating the shared direct/affine resolver so
+// its 6,561-byte device LUT is not pulled into rankstream-only binaries.
+#define P10DC_DIRECT_RESOLVED_NO_CROSS5 1
 #include "ramstream32_bucket_closure_pattern10_depthcode_delta_direct_affine.cuh"
+#undef P10DC_DIRECT_RESOLVED_NO_CROSS5
 #include "ramstream32_bucket_closure_cross5_rankstream.cuh"
 
 __device__ __forceinline__ Count p10dc_direct_resolved_high_plan_sum_cross5_prekey_rankstream(
