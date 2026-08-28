@@ -8,28 +8,31 @@ namespace oneesan::twocell::cuda_face {
 
 constexpr int kMaxComponent = 18;
 constexpr int kMaxCandidates = 34;
+constexpr unsigned kFullWarp = 0xffffffffu;
 
 __device__ __forceinline__ int prefix_height(PackedWord w, int boundary) {
     const std::uint32_t mask = low_mask(boundary);
     return 1 + 2 * __popc(w.left & mask) - __popc(w.support & mask);
 }
 
-__device__ __forceinline__ int partner_first_return(
-    PackedWord w,
-    int p,
-    int* rounds
-) {
-    const int level = prefix_height(w, p);
-    int n = 0;
-    for (int q = p + 1; q < w.len; ++q) {
-        ++n;
-        if (symbol(w, q) == TC_R && prefix_height(w, q + 1) == level) {
-            *rounds = n;
-            return q;
-        }
-    }
-    *rounds = n;
-    return -1;
+// Parenthesis matching without a per-lane rightward scan.  For an L at p the
+// mate is the first later R whose post-R height equals the pre-L height.  Give
+// L lanes their pre-symbol height and R lanes their post-symbol height as the
+// match-any key; then the first R bit to the right in the equal-key group is
+// exactly the mate.  N/unused lanes receive unique non-height keys.
+__device__ __forceinline__ int partner_match_any(PackedWord w, int lane) {
+    const bool in_range = lane < w.len;
+    const Symbol c = in_range ? symbol(w, lane) : TC_N;
+    int key = 0x100 + lane;
+    if (c == TC_L) key = prefix_height(w, lane);
+    else if (c == TC_R) key = prefix_height(w, lane + 1);
+
+    const unsigned same_height = __match_any_sync(kFullWarp, key);
+    const unsigned r_mask = __ballot_sync(
+        kFullWarp, in_range && c == TC_R);
+    if (c != TC_L) return -1;
+    const unsigned later_r = same_height & r_mask & ~low_mask(lane + 1);
+    return later_r ? (__ffs(static_cast<int>(later_r)) - 1) : -1;
 }
 
 __device__ __forceinline__ bool key_in_list(
@@ -43,9 +46,9 @@ __device__ __forceinline__ bool key_in_list(
 }
 
 // All lanes in one warp call this helper. `label` must be a deep component.
-// Expensive prefix-height and matching-partner work is distributed over the W
-// physical-position lanes. Only the final <=34-candidate unique compaction is
-// scalar, and that compaction performs no partner/height rescans.
+// Prefix heights are popcount expressions, face boundaries use ballots, and all
+// L/R matching partners are resolved by one match-any grouping.  There is no
+// O(W) partner loop.  Only the final <=34-candidate unique compaction is scalar.
 __device__ __forceinline__ void deep_component_sources(
     PackedWord label,
     int W,
@@ -79,6 +82,7 @@ __device__ __forceinline__ void deep_component_sources(
     const int j = i + 1;
     PackedWord z = insert_symbol(central, j + 1, TC_N);
 
+    // The no-cut predecessor is the fourth canonical source.
     if (lane == 0) {
         PackedKey sparse{};
         if (!inverse_E(z, i, sparse) || !in_source_layout(sparse, W, i)) {
@@ -92,20 +96,22 @@ __device__ __forceinline__ void deep_component_sources(
     const int h = lane <= W ? prefix_height(z, boundary) : 0x3fffffff;
     const int level = prefix_height(z, j);
     const unsigned left_bad = __ballot_sync(
-        0xffffffffu, lane < j && h < level);
+        kFullWarp, lane < j && h < level);
     const unsigned right_bad = __ballot_sync(
-        0xffffffffu, lane >= j + 3 && lane <= W && h < level);
+        kFullWarp, lane >= j + 3 && lane <= W && h < level);
     const int face_left = left_bad ? (31 - __clz(left_bad)) + 1 : 0;
     const int face_right = right_bad
         ? (__ffs(static_cast<int>(right_bad)) - 1) - 1
         : W;
 
+    // Every lane participates so __match_any_sync sees the complete warp.
+    const int partner_q = partner_match_any(z, lane);
+
     PackedKey mine{};
     bool valid = false;
-    int rounds = 0;
     if (lane < W && symbol(z, lane) == TC_L &&
         lane >= face_left && prefix_height(z, lane) == level) {
-        const int q = partner_first_return(z, lane, &rounds);
+        const int q = partner_q;
         if (q >= 0 && q < face_right) {
             PackedWord w = z;
             bool full_valid = true;
@@ -131,21 +137,23 @@ __device__ __forceinline__ void deep_component_sources(
     candidate[lane] = mine;
     candidate_valid[lane] = static_cast<std::uint8_t>(valid);
 
+    // The enclosing strand immediately outside the marked face is a separate
+    // inverse-R case.  Its partner has already been computed by its own lane;
+    // lane zero obtains it with one shuffle instead of a second scan.
+    const int enclosing_lane = face_left > 0 ? face_left - 1 : 0;
+    const int enclosing_partner = __shfl_sync(
+        kFullWarp, partner_q, enclosing_lane);
     if (lane == 0) {
         PackedKey extra{};
         bool extra_valid = false;
         if (face_left > 0) {
             const int p = face_left - 1;
-            if (symbol(z, p) == TC_L) {
-                int qrounds = 0;
-                const int q = partner_first_return(z, p, &qrounds);
-                if (qrounds > *max_partner_rounds) *max_partner_rounds = qrounds;
-                if (q == face_right && p < j && q > j + 1) {
-                    PackedWord w = set_symbol(set_symbol(z, j, TC_R), j + 1, TC_L);
-                    if (valid_word(w) && inverse_E(w, i, extra) &&
-                        in_source_layout(extra, W, i))
-                        extra_valid = true;
-                }
+            if (symbol(z, p) == TC_L &&
+                enclosing_partner == face_right && p < j && face_right > j + 1) {
+                PackedWord w = set_symbol(set_symbol(z, j, TC_R), j + 1, TC_L);
+                if (valid_word(w) && inverse_E(w, i, extra) &&
+                    in_source_layout(extra, W, i))
+                    extra_valid = true;
             }
         }
         candidate[32] = extra;
@@ -153,7 +161,7 @@ __device__ __forceinline__ void deep_component_sources(
     }
 
     const unsigned root_mask = __ballot_sync(
-        0xffffffffu,
+        kFullWarp,
         lane < W && symbol(z, lane) == TC_R && prefix_height(z, lane + 1) == 0);
     if (lane == 0) {
         const int root = root_mask ? (__ffs(static_cast<int>(root_mask)) - 1) : -1;
@@ -179,15 +187,12 @@ __device__ __forceinline__ void deep_component_sources(
         candidate[33] = extra;
         candidate_valid[33] = static_cast<std::uint8_t>(extra_valid);
     }
-
-    int warp_max = rounds;
-    for (int offset = 16; offset; offset >>= 1) {
-        const int other = __shfl_down_sync(0xffffffffu, warp_max, offset);
-        if (other > warp_max) warp_max = other;
-    }
-    if (lane == 0 && warp_max > *max_partner_rounds)
-        *max_partner_rounds = warp_max;
     __syncwarp();
+
+    // Keep the legacy counter field for A/B probes.  Zero now means the
+    // rightward partner-search loop has been eliminated, not that no matching
+    // work occurred.
+    if (lane == 0) *max_partner_rounds = 0;
 
     if (lane == 0) {
         int n = *out_size;
