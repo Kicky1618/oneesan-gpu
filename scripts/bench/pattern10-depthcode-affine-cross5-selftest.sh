@@ -19,9 +19,9 @@ printf '%s\n' "$out"
 grep -Eq "bucket-closure-pattern10-depthcode-affine-cross5-selftest (OK W=$W|SKIP no CUDA device)" <<<"$out"
 if grep -Fq "OK W=$W" <<<"$out"; then
   grep -Fq 'forward_exact=1 reverse_exact=1' <<<"$out"
-  grep -Fq 'affine_descriptor_bytes=16' <<<"$out"
+  grep -Fq 'affine_descriptor_bytes=8' <<<"$out"
   grep -Fq 'intermediate_plan_local_descriptors=0' <<<"$out"
   grep -Fq 'cross5_table_bytes=6561' <<<"$out"
   grep -Fq "pm_accum=$PM_ACCUM" <<<"$out"
 fi
-echo "pattern10-depthcode-affine-cross5-selftest OK W=$W pm_accum=$PM_ACCUM decode_load=$DECODE_LOAD affine_rows=1" >&2
+echo "pattern10-depthcode-affine-cross5-selftest OK W=$W pm_accum=$PM_ACCUM decode_load=$DECODE_LOAD affine_rows=1 affine_entry_bytes=8" >&2
