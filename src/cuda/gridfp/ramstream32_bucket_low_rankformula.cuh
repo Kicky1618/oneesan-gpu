@@ -5,15 +5,25 @@
 #ifndef P10DC_RANKFORMULA_SPARSE_BASE
 #define P10DC_RANKFORMULA_SPARSE_BASE 1
 #endif
+#ifndef P10DC_RANKFORMULA_RAWCODE
+#define P10DC_RANKFORMULA_RAWCODE 0
+#endif
 static_assert(P10DC_RANKFORMULA_SPARSE_BASE == 0 || P10DC_RANKFORMULA_SPARSE_BASE == 1,
               "P10DC_RANKFORMULA_SPARSE_BASE must be 0 or 1");
+static_assert(P10DC_RANKFORMULA_RAWCODE == 0 || P10DC_RANKFORMULA_RAWCODE == 1,
+              "P10DC_RANKFORMULA_RAWCODE must be 0 or 1");
 
 static constexpr uint32_t P10DC_RANKFORMULA_MASKS = 1u << LOW_LUT_K;
 static constexpr uint32_t P10DC_RANKFORMULA_HEIGHTS = LOW_LUT_K + 2u;
 static constexpr uint16_t P10DC_RANKFORMULA_BASE_INVALID = 0xffffu;
+static constexpr uint32_t P10DC_RANKFORMULA_RAWCODE_BITS = 2u * LOW_LUT_K;
+static constexpr uint32_t P10DC_RANKFORMULA_RAWCODE_MASK =
+    (1u << P10DC_RANKFORMULA_RAWCODE_BITS) - 1u;
 static_assert(LOW_LUT_K <= 14, "rankformula assumes LOW_LUT_K<=14");
+static_assert(P10DC_RANKFORMULA_RAWCODE_BITS <= 28u,
+              "rankformula raw 2-bit metadata must fit uint32");
 static_assert(P10DC_RANKCHUNK32_BYTEPACK == 0,
-              "rankformula stores compact 23-bit CROSS5 chunks");
+              "rankformula ternary metadata uses compact 23-bit CROSS5 chunks");
 static_assert(P10DC_RANKFORMULA_HEIGHTS <= uint32_t(MAXW + 2));
 
 __constant__ uint32_t* D_P10DC_LOW_RANKFORMULA_META32;
@@ -21,10 +31,17 @@ __constant__ uint16_t* D_P10DC_LOW_RANKFORMULA_BASE16;
 __constant__ uint16_t* D_P10DC_LOW_RANKFORMULA_MASK_SLOT16;
 __constant__ uint32_t D_P10DC_LOW_RANKFORMULA_HOFF[MAXW + 2];
 
-__device__ __forceinline__ uint32_t p10dc_low_rankformula_chunks(
+__device__ __forceinline__ uint32_t p10dc_low_rankformula_meta(
     uint32_t h, uint32_t rank
 ) {
     return D_P10DC_LOW_RANKFORMULA_META32[D_P10DC_LOW_RANKFORMULA_HOFF[h] + rank];
+}
+
+// Compatibility name for the original ternary-chunk metadata path.
+__device__ __forceinline__ uint32_t p10dc_low_rankformula_chunks(
+    uint32_t h, uint32_t rank
+) {
+    return p10dc_low_rankformula_meta(h, rank);
 }
 
 __device__ __forceinline__ uint32_t p10dc_low_rankformula_base(
@@ -154,6 +171,15 @@ struct BucketFusedDirectHighRowsRankFormulaTables
                     have_mask = true;
                 }
 
+#if P10DC_RANKFORMULA_RAWCODE
+                if ((code & ~P10DC_RANKFORMULA_RAWCODE_MASK) != 0u) {
+                    std::cerr << "p10dc rankformula raw-code overflow owner=" << fixed
+                              << " h=" << h << " code=" << code
+                              << " bits=" << P10DC_RANKFORMULA_RAWCODE_BITS << '\n';
+                    std::exit(737);
+                }
+                meta.push_back(code);
+#else
                 const uint32_t key = gpu_direct_ternary_key_host(code, LOW_LUT_K);
                 const uint32_t chunks = p10dc_rankchunk32_pack_host(key);
                 if ((chunks >> 23) != 0u || p10dc_rankchunk32_unpack_host(chunks) != key) {
@@ -163,6 +189,7 @@ struct BucketFusedDirectHighRowsRankFormulaTables
                     std::exit(737);
                 }
                 meta.push_back(chunks);
+#endif
                 ++actual_codes;
             }
         }
@@ -255,6 +282,8 @@ struct BucketFusedDirectHighRowsRankFormulaTables
                   << " rankstream_bytes=0"
                   << " sparse_base=" << P10DC_RANKFORMULA_SPARSE_BASE
                   << " base_layout=" << (P10DC_RANKFORMULA_SPARSE_BASE ? "slot-major" : "height-major")
+                  << " meta_mode=" << (P10DC_RANKFORMULA_RAWCODE ? "raw2bit" : "ternary23")
+                  << " meta_bits=" << (P10DC_RANKFORMULA_RAWCODE ? P10DC_RANKFORMULA_RAWCODE_BITS : 23u)
                   << " bytes_per_code_meta=4 old_prekey_freed=1\n";
     }
 
