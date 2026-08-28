@@ -2,7 +2,7 @@
 set -euo pipefail
 source "$(dirname -- "${BASH_SOURCE[0]}")/../lib/common.sh"
 NVCC="${NVCC:-nvcc}";ARCH="${ARCH:-sm_103}"
-command -v "$NVCC" >/dev/null || { echo "$NVCC not found" >&2; exit 2; }
+require_nvcc_version_at_least "$NVCC" 13 0 "B300 sm_103 VMM basearg PTX proof"
 SRC="$ONEESAN_ROOT/src/cuda/b300/oneesan_cuda_gridfp_b300_hbm32_fullmate_dropN.cu"
 GEN="$ONEESAN_ROOT/scripts/build/gen-b300-vmm-production.py";PRUNE="$ONEESAN_ROOT/scripts/build/prune-b300-vmm-stale-shard-symbols.py";LOWER="$ONEESAN_ROOT/scripts/build/lower-b300-vmm-basearg.py"
 OUTDIR="${OUTDIR:-$ONEESAN_BUILD_DIR/b300_vmm_basearg_production_ptx}";GENSRC="$OUTDIR/generated.cu";PROBE="$OUTDIR/probe.cu";PTX="$OUTDIR/probe.ptx";mkdir -p "$OUTDIR"
@@ -32,4 +32,4 @@ for k in main_load block_load main_store block_store;do
   printf '%s_ldconst_u64=%s\n%s_ldparam_u64=%s\n' "$k" "$const" "$k" "$param"
 done
 if grep -Fq 'D_MAIN_VBASE' "$PTX" || grep -Fq 'D_BLOCK_VBASE' "$PTX";then echo "basearg PTX still contains VMM base symbols" >&2;exit 5;fi
-echo "b300-vmm-basearg-production-ptx-proof OK arch=$ARCH vmm_base_source=kernel_param vmm_base_symbols=0 base_ldconst_u64=0 owner_div64=0 owner_mul64=0 owner_compare64=0 direct_global_index=1"
+echo "b300-vmm-basearg-production-ptx-proof OK arch=$ARCH cuda_min=13.0 vmm_base_source=kernel_param vmm_base_symbols=0 base_ldconst_u64=0 owner_div64=0 owner_mul64=0 owner_compare64=0 direct_global_index=1"
