@@ -28,9 +28,10 @@ out="$($BIN)"
 printf '%s\n' "$out"
 grep -Eq "bucket-closure-pattern10-depthcode-rankchunk32-cross5-selftest (OK W=$W|SKIP no CUDA device)" <<<"$out"
 if grep -Fq "OK W=$W" <<<"$out"; then
-  grep -Fq 'forward_exact=1 reverse_exact=1 rankchunk32_table_exact=1' <<<"$out"
-  grep -Fq 'chunk_bits=24 prefix_bits=8 block=16' <<<"$out"
+  grep -Fq 'forward_exact=1 reverse_exact=1 rankchunk32_table_exact=1 padding_exact=1' <<<"$out"
+  grep -Fq 'chunk_bits=24 prefix_bits=8 block=16 height_align=32' <<<"$out"
+  grep -Fq 'block_base_loads_per_warp_max=2' <<<"$out"
   grep -Fq 'cross_runtime_div=0 cross_runtime_mod=0 cross_runtime_direct_lookup=0' <<<"$out"
   grep -Fq 'old_prekey_offset_arrays_freed=1 fallback_structurally_unreachable=1' <<<"$out"
 fi
-echo "pattern10-depthcode-rankchunk32-cross5-selftest OK W=$W pm_accum=$PM_ACCUM decode_load=$DECODE_LOAD rankstream_lut_load=$RANKSTREAM_LUT_LOAD" >&2
+echo "pattern10-depthcode-rankchunk32-cross5-selftest OK W=$W pm_accum=$PM_ACCUM decode_load=$DECODE_LOAD rankstream_lut_load=$RANKSTREAM_LUT_LOAD aligned_meta=1" >&2
