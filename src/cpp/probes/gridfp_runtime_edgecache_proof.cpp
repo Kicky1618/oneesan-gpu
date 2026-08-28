@@ -43,9 +43,66 @@ static_assert(MAX_DESTINATIONS_PER_LANE == 3);
 static_assert(sizeof(EdgeRow) == 4);
 static_assert(sizeof(RuntimeEdgeCacheModel) == 80);
 
+template <std::size_t N>
+bool prove_merged_coefficient_bound(
+    const std::array<int, N>& primitive,
+    int labels,
+    std::uint64_t& cases,
+    int& observed_min,
+    int& observed_max
+) {
+    std::uint64_t assignments = 1;
+    for (std::size_t i = 0; i < N; ++i) assignments *= std::uint64_t(labels);
+
+    for (std::uint64_t code = 0; code < assignments; ++code) {
+        std::array<int, MAX_EDGE_TERMS> sum{};
+        std::uint64_t x = code;
+        for (std::size_t i = 0; i < N; ++i) {
+            const int label = int(x % std::uint64_t(labels));
+            x /= std::uint64_t(labels);
+            sum[std::size_t(label)] += primitive[i];
+        }
+        for (int label = 0; label < labels; ++label) {
+            const int coefficient = sum[std::size_t(label)];
+            if (!coefficient) continue;
+            observed_min = std::min(observed_min, coefficient);
+            observed_max = std::max(observed_max, coefficient);
+            if (coefficient < COEF_MIN || coefficient > COEF_MAX) {
+                std::cerr << "edge-cache coefficient bound mismatch assignment="
+                          << code << " coefficient=" << coefficient << '\n';
+                return false;
+            }
+        }
+        ++cases;
+    }
+    return true;
+}
+
 } // namespace
 
 int main() {
+    // Interior/runtime_small_step has at most the primitive contributions
+    // {+1,+1,-1}; turn compression has {+1,+1}. Enumerating every possible
+    // equality partition of those keys proves the post-merge nonzero range
+    // used by the two-bit coefficient encoding.
+    std::uint64_t coefficient_merge_cases = 0;
+    int observed_coef_min = 99;
+    int observed_coef_max = -99;
+    if (!prove_merged_coefficient_bound(
+            std::array<int, 3>{1, 1, -1}, 3,
+            coefficient_merge_cases, observed_coef_min, observed_coef_max) ||
+        !prove_merged_coefficient_bound(
+            std::array<int, 2>{1, 1}, 2,
+            coefficient_merge_cases, observed_coef_min, observed_coef_max))
+        return 2;
+    if (coefficient_merge_cases != 31 ||
+        observed_coef_min != COEF_MIN || observed_coef_max != COEF_MAX) {
+        std::cerr << "unexpected coefficient proof coverage cases="
+                  << coefficient_merge_cases << " observed="
+                  << observed_coef_min << ".." << observed_coef_max << '\n';
+        return 3;
+    }
+
     std::uint64_t packing_cases = 0;
     for (int destination = 0; destination < MAX_PAIRS; ++destination) {
         for (int coefficient = COEF_MIN; coefficient <= COEF_MAX; ++coefficient) {
@@ -55,7 +112,7 @@ int main() {
                 std::cerr << "edge-cache packing mismatch destination=" << destination
                           << " coefficient=" << coefficient
                           << " packed=" << unsigned(packed) << '\n';
-                return 2;
+                return 4;
             }
             ++packing_cases;
         }
@@ -74,7 +131,7 @@ int main() {
                           << " di=" << di << " lane=" << lane
                           << " slot=" << slot
                           << " reconstructed=" << reconstructed << '\n';
-                return 3;
+                return 5;
             }
             max_slot = std::max(max_slot, slot);
             ++routing_cases;
@@ -129,7 +186,7 @@ int main() {
                               << " nd=" << nd << " di=" << di
                               << " got=" << got
                               << " expected=" << reference[di] << '\n';
-                    return 4;
+                    return 6;
                 }
             }
             ++accumulation_cases;
@@ -138,18 +195,21 @@ int main() {
 
     if (packing_cases != 80 || routing_cases != 210 ||
         accumulation_cases != 400 || max_slot != 2)
-        return 5;
+        return 7;
 
     std::cout << "gridfp-runtime-edgecache-proof OK"
+              << " coefficient_merge_cases=" << coefficient_merge_cases
               << " packing_cases=" << packing_cases
               << " routing_cases=" << routing_cases
               << " accumulation_cases=" << accumulation_cases
               << " edge_terms=" << edge_terms
               << " subgroup_width=8 max_pairs=20 max_edge_terms=3"
-              << " coefficient_range=-1..2"
+              << " coefficient_range=" << observed_coef_min
+              << ".." << observed_coef_max
               << " max_destination_slot=" << max_slot
               << " cache_bytes_per_subgroup=80"
               << " cache_bytes_per_block=2560"
-              << " packing_exact=1 routing_exact=1 accumulation_exact=1\n";
+              << " coefficient_bound_exact=1 packing_exact=1"
+              << " routing_exact=1 accumulation_exact=1\n";
     return 0;
 }
