@@ -44,7 +44,7 @@ N=27 ARCH="$ARCH" OUT="$BIN_VMM" \
 
 nvidia-smi -L >&2
 nvidia-smi topo -m >&2 || true
-printf 'mode\trun\tresidue\twall_s\tactive_max_s\tactive_sum_s\tprepare_s\tvmm_granularity_kib\tvmm_physical_min_gib\tvmm_physical_max_gib\tvmm_imbalance_kib\tvmm_main_padding_kib\tvmm_block_padding_kib\n' >"$RESULT"
+printf 'mode\trun\tresidue\twall_s\tactive_max_s\tactive_sum_s\tprepare_s\tmax_intervals\tvmm_granularity_kib\tvmm_physical_min_gib\tvmm_physical_max_gib\tvmm_imbalance_kib\tvmm_main_padding_kib\tvmm_block_padding_kib\n' >"$RESULT"
 
 run_one(){
   local mode="$1" run="$2" bin
@@ -58,12 +58,12 @@ run_one(){
   echo "=== B300 W28x8 full solver mode=$mode run $run/$RUNS ===" >&2
   GRIDFP_VRAM_RESERVE_MIB="$GRIDFP_VRAM_RESERVE_MIB" \
     "$bin" 27 "$MOD" "$TARGET_MIB" "$MAX_WINDOW" 8 >"$out" 2>"$err"
-  local line residue wall active_max active_sum prepare
+  local line residue wall active_max active_sum prepare max_intervals
   line="$(grep '^backend=gridfp-b300-hbm32-fullmate-dropN' "$out" | tail -n1 || true)"
   [[ -n "$line" ]] || { tail -n 120 "$err" >&2 || true; cat "$out" >&2; exit 3; }
   field(){ sed -nE "s/.* $1=([^[:space:]]+).*/\\1/p" <<<"$line"; }
-  residue="$(field residue)"; wall="$(field wall_s)"; active_max="$(field active_max_s)"; active_sum="$(field active_sum_s)"; prepare="$(field prepare_s)"
-  [[ -n "$residue" && -n "$wall" && -n "$active_max" && -n "$active_sum" && -n "$prepare" ]] || { echo "$line" >&2; exit 4; }
+  residue="$(field residue)"; wall="$(field wall_s)"; active_max="$(field active_max_s)"; active_sum="$(field active_sum_s)"; prepare="$(field prepare_s)"; max_intervals="$(field max_intervals)"
+  [[ -n "$residue" && -n "$wall" && -n "$active_max" && -n "$active_sum" && -n "$prepare" && -n "$max_intervals" ]] || { echo "$line" >&2; exit 4; }
 
   local gran='-' pmin='-' pmax='-' imbalance='-' mpad='-' bpad='-'
   if [[ "$mode" == vmm ]]; then
@@ -75,7 +75,7 @@ run_one(){
     gran="$(lfield granularity_kib)"; pmin="$(lfield physical_min_gib)"; pmax="$(lfield physical_max_gib)"; imbalance="$(lfield imbalance_kib)"; mpad="$(lfield main_padding_kib)"; bpad="$(lfield block_padding_kib)"
     [[ -n "$gran" && -n "$pmin" && -n "$pmax" && -n "$imbalance" && -n "$mpad" && -n "$bpad" ]] || { echo "$layout" >&2; exit 7; }
   fi
-  printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' "$mode" "$run" "$residue" "$wall" "$active_max" "$active_sum" "$prepare" "$gran" "$pmin" "$pmax" "$imbalance" "$mpad" "$bpad" >>"$RESULT"
+  printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' "$mode" "$run" "$residue" "$wall" "$active_max" "$active_sum" "$prepare" "$max_intervals" "$gran" "$pmin" "$pmax" "$imbalance" "$mpad" "$bpad" >>"$RESULT"
 }
 
 for ((r=1;r<=RUNS;++r)); do
@@ -101,11 +101,14 @@ for mode in ('compare','u32','vmm'):
     if len(rr)!=1: raise SystemExit(f'unstable residue {mode}: {rr}')
     residues[mode]=next(iter(rr))
     def med(k): return statistics.median(float(r[k]) for r in rs)
+    interval_values={int(r['max_intervals']) for r in rs}
+    if len(interval_values)!=1: raise SystemExit(f'unstable max_intervals {mode}: {interval_values}')
     row={'mode':mode,'runs':len(rs),'residue':residues[mode],
          'median_wall_s':f'{med("wall_s"):.9f}',
          'median_active_max_s':f'{med("active_max_s"):.9f}',
          'median_active_sum_s':f'{med("active_sum_s"):.9f}',
-         'median_prepare_s':f'{med("prepare_s"):.9f}'}
+         'median_prepare_s':f'{med("prepare_s"):.9f}',
+         'max_intervals':next(iter(interval_values))}
     for k in layout_keys:
         vals={r[k] for r in rs if r[k] != '-'}
         if mode=='vmm' and len(vals)!=1: raise SystemExit(f'unstable VMM layout field {k}: {vals}')
@@ -124,13 +127,17 @@ best=min(out,key=lambda r:float(r['median_wall_s']))
 v=q['vmm']
 print(f'b300_vmm_ab_best_mode={best["mode"]}')
 print(f'b300_vmm_ab_best_median_wall_s={best["median_wall_s"]}')
+print(f'b300_compare_max_intervals={q["compare"]["max_intervals"]}')
+print(f'b300_u32_max_intervals={q["u32"]["max_intervals"]}')
+print(f'b300_vmm_max_intervals={v["max_intervals"]}')
+print(f'b300_vmm_interval_ratio_vs_compare={int(v["max_intervals"])/max(1,int(q["compare"]["max_intervals"])):.6f}')
 print(f'b300_vmm_granularity_kib={v["vmm_granularity_kib"]}')
 print(f'b300_vmm_physical_imbalance_kib={v["vmm_imbalance_kib"]}')
 print(f'b300_vmm_main_padding_kib={v["vmm_main_padding_kib"]}')
 print(f'b300_vmm_block_padding_kib={v["vmm_block_padding_kib"]}')
 print('compare=three_compare_subtract_shard_address')
 print('u32=hi32_seed_fully_u32_shard_address')
-print('vmm=contiguous_multi_gpu_virtual_address_direct_global_index')
+print('vmm=contiguous_multi_gpu_virtual_address_direct_global_index_shard_free_intervals')
 print(f'residue={residues["compare"]}')
 print(f'summary={dst}')
 PY
