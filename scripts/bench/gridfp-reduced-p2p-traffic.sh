@@ -19,6 +19,7 @@ SCRATCH_FULL_W="${SCRATCH_FULL_W:-10}"
 SCRATCH_FULL_K="${SCRATCH_FULL_K:-4}"
 SCRATCH_FULL_S="${SCRATCH_FULL_S:-4}"
 SCRATCH_FULL_BLOCKS="${SCRATCH_FULL_BLOCKS:-256}"
+PERSISTENT_BATCHES="${PERSISTENT_BATCHES:-8}"
 TRAFFIC_W="${TRAFFIC_W:-28}"
 TRAFFIC_K="${TRAFFIC_K:-13}"
 TRAFFIC_S="${TRAFFIC_S:-13}"
@@ -38,6 +39,7 @@ RUN_PAIR_QUEUE="${RUN_PAIR_QUEUE:-1}"
 RUN_SCRATCH_CYCLE="${RUN_SCRATCH_CYCLE:-1}"
 RUN_SCRATCH_FULL="${RUN_SCRATCH_FULL:-1}"
 RUN_SCRATCH_OWNER="${RUN_SCRATCH_OWNER:-1}"
+RUN_PERSISTENT_SEGMENT="${RUN_PERSISTENT_SEGMENT:-1}"
 RUN_SCRATCH_PLAN="${RUN_SCRATCH_PLAN:-1}"
 RUN_CYCLE_BATCH_PLAN="${RUN_CYCLE_BATCH_PLAN:-1}"
 RUN_OWNER_SUPPORT="${RUN_OWNER_SUPPORT:-1}"
@@ -53,6 +55,7 @@ PAIR_QUEUE_BIN="$(build_path gridfp_reduced_component_p2p-pair-queue)"
 SCRATCH_CYCLE_BIN="$(build_path gridfp_reduced_component_p2p-scratch-cycle)"
 SCRATCH_FULL_BIN="$(build_path gridfp_reduced_component_p2p-scratch-full)"
 SCRATCH_OWNER_BIN="$(build_path gridfp_reduced_component_p2p-scratch-owner)"
+PERSISTENT_BIN="$(build_path gridfp_reduced_component_p2p-persistent-segment)"
 SCRATCH_PLAN_BIN="$(build_path gridfp_reduced_component_p2p-scratch-plan)"
 CYCLE_BATCH_BIN="$(build_path gridfp_reduced_component_p2p-cycle-batch-plan)"
 OWNER_SUPPORT_BIN="$(build_path gridfp_reduced_component_owner-support)"
@@ -100,6 +103,10 @@ if [[ "$RUN_SCRATCH_FULL" == 1 ]]; then
 fi
 if [[ "$RUN_SCRATCH_OWNER" == 1 ]]; then
   MODE=p2p-scratch-owner ARCH="$ARCH" OUT="$(basename "$SCRATCH_OWNER_BIN")" \
+    bash "$BUILD_SCRIPT"
+fi
+if [[ "$RUN_PERSISTENT_SEGMENT" == 1 ]]; then
+  MODE=p2p-persistent-segment ARCH="$ARCH" OUT="$(basename "$PERSISTENT_BIN")" \
     bash "$BUILD_SCRIPT"
 fi
 if [[ "$RUN_SCRATCH_PLAN" == 1 ]]; then
@@ -171,6 +178,22 @@ if [[ "$RUN_SCRATCH_OWNER" == 1 ]]; then
   echo "== full small-W owner-local two-phase scratch redistribution =="
   "$SCRATCH_OWNER_BIN" "$SCRATCH_FULL_W" "$SCRATCH_FULL_K" \
     "$SCRATCH_FULL_S" "$SCRATCH_FULL_BLOCKS" "$NGPU"
+fi
+
+if [[ "$RUN_PERSISTENT_SEGMENT" == 1 ]]; then
+  echo "== full small-W persistent-list cycle-batched redistribution =="
+  PERSISTENT_OUTPUT="$($PERSISTENT_BIN "$SCRATCH_FULL_W" "$SCRATCH_FULL_K" \
+    "$SCRATCH_FULL_S" "$PERSISTENT_BATCHES" "$SCRATCH_FULL_BLOCKS" "$NGPU")"
+  printf '%s\n' "$PERSISTENT_OUTPUT"
+  PERSISTENT_EXACT="$(printf '%s\n' "$PERSISTENT_OUTPUT" | awk '
+    /gridfp-p2p-persistent-segments/ && /runtime_support_scan_passes=0/ &&
+    /runtime_count_passes=0/ && /cycle_closed_batches=1/ && /exact=OK/ { ++n }
+    END { print n + 0 }
+  ')"
+  if [[ "$PERSISTENT_EXACT" != 2 ]]; then
+    echo "persistent-list redistribution did not prove both directions exact" >&2
+    exit 7
+  fi
 fi
 
 echo "== support-only slab-rank equivalence =="
@@ -265,7 +288,7 @@ else
   echo "p2p-recommendation token-mailbox-native-atomic candidate=0 reason=no-full-native-atomic-mesh"
 fi
 
-echo "p2p-recommendation cycle-closed-two-phase-scratch candidate=1 batches=$CYCLE_BATCHES native_atomic_required=0 remote_state_reads=0 runtime_count_pass_required=0"
+echo "p2p-recommendation persistent-cycle-batched-two-phase candidate=1 batches=$PERSISTENT_BATCHES startup_support_scan_passes=2 runtime_support_scan_passes=0 runtime_count_passes=0 native_atomic_required=0 remote_state_reads=0"
 
 if awk -v limit="$MAX_DIRECT_OVER_LOGICAL" -v got="$MAX_OVERHEAD" \
   'BEGIN { exit !(limit > 0 && got > limit) }'; then
