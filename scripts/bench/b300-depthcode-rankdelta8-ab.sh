@@ -106,9 +106,11 @@ if run_ptxas=='1':
   regs,ss,sl=vals('registers'),vals('spill_store_bytes'),vals('spill_load_bytes')
   print(f'{mode}_high_max_registers={max(regs) if regs else "NA"}'); print(f'{mode}_high_spill_store_bytes={sum(ss) if ss else "NA"}'); print(f'{mode}_high_spill_load_bytes={sum(sl) if sl else "NA"}')
 print('rankdelta8_w28_original_rankstream_bytes=7441610')
-print('rankdelta8_w28_compressed_rankstream_bytes=4925378')
-print('rankdelta8_w28_stream_reduction=33.813005%')
-print('rankdelta8_delta_fast_fraction=99.248996%')
+print('rankdelta8_w28_compressed_rankstream_bytes=4911578')
+print('rankdelta8_w28_stream_reduction=33.998449%')
+print('rankdelta8_w28_slow_delta=2620/2535272')
+print('rankdelta8_delta_fast_fraction=99.896658%')
+print('rankdelta8_delta_encoding=byte_1_to_255_escape0_u16le')
 print(f'summary={dst}')
 PY
 
