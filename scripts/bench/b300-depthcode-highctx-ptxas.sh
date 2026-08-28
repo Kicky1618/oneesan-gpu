@@ -92,14 +92,14 @@ print('rankstream32_per_code_meta_bytes=4')
 print('rankstream32_block_base_bytes_per_code=0.125')
 print('rankstream32_block_base_loads_per_warp_max=2')
 print('rankstream32_cross_runtime_divmod=1')
-print('rankchunk32_model=heightalign32+chunk24+prefix8_per_meta+blockbase16+rank16_per_L')
-print('rankchunk32_meta_bytes_per_entry=4')
-print('rankchunk32_block_base_bytes_per_meta_entry=0.25')
-print('rankchunk32_height_padding_entries_per_height_max=31')
+print('rankchunk32_model=chunk23+prefix9_per_code+blockbase32+rank16_per_L')
+print('rankchunk32_per_code_meta_bytes=4')
+print('rankchunk32_block_base_bytes_per_code=0.125')
+print('rankchunk32_height_padding_entries=0')
+print('rankchunk32_third_chunk_bits=7')
 print('rankchunk32_block_base_loads_per_warp_max=2')
-print('rankchunk32_actual_padding_overhead=measure_with_b300-depthcode-rank-backends-ab.sh')
 print('rankchunk32_cross_runtime_divmod=0')
 print('rankchunk32_cross_runtime_direct_lookup=0')
 PY
 
-echo "depthcode-highctx-ptxas OK n=$N arch=$ARCH transpose=$TRANSPOSE_MODE result=$OUT logs=$LOGDIR rankstream32=1 rankchunk32=1 aligned_rankchunk32=1" >&2
+echo "depthcode-highctx-ptxas OK n=$N arch=$ARCH transpose=$TRANSPOSE_MODE result=$OUT logs=$LOGDIR rankstream32=1 rankchunk32=1 compact23_9=1" >&2
