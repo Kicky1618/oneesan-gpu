@@ -17,18 +17,17 @@ static u32 mulp(u32 a,u32 b){return u32((u64(a)*b)%P);}
 static u32 powp(u32 a,u64 e){u32 r=1;while(e){if(e&1)r=mulp(r,a);a=mulp(a,a);e>>=1;}return r;}
 static u32 addp(u32 a,u32 b){u32 z=a+b;return z>=P?z-P:z;}
 
-// Edge states: 0=empty, 1=arrow in the positive reference direction,
-// 2=arrow in the negative reference direction.  Horizontal positive is east;
-// vertical positive is south.  Direction indices E,S,W,N are 0,1,2,3.
+// Internal signed edge states are -1,0,+1.  Horizontal +1 is east and
+// vertical +1 is south.  Ternary storage digits are 0=empty, 1=+1, 2=-1 so
+// the all-empty frontier is code zero.
 struct Opt { int down=0,right=0; u32 w=0; };
 static std::array<std::vector<Opt>,9> OPT;
 static u32 ZETA=0,ZETA_INV=0;
 
-static int sid(int x){return x<0?2:x;} // -1,0,+1 -> 2,0,1 only for helper use
 static int dir_for(char edge,int s){
     assert(s!=0);
-    if(edge=='L'||edge=='R') return s>0?0:2;
-    return s>0?1:3;
+    if(edge=='L'||edge=='R') return s>0?0:2; // E/W
+    return s>0?1:3;                          // S/N
 }
 static bool incoming(char edge,int s){
     if(edge=='L') return s>0;
@@ -51,14 +50,13 @@ static u32 vertex_weight(int up,int left,int down,int right){
     if(t==0) return 1;
     if(t==1) return ZETA;      // clockwise quarter turn
     if(t==3) return ZETA_INV;  // counter-clockwise quarter turn
-    return 0;
+    return 0;                  // U-turn is not an allowed degree-two vertex
 }
 
 static void build_opts(){
     ZETA=powp(3,(P-1)/16);
     ZETA_INV=powp(ZETA,P-2);
-    assert(mulp(powp(ZETA,4),powp(ZETA,12))==1);
-    assert(powp(ZETA,8)==P-1);
+    assert(powp(ZETA,8)==P-1); // primitive 16th root
     for(int u=-1;u<=1;++u) for(int l=-1;l<=1;++l){
         auto &v=OPT[(u+1)*3+(l+1)];
         for(int d=-1;d<=1;++d) for(int r=-1;r<=1;++r){
@@ -69,16 +67,19 @@ static void build_opts(){
     }
 }
 
-static int trit(u64 code,int p){for(int i=0;i<p;++i)code/=3;return int(code%3)-1;}
+static int decode_digit(int d){return d==0?0:(d==1?1:-1);}
+static int encode_digit(int s){return s==0?0:(s>0?1:2);}
+static int trit(u64 code,int p){for(int i=0;i<p;++i)code/=3;return decode_digit(int(code%3));}
 static u64 put_trit(u64 code,int p,int s){
     u64 q=1;for(int i=0;i<p;++i)q*=3;
-    return code+u64(s+1)*q;
+    return code+u64(encode_digit(s))*q;
 }
 
 static u32 oriented_count(int n,std::vector<size_t>* row_support=nullptr){
     // Boundary condition closes the desired source->sink path by a fixed exterior
-    // arc: west->source is an east-pointing incoming arrow; sink->east is an
-    // east-pointing outgoing arrow.  All other external half-edges are empty.
+    // arc.  The west half-edge at the source is an east-pointing incoming arrow;
+    // the east half-edge at the sink is an east-pointing outgoing arrow.  The grid
+    // portion of every distinguished simple loop then has total signed turn zero.
     std::unordered_map<u64,u32> V,NV;
     V.emplace(0,1);
     for(int y=0;y<n;++y){
@@ -93,8 +94,7 @@ static u32 oriented_count(int n,std::vector<size_t>* row_support=nullptr){
                     auto const& os=OPT[(up+1)*3+(s.h+1)];
                     for(auto const&o:os){
                         u64 dc=put_trit(s.down,x,o.down);
-                        u32 nv=addp(0,mulp(s.v,o.w));
-                        next.push_back({o.right,dc,nv});
+                        next.push_back({o.right,dc,mulp(s.v,o.w)});
                     }
                 }
                 // Merge identical (horizontal carry, down-prefix) states.
