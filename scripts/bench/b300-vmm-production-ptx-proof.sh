@@ -4,7 +4,7 @@ source "$(dirname -- "${BASH_SOURCE[0]}")/../lib/common.sh"
 
 NVCC="${NVCC:-nvcc}"
 ARCH="${ARCH:-sm_103}"
-command -v "$NVCC" >/dev/null || { echo "$NVCC not found" >&2; exit 2; }
+require_nvcc_version_at_least "$NVCC" 13 0 "B300 sm_103 VMM PTX proof"
 
 SRC="$ONEESAN_ROOT/src/cuda/b300/oneesan_cuda_gridfp_b300_hbm32_fullmate_dropN.cu"
 GEN="$ONEESAN_ROOT/scripts/build/gen-b300-vmm-production.py"
@@ -84,4 +84,4 @@ grep -Fq 'D_BLOCK_VBASE' "$OUTDIR/block_load.body.ptx"
 grep -Fq 'D_MAIN_VBASE' "$OUTDIR/main_store.body.ptx"
 grep -Fq 'D_BLOCK_VBASE' "$OUTDIR/block_store.body.ptx"
 
-echo "b300-vmm-production-ptx-proof OK arch=$ARCH owner_div64=0 owner_mul64=0 owner_compare64=0 dynamic_shard_ptr_index=0 legacy_shard_address_scaffolding=0 stale_shard_symbols=0 stale_width_symbols=0 direct_global_index=1"
+echo "b300-vmm-production-ptx-proof OK arch=$ARCH cuda_min=13.0 owner_div64=0 owner_mul64=0 owner_compare64=0 dynamic_shard_ptr_index=0 legacy_shard_address_scaffolding=0 stale_shard_symbols=0 stale_width_symbols=0 direct_global_index=1"
