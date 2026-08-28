@@ -15,9 +15,6 @@ static_assert(P10DC_RANKCHUNK32_FUSED16 == 0 || P10DC_RANKCHUNK32_FUSED16 == 1,
               "P10DC_RANKCHUNK32_FUSED16 must be 0 or 1");
 
 #if P10DC_RANKCHUNK32_FUSED16
-// Rankchunk32 consumes both the state-dependent rank mask and the chunk-only
-// state delta/L-count. Pack both bytes into one 16-bit load. This intentionally
-// leaves the generic rankstream LUT untouched so the experiment is isolated.
 #if P10DC_RANKSTREAM_LUT_LDG
 __device__ __align__(128) uint16_t
     D_P10DC_RANKCHUNK32_FUSED16[P10DC_CROSS5_STATES * P10DC_RANKSTREAM_LUT_STRIDE];
@@ -80,7 +77,7 @@ __device__ __forceinline__ void p10dc_low_rankchunk32_row_warpstripe_oneshfl(
     const uint32_t first_compact = compact - lane;
     const uint32_t first_block = first_compact >> P10DC_RANKCHUNK32_BLOCK_LOG2;
     const uint32_t first_off = first_compact & (P10DC_RANKCHUNK32_BLOCK - 1u);
-    const uint32_t split_lane = P10DC_RANKCHUNK32_BLOCK - first_off; // [1,32]
+    const uint32_t split_lane = P10DC_RANKCHUNK32_BLOCK - first_off;
     const bool use_second = split_lane < 32u;
     const uint32_t source_lane = use_second && lane >= split_lane ? split_lane : 0u;
 
@@ -93,9 +90,16 @@ __device__ __forceinline__ void p10dc_low_rankchunk32_row_warpstripe_oneshfl(
     row = D_P10DC_LOW_RANKSTREAM + block_base + prefix;
 }
 
-// Chunk-value form of the sparse-rank automaton.  The caller supplies an
-// already-decoded base-243 chunk, so there is no integer division or modulo in
-// the device hot path.  Valid depth4 input and K<=14 keep state in [1,25].
+// Centralized production decoder. The third CROSS5 chunk occupies only bits
+// 16..22; bit 23 is already the low bit of the 9-bit rankstream prefix.
+__device__ __forceinline__ uint32_t p10dc_rankchunk32_chunk_device(
+    uint32_t packed_chunks, uint32_t slot
+) {
+    if (slot == 0u) return packed_chunks & 0xffu;
+    if (slot == 1u) return (packed_chunks >> 8) & 0xffu;
+    return (packed_chunks >> 16) & 0x7fu;
+}
+
 __device__ __forceinline__ uint32_t p10dc_cross5_apply_rankchunk32(
     uint32_t chunk, uint32_t& state, const Count* source_row,
     const uint16_t* rank_row, uint32_t& lbase, BkczCrossAccum& sum
@@ -138,14 +142,16 @@ p10dc_resolved_low_preimages_cross5_rankchunk32_fast(
     BkczCrossAccum sum = 0;
 
     uint32_t st = p10dc_cross5_apply_rankchunk32(
-        packed_chunks & 0xffu, state, source_row, rank_row, lbase, sum);
+        p10dc_rankchunk32_chunk_device(packed_chunks, 0u),
+        state, source_row, rank_row, lbase, sum);
     if (st == 1u) return sum;
 
     constexpr int L0 = LOW_LUT_K >= P10DC_CROSS5_CHUNK ? P10DC_CROSS5_CHUNK : LOW_LUT_K;
     constexpr int S0 = LOW_LUT_K - L0;
     if constexpr (S0 > 0) {
         st = p10dc_cross5_apply_rankchunk32(
-            (packed_chunks >> 8) & 0xffu, state, source_row, rank_row, lbase, sum);
+            p10dc_rankchunk32_chunk_device(packed_chunks, 1u),
+            state, source_row, rank_row, lbase, sum);
         if (st == 1u) return sum;
         constexpr int L1 = S0 >= P10DC_CROSS5_CHUNK ? P10DC_CROSS5_CHUNK : S0;
         constexpr int S1 = S0 - L1;
@@ -154,7 +160,8 @@ p10dc_resolved_low_preimages_cross5_rankchunk32_fast(
             constexpr int S2 = S1 - L2;
             static_assert(S2 == 0, "rankchunk32 K<=14 must fit in three chunks");
             p10dc_cross5_apply_rankchunk32(
-                (packed_chunks >> 16) & 0x7fu, state, source_row, rank_row, lbase, sum);
+                p10dc_rankchunk32_chunk_device(packed_chunks, 2u),
+                state, source_row, rank_row, lbase, sum);
         }
     }
     return sum;
