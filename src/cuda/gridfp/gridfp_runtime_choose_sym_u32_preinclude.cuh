@@ -7,12 +7,12 @@
 #define RP_RUNTIME_CHOOSE_U32_PREINCLUDE_MODE RP_RUNTIME_CHOOSE_SYM_U32_PREINCLUDE
 #endif
 static_assert(RP_RUNTIME_CHOOSE_U32_PREINCLUDE_MODE >= 0 &&
-              RP_RUNTIME_CHOOSE_U32_PREINCLUDE_MODE <= 2,
-              "RP_RUNTIME_CHOOSE_U32_PREINCLUDE_MODE must be 0, 1, or 2");
+              RP_RUNTIME_CHOOSE_U32_PREINCLUDE_MODE <= 3,
+              "RP_RUNTIME_CHOOSE_U32_PREINCLUDE_MODE must be 0, 1, 2, or 3");
 
 // Preserve the canonical host-upload symbol under a stable alternate name.
-// Device-side indexing can then use either compact representation without
-// changing cudaMemcpyToSymbol call sites.
+// Device-side indexing can then use compact or full-shape uint32 layouts
+// without changing cudaMemcpyToSymbol call sites.
 #define RP_CHOOSE RP_CHOOSE_PREINCLUDE_ORIG
 #include "gridfp_reduced_production_device.cuh"
 #undef RP_CHOOSE
@@ -51,6 +51,20 @@ struct RuntimeChooseU32RowProxy {
     __device__ __forceinline__ Rank64 operator[](int k) const {
         if (n < 0 || n > RP_MAX_W || k < 0 || k > n) return 0;
         return RP_RUNTIME_CHOOSE_TRI_U32[n * (n + 1) / 2 + k];
+    }
+};
+#elif RP_RUNTIME_CHOOSE_U32_PREINCLUDE_MODE == 3
+__device__ __constant__ std::uint32_t
+RP_RUNTIME_CHOOSE_FULL_U32[RP_MAX_W + 1][RP_MAX_W + 1] = {
+#include "gridfp_reduced_production_choose_full_u32_values.inc"
+};
+static_assert(sizeof(RP_RUNTIME_CHOOSE_FULL_U32) == 3364);
+
+struct RuntimeChooseU32RowProxy {
+    int n = 0;
+    __device__ __forceinline__ Rank64 operator[](int k) const {
+        if (n < 0 || n > RP_MAX_W || k < 0 || k > n) return 0;
+        return RP_RUNTIME_CHOOSE_FULL_U32[n][k];
     }
 };
 #endif
