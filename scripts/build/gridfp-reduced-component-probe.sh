@@ -52,11 +52,14 @@ case "$MODE" in
   p2p-traffic)
     SRC_REL="src/cuda/gridfp/gridfp_reduced_production_p2p_traffic_microprobe.cu"
     ;;
+  p2p-traffic-matrix)
+    SRC_REL="src/cuda/gridfp/gridfp_reduced_production_p2p_traffic_matrix_microprobe.cu"
+    ;;
   support-rank)
     SRC_REL="src/cuda/gridfp/gridfp_reduced_production_grouped_support_rank_probe.cu"
     ;;
   *)
-    echo "invalid MODE=$MODE (forward|reverse|register|persistent|dense|edge|grouped|inplace|cycle|shift-cycle|turn|owner-component|owner-lean|p2p-cycle|p2p-traffic|support-rank)" >&2
+    echo "invalid MODE=$MODE (forward|reverse|register|persistent|dense|edge|grouped|inplace|cycle|shift-cycle|turn|owner-component|owner-lean|p2p-cycle|p2p-traffic|p2p-traffic-matrix|support-rank)" >&2
     exit 2
     ;;
 esac
