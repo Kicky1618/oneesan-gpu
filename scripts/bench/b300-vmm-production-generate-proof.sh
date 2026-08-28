@@ -23,6 +23,8 @@ grep -Fq 'Count global_load_main(Code g){return D_MAIN_VBASE[g];}' "$OUT"
 grep -Fq 'Count global_load_block(Code g){return D_BLOCK_VBASE[g];}' "$OUT"
 grep -Fq 'void global_store_main(Code g,Count v){D_MAIN_VBASE[g]=v;}' "$OUT"
 grep -Fq 'void global_store_block(Code g,Count v){D_BLOCK_VBASE[g]=v;}' "$OUT"
+grep -Fq 'void init(int d,Count mod)' "$OUT"
+grep -Fq 'ctx[d].init(d,mod);' "$OUT"
 grep -Fq 'VMM exposes one contiguous authoritative VA' "$OUT"
 grep -Fq 'Count*peer=(BLOCK?D_BLOCK_VBASE:D_MAIN_VBASE)+x.remote;' "$OUT"
 grep -Fq 'b300_vmm::ContiguousStorage main_store,block_store;' "$OUT"
@@ -36,27 +38,31 @@ grep -Fq 'cudaMemcpyToSymbol(D_BLOCK_VBASE,&block_base,sizeof(block_base))' "$OU
 grep -Fq 'main_store.destroy();block_store.destroy();' "$OUT"
 grep -Fq 'backend=gridfp-b300-hbm32-fullmate-dropN-vmm n=' "$OUT"
 
-for stale in D_MAIN_PTR D_BLOCK_PTR D_MAIN_CHUNK D_BLOCK_CHUNK D_NGPU; do
+for stale in D_MAIN_PTR D_BLOCK_PTR D_MAIN_CHUNK D_BLOCK_CHUNK D_NGPU D_MAIN_W D_BLOCK_W; do
   if grep -Fq "$stale" "$OUT"; then
-    echo "generated VMM source still contains stale shard symbol $stale" >&2
+    echo "generated VMM source still contains stale symbol $stale" >&2
     exit 3
   fi
 done
+if grep -Fq 'init(d,mod,mp,bp,mc,bc,ng)' "$OUT"; then
+  echo "generated VMM source still passes stale shard init arguments" >&2
+  exit 4
+fi
 if grep -Fq 'uint32_t owner,pad' "$OUT"; then
   echo "generated VMM PeerInterval still contains owner/pad" >&2
-  exit 4
+  exit 5
 fi
 if grep -Fq 'cudaMalloc(&mp[d]' "$OUT" || grep -Fq 'cudaMalloc(&bp[d]' "$OUT"; then
   echo "generated VMM source still cudaMallocs authoritative shards" >&2
-  exit 5
+  exit 6
 fi
 if grep -Fq 'cudaFree(mp[d])' "$OUT" || grep -Fq 'cudaFree(bp[d])' "$OUT"; then
   echo "generated VMM source still cudaFrees VMM logical views" >&2
-  exit 6
+  exit 7
 fi
 if grep -Fq 'Every shard boundary can split at most one globally ordered interval.' "$OUT" || grep -Fq 'int owner=int(g/chunk)' "$OUT"; then
   echo "generated VMM interval planner still performs logical shard splitting" >&2
-  exit 7
+  exit 8
 fi
 
-echo "b300-vmm-production-generate-proof OK count_bytes=4 direct_global_index=1 shard_free_interval_io=1 compact_interval_bytes=24 compact_interval_vs_old_pct=75 interval_host_owner_div=0 interval_device_ptr_index=0 stale_shard_symbols=0 stale_shard_symbol_copies=0 logical_shard_views=host_only authoritative_cudaMalloc=0 authoritative_cudaFree=0 balanced_physical_rotation=1 combined_imbalance_le_one_granularity=1 runtime_physical_balance_guard=1"
+echo "b300-vmm-production-generate-proof OK count_bytes=4 direct_global_index=1 shard_free_interval_io=1 compact_interval_bytes=24 compact_interval_vs_old_pct=75 interval_host_owner_div=0 interval_device_ptr_index=0 stale_shard_symbols=0 stale_shard_symbol_copies=0 stale_shard_init_args=0 stale_width_symbols=0 per_group_width_symbol_copies=0 logical_shard_views=host_only authoritative_cudaMalloc=0 authoritative_cudaFree=0 balanced_physical_rotation=1 combined_imbalance_le_one_granularity=1 runtime_physical_balance_guard=1"
