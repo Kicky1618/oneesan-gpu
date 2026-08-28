@@ -21,6 +21,7 @@ enum DecodeMode : int {
     kDecodeFfs = 0,
     kDecodeUnrolled5 = 1,
     kDecodeDirect3 = 2,
+    kDecodeDirect3Guard = 3,
 };
 
 static void ck(cudaError_t e, const char* what) {
@@ -121,12 +122,33 @@ __device__ __forceinline__ uint64_t decode_direct3(
     return sum;
 }
 
+__device__ __forceinline__ uint64_t decode_direct3_guard(
+    uint8_t rankmask, const uint16_t* rank_row, const uint32_t* source
+) {
+    uint64_t sum = 0;
+    if (rankmask != 0u) {
+        if (rankmask & 0x01u) {
+            const uint16_t rank = rank_row[0];
+            sum += uint64_t(source[uint32_t(rank)]);
+        }
+        if (rankmask & 0x02u) {
+            const uint16_t rank = rank_row[1];
+            sum += uint64_t(source[uint32_t(rank)]);
+        }
+        if (rankmask & 0x04u) {
+            const uint16_t rank = rank_row[2];
+            sum += uint64_t(source[uint32_t(rank)]);
+        }
+    }
+    return sum;
+}
+
 template<int MODE>
 __global__ void rankmask5_kernel(
     const uint8_t* masks, const uint16_t* ranks, const uint32_t* source,
     size_t n, uint64_t* partial
 ) {
-    static_assert(MODE >= kDecodeFfs && MODE <= kDecodeDirect3);
+    static_assert(MODE >= kDecodeFfs && MODE <= kDecodeDirect3Guard);
     const size_t tid = size_t(blockIdx.x) * blockDim.x + threadIdx.x;
     const size_t stride = size_t(gridDim.x) * blockDim.x;
     uint64_t sum = 0;
@@ -135,7 +157,8 @@ __global__ void rankmask5_kernel(
         const uint16_t* row = ranks + i * kChunk;
         if constexpr (MODE == kDecodeFfs) sum += decode_ffs(m, row, source);
         else if constexpr (MODE == kDecodeUnrolled5) sum += decode_unrolled5(m, row, source);
-        else sum += decode_direct3(m, row, source);
+        else if constexpr (MODE == kDecodeDirect3) sum += decode_direct3(m, row, source);
+        else sum += decode_direct3_guard(m, row, source);
     }
     partial[tid] = sum;
 }
@@ -255,6 +278,7 @@ int main(int argc, char** argv) {
     rankmask5_kernel<kDecodeFfs><<<blocks, kBlock>>>(d_masks, d_ranks, d_source, n, d_partial);
     rankmask5_kernel<kDecodeUnrolled5><<<blocks, kBlock>>>(d_masks, d_ranks, d_source, n, d_partial);
     rankmask5_kernel<kDecodeDirect3><<<blocks, kBlock>>>(d_masks, d_ranks, d_source, n, d_partial);
+    rankmask5_kernel<kDecodeDirect3Guard><<<blocks, kBlock>>>(d_masks, d_ranks, d_source, n, d_partial);
     ck(cudaDeviceSynchronize(), "warmup");
 
     const uint64_t sum_ffs = run_checksum<kDecodeFfs>(
@@ -263,20 +287,27 @@ int main(int argc, char** argv) {
         d_masks, d_ranks, d_source, n, d_partial, blocks, threads);
     const uint64_t sum_direct3 = run_checksum<kDecodeDirect3>(
         d_masks, d_ranks, d_source, n, d_partial, blocks, threads);
-    if (sum_ffs != sum_unrolled || sum_ffs != sum_direct3) {
-        std::fprintf(stderr, "checksum mismatch ffs=%llu unrolled=%llu direct3=%llu\n",
+    const uint64_t sum_direct3_guard = run_checksum<kDecodeDirect3Guard>(
+        d_masks, d_ranks, d_source, n, d_partial, blocks, threads);
+    if (sum_ffs != sum_unrolled || sum_ffs != sum_direct3 || sum_ffs != sum_direct3_guard) {
+        std::fprintf(stderr,
+                     "checksum mismatch ffs=%llu unrolled=%llu direct3=%llu direct3_guard=%llu\n",
                      (unsigned long long)sum_ffs, (unsigned long long)sum_unrolled,
-                     (unsigned long long)sum_direct3);
+                     (unsigned long long)sum_direct3, (unsigned long long)sum_direct3_guard);
         return 3;
     }
 
-    // Mirror the order around direct3 to reduce first/last-mode bias; report best launch time.
+    // Mirror all four modes to reduce first/last-mode bias; report best launch time.
     const Timing ffs_a = bench<kDecodeFfs>(d_masks, d_ranks, d_source, n, d_partial,
                                            blocks, repeats, trials);
     const Timing unr_a = bench<kDecodeUnrolled5>(d_masks, d_ranks, d_source, n, d_partial,
                                                  blocks, repeats, trials);
     const Timing dir_a = bench<kDecodeDirect3>(d_masks, d_ranks, d_source, n, d_partial,
                                                blocks, repeats, trials);
+    const Timing grd_a = bench<kDecodeDirect3Guard>(d_masks, d_ranks, d_source, n, d_partial,
+                                                    blocks, repeats, trials);
+    const Timing grd_b = bench<kDecodeDirect3Guard>(d_masks, d_ranks, d_source, n, d_partial,
+                                                    blocks, repeats, trials);
     const Timing dir_b = bench<kDecodeDirect3>(d_masks, d_ranks, d_source, n, d_partial,
                                                blocks, repeats, trials);
     const Timing unr_b = bench<kDecodeUnrolled5>(d_masks, d_ranks, d_source, n, d_partial,
@@ -286,6 +317,7 @@ int main(int argc, char** argv) {
     const float ffs_ms = std::min(ffs_a.best_ms, ffs_b.best_ms);
     const float unrolled_ms = std::min(unr_a.best_ms, unr_b.best_ms);
     const float direct3_ms = std::min(dir_a.best_ms, dir_b.best_ms);
+    const float direct3_guard_ms = std::min(grd_a.best_ms, grd_b.best_ms);
 
     cudaDeviceProp prop{};
     ck(cudaGetDeviceProperties(&prop, 0), "device props");
@@ -297,12 +329,14 @@ int main(int argc, char** argv) {
                 (unsigned long long)hist[2], (unsigned long long)hist[3],
                 (unsigned long long)hist[4], (unsigned long long)hist[5],
                 unsigned(rankmask_or), (unsigned long long)sum_ffs);
-    std::printf("ffs_loop_ms=%.6f unrolled5_ms=%.6f direct3_ms=%.6f ffs_to_unrolled5_speedup=%.6f ffs_to_direct3_speedup=%.6f unrolled5_to_direct3_speedup=%.6f\n",
-                ffs_ms, unrolled_ms, direct3_ms,
+    std::printf("ffs_loop_ms=%.6f unrolled5_ms=%.6f direct3_ms=%.6f direct3_guard_ms=%.6f ffs_to_unrolled5_speedup=%.6f ffs_to_direct3_speedup=%.6f ffs_to_direct3_guard_speedup=%.6f unrolled5_to_direct3_speedup=%.6f direct3_to_guard_speedup=%.6f\n",
+                ffs_ms, unrolled_ms, direct3_ms, direct3_guard_ms,
                 double(ffs_ms) / double(unrolled_ms),
                 double(ffs_ms) / double(direct3_ms),
-                double(unrolled_ms) / double(direct3_ms));
-    std::printf("decode_model=rank16_then_source32 mask_source=all_state1_25_x_key0_242_repeated direct3_ordinals=0,1,2\n");
+                double(ffs_ms) / double(direct3_guard_ms),
+                double(unrolled_ms) / double(direct3_ms),
+                double(direct3_ms) / double(direct3_guard_ms));
+    std::printf("decode_model=rank16_then_source32 mask_source=all_state1_25_x_key0_242_repeated direct3_ordinals=0,1,2 direct3_guard=rankmask_nonzero_outer_guard\n");
 
     cudaFree(d_partial);
     cudaFree(d_source);
