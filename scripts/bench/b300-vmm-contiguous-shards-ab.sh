@@ -4,6 +4,7 @@ source "$(dirname -- "${BASH_SOURCE[0]}")/../lib/common.sh"
 
 NVCC="${NVCC:-nvcc}"
 ARCH="${ARCH:-native}"
+PTX_ARCH="${PTX_ARCH:-sm_103}"
 GPUS="${GPUS:-8}"
 CHUNK_ELEMS="${CHUNK_ELEMS:-1048576}"
 BLOCKS="${BLOCKS:-256}"
@@ -28,6 +29,8 @@ if (( visible < GPUS )); then echo "requested $GPUS GPUs, visible=$visible" >&2;
 
 SRC="$ONEESAN_ROOT/src/cuda/b300/probes/vmm_contiguous_shards_microprobe.cu"
 mkdir -p "$(dirname "$RESULT")" "$LOGDIR"
+ARCH="$PTX_ARCH" bash "$ONEESAN_ROOT/scripts/bench/b300-vmm-base-source-ptx-proof.sh" \
+  >"$LOGDIR/base_source_ptx.out" 2>"$LOGDIR/base_source_ptx.err"
 "$NVCC" -O3 -std=c++17 -lineinfo -arch="$ARCH" "$SRC" -lcuda -o "$BIN" \
   >"$LOGDIR/build.out" 2>"$LOGDIR/build.err"
 
@@ -64,5 +67,5 @@ print(f'b300_vmm_symbol_speedup_vs_old_max={max(old):.6f}x')
 print(f'b300_vmm_arg_speedup_vs_symbol_median={statistics.median(arg):.6f}x')
 print(f'b300_vmm_arg_speedup_vs_symbol_min={min(arg):.6f}x')
 print(f'b300_vmm_arg_speedup_vs_symbol_max={max(arg):.6f}x')
-print('b300_vmm_symbol_owner_ops=0 b300_vmm_arg_owner_ops=0 b300_vmm_arg_dynamic_ptr_index=0')
+print('b300_vmm_symbol_owner_ops=0 b300_vmm_arg_owner_ops=0 b300_vmm_arg_dynamic_ptr_index=0 base_source_ptx_gated=1')
 PY
