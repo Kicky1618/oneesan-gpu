@@ -13,6 +13,9 @@ namespace oneesan::gridfp::reducedprod {
 #ifndef RP_RUNTIME_OWNER_FROM_BOUNDARIES
 #define RP_RUNTIME_OWNER_FROM_BOUNDARIES 1
 #endif
+#ifndef RP_RUNTIME_SUPPORT_RANK_SETBITS
+#define RP_RUNTIME_SUPPORT_RANK_SETBITS 1
+#endif
 static_assert(
     RP_RUNTIME_PRIMITIVE_RANK_SETBITS == 0 ||
     RP_RUNTIME_PRIMITIVE_RANK_SETBITS == 1,
@@ -23,6 +26,9 @@ static_assert(
 static_assert(
     RP_RUNTIME_OWNER_FROM_BOUNDARIES == 0 || RP_RUNTIME_OWNER_FROM_BOUNDARIES == 1,
     "RP_RUNTIME_OWNER_FROM_BOUNDARIES must be 0 or 1");
+static_assert(
+    RP_RUNTIME_SUPPORT_RANK_SETBITS == 0 || RP_RUNTIME_SUPPORT_RANK_SETBITS == 1,
+    "RP_RUNTIME_SUPPORT_RANK_SETBITS must be 0 or 1");
 
 struct GroupedComponentContextDevice {
     int owner = -1;
@@ -65,6 +71,27 @@ __device__ __forceinline__ std::uint32_t runtime_full_support_device(
         : (reverse ? blocked_exclude_reverse(k.mate, W, q)
                    : blocked_exclude(k.mate, q));
     return runtime_support_from_mate_device(full, W);
+}
+
+__device__ __forceinline__ Rank64 runtime_compact_support_rank_device(
+    std::uint32_t mask,
+    int len,
+    int ones
+) {
+#if RP_RUNTIME_SUPPORT_RANK_SETBITS
+    if (len < 32) mask &= (std::uint32_t(1) << len) - 1u;
+    Rank64 rank = 0;
+    int left = ones;
+    while (mask) {
+        const int pos = __ffs(mask) - 1;
+        rank += choose_device(len - pos - 1, left);
+        --left;
+        mask &= mask - 1u;
+    }
+    return rank;
+#else
+    return compact_support_rank_device(mask, len, ones);
+#endif
 }
 
 __device__ __forceinline__ Rank64 runtime_primitive_rank_support_device(
@@ -138,7 +165,7 @@ __device__ __forceinline__ GroupedComponentContextDevice grouped_component_conte
     const std::uint32_t outer = compact_outside_window_device(full, W, lo, hi);
     const int outer_ones = __popc(outer);
     const Rank64 group = outer_group_size_device(L, outer_ones);
-    const Rank64 sr_outer = compact_support_rank_device(outer, O, outer_ones);
+    const Rank64 sr_outer = runtime_compact_support_rank_device(outer, O, outer_ones);
     Rank64 prefix = 0;
     for (int t = 0; t < outer_ones; ++t)
         prefix += choose_device(O, t) * outer_group_size_device(L, t);
@@ -173,7 +200,8 @@ __device__ __forceinline__ GroupedDeviceRank grouped_rank_in_component_device(
     Rank64 within = group_local_sector_offset_device(ctx.L, ctx.outer_ones, local_ones);
 
     if (!k.blocked) {
-        const Rank64 sr = compact_support_rank_device(local_mask, ctx.L, local_ones);
+        const Rank64 sr = runtime_compact_support_rank_device(
+            local_mask, ctx.L, local_ones);
         within += sr * pc + pr;
     } else {
         const int missing_bit = reverse ? q - 1 : q;
@@ -182,7 +210,8 @@ __device__ __forceinline__ GroupedDeviceRank grouped_rank_in_component_device(
         const int fixed_pos = fixed_bit - ctx.lo;
         const std::uint32_t compact = erase_two_local_bits_device(
             local_mask, ctx.L, missing_pos, fixed_pos);
-        const Rank64 sr = compact_support_rank_device(compact, ctx.L - 2, local_ones - 1);
+        const Rank64 sr = runtime_compact_support_rank_device(
+            compact, ctx.L - 2, local_ones - 1);
         within += choose_device(ctx.L, local_ones) * pc + sr * pc + pr;
     }
     return GroupedDeviceRank{ctx.owner, ctx.local_group_base + within};
