@@ -12,11 +12,12 @@ RUN_DIRECT_AB="${RUN_DIRECT_AB:-0}"
 RUN_AFFINE_AB="${RUN_AFFINE_AB:-0}"
 RUN_PREKEY_AB="${RUN_PREKEY_AB:-0}"
 RUN_RANK16_AB="${RUN_RANK16_AB:-0}"
+RUN_RANK_BACKENDS_AB="${RUN_RANK_BACKENDS_AB:-0}"
 AB_N="${AB_N:-21}"
 REPEATS="${REPEATS:-3}"
 DEPTHCODE_DECODE_LOAD="${DEPTHCODE_DECODE_LOAD:-ldg}"
 
-for x in RUN_PTXAS RUN_B300_AB RUN_DELTA_AB RUN_CROSS5_AB RUN_DIRECT_AB RUN_AFFINE_AB RUN_PREKEY_AB RUN_RANK16_AB; do
+for x in RUN_PTXAS RUN_B300_AB RUN_DELTA_AB RUN_CROSS5_AB RUN_DIRECT_AB RUN_AFFINE_AB RUN_PREKEY_AB RUN_RANK16_AB RUN_RANK_BACKENDS_AB; do
   v="${!x}"
   if [[ "$v" != 0 && "$v" != 1 ]]; then echo "$x must be 0 or 1" >&2; exit 2; fi
 done
@@ -42,17 +43,18 @@ ARCH="$ARCH" W=10 bash "$ONEESAN_ROOT/scripts/bench/pattern10-depthcode-selftest
 echo '=== direct-resolve CROSS5 CUDA matrix ===' >&2
 ARCH="$ARCH" W=10 bash "$ONEESAN_ROOT/scripts/bench/pattern10-depthcode-direct-cross5-selftest-matrix.sh"
 
-echo '=== affine/prekey/rank16 CUDA matrices: PM 0/1 x global/ldg ===' >&2
+echo '=== affine/prekey/rank16/rankstream CUDA matrices: PM 0/1 x global/ldg ===' >&2
 for pm in 0 1; do
   for load in global ldg; do
     PM_ACCUM="$pm" DECODE_LOAD="$load" ARCH="$ARCH" W=10 bash "$ONEESAN_ROOT/scripts/bench/pattern10-depthcode-affine-cross5-selftest.sh"
     PM_ACCUM="$pm" DECODE_LOAD="$load" ARCH="$ARCH" W=10 bash "$ONEESAN_ROOT/scripts/bench/pattern10-depthcode-prekey-cross5-selftest.sh"
     PM_ACCUM="$pm" DECODE_LOAD="$load" ARCH="$ARCH" W=10 bash "$ONEESAN_ROOT/scripts/bench/pattern10-depthcode-rank16-cross5-selftest.sh"
+    PM_ACCUM="$pm" DECODE_LOAD="$load" ARCH="$ARCH" W=10 bash "$ONEESAN_ROOT/scripts/bench/pattern10-depthcode-rankstream-cross5-selftest.sh"
   done
 done
 
 if [[ "$RUN_PTXAS" == 1 ]]; then
-  echo '=== ptxas resource comparison, including prekey/rank16 ===' >&2
+  echo '=== ptxas resource comparison, including prekey/rank16/rankstream ===' >&2
   N="$N" ARCH="$ARCH" bash "$ONEESAN_ROOT/scripts/bench/b300-depthcode-highctx-ptxas.sh"
 fi
 if [[ "$RUN_DELTA_AB" == 1 ]]; then
@@ -73,8 +75,11 @@ fi
 if [[ "$RUN_RANK16_AB" == 1 ]]; then
   N="$AB_N" REPEATS="$REPEATS" DEPTHCODE_DECODE_LOAD="$DEPTHCODE_DECODE_LOAD" bash "$ONEESAN_ROOT/scripts/bench/b300-depthcode-rank16-ab.sh"
 fi
+if [[ "$RUN_RANK_BACKENDS_AB" == 1 ]]; then
+  N="$AB_N" REPEATS="$REPEATS" DEPTHCODE_DECODE_LOAD="$DEPTHCODE_DECODE_LOAD" bash "$ONEESAN_ROOT/scripts/bench/b300-depthcode-rank-backends-ab.sh"
+fi
 if [[ "$RUN_B300_AB" == 1 ]]; then
   N="$AB_N" REPEATS="$REPEATS" DEPTHCODE_DECODE_LOAD="$DEPTHCODE_DECODE_LOAD" bash "$ONEESAN_ROOT/scripts/bench/b300-depthcode-warpstriped-ab.sh"
 fi
 
-echo "b300-depthcode-warpstriped-preflight OK n=$N arch=$ARCH run_ptxas=$RUN_PTXAS run_delta_ab=$RUN_DELTA_AB run_cross5_ab=$RUN_CROSS5_AB run_direct_ab=$RUN_DIRECT_AB run_affine_ab=$RUN_AFFINE_AB run_prekey_ab=$RUN_PREKEY_AB run_rank16_ab=$RUN_RANK16_AB run_b300_ab=$RUN_B300_AB ternary_delta_proved=1 cross5_cuda=1 low_rank_owner_proved=1 direct_resolve_cuda=1 affine_rows_cuda=1 prekey_cuda=1 rank16_cuda=1" >&2
+echo "b300-depthcode-warpstriped-preflight OK n=$N arch=$ARCH run_ptxas=$RUN_PTXAS run_delta_ab=$RUN_DELTA_AB run_cross5_ab=$RUN_CROSS5_AB run_direct_ab=$RUN_DIRECT_AB run_affine_ab=$RUN_AFFINE_AB run_prekey_ab=$RUN_PREKEY_AB run_rank16_ab=$RUN_RANK16_AB run_rank_backends_ab=$RUN_RANK_BACKENDS_AB run_b300_ab=$RUN_B300_AB ternary_delta_proved=1 cross5_cuda=1 low_rank_owner_proved=1 direct_resolve_cuda=1 affine_rows_cuda=1 prekey_cuda=1 rank16_cuda=1 rankstream_cuda=1" >&2
