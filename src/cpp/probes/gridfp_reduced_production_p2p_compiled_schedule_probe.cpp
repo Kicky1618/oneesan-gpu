@@ -9,11 +9,33 @@
 
 namespace {
 
+static constexpr int COMPILED_LEN_SHIFT = 24;
+static constexpr std::uint32_t COMPILED_PC_MASK =
+    (std::uint32_t(1) << COMPILED_LEN_SHIFT) - 1u;
+
 struct CompiledCycleHeader {
     std::uint32_t run_begin = 0;
-    std::uint32_t primitive_count = 0;
+    std::uint32_t primitive_and_len = 0;
 };
 static_assert(sizeof(CompiledCycleHeader) == 8);
+
+CompiledCycleHeader make_compiled_header(Rank run_begin, Rank pc, int len) {
+    if (run_begin > std::numeric_limits<std::uint32_t>::max() ||
+        pc > COMPILED_PC_MASK || len < 2 || len > 31)
+        fail("compiled header packing range");
+    return CompiledCycleHeader{
+        static_cast<std::uint32_t>(run_begin),
+        static_cast<std::uint32_t>(pc) |
+            (static_cast<std::uint32_t>(len) << COMPILED_LEN_SHIFT)};
+}
+
+Rank compiled_header_pc(CompiledCycleHeader h) {
+    return h.primitive_and_len & COMPILED_PC_MASK;
+}
+
+int compiled_header_len(CompiledCycleHeader h) {
+    return int(h.primitive_and_len >> COMPILED_LEN_SHIFT);
+}
 
 struct CompiledOwnerSchedule {
     std::vector<CompiledCycleHeader> header;
@@ -194,9 +216,7 @@ std::array<CompiledOwnerSchedule, 8> compile_schedule(
             for (int h = 1; h < len; ++h)
                 if (rank[static_cast<std::size_t>(h)].pc != pc)
                     fail("compiled primitive count changed in cycle");
-            s.header.push_back(CompiledCycleHeader{
-                static_cast<std::uint32_t>(s.run.size()),
-                static_cast<std::uint32_t>(pc)});
+            s.header.push_back(make_compiled_header(s.run.size(), pc, len));
             for (int h = 0; h < len; ++h) {
                 const auto& r = rank[static_cast<std::size_t>(h)];
                 s.run.push_back(pack_compiled_run(r.owner, r.local));
@@ -208,26 +228,24 @@ std::array<CompiledOwnerSchedule, 8> compile_schedule(
     for (const auto& [rk, rec] : actual) {
         (void)rec;
         const auto [len, leader] = cycle_length_and_leader(rk, W, q, K, reverse);
+        (void)leader;
         if (len > 1) ++nonfixed_actual;
     }
     if (compiled_runs.size() != nonfixed_actual)
         fail("compiled nonfixed run coverage");
 
     for (int g = 0; g < ngpu; ++g) {
-        auto& s = schedule[static_cast<std::size_t>(g)];
-        if (s.run.size() > std::numeric_limits<std::uint32_t>::max())
-            fail("compiled sentinel run offset exceeds u32");
-        s.header.push_back(CompiledCycleHeader{
-            static_cast<std::uint32_t>(s.run.size()), 0});
-        for (std::size_t i = 0; i + 1 < s.header.size(); ++i) {
-            const std::uint32_t begin = s.header[i].run_begin;
-            const std::uint32_t end = s.header[i + 1].run_begin;
-            if (begin >= end || end > s.run.size()) fail("compiled header interval");
-            const int len = int(end - begin);
-            if (len < 2 || len > RP_MAX_W) fail("compiled header cycle length");
-            for (std::uint32_t j = begin; j < end; ++j) {
-                const int owner = compiled_run_owner(s.run[j]);
-                const Rank local = compiled_run_local(s.run[j]);
+        const auto& s = schedule[static_cast<std::size_t>(g)];
+        for (CompiledCycleHeader h : s.header) {
+            const Rank begin = h.run_begin;
+            const int len = compiled_header_len(h);
+            const Rank end = begin + Rank(len);
+            const Rank pc = compiled_header_pc(h);
+            if (len < 2 || len > RP_MAX_W || !pc || end > s.run.size())
+                fail("compiled packed header interval");
+            for (Rank j = begin; j < end; ++j) {
+                const int owner = compiled_run_owner(s.run[static_cast<std::size_t>(j)]);
+                const Rank local = compiled_run_local(s.run[static_cast<std::size_t>(j)]);
                 if (owner < 0 || owner >= ngpu ||
                     local >= plan.size[static_cast<std::size_t>(owner)])
                     fail("compiled packed run decode");
@@ -244,7 +262,7 @@ void verify_compiled_schedule(int W, bool reverse, int ngpu) {
     Rank bytes = 0;
     for (int g = 0; g < ngpu; ++g) {
         const auto& s = schedule[static_cast<std::size_t>(g)];
-        cycles += s.header.size() - 1;
+        cycles += s.header.size();
         runs += s.run.size();
         bytes += s.header.size() * sizeof(CompiledCycleHeader) +
                  s.run.size() * sizeof(std::uint64_t);
@@ -253,8 +271,6 @@ void verify_compiled_schedule(int W, bool reverse, int ngpu) {
     if (cycles != w.descriptors)
         fail("compiled cycle/worklist count mismatch");
 
-    // All nontrivial cycles preserve primitive count, so every run in the
-    // compiled schedule corresponds to one nonfixed primitive interval.
     Rank expected_nonfixed_runs = w.runs - w.fixed_cycles;
     if (runs != expected_nonfixed_runs)
         fail("compiled nonfixed run count mismatch");
@@ -266,6 +282,7 @@ void verify_compiled_schedule(int W, bool reverse, int ngpu) {
               << " compiled_runs=" << runs
               << " compiled_metadata_bytes=" << bytes
               << " run_record_bytes=8 header_bytes=8"
+              << " header_order_independent=1"
               << " grouped_rank_per_row=0 support_transform_per_row=0"
               << " owner_compute_per_row=0 exact_run_bases=1\n";
 }
@@ -277,12 +294,12 @@ void print_w28_compiled_theory() {
     constexpr Rank nonfixed_runs = main_runs + blocked_runs - blocked_fixed;
     constexpr Rank cycles = 21566612ULL;
     constexpr Rank run_bytes = nonfixed_runs * sizeof(std::uint64_t);
-    constexpr Rank header_bytes = (cycles + 8) * sizeof(CompiledCycleHeader);
+    constexpr Rank header_bytes = cycles * sizeof(CompiledCycleHeader);
     constexpr Rank total_bytes = run_bytes + header_bytes;
     static_assert(nonfixed_runs == 167763968ULL);
     static_assert(run_bytes == 1342111744ULL);
-    static_assert(header_bytes == 172532960ULL);
-    static_assert(total_bytes == 1514644704ULL);
+    static_assert(header_bytes == 172532896ULL);
+    static_assert(total_bytes == 1514644640ULL);
 
     std::cout << "W=28 K=13"
               << " compiled_nonfixed_runs=" << nonfixed_runs
@@ -292,6 +309,7 @@ void print_w28_compiled_theory() {
               << " total_compiled_schedule_GiB=" << double(total_bytes) / double(1ULL << 30)
               << " avg_MiB_per_8gpu=" << double(total_bytes) / 8.0 / double(1ULL << 20)
               << " forward_reverse_both_GiB=" << 2.0 * double(total_bytes) / double(1ULL << 30)
+              << " header_len_bits=5 primitive_bits=24"
               << " state_stream_GiB_per_gpu=220.442683"
               << " pure_rotation_runtime_candidate=1\n";
 }
