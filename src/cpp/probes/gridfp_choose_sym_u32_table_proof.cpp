@@ -5,9 +5,13 @@
 namespace {
 using Rank64 = std::uint64_t;
 static constexpr int MAX = 28;
-static constexpr int ENTRIES = 225;
-static constexpr std::array<std::uint32_t, ENTRIES> COMPACT = {
+static constexpr int SYM_ENTRIES = 225;
+static constexpr int TRI_ENTRIES = 435;
+static constexpr std::array<std::uint32_t, SYM_ENTRIES> SYM = {
 #include "../../cuda/gridfp/gridfp_reduced_production_choose_sym_u32_values.inc"
+};
+static constexpr std::array<std::uint32_t, TRI_ENTRIES> TRI = {
+#include "../../cuda/gridfp/gridfp_reduced_production_choose_tri_u32_values.inc"
 };
 
 std::array<std::array<Rank64, MAX + 1>, MAX + 1> build_choose() {
@@ -21,15 +25,20 @@ std::array<std::array<Rank64, MAX + 1>, MAX + 1> build_choose() {
     return c;
 }
 
-constexpr int row_base(int n) {
+constexpr int sym_row_base(int n) {
     const int m = n >> 1;
     return (n & 1) ? (m + 1) * (m + 1) : m * (m + 1);
 }
+constexpr int tri_row_base(int n) { return n * (n + 1) / 2; }
 
-std::uint32_t compact_choose(int n, int k) {
+std::uint32_t sym_choose(int n, int k) {
     if (n < 0 || n > MAX || k < 0 || k > n) return 0;
     if (k > n - k) k = n - k;
-    return COMPACT[std::size_t(row_base(n) + k)];
+    return SYM[std::size_t(sym_row_base(n) + k)];
+}
+std::uint32_t tri_choose(int n, int k) {
+    if (n < 0 || n > MAX || k < 0 || k > n) return 0;
+    return TRI[std::size_t(tri_row_base(n) + k)];
 }
 }
 
@@ -37,45 +46,56 @@ int main() {
     const auto choose = build_choose();
     std::uint64_t cases = 0;
     std::uint32_t max_value = 0;
-    int expected_base = 0;
+    int expected_sym_base = 0;
+    int expected_tri_base = 0;
     for (int n = 0; n <= MAX; ++n) {
-        const int base = row_base(n);
-        if (base != expected_base) {
-            std::cerr << "row base mismatch n=" << n << " got=" << base
-                      << " expected=" << expected_base << '\n';
+        const int sb = sym_row_base(n);
+        const int tb = tri_row_base(n);
+        if (sb != expected_sym_base || tb != expected_tri_base) {
+            std::cerr << "row base mismatch n=" << n
+                      << " sym=" << sb << "/" << expected_sym_base
+                      << " tri=" << tb << "/" << expected_tri_base << '\n';
             return 2;
         }
-        expected_base += n / 2 + 1;
+        expected_sym_base += n / 2 + 1;
+        expected_tri_base += n + 1;
         for (int k = -1; k <= n + 1; ++k) {
             const Rank64 ref = (k < 0 || k > n) ? 0 : choose[n][k];
-            const std::uint32_t got = compact_choose(n, k);
-            if (ref != got) {
+            const std::uint32_t sym = sym_choose(n, k);
+            const std::uint32_t tri = tri_choose(n, k);
+            if (ref != sym || ref != tri) {
                 std::cerr << "choose mismatch n=" << n << " k=" << k
-                          << " ref=" << ref << " got=" << got << '\n';
+                          << " ref=" << ref << " sym=" << sym
+                          << " tri=" << tri << '\n';
                 return 3;
             }
             if (k >= 0 && k <= n) {
                 ++cases;
                 if (ref > 0xffffffffULL) return 4;
-                if (got > max_value) max_value = got;
+                if (sym > max_value) max_value = sym;
             }
         }
     }
-    if (expected_base != ENTRIES) return 5;
+    if (expected_sym_base != SYM_ENTRIES || expected_tri_base != TRI_ENTRIES) return 5;
     if (cases != 435ULL) return 6;
     if (max_value != 40116600u) return 7;
     constexpr std::uint64_t old_bytes = 29ULL * 29ULL * 8ULL;
-    constexpr std::uint64_t new_bytes = ENTRIES * 4ULL;
+    constexpr std::uint64_t sym_bytes = SYM_ENTRIES * 4ULL;
+    constexpr std::uint64_t tri_bytes = TRI_ENTRIES * 4ULL;
     static_assert(old_bytes == 6728);
-    static_assert(new_bytes == 900);
+    static_assert(sym_bytes == 900);
+    static_assert(tri_bytes == 1740);
     std::cout << "gridfp-choose-sym-u32-table-proof OK"
               << " production_n_max=28"
               << " valid_choose_cases=" << cases
-              << " compact_entries=" << ENTRIES
+              << " sym_entries=" << SYM_ENTRIES
+              << " tri_entries=" << TRI_ENTRIES
               << " old_bytes=" << old_bytes
-              << " compact_bytes=" << new_bytes
-              << " saved_bytes=" << (old_bytes - new_bytes)
+              << " sym_bytes=" << sym_bytes
+              << " tri_bytes=" << tri_bytes
+              << " sym_saved_bytes=" << (old_bytes - sym_bytes)
+              << " tri_saved_bytes=" << (old_bytes - tri_bytes)
               << " max_value=" << max_value
-              << " symmetry_exact=1 row_base_exact=1 uint32_exact=1 exact=1\n";
+              << " symmetry_exact=1 triangle_exact=1 row_base_exact=1 uint32_exact=1 exact=1\n";
     return 0;
 }
