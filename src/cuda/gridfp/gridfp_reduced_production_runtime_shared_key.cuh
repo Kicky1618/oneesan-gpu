@@ -13,6 +13,9 @@ namespace oneesan::gridfp::reducedprod {
 #ifndef RP_RUNTIME_DISCOVERY_ENDPOINT_SCAN
 #define RP_RUNTIME_DISCOVERY_ENDPOINT_SCAN 1
 #endif
+#ifndef RP_RUNTIME_FIND_RECENT_FIRST
+#define RP_RUNTIME_FIND_RECENT_FIRST 0
+#endif
 static_assert(RP_RUNTIME_PACK_SHARED_KEYS == 0 || RP_RUNTIME_PACK_SHARED_KEYS == 1,
               "RP_RUNTIME_PACK_SHARED_KEYS must be 0 or 1");
 static_assert(RP_RUNTIME_FAST_DISCOVERY_VALIDITY == 0 ||
@@ -21,6 +24,8 @@ static_assert(RP_RUNTIME_FAST_DISCOVERY_VALIDITY == 0 ||
 static_assert(RP_RUNTIME_DISCOVERY_ENDPOINT_SCAN == 0 ||
               RP_RUNTIME_DISCOVERY_ENDPOINT_SCAN == 1,
               "RP_RUNTIME_DISCOVERY_ENDPOINT_SCAN must be 0 or 1");
+static_assert(RP_RUNTIME_FIND_RECENT_FIRST == 0 || RP_RUNTIME_FIND_RECENT_FIRST == 1,
+              "RP_RUNTIME_FIND_RECENT_FIRST must be 0 or 1");
 
 static constexpr std::uint64_t RP_RUNTIME_SHARED_BLOCKED_BIT = 1ULL << 63;
 static constexpr std::uint64_t RP_RUNTIME_SHARED_MATE_MASK =
@@ -58,11 +63,21 @@ __device__ __forceinline__ int runtime_find_shared_key(
 ) {
 #if RP_RUNTIME_PACK_SHARED_KEYS
     const RuntimeSharedKey needle = runtime_shared_key_encode(k);
-    for (int i = 0; i < n; ++i)
+#if RP_RUNTIME_FIND_RECENT_FIRST
+    for (int i = n - 1; i >= 0; --i)
         if (a[i] == needle) return i;
 #else
     for (int i = 0; i < n; ++i)
+        if (a[i] == needle) return i;
+#endif
+#else
+#if RP_RUNTIME_FIND_RECENT_FIRST
+    for (int i = n - 1; i >= 0; --i)
         if (key_equal(a[i], k)) return i;
+#else
+    for (int i = 0; i < n; ++i)
+        if (key_equal(a[i], k)) return i;
+#endif
 #endif
     return -1;
 }
