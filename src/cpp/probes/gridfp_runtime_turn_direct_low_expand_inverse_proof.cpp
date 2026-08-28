@@ -6,6 +6,7 @@
 
 #include <array>
 #include <cstdint>
+#include <cstdlib>
 #include <iostream>
 #include <random>
 #include <set>
@@ -14,22 +15,31 @@ namespace {
 
 using KeySet = std::set<Key>;
 
-bool emit_if_reverse_blocked_preimage(
+bool valid_reverse_mate(MateID m, int W) {
+    int h = 1;
+    for (int q = 0; q < W; ++q) {
+        const MateValue v = mget(m, q);
+        if (v == X) return false;
+        if (v == L) --h;
+        else if (v == R) ++h;
+        if (h < 0) return false;
+    }
+    return h == 0;
+}
+
+void emit_if_reverse_blocked_preimage(
     KeySet& out, MateID x, MateID blocked_dest, int W
 ) {
-    if (!valid_mate(x, W)) return true;
+    if (!valid_reverse_mate(x, W)) return;
     const IncludeResult z = include_horizontal_reverse(x, W, 1);
     if (z.valid && z.blocked && z.mate == blocked_dest)
         out.insert(Key{false, x});
-    return true;
 }
 
 KeySet direct_blocked_preimages_reverse_low(MateID b, int W) {
     KeySet out;
-    if (is_endpoint(mget(b, 0))) {
-        const MateID x = minsert(b, 0, N);
-        emit_if_reverse_blocked_preimage(out, x, b, W);
-    }
+    if (is_endpoint(mget(b, 0)))
+        emit_if_reverse_blocked_preimage(out, minsert(b, 0, N), b, W);
 
     const MateID d = minsert(b, 1, N);
     if (mpair(d, 1) != NN) return out;
@@ -51,9 +61,7 @@ KeySet direct_blocked_preimages_reverse_low(MateID b, int W) {
 }
 
 void try_main_reverse_low(KeySet& out, MateID x, MateID dest, int W) {
-    if (!valid_mate(x, W)) return;
-    Vec z;
-    add(z, Key{false, x}, 1);
+    if (!valid_reverse_mate(x, W)) return;
     const Vec got = reduced_step_basis(Key{false, x}, W, 1, true);
     if (got.find(Key{false, dest}) != got.end()) out.insert(Key{false, x});
 }
@@ -71,13 +79,12 @@ KeySet direct_main_only_inverse_reverse_low(Key dest, int W) {
     if (pair == LN) try_main_reverse_low(out, msetpair(d, 1, NL), d, W);
     if (pair == RN) try_main_reverse_low(out, msetpair(d, 1, NR), d, W);
 
-    const int q = 2;
     if (W > 2) {
-        const MateValuePair qp = mpair(d, q);
+        const MateValuePair qp = mpair(d, 2);
         if (qp == NN || qp == LR) {
-            const MateID nn = qp == NN ? d : msetpair(d, q, NN);
+            const MateID nn = qp == NN ? d : msetpair(d, 2, NN);
             const MateID b = mshrink(nn, 1);
-            if (valid_mate(b, W - 1) && mget(b, 1) == N) {
+            if (valid_reverse_mate(b, W - 1) && mget(b, 1) == N) {
                 const KeySet extra = direct_blocked_preimages_reverse_low(b, W);
                 out.insert(extra.begin(), extra.end());
             }
@@ -162,12 +169,13 @@ int main() {
     std::uint64_t blocked_cases = 0;
     std::uint64_t projected_cases = 0;
 
-    for (int W = 4; W <= 11; ++W) {
+    for (int W = 4; W <= 12; ++W) {
         const auto main = gen_words(W);
         const auto block = gen_words(W - 1);
-        const auto dst = layout(main, block, 2);
-        for (Key d : dst) {
-            check_dest(d, W, main_cases, blocked_cases, projected_cases);
+        const auto forward_dst = layout(main, block, W - 2);
+        for (Key d : forward_dst) {
+            check_dest(mirror_key(d, W), W,
+                       main_cases, blocked_cases, projected_cases);
             ++exhaustive_cases;
         }
     }
@@ -177,26 +185,30 @@ int main() {
     std::mt19937_64 rng(0x6c6f77657870696eULL);
     constexpr std::uint64_t RANDOM = 500000;
     for (std::uint64_t i = 0; i < RANDOM; ++i) {
-        const MateID m = unrank_valid(28, rng() % f[28][1], f);
-        check_dest(Key{false, m}, 28, main_cases, blocked_cases, projected_cases);
+        const MateID fm = unrank_valid(28, rng() % f[28][1], f);
+        check_dest(mirror_key(Key{false, fm}, 28), 28,
+                   main_cases, blocked_cases, projected_cases);
         ++random_cases;
 
-        MateID b;
+        MateID fb;
         do {
-            b = unrank_valid(27, rng() % f[27][1], f);
-        } while (mget(b, 1) == N);
-        check_dest(Key{true, b}, 28, main_cases, blocked_cases, projected_cases);
+            fb = unrank_valid(27, rng() % f[27][1], f);
+        } while (mget(fb, 25) == N);
+        check_dest(mirror_key(Key{true, fb}, 28), 28,
+                   main_cases, blocked_cases, projected_cases);
         ++random_cases;
     }
 
     if (!main_cases || !blocked_cases || !projected_cases) return 4;
     std::cout << "gridfp-runtime-turn-direct-low-expand-inverse-proof OK"
-              << " exhaustive_width_max=11 exhaustive_cases=" << exhaustive_cases
+              << " exhaustive_width_max=12 exhaustive_cases=" << exhaustive_cases
               << " random_width=28 random_cases=" << random_cases
               << " main_cases=" << main_cases
               << " blocked_cases=" << blocked_cases
               << " projected_cases=" << projected_cases
               << " source_scope=main_only"
+              << " reverse_basis=mirrored_Q_Wm2"
+              << " direct_reverse_validity=low_to_high"
               << " direct_reverse_p=1"
               << " destination_mirror_passes=0 source_mirror_passes=0"
               << " candidate_validation=direct_reverse_step"
