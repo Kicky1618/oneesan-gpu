@@ -2,10 +2,13 @@
 
 #include "ramstream32_bucket_orbit_closure_pattern10_depthcode_warpctx.cuh"
 
-// Assign a distinct orbit to each warp instead of having every warp resolve the
-// same orbit. This preserves the original blockIdx.y orbit independence while
-// removing the per-warp duplication of payload decode, plan construction and
-// resolved-row setup. Each warp covers one orbit with 32-column stripes.
+// EXPERIMENTAL: assign a distinct HIGH orbit to each warp instead of having
+// every warp resolve the same orbit. This removes duplicated payload decode,
+// plan construction and row setup, but it is only correct if simultaneously
+// scheduled orbit footprints are independent. BucketPhysicalBlock ranges may
+// overlap, so schedule coverage alone is not a proof: write/write and
+// write/closure-read row-address overlap must be checked before exact use.
+// Each warp covers one orbit with 32-column stripes.
 static inline bool p10dc_warpstriped_threads_ok(int threads) {
     return threads > 0 && threads <= 1024 && (threads & 31) == 0;
 }
