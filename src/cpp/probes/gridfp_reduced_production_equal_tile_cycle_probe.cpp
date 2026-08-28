@@ -146,6 +146,53 @@ EqualCycleStats verify_equal_tile_cycles(
     return st;
 }
 
+RunTraffic equal_run_traffic_model(int W, int K, int ngpu) {
+    if (ngpu != 8) fail("equal traffic matrix currently fixed to 8 GPUs");
+    const int common_bits = W - (2 * K + 2);
+    if (common_bits < 0 || common_bits > 20) fail("equal traffic common bits");
+    const int L = K + 2;
+    RunTraffic out;
+    const Rank common_count = Rank(1) << common_bits;
+    for (Rank c = 0; c < common_count; ++c) {
+        const RunOwnerHist old_hist = run_owner_hist_for_common(
+            static_cast<std::uint32_t>(c), common_bits, K, L, ngpu);
+        const RunOwnerHist new_hist = run_owner_hist_for_common(
+            static_cast<std::uint32_t>(c), common_bits, K, L, ngpu);
+        const int common_ones = __builtin_popcountll(c);
+        for (int so = 0; so < ngpu; ++so) {
+            for (int bo = 0; bo <= K; ++bo) {
+                const Rank cb = old_hist.by_owner_ones[static_cast<std::size_t>(so)]
+                                                      [static_cast<std::size_t>(bo)];
+                if (!cb) continue;
+                for (int d = 0; d < ngpu; ++d) {
+                    for (int ao = 0; ao <= K; ++ao) {
+                        const Rank ca = new_hist.by_owner_ones[static_cast<std::size_t>(d)]
+                                                          [static_cast<std::size_t>(ao)];
+                        if (!ca) continue;
+                        const int base_occupied = common_ones + bo + ao;
+                        const Rank state_weight = run_overlap_state_weight(base_occupied);
+                        const Rank run_weight = (base_occupied & 1) ? 2 : 3;
+                        const Rank pairs = cb * ca;
+                        const Rank states = pairs * state_weight;
+                        const Rank runs = pairs * run_weight;
+                        out.total_states += states;
+                        out.total_runs += runs;
+                        out.pair_states[so][d] += states;
+                        out.pair_runs[so][d] += runs;
+                        if (so != d) {
+                            out.moved_states += states;
+                            out.moved_runs += runs;
+                        }
+                    }
+                }
+            }
+        }
+    }
+    const Rank expected_runs = Rank(5) << (W - 3);
+    if (out.total_runs != expected_runs) fail("equal traffic total runs");
+    return out;
+}
+
 Rank w28_fixed_main_states_k12() {
     Rank total = 0;
     for (int a = 0; a <= 1; ++a) {
@@ -177,7 +224,11 @@ void print_w28_cycle_plan() {
     const Rank main_cycles = (main_states - fixed_main) / 13;
     const Rank blocked_cycles = (blocked_states - fixed_blocked) / 2;
 
-    const RunTraffic traffic = run_traffic_model(28, 12, 8);
+    const RunTraffic traffic = equal_run_traffic_model(28, 12, 8);
+    if (traffic.total_states != 473397057701ULL ||
+        traffic.moved_states != 387344269008ULL ||
+        traffic.moved_runs != 106060788ULL)
+        fail("W28 equal traffic constants");
     std::cout << "W=28 scheme=12+12+fused1"
               << " redistribution_TiB=" << double(traffic.moved_states) * 4.0 / double(1ULL << 40)
               << " moved_fraction=" << double(traffic.moved_states) / double(traffic.total_states)
