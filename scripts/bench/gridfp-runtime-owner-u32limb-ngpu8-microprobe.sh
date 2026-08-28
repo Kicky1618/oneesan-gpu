@@ -4,6 +4,7 @@ source "$(dirname -- "${BASH_SOURCE[0]}")/../lib/common.sh"
 
 NVCC="${NVCC:-nvcc}"
 ARCH="${ARCH:-native}"
+PTX_ARCH="${PTX_ARCH:-sm_80}"
 W="${W:-28}"
 BLOCKS="${BLOCKS:-256}"
 THREADS="${THREADS:-256}"
@@ -19,6 +20,9 @@ command -v "$NVCC" >/dev/null || { echo "$NVCC not found" >&2; exit 2; }
 command -v nvidia-smi >/dev/null || { echo "nvidia-smi not found" >&2; exit 2; }
 
 bash "$ONEESAN_ROOT/scripts/bench/gridfp-runtime-owner-u32limb-ngpu8-proof.sh"
+if [[ "$W" == 28 ]]; then
+  ARCH="$PTX_ARCH" bash "$ONEESAN_ROOT/scripts/bench/gridfp-runtime-owner-u32limb-ngpu8-w28-ptx-proof.sh"
+fi
 
 SRC="$ONEESAN_ROOT/src/cuda/gridfp/gridfp_runtime_owner_u32limb_ngpu8_microprobe.cu"
 BIN="${BIN:-$ONEESAN_BUILD_DIR/gridfp_runtime_owner_u32limb_ngpu8_microprobe}"
@@ -41,4 +45,4 @@ if [[ "$PTXAS_VERBOSE" == 1 ]]; then
   grep -E 'Used .* registers|bytes smem|bytes cmem' "$BUILD_LOG" >&2 || true
 fi
 
-echo "gridfp-runtime-owner-u32limb-ngpu8-microprobe runner OK W=$W blocks=$BLOCKS threads=$THREADS iters=$ITERS repeats=$REPEATS" >&2
+echo "gridfp-runtime-owner-u32limb-ngpu8-microprobe runner OK W=$W blocks=$BLOCKS threads=$THREADS iters=$ITERS repeats=$REPEATS ptx_gate=$([[ "$W" == 28 ]] && echo 1 || echo 0)" >&2
