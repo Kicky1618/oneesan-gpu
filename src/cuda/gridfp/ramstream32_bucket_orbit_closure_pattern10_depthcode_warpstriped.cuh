@@ -13,6 +13,21 @@ static inline bool p10dc_warpstriped_threads_ok(int threads) {
     return threads > 0 && threads <= 1024 && (threads & 31) == 0;
 }
 
+#ifndef P10DC_WARPSTRIPED_PREPARE_FORWARD
+#define P10DC_WARPSTRIPED_PREPARE_FORWARD(c,payload,loc,p,ss,js,ds,sr,jr,dr) do { \
+    (c).plan = p10dc_forward_high((payload),(loc),(c).db,(p)); \
+    p10dc_resolve_high_rows((c),(ss),(js),(ds),(sr),(jr),(dr)); \
+} while(0)
+#define P10DC_WARPSTRIPED_PREPARE_FORWARD_LOCAL 1
+#endif
+#ifndef P10DC_WARPSTRIPED_PREPARE_REVERSE
+#define P10DC_WARPSTRIPED_PREPARE_REVERSE(c,payload,loc,plan_db,p,edge,ss,js,ds,sr,jr,dr) do { \
+    (c).plan = p10dc_reverse_high((payload),(loc),(plan_db),(p),(edge)); \
+    p10dc_resolve_high_rows((c),(ss),(js),(ds),(sr),(jr),(dr)); \
+} while(0)
+#define P10DC_WARPSTRIPED_PREPARE_REVERSE_LOCAL 1
+#endif
+
 __global__ void bucket_high_orbit_closure_pattern10_depthcode_warpstriped_kernel(int p) {
     uint32_t bid = blockIdx.z;
     if (bid >= D_BKF_MAIN_NBLOCKS) return;
@@ -59,11 +74,10 @@ __global__ void bucket_high_orbit_closure_pattern10_depthcode_warpstriped_kernel
                 c.jb = bkf_high_main(js, jbid);
                 c.db = bkf_high_block(ds, uint32_t(c.xb.hs));
                 uint32_t payload = p10dc_payload(op, false, true, sid, p, uint32_t(c.xb.hs));
-                c.plan = p10dc_forward_high(payload, dl, c.db, p);
-                c.kind = uint8_t(nn ? CPU_ORBIT_NN : CPU_ORBIT_NR);
-                p10dc_resolve_high_rows(
-                    c, ss, js, ds,
+                P10DC_WARPSTRIPED_PREPARE_FORWARD(
+                    c, payload, dl, p, ss, js, ds,
                     bkf_loc_rank(sl), bkf_loc_rank(jl), bkf_loc_rank(dl));
+                c.kind = uint8_t(nn ? CPU_ORBIT_NN : CPU_ORBIT_NR);
                 c.valid = 1;
             }
         }
@@ -152,13 +166,10 @@ __global__ void bucket_reverse_high_pattern10_depthcode_warpstriped_kernel(int p
                 c.jb = bkf_high_main(js, bkcp10_reverse_high_jblock(bid, c.xb, p, kind));
                 c.db = bkf_high_block(ds, uint32_t(c.xb.hs));
                 uint32_t payload = p10dc_payload(op, true, true, sid, p, uint32_t(c.xb.hs));
-                c.plan = edge
-                    ? p10dc_reverse_high(payload, sl, c.xb, p, true)
-                    : p10dc_reverse_high(payload, dl, c.db, p, false);
+                P10DC_WARPSTRIPED_PREPARE_REVERSE(
+                    c, payload, edge ? sl : dl, edge ? c.xb : c.db, p, edge,
+                    ss, js, ds, bkf_loc_rank(sl), bkf_loc_rank(jl), bkf_loc_rank(dl));
                 c.kind = uint8_t(kind);
-                p10dc_resolve_high_rows(
-                    c, ss, js, ds,
-                    bkf_loc_rank(sl), bkf_loc_rank(jl), bkf_loc_rank(dl));
                 c.valid = 1;
             }
         }
@@ -198,3 +209,12 @@ __global__ void bucket_reverse_high_pattern10_depthcode_warpstriped_kernel(int p
         __syncwarp(active);
     }
 }
+
+#ifdef P10DC_WARPSTRIPED_PREPARE_REVERSE_LOCAL
+#undef P10DC_WARPSTRIPED_PREPARE_REVERSE_LOCAL
+#undef P10DC_WARPSTRIPED_PREPARE_REVERSE
+#endif
+#ifdef P10DC_WARPSTRIPED_PREPARE_FORWARD_LOCAL
+#undef P10DC_WARPSTRIPED_PREPARE_FORWARD_LOCAL
+#undef P10DC_WARPSTRIPED_PREPARE_FORWARD
+#endif
