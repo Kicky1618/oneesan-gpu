@@ -42,20 +42,26 @@ bash "$ONEESAN_ROOT/scripts/bench/gridfp-runtime-p32m5-mod-proof.sh" \
   >"$LOGDIR/p32m5-proof.out" 2>"$LOGDIR/p32m5-proof.err"
 bash "$ONEESAN_ROOT/scripts/bench/gridfp-runtime-sharedkey-proof.sh" \
   >"$LOGDIR/sharedkey-proof.out" 2>"$LOGDIR/sharedkey-proof.err"
+bash "$ONEESAN_ROOT/scripts/bench/gridfp-runtime-fastdiv64-proof.sh" \
+  >"$LOGDIR/fastdiv64-proof.out" 2>"$LOGDIR/fastdiv64-proof.err"
+bash "$ONEESAN_ROOT/scripts/bench/gridfp-runtime-primitive-rank-setbits-proof.sh" \
+  >"$LOGDIR/setbits-proof.out" 2>"$LOGDIR/setbits-proof.err"
 
 build_one() {
   local mode="$1" bin="$2"
-  local cache fast poll packed
+  local cache fast poll packed fastdiv setbits
   if [[ "$mode" == baseline ]]; then
-    cache=0; fast=0; poll=1; packed=0
+    cache=0; fast=0; poll=1; packed=0; fastdiv=0; setbits=0
   else
-    cache=1; fast=1; poll=0; packed=1
+    cache=1; fast=1; poll=0; packed=1; fastdiv=1; setbits=1
   fi
   MODE=two-row-runtime-multigpu \
     RUNTIME_CACHE_EDGES="$cache" \
     RUNTIME_FAST_P32M5_MOD="$fast" \
     RUNTIME_POLL_GLOBAL_ERROR="$poll" \
     RUNTIME_PACK_SHARED_KEYS="$packed" \
+    RUNTIME_FAST_DIV64="$fastdiv" \
+    RUNTIME_PRIMITIVE_RANK_SETBITS="$setbits" \
     ARCH="$ARCH" PTXAS_VERBOSE="$PTXAS_VERBOSE" OUT="$bin" \
     bash "$ONEESAN_ROOT/scripts/build/gridfp-reduced-component-probe.sh" \
     >"$LOGDIR/${mode}.build.out" 2>"$LOGDIR/${mode}.build.err"
@@ -141,14 +147,16 @@ old = float(q['baseline']['wall_ms_median'])
 new = float(q['fast']['wall_ms_median'])
 print(f'runtime_fast_stack_wall_speedup={old / new:.6f}x')
 print(f'runtime_fast_stack_wall_delta_pct={(new / old - 1.0) * 100.0:.4f}%')
-print('runtime_fast_stack_baseline=edge_cache0,fast_mod0,error_poll1,packed_keys0')
-print('runtime_fast_stack_fast=edge_cache1,fast_mod1,error_poll0,packed_keys1')
+print('runtime_fast_stack_baseline=edge_cache0,fast_mod0,error_poll1,packed_keys0,fast_div640,primitive_setbits0')
+print('runtime_fast_stack_fast=edge_cache1,fast_mod1,error_poll0,packed_keys1,fast_div641,primitive_setbits1')
 print('runtime_fast_stack_key_shared_bytes_saved_per_block=10240')
 print('runtime_fast_stack_edge_cache_shared_bytes_added_per_block=2560')
 print('runtime_fast_stack_net_known_shared_bytes_delta_per_block=-7680')
 print('runtime_fast_stack_recomputed_small_steps_in_accumulation=0')
 print('runtime_fast_stack_signed_64bit_divisions_at_mod4294967291=0')
+print('runtime_fast_stack_dynamic_label_divmod_pairs_remaining=0')
 print('runtime_fast_stack_global_error_polls_per_discovered_source=0')
+print('runtime_fast_stack_primitive_rank_scan=occupied')
 print(f'summary={dst}')
 PY
 
