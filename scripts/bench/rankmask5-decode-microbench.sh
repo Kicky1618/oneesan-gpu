@@ -7,6 +7,7 @@ N="${N:-4194304}"
 REPEATS="${REPEATS:-20}"
 TRIALS="${TRIALS:-5}"
 PTXAS_VERBOSE="${PTXAS_VERBOSE:-0}"
+MASK_ORDER="${MASK_ORDER:-shuffled}"
 
 if (( N <= 0 || REPEATS <= 0 || TRIALS <= 0 )); then
   echo "N, REPEATS, and TRIALS must be positive" >&2
@@ -14,6 +15,10 @@ if (( N <= 0 || REPEATS <= 0 || TRIALS <= 0 )); then
 fi
 if [[ "$PTXAS_VERBOSE" != 0 && "$PTXAS_VERBOSE" != 1 ]]; then
   echo "PTXAS_VERBOSE must be 0 or 1" >&2
+  exit 2
+fi
+if [[ "$MASK_ORDER" != ordered && "$MASK_ORDER" != shuffled ]]; then
+  echo "MASK_ORDER must be ordered or shuffled" >&2
   exit 2
 fi
 
@@ -27,10 +32,11 @@ if [[ "$PTXAS_VERBOSE" == 1 ]]; then
 fi
 TMPDIR="$ONEESAN_TMP_DIR" nvcc "${NVCC_FLAGS[@]}" "$SRC" -o "$BIN"
 
-out="$($BIN "$N" "$REPEATS" "$TRIALS")"
+out="$($BIN "$N" "$REPEATS" "$TRIALS" "$MASK_ORDER")"
 printf '%s\n' "$out"
 grep -Eq 'rankmask5-decode-microbench (OK|SKIP no CUDA device)' <<<"$out"
 if grep -Fq 'rankmask5-decode-microbench OK' <<<"$out"; then
+  grep -Fq "mask_order=$MASK_ORDER" <<<"$out"
   grep -Fq 'table_cases=6075' <<<"$out"
   grep -Fq 'popcount_hist=5855,187,32,1,0,0' <<<"$out"
   grep -Fq 'rankmask_or=0x07 upper_bits_zero=1 checksum_exact=1' <<<"$out"
@@ -45,4 +51,4 @@ if grep -Fq 'rankmask5-decode-microbench OK' <<<"$out"; then
   grep -Fq 'direct3_to_guard_speedup=' <<<"$out"
 fi
 
-echo "rankmask5-decode-microbench done arch=$ARCH n=$N repeats=$REPEATS trials=$TRIALS modes=ffs,unrolled5,direct3,direct3_guard ptxas_verbose=$PTXAS_VERBOSE" >&2
+echo "rankmask5-decode-microbench done arch=$ARCH n=$N repeats=$REPEATS trials=$TRIALS mask_order=$MASK_ORDER modes=ffs,unrolled5,direct3,direct3_guard ptxas_verbose=$PTXAS_VERBOSE" >&2
