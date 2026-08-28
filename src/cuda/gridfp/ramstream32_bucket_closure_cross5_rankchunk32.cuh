@@ -62,10 +62,11 @@ static void p10dc_install_rankchunk32_lut() {
 }
 #endif
 
-// Height-local rankchunk metadata is 32-entry aligned.  A warp stripe therefore
-// covers at most the two fixed 16-entry blocks sourced by lanes 0 and 16.
-// Each source lane loads one block base and every active lane selects its half
-// with a single variable-source shuffle.
+// A warp rank stripe is base32+lane but a height may start at an arbitrary
+// compact index. With 32-code metadata blocks the stripe intersects one or two
+// blocks. Lane 0 loads the first base; if a boundary lies inside the active
+// prefix, the boundary lane loads the second. Every lane then selects source 0
+// or the boundary lane with one variable-source shuffle.
 __device__ __forceinline__ void p10dc_low_rankchunk32_row_warpstripe_oneshfl(
     uint32_t h, uint32_t rank, uint32_t& packed_chunks, const uint16_t*& row
 ) {
@@ -76,12 +77,18 @@ __device__ __forceinline__ void p10dc_low_rankchunk32_row_warpstripe_oneshfl(
     packed_chunks = meta & P10DC_RANKCHUNK32_CHUNK_MASK;
     const uint32_t prefix = meta >> P10DC_RANKCHUNK32_CHUNK_BITS;
 
-    const uint32_t first_block = (compact - lane) >> P10DC_RANKCHUNK32_BLOCK_LOG2;
-    const uint32_t source_lane = lane & P10DC_RANKCHUNK32_BLOCK;
+    const uint32_t first_compact = compact - lane;
+    const uint32_t first_block = first_compact >> P10DC_RANKCHUNK32_BLOCK_LOG2;
+    const uint32_t first_off = first_compact & (P10DC_RANKCHUNK32_BLOCK - 1u);
+    const uint32_t split_lane = P10DC_RANKCHUNK32_BLOCK - first_off; // [1,32]
+    const bool use_second = split_lane < 32u;
+    const uint32_t source_lane = use_second && lane >= split_lane ? split_lane : 0u;
+
     uint32_t local_base = 0;
-    if ((lane & (P10DC_RANKCHUNK32_BLOCK - 1u)) == 0u)
-        local_base = D_P10DC_LOW_RANKCHUNKBLOCK16[
-            first_block + (lane >> P10DC_RANKCHUNK32_BLOCK_LOG2)];
+    if (lane == 0u)
+        local_base = D_P10DC_LOW_RANKCHUNKBLOCK16[first_block];
+    if (use_second && lane == split_lane)
+        local_base = D_P10DC_LOW_RANKCHUNKBLOCK16[first_block + 1u];
     const uint32_t block_base = __shfl_sync(active, local_base, int(source_lane));
     row = D_P10DC_LOW_RANKSTREAM + block_base + prefix;
 }
@@ -147,7 +154,7 @@ p10dc_resolved_low_preimages_cross5_rankchunk32_fast(
             constexpr int S2 = S1 - L2;
             static_assert(S2 == 0, "rankchunk32 K<=14 must fit in three chunks");
             p10dc_cross5_apply_rankchunk32(
-                (packed_chunks >> 16) & 0xffu, state, source_row, rank_row, lbase, sum);
+                (packed_chunks >> 16) & 0x7fu, state, source_row, rank_row, lbase, sum);
         }
     }
     return sum;
