@@ -12,6 +12,10 @@ TOKEN_S="${TOKEN_S:-3}"
 SCRATCH_W="${SCRATCH_W:-$TOKEN_W}"
 SCRATCH_K="${SCRATCH_K:-$TOKEN_K}"
 SCRATCH_S="${SCRATCH_S:-$TOKEN_S}"
+SCRATCH_FULL_W="${SCRATCH_FULL_W:-10}"
+SCRATCH_FULL_K="${SCRATCH_FULL_K:-4}"
+SCRATCH_FULL_S="${SCRATCH_FULL_S:-4}"
+SCRATCH_FULL_BLOCKS="${SCRATCH_FULL_BLOCKS:-256}"
 TRAFFIC_W="${TRAFFIC_W:-28}"
 TRAFFIC_K="${TRAFFIC_K:-13}"
 TRAFFIC_S="${TRAFFIC_S:-13}"
@@ -28,6 +32,7 @@ RUN_TOKEN_CYCLE="${RUN_TOKEN_CYCLE:-1}"
 RUN_TOKEN_PLAN="${RUN_TOKEN_PLAN:-1}"
 RUN_PAIR_QUEUE="${RUN_PAIR_QUEUE:-1}"
 RUN_SCRATCH_CYCLE="${RUN_SCRATCH_CYCLE:-1}"
+RUN_SCRATCH_FULL="${RUN_SCRATCH_FULL:-1}"
 RUN_SCRATCH_PLAN="${RUN_SCRATCH_PLAN:-1}"
 NGPU="${NGPU:-8}"
 MAX_DIRECT_OVER_LOGICAL="${MAX_DIRECT_OVER_LOGICAL:-0}"
@@ -39,6 +44,7 @@ TOKEN_BIN="$(build_path gridfp_reduced_component_p2p-token-cycle)"
 TOKEN_PLAN_BIN="$(build_path gridfp_reduced_component_p2p-token-plan)"
 PAIR_QUEUE_BIN="$(build_path gridfp_reduced_component_p2p-pair-queue)"
 SCRATCH_CYCLE_BIN="$(build_path gridfp_reduced_component_p2p-scratch-cycle)"
+SCRATCH_FULL_BIN="$(build_path gridfp_reduced_component_p2p-scratch-full)"
 SCRATCH_PLAN_BIN="$(build_path gridfp_reduced_component_p2p-scratch-plan)"
 PROOF_BIN="$(build_path gridfp_reduced_component_support-rank)"
 LUT_BIN="$(build_path gridfp_reduced_component_p2p-owner-lut)"
@@ -72,6 +78,10 @@ if [[ "$RUN_PAIR_QUEUE" == 1 ]]; then
 fi
 if [[ "$RUN_SCRATCH_CYCLE" == 1 ]]; then
   MODE=p2p-scratch-cycle ARCH="$ARCH" OUT="$(basename "$SCRATCH_CYCLE_BIN")" \
+    bash "$BUILD_SCRIPT"
+fi
+if [[ "$RUN_SCRATCH_FULL" == 1 ]]; then
+  MODE=p2p-scratch-full ARCH="$ARCH" OUT="$(basename "$SCRATCH_FULL_BIN")" \
     bash "$BUILD_SCRIPT"
 fi
 if [[ "$RUN_SCRATCH_PLAN" == 1 ]]; then
@@ -127,6 +137,12 @@ fi
 if [[ "$RUN_SCRATCH_CYCLE" == 1 ]]; then
   echo "== real GridFP two-phase local-scratch shift cycle =="
   "$SCRATCH_CYCLE_BIN" "$SCRATCH_W" "$SCRATCH_K" "$SCRATCH_S" "$NGPU"
+fi
+
+if [[ "$RUN_SCRATCH_FULL" == 1 ]]; then
+  echo "== full small-W two-phase scratch redistribution =="
+  "$SCRATCH_FULL_BIN" "$SCRATCH_FULL_W" "$SCRATCH_FULL_K" \
+    "$SCRATCH_FULL_S" "$SCRATCH_FULL_BLOCKS" "$NGPU"
 fi
 
 echo "== support-only slab-rank equivalence =="
