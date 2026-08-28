@@ -8,6 +8,7 @@ RUN_PTXAS="${RUN_PTXAS:-1}"
 RUN_B300_AB="${RUN_B300_AB:-0}"
 RUN_DELTA_AB="${RUN_DELTA_AB:-0}"
 RUN_CROSS5_AB="${RUN_CROSS5_AB:-0}"
+RUN_DIRECT_AB="${RUN_DIRECT_AB:-0}"
 AB_N="${AB_N:-21}"
 REPEATS="${REPEATS:-3}"
 DEPTHCODE_DECODE_LOAD="${DEPTHCODE_DECODE_LOAD:-ldg}"
@@ -16,6 +17,7 @@ if [[ "$RUN_PTXAS" != 0 && "$RUN_PTXAS" != 1 ]]; then echo "RUN_PTXAS must be 0 
 if [[ "$RUN_B300_AB" != 0 && "$RUN_B300_AB" != 1 ]]; then echo "RUN_B300_AB must be 0 or 1" >&2; exit 2; fi
 if [[ "$RUN_DELTA_AB" != 0 && "$RUN_DELTA_AB" != 1 ]]; then echo "RUN_DELTA_AB must be 0 or 1" >&2; exit 2; fi
 if [[ "$RUN_CROSS5_AB" != 0 && "$RUN_CROSS5_AB" != 1 ]]; then echo "RUN_CROSS5_AB must be 0 or 1" >&2; exit 2; fi
+if [[ "$RUN_DIRECT_AB" != 0 && "$RUN_DIRECT_AB" != 1 ]]; then echo "RUN_DIRECT_AB must be 0 or 1" >&2; exit 2; fi
 case "$DEPTHCODE_DECODE_LOAD" in global|ldg) ;; *) echo "DEPTHCODE_DECODE_LOAD must be global or ldg" >&2; exit 2;; esac
 
 echo '=== host schedule proof ===' >&2
@@ -41,7 +43,7 @@ echo '=== CUDA reference matrix: PM 0/1 x global/ldg x all stable HIGH contexts 
 ARCH="$ARCH" W=10 bash "$ONEESAN_ROOT/scripts/bench/pattern10-depthcode-selftest-matrix.sh"
 
 if [[ "$RUN_PTXAS" == 1 ]]; then
-  echo '=== ptxas resource comparison, including delta and CROSS5 experiments ===' >&2
+  echo '=== ptxas resource comparison, including delta/CROSS5/direct-resolve experiments ===' >&2
   N="$N" ARCH="$ARCH" bash "$ONEESAN_ROOT/scripts/bench/b300-depthcode-highctx-ptxas.sh"
 fi
 
@@ -57,10 +59,16 @@ if [[ "$RUN_CROSS5_AB" == 1 ]]; then
     bash "$ONEESAN_ROOT/scripts/bench/b300-depthcode-cross5-ab.sh"
 fi
 
+if [[ "$RUN_DIRECT_AB" == 1 ]]; then
+  echo '=== B300 CROSS5 plan-descriptor vs direct-resolve A/B ===' >&2
+  N="$AB_N" REPEATS="$REPEATS" DEPTHCODE_DECODE_LOAD="$DEPTHCODE_DECODE_LOAD" \
+    bash "$ONEESAN_ROOT/scripts/bench/b300-depthcode-direct-resolve-ab.sh"
+fi
+
 if [[ "$RUN_B300_AB" == 1 ]]; then
   echo '=== B300 warp vs warpstriped residue/timing A/B ===' >&2
   N="$AB_N" REPEATS="$REPEATS" DEPTHCODE_DECODE_LOAD="$DEPTHCODE_DECODE_LOAD" \
     bash "$ONEESAN_ROOT/scripts/bench/b300-depthcode-warpstriped-ab.sh"
 fi
 
-echo "b300-depthcode-warpstriped-preflight OK n=$N arch=$ARCH run_ptxas=$RUN_PTXAS run_delta_ab=$RUN_DELTA_AB run_cross5_ab=$RUN_CROSS5_AB run_b300_ab=$RUN_B300_AB decode_load=$DEPTHCODE_DECODE_LOAD ternary_delta_proved=1 cross5_proved=1 cross5_cuda=1" >&2
+echo "b300-depthcode-warpstriped-preflight OK n=$N arch=$ARCH run_ptxas=$RUN_PTXAS run_delta_ab=$RUN_DELTA_AB run_cross5_ab=$RUN_CROSS5_AB run_direct_ab=$RUN_DIRECT_AB run_b300_ab=$RUN_B300_AB decode_load=$DEPTHCODE_DECODE_LOAD ternary_delta_proved=1 cross5_proved=1 cross5_cuda=1 direct_resolve_experiment=1" >&2
