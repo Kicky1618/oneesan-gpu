@@ -36,7 +36,8 @@ CONFIGS=(
   "compact32_align 0 1 0 normal"
   "compact64 0 0 1 normal"
   "compact64_align 0 1 1 normal"
-  "basepair64 1 1 0 basepair"
+  "basepair64_packed 1 0 0 basepair"
+  "basepair64_align 1 1 0 basepair"
 )
 
 bash "$ONEESAN_ROOT/scripts/bench/cross5-rankstream-projection-proof.sh"
@@ -46,16 +47,18 @@ bash "$ONEESAN_ROOT/scripts/bench/rankchunk32-align32-proof.sh"
 bash "$ONEESAN_ROOT/scripts/bench/rankchunk32-block64-proof.sh"
 bash "$ONEESAN_ROOT/scripts/bench/rankchunk32-block64-align-proof.sh"
 bash "$ONEESAN_ROOT/scripts/bench/rankchunk32-basepair64-proof.sh"
+bash "$ONEESAN_ROOT/scripts/bench/rankchunk32-basepair64-warp-proof.sh"
+if [[ "$RUN_SELFTEST" == 1 ]]; then
+  RUN_HOST_PROOF=0 ARCH="${ARCH:-sm_80}" bash "$ONEESAN_ROOT/scripts/bench/rankchunk32-basepair64-warp-cuda-selftest.sh" \
+    >"$LOGDIR/basepair64.warp.selftest.out" 2>"$LOGDIR/basepair64.warp.selftest.err"
+fi
 
 field(){ local key="$1" line="$2"; sed -nE "s/(^|.*[[:space:]])${key}=([^[:space:]]+).*/\\2/p" <<<"$line" | tail -n1; }
 
 build_one(){
   local label="$1" bytepack="$2" align="$3" block64="$4" backend="$5" bin="$6" highctx
-  if [[ "$backend" == basepair ]]; then
-    highctx=warpstriped_delta_direct_affine_rankchunk32_basepair64_cross5
-  else
-    highctx=warpstriped_delta_direct_affine_rankchunk32_cross5
-  fi
+  if [[ "$backend" == basepair ]]; then highctx=warpstriped_delta_direct_affine_rankchunk32_basepair64_cross5
+  else highctx=warpstriped_delta_direct_affine_rankchunk32_cross5; fi
   N="$N" OUT="$bin" HIGH_CTX="$highctx" \
     DEPTHCODE_DECODE_LOAD="$DEPTHCODE_DECODE_LOAD" RANKSTREAM_LUT_LOAD="$RANKSTREAM_LUT_LOAD" \
     RANKCHUNK32_ONESHFL="$RANKCHUNK32_ONESHFL" RANKCHUNK32_FUSED16="$RANKCHUNK32_FUSED16" \
@@ -86,11 +89,13 @@ for spec in "${CONFIGS[@]}"; do
   read -r label bytepack align block64 backend <<<"$spec"
   if [[ "$RUN_SELFTEST" == 1 ]]; then
     echo "=== selftest $label ===" >&2
-    if [[ "$backend" == basepair ]]; then
+    if [[ "$backend" == basepair && "$align" == 1 ]]; then
       RUN_LAYOUT_PROOF=0 RANKCHUNK32_FUSED16="$RANKCHUNK32_FUSED16" \
         RANKSTREAM_LUT_LOAD="$RANKSTREAM_LUT_LOAD" PM_ACCUM="$PM_ACCUM" DECODE_LOAD="$DEPTHCODE_DECODE_LOAD" \
         bash "$ONEESAN_ROOT/scripts/bench/pattern10-depthcode-rankchunk32-basepair64-cross5-selftest.sh" \
         >"$LOGDIR/${label}.selftest.out" 2>"$LOGDIR/${label}.selftest.err"
+    elif [[ "$backend" == basepair ]]; then
+      printf '%s\n' 'basepair64 packed routing covered by rankchunk32-basepair64-warp-cuda-selftest' >"$LOGDIR/${label}.selftest.out"
     else
       RUN_LAYOUT_PROOF=0 RANKCHUNK32_BYTEPACK="$bytepack" RANKCHUNK32_ALIGN32="$align" RANKCHUNK32_BLOCK64="$block64" \
         RANKCHUNK32_FUSED16="$RANKCHUNK32_FUSED16" RANKCHUNK32_ONESHFL="$RANKCHUNK32_ONESHFL" \
@@ -110,7 +115,7 @@ cat "$RESULT"
 python3 - "$RESULT" "$SUMMARY" "$RESOURCE" "$RUN_PTXAS" "$LOGDIR" <<'PY'
 import csv, pathlib, re, statistics, sys
 src,dst,resource,run_ptxas,logdir=sys.argv[1:]
-layouts=('compact32','bytepack32','compact32_align','compact64','compact64_align','basepair64')
+layouts=('compact32','bytepack32','compact32_align','compact64','compact64_align','basepair64_packed','basepair64_align')
 rows=list(csv.DictReader(open(src),delimiter='\t'))
 metrics=('wall_s','forward_high_s','reverse_high_s','forward_low_s','reverse_low_s','transpose_s')
 out=[]
@@ -120,10 +125,8 @@ for layout in layouts:
     for m in metrics:
         xs=[float(r[m]) for r in g if r[m]!='NA']
         z[m]=f'{statistics.median(xs):.9f}' if xs else 'NA'
-    if z['forward_high_s']!='NA' and z['reverse_high_s']!='NA':
-        z['total_high_s']=f'{float(z["forward_high_s"])+float(z["reverse_high_s"]):.9f}'
-    else:
-        z['total_high_s']='NA'
+    if z['forward_high_s']!='NA' and z['reverse_high_s']!='NA': z['total_high_s']=f'{float(z["forward_high_s"])+float(z["reverse_high_s"]):.9f}'
+    else: z['total_high_s']='NA'
     out.append(z)
 fields=('layout','repeats',*metrics,'total_high_s')
 with open(dst,'w',newline='') as f:
@@ -143,7 +146,7 @@ for layout in layouts:
     vals=[tuple(map(int,x)) for x in re.findall(r'p10dc_low_rankchunk32 fixed_owner=\d+ codes=(\d+) blocks=(\d+) l_ranks=(\d+) bytes=(\d+) meta_entries=(\d+) padding=(\d+)',text)]
     if vals:
         table_bytes=sum(v[3] for v in vals)
-        if layout=='basepair64':
+        if layout.startswith('basepair64_'):
             pairs=[tuple(map(int,x)) for x in re.findall(r'p10dc_low_rankchunk32_basepair64 fixed_owner=\d+ base32_entries=(\d+) pair_entries=(\d+) pair_bytes=(\d+)',text)]
             if pairs:
                 table_bytes -= sum(v[0]*4 for v in pairs)
@@ -167,7 +170,8 @@ print('layout_bytepack32=24+8_block32_packed_heights_max2loads')
 print('layout_compact32_align=23+9_block32_align32_max1load')
 print('layout_compact64=23+9_block64_packed_heights_max2loads')
 print('layout_compact64_align=23+9_block64_align64_max1load')
-print('layout_basepair64=24+8_block32_align32_base22_delta8_pair64_max1load')
+print('layout_basepair64_packed=24+8_block32_packed_heights_base22_delta8_pair64_max2loads')
+print('layout_basepair64_align=24+8_block32_align32_base22_delta8_pair64_max1load')
 print('basepair64_block_base_bytes_per_code=0.0625')
 print(f'summary={dst}')
 PY
