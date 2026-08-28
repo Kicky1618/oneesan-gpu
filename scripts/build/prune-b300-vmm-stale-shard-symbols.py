@@ -4,8 +4,8 @@ from __future__ import annotations
 import argparse
 from pathlib import Path
 
-NGPU_OLD='__constant__ int D_MAIN_W,D_BLOCK_W,D_NGPU;'
-NGPU_NEW='__constant__ int D_MAIN_W,D_BLOCK_W;'
+WIDTH_NGPU_OLD='__constant__ int D_MAIN_W,D_BLOCK_W,D_NGPU;'
+WIDTH_NGPU_NEW=''
 
 SHARD_SYMBOLS_OLD='''__constant__ Count* D_MAIN_PTR[MAXGPU];
 __constant__ Count* D_BLOCK_PTR[MAXGPU];
@@ -21,6 +21,9 @@ INIT_NEW='''void init(int d,Count mod){dev=d;ck(cudaSetDevice(dev),"set init");c
 INIT_CALL_OLD='ctx[d].init(d,mod,mp,bp,mc,bc,ng);'
 INIT_CALL_NEW='ctx[d].init(d,mod);'
 
+WIDTH_COPY_OLD='''int mw=W,bw=W-1;ck(cudaMemcpyToSymbol(D_MAIN_W,&mw,sizeof(mw)),"mw");ck(cudaMemcpyToSymbol(D_BLOCK_W,&bw,sizeof(bw)),"bw");'''
+WIDTH_COPY_NEW=''
+
 
 def once(text:str,old:str,new:str,label:str)->str:
     n=text.count(old)
@@ -35,18 +38,19 @@ def main()->None:
     ap.add_argument('out',type=Path)
     a=ap.parse_args()
     text=a.src.read_text()
-    text=once(text,NGPU_OLD,NGPU_NEW,'D_NGPU declaration')
+    text=once(text,WIDTH_NGPU_OLD,WIDTH_NGPU_NEW,'stale width/ngpu declarations')
     text=once(text,SHARD_SYMBOLS_OLD,SHARD_SYMBOLS_NEW,'stale shard symbol declarations')
     text=once(text,INIT_OLD,INIT_NEW,'DeviceCtx stale shard symbol copies')
     text=once(text,INIT_CALL_OLD,INIT_CALL_NEW,'DeviceCtx stale shard init arguments')
-    for token in ('D_MAIN_PTR','D_BLOCK_PTR','D_MAIN_CHUNK','D_BLOCK_CHUNK','D_NGPU'):
+    text=once(text,WIDTH_COPY_OLD,WIDTH_COPY_NEW,'per-group stale width symbol copies')
+    for token in ('D_MAIN_PTR','D_BLOCK_PTR','D_MAIN_CHUNK','D_BLOCK_CHUNK','D_NGPU','D_MAIN_W','D_BLOCK_W'):
         if token in text:
-            raise SystemExit(f'stale VMM shard symbol remains after prune: {token}')
+            raise SystemExit(f'stale VMM symbol remains after prune: {token}')
     if 'init(d,mod,mp,bp,mc,bc,ng)' in text:
         raise SystemExit('stale VMM DeviceCtx init arguments remain after prune')
     a.out.parent.mkdir(parents=True,exist_ok=True)
     a.out.write_text(text)
-    print(f'pruned {a.out} stale_shard_symbols=0 stale_shard_symbol_copies=0 stale_shard_init_args=0 direct_vmm_symbols=2')
+    print(f'pruned {a.out} stale_shard_symbols=0 stale_shard_symbol_copies=0 stale_shard_init_args=0 stale_width_symbols=0 per_group_width_symbol_copies=0 direct_vmm_symbols=2')
 
 if __name__=='__main__':
     main()
