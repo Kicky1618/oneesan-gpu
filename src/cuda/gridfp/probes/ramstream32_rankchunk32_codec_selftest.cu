@@ -4,6 +4,7 @@ __global__ void p10dc_rankchunk32_codec_kernel(uint32_t* bad) {
     constexpr uint32_t KEYN = 4782969u; // 3^14
     constexpr uint32_t P9 = 19683u;     // 3^9
     constexpr uint32_t P4 = 81u;        // 3^4
+    constexpr uint32_t PREFIX_N = 1u << P10DC_RANKCHUNK32_PREFIX_BITS;
     for (uint32_t key = uint32_t(blockIdx.x) * blockDim.x + threadIdx.x;
          key < KEYN;
          key += uint32_t(gridDim.x) * blockDim.x) {
@@ -11,19 +12,24 @@ __global__ void p10dc_rankchunk32_codec_kernel(uint32_t* bad) {
         const uint32_t c1 = (key / P4) % 243u;
         const uint32_t c2 = key % P4;
         const uint32_t packed = c0 | (c1 << 8) | (c2 << 16);
+        const uint32_t prefix = key & (PREFIX_N - 1u);
+        const uint32_t meta = packed | (prefix << P10DC_RANKCHUNK32_CHUNK_BITS);
+        const uint32_t chunks = meta & P10DC_RANKCHUNK32_CHUNK_MASK;
+        const uint32_t recovered_prefix = meta >> P10DC_RANKCHUNK32_CHUNK_BITS;
         if (packed > P10DC_RANKCHUNK32_CHUNK_MASK ||
-            p10dc_rankchunk32_chunk_device(packed, 0u) != c0 ||
-            p10dc_rankchunk32_chunk_device(packed, 1u) != c1 ||
-            p10dc_rankchunk32_chunk_device(packed, 2u) != c2)
+            chunks != packed || recovered_prefix != prefix ||
+            p10dc_rankchunk32_chunk_device(chunks, 0u) != c0 ||
+            p10dc_rankchunk32_chunk_device(chunks, 1u) != c1 ||
+            p10dc_rankchunk32_chunk_device(chunks, 2u) != c2)
             atomicAdd(bad, 1u);
     }
 }
 
 int main() {
     static_assert(LOW_LUT_K == 14, "rankchunk32 codec selftest requires K=14");
-    static_assert(P10DC_RANKCHUNK32_CHUNK_BITS == 23u);
-    static_assert(P10DC_RANKCHUNK32_PREFIX_BITS == 9u);
     static_assert(P10DC_RANKCHUNK32_BLOCK == 32u);
+    static_assert(P10DC_RANKCHUNK32_CHUNK_BITS == (P10DC_RANKCHUNK32_BYTEPACK ? 24u : 23u));
+    static_assert(P10DC_RANKCHUNK32_PREFIX_BITS == (P10DC_RANKCHUNK32_BYTEPACK ? 8u : 9u));
 
     int visible = 0;
     cudaError_t ce = cudaGetDeviceCount(&visible);
@@ -47,8 +53,10 @@ int main() {
         return 2;
     }
     std::cout << "rankchunk32-codec-cuda-selftest OK"
-              << " keys=4782969 chunk_bits=23 prefix_bits=9 block=32"
-              << " chunk0_bits=8 chunk1_bits=8 chunk2_bits=7"
-              << " device_decode_exact=1\n";
+              << " keys=4782969 chunk_bits=" << P10DC_RANKCHUNK32_CHUNK_BITS
+              << " prefix_bits=" << P10DC_RANKCHUNK32_PREFIX_BITS
+              << " block=32 chunk0_bits=8 chunk1_bits=8 chunk2_value_bits=7"
+              << " byte_aligned_chunks=" << P10DC_RANKCHUNK32_BYTEPACK
+              << " prefix_isolation_exact=1 device_decode_exact=1\n";
     return 0;
 }
