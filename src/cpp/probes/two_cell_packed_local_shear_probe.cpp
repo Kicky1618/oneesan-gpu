@@ -102,7 +102,7 @@ void verify_component_local_shear(
     if (source.size <= 0 || source.size > 32) fail("packed local source capacity");
 
     SmallUnique<PackedKey, 32> matched_dst;
-    std::array<std::array<int, 2>, 32> incoming{};
+    std::array<std::array<int, 16>, 32> incoming{};
     std::array<std::array<int, 2>, 32> outgoing{};
     std::array<int, 32> indeg{};
     std::array<int, 32> in_count{};
@@ -123,7 +123,7 @@ void verify_component_local_shear(
             const PackedKey owner = packed_local_P_inverse(d, i);
             const int t = local_index(source, owner);
             if (t < 0) fail("packed correction owner outside component");
-            if (out_count[s] >= 2 || in_count[t] >= 2)
+            if (out_count[s] >= 2 || in_count[t] >= 16)
                 fail("packed correction degree capacity");
             outgoing[s][out_count[s]++] = t;
             incoming[t][in_count[t]++] = s;
