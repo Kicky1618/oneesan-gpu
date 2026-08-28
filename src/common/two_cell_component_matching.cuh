@@ -18,6 +18,7 @@ enum ComponentFastKind : std::uint8_t {
     TC_MATCH_TRIPLE = 2,
     TC_MATCH_DEEP_RN = 3,
     TC_MATCH_DEEP_LR = 4,
+    TC_MATCH_DEEP_LN = 5,
 };
 
 struct ComponentMatching {
@@ -27,6 +28,7 @@ struct ComponentMatching {
     int size = 0;
     int edges = 0;
     int residual_edges = 0;
+    int pivot = -1;
     ComponentFastKind fast_kind = TC_MATCH_GENERIC;
     bool ok = false;
 };
@@ -34,10 +36,22 @@ struct ComponentMatching {
 ONEESAN_TC_MATCH_HD void clear_component_matching(ComponentMatching& out, int n) {
     out = ComponentMatching{};
     out.size = n;
+    out.pivot = -1;
     for (int q = 0; q < kMaxComponentMatching; ++q) {
         out.src_to_dst[q] = 0xffu;
         out.dst_to_src[q] = 0xffu;
     }
+}
+
+ONEESAN_TC_MATCH_HD int coordinate_index_for_destination(
+    const PackedKey* src,
+    int n,
+    PackedKey dst,
+    int i
+) {
+    for (int t = 0; t < n; ++t)
+        if (equal(recouple_coordinate(src[t], i), dst)) return t;
+    return -1;
 }
 
 ONEESAN_TC_MATCH_HD ComponentFastKind classify_component_fastpath(
@@ -54,12 +68,25 @@ ONEESAN_TC_MATCH_HD ComponentFastKind classify_component_fastpath(
     const Symbol b = symbol(u, i + 1);
     if (a == TC_R && b == TC_N) return TC_MATCH_DEEP_RN;
     if (a == TC_L && b == TC_R) return TC_MATCH_DEEP_LR;
-    return TC_MATCH_GENERIC; // deep LN remains topology-dependent
+    if (a == TC_L && b == TC_N) return TC_MATCH_DEEP_LN;
+    return TC_MATCH_GENERIC;
 }
 
-// direct_component_sources() has a canonical source order.  In this order four
-// component families have closed support graphs.  Only deep LN components need
-// K_step() edge generation and leaf peeling.
+ONEESAN_TC_MATCH_HD void fill_deep_tail_adjacency(
+    ComponentMatching& out,
+    int n
+) {
+    out.adjacency[0] = std::uint32_t(1) << 2;
+    out.adjacency[1] = std::uint32_t(1) << 1;
+    out.adjacency[3] = (std::uint32_t(1) << 0) | (std::uint32_t(1) << 3);
+    for (int s = 4; s < n; ++s)
+        out.adjacency[s] = (std::uint32_t(1) << 3) | (std::uint32_t(1) << s);
+}
+
+// direct_component_sources() has a canonical source order.  Singleton, triple,
+// deep RN and deep LR are fully closed.  Deep LN has the same closed tail, with
+// one topology-dependent pivot k.  k is obtained from K_step(src[2]) only; no
+// other K_step calls and no leaf peeling are required.
 ONEESAN_TC_MATCH_HD bool build_component_matching_fastpath(
     const PackedKey* src,
     int n,
@@ -121,15 +148,10 @@ ONEESAN_TC_MATCH_HD bool build_component_matching_fastpath(
     }
 
     if (kind == TC_MATCH_DEEP_RN) {
-        out.adjacency[0] = std::uint32_t(1) << 2;
-        out.adjacency[1] = std::uint32_t(1) << 1;
+        fill_deep_tail_adjacency(out, n);
         out.adjacency[2] = (std::uint32_t(1) << 1) |
                            (std::uint32_t(1) << 2) |
                            (std::uint32_t(1) << (n - 1));
-        out.adjacency[3] = (std::uint32_t(1) << 0) | (std::uint32_t(1) << 3);
-        for (int s = 4; s < n; ++s)
-            out.adjacency[s] = (std::uint32_t(1) << 3) | (std::uint32_t(1) << s);
-
         out.src_to_dst[0] = 2;
         out.src_to_dst[1] = 1;
         out.src_to_dst[2] = static_cast<std::uint8_t>(n - 1);
@@ -150,31 +172,59 @@ ONEESAN_TC_MATCH_HD bool build_component_matching_fastpath(
         return true;
     }
 
+    if (kind == TC_MATCH_DEEP_LN) {
+        fill_deep_tail_adjacency(out, n);
+        const auto pivot_edges = K_step(src[2], W, i);
+        if (pivot_edges.overflow || pivot_edges.size != 3) return false;
+        std::uint32_t mask = 0;
+        for (int e = 0; e < pivot_edges.size; ++e) {
+            const int t = coordinate_index_for_destination(
+                src, n, pivot_edges.value[e], i);
+            if (t < 0) return false;
+            mask |= std::uint32_t(1) << t;
+        }
+        if ((mask & 0x6u) != 0x6u) return false;
+        const std::uint32_t extra = mask & ~0x6u;
+        if (!extra || (extra & (extra - 1))) return false;
+        const int pivot = ctz32(extra);
+        if (pivot < 4 || pivot >= n) return false;
+        out.pivot = pivot;
+        out.adjacency[2] = mask;
+
+        out.src_to_dst[0] = 2;
+        out.src_to_dst[1] = 1;
+        out.src_to_dst[2] = static_cast<std::uint8_t>(pivot);
+        out.src_to_dst[3] = 0;
+        out.dst_to_src[0] = 3;
+        out.dst_to_src[1] = 1;
+        out.dst_to_src[2] = 0;
+        out.dst_to_src[pivot] = 2;
+        for (int s = 4; s < n; ++s) {
+            if (s == pivot) continue;
+            out.src_to_dst[s] = static_cast<std::uint8_t>(s);
+            out.dst_to_src[s] = static_cast<std::uint8_t>(s);
+        }
+        out.src_to_dst[pivot] = 3;
+        out.dst_to_src[3] = static_cast<std::uint8_t>(pivot);
+        out.edges = 2 * n - 1;
+        out.residual_edges = n - 1;
+        out.ok = true;
+        return true;
+    }
+
     return false;
 }
 
-ONEESAN_TC_MATCH_HD int coordinate_index_for_destination(
-    const PackedKey* src,
-    int n,
-    PackedKey dst,
-    int i
-) {
-    for (int t = 0; t < n; ++t)
-        if (equal(recouple_coordinate(src[t], i), dst)) return t;
-    return -1;
-}
-
-ONEESAN_TC_MATCH_HD ComponentMatching build_component_matching(
+// Safety fallback.  Exhaustive probes through W=14 find that every valid
+// component is handled above, so this path should not execute in production.
+ONEESAN_TC_MATCH_HD ComponentMatching build_component_matching_generic(
     const PackedKey* src,
     int n,
     int W,
     int i
 ) {
     ComponentMatching out{};
-    if (n <= 0 || n > kMaxComponentMatching) return out;
-    if (build_component_matching_fastpath(src, n, W, i, out)) return out;
     clear_component_matching(out, n);
-
     for (int s = 0; s < n; ++s) {
         const auto edges = K_step(src[s], W, i);
         if (edges.overflow || edges.size <= 0 || edges.size > 3) return out;
@@ -188,7 +238,6 @@ ONEESAN_TC_MATCH_HD ComponentMatching build_component_matching(
         out.adjacency[s] = mask;
         out.edges += edges.size;
     }
-
     std::uint32_t alive_s = low_mask(n);
     std::uint32_t alive_d = low_mask(n);
     int matched = 0;
@@ -229,19 +278,22 @@ ONEESAN_TC_MATCH_HD ComponentMatching build_component_matching(
         }
         if (!progress) return out;
     }
-
-    for (int s = 0; s < n; ++s) {
-        const int t = out.src_to_dst[s];
-        if (t < 0 || t >= n || !((out.adjacency[s] >> t) & 1u)) return out;
-    }
-    for (int t = 0; t < n; ++t) {
-        const int s = out.dst_to_src[t];
-        if (s < 0 || s >= n || out.src_to_dst[s] != t) return out;
-    }
     out.residual_edges = out.edges - n;
     if (out.residual_edges != n - 1) return out;
     out.ok = true;
     return out;
+}
+
+ONEESAN_TC_MATCH_HD ComponentMatching build_component_matching(
+    const PackedKey* src,
+    int n,
+    int W,
+    int i
+) {
+    ComponentMatching out{};
+    if (n <= 0 || n > kMaxComponentMatching) return out;
+    if (build_component_matching_fastpath(src, n, W, i, out)) return out;
+    return build_component_matching_generic(src, n, W, i);
 }
 
 template <class Value>
@@ -273,8 +325,8 @@ ONEESAN_TC_MATCH_HD bool apply_component_matching(
     return true;
 }
 
-// Descriptor-free arithmetic for all closed families.  Returns false only for
-// topology-dependent deep LN components.
+// Descriptor-free arithmetic for all families except LN.  LN needs one pivot
+// K_step and then uses apply_component_matching() on the closed descriptor.
 template <class Value>
 ONEESAN_TC_MATCH_HD bool apply_component_fastpath(
     const PackedKey* src,
