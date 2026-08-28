@@ -2,7 +2,7 @@
 set -euo pipefail
 source "$(dirname -- "${BASH_SOURCE[0]}")/../lib/common.sh"
 
-MODE="${MODE:-compiled}"
+MODE="${MODE:-packed}"
 ARCH="${ARCH:-native}"
 PTXAS_VERBOSE="${PTXAS_VERBOSE:-1}"
 
@@ -22,8 +22,11 @@ case "$MODE" in
   compiled)
     SRC_REL="src/cuda/gridfp/gridfp_reduced_production_p2p_compiled_schedule_microprobe.cu"
     ;;
+  packed)
+    SRC_REL="src/cuda/gridfp/gridfp_reduced_production_p2p_packed_schedule_microprobe.cu"
+    ;;
   *)
-    echo "invalid MODE=$MODE (baseline|ownerfirst|tie|worklist|compiled)" >&2
+    echo "invalid MODE=$MODE (baseline|ownerfirst|tie|worklist|compiled|packed)" >&2
     exit 2
     ;;
 esac
