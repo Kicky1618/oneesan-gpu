@@ -14,16 +14,15 @@ RUNTIME_PRIMITIVE_RANK_SETBITS="${RUNTIME_PRIMITIVE_RANK_SETBITS:-1}"
 RUNTIME_BROADWORD_SUPPORT="${RUNTIME_BROADWORD_SUPPORT:-1}"
 RUNTIME_OWNER_FROM_BOUNDARIES="${RUNTIME_OWNER_FROM_BOUNDARIES:-1}"
 RUNTIME_SUPPORT_RANK_SETBITS="${RUNTIME_SUPPORT_RANK_SETBITS:-1}"
+RUNTIME_SECTOR_OFFSET_TABLE="${RUNTIME_SECTOR_OFFSET_TABLE:-1}"
 
 for name in \
   RUNTIME_CACHE_EDGES RUNTIME_FAST_P32M5_MOD RUNTIME_POLL_GLOBAL_ERROR \
   RUNTIME_PACK_SHARED_KEYS RUNTIME_FAST_DIV64 RUNTIME_PRIMITIVE_RANK_SETBITS \
-  RUNTIME_BROADWORD_SUPPORT RUNTIME_OWNER_FROM_BOUNDARIES RUNTIME_SUPPORT_RANK_SETBITS; do
+  RUNTIME_BROADWORD_SUPPORT RUNTIME_OWNER_FROM_BOUNDARIES RUNTIME_SUPPORT_RANK_SETBITS \
+  RUNTIME_SECTOR_OFFSET_TABLE; do
   value="${!name}"
-  if [[ "$value" != 0 && "$value" != 1 ]]; then
-    echo "$name must be 0 or 1" >&2
-    exit 2
-  fi
+  if [[ "$value" != 0 && "$value" != 1 ]]; then echo "$name must be 0 or 1" >&2; exit 2; fi
 done
 
 case "$MODE" in
@@ -46,10 +45,7 @@ case "$MODE" in
   p2p-cycle) SRC_REL="src/cuda/gridfp/gridfp_reduced_production_p2p_cycle_microprobe.cu" ;;
   two-row-multigpu) SRC_REL="src/cuda/gridfp/gridfp_reduced_production_two_row_multigpu_microprobe.cu" ;;
   two-row-runtime-multigpu) SRC_REL="src/cuda/gridfp/gridfp_reduced_production_two_row_runtime_multigpu_microprobe.cu" ;;
-  *)
-    echo "invalid MODE=$MODE (forward|reverse|register|persistent|dense|edge|grouped|inplace|cycle|shift-cycle|turn|owner-component|owner-lean|owner-subwarp|turn-owner-subwarp|turn-high-owner-subwarp|p2p-cycle|two-row-multigpu|two-row-runtime-multigpu)" >&2
-    exit 2
-    ;;
+  *) echo "invalid MODE=$MODE" >&2; exit 2 ;;
 esac
 
 SRC="$(repo_path "$SRC_REL")"
@@ -63,9 +59,9 @@ if [[ "$MODE" == two-row-runtime-multigpu && "$RUNTIME_PRIMITIVE_RANK_SETBITS" =
 if [[ "$MODE" == two-row-runtime-multigpu && "$RUNTIME_BROADWORD_SUPPORT" == 0 ]]; then DEFAULT_OUT="${DEFAULT_OUT}_loopmask"; fi
 if [[ "$MODE" == two-row-runtime-multigpu && "$RUNTIME_OWNER_FROM_BOUNDARIES" == 0 ]]; then DEFAULT_OUT="${DEFAULT_OUT}_weightedowner"; fi
 if [[ "$MODE" == two-row-runtime-multigpu && "$RUNTIME_SUPPORT_RANK_SETBITS" == 0 ]]; then DEFAULT_OUT="${DEFAULT_OUT}_fullscansr"; fi
+if [[ "$MODE" == two-row-runtime-multigpu && "$RUNTIME_SECTOR_OFFSET_TABLE" == 0 ]]; then DEFAULT_OUT="${DEFAULT_OUT}_sectorloop"; fi
 OUT="$(build_path "${OUT:-$DEFAULT_OUT}")"
-PTXAS_FLAGS=()
-if [[ "$PTXAS_VERBOSE" == 1 ]]; then PTXAS_FLAGS+=("-Xptxas=-v"); fi
+PTXAS_FLAGS=(); if [[ "$PTXAS_VERBOSE" == 1 ]]; then PTXAS_FLAGS+=("-Xptxas=-v"); fi
 
 TMPDIR="$ONEESAN_TMP_DIR" nvcc -O3 -std=c++17 -lineinfo -arch="$ARCH" \
   "${PTXAS_FLAGS[@]}" \
@@ -78,6 +74,7 @@ TMPDIR="$ONEESAN_TMP_DIR" nvcc -O3 -std=c++17 -lineinfo -arch="$ARCH" \
   -DRP_RUNTIME_BROADWORD_SUPPORT="$RUNTIME_BROADWORD_SUPPORT" \
   -DRP_RUNTIME_OWNER_FROM_BOUNDARIES="$RUNTIME_OWNER_FROM_BOUNDARIES" \
   -DRP_RUNTIME_SUPPORT_RANK_SETBITS="$RUNTIME_SUPPORT_RANK_SETBITS" \
+  -DRP_RUNTIME_SECTOR_OFFSET_TABLE="$RUNTIME_SECTOR_OFFSET_TABLE" \
   "$SRC" -o "$OUT"
 
-echo "built $OUT (mode=$MODE arch=$ARCH runtime_cache_edges=$RUNTIME_CACHE_EDGES runtime_fast_p32m5_mod=$RUNTIME_FAST_P32M5_MOD runtime_poll_global_error=$RUNTIME_POLL_GLOBAL_ERROR runtime_pack_shared_keys=$RUNTIME_PACK_SHARED_KEYS runtime_fast_div64=$RUNTIME_FAST_DIV64 runtime_primitive_rank_setbits=$RUNTIME_PRIMITIVE_RANK_SETBITS runtime_broadword_support=$RUNTIME_BROADWORD_SUPPORT runtime_owner_from_boundaries=$RUNTIME_OWNER_FROM_BOUNDARIES runtime_support_rank_setbits=$RUNTIME_SUPPORT_RANK_SETBITS)"
+echo "built $OUT (mode=$MODE arch=$ARCH runtime_cache_edges=$RUNTIME_CACHE_EDGES runtime_fast_p32m5_mod=$RUNTIME_FAST_P32M5_MOD runtime_poll_global_error=$RUNTIME_POLL_GLOBAL_ERROR runtime_pack_shared_keys=$RUNTIME_PACK_SHARED_KEYS runtime_fast_div64=$RUNTIME_FAST_DIV64 runtime_primitive_rank_setbits=$RUNTIME_PRIMITIVE_RANK_SETBITS runtime_broadword_support=$RUNTIME_BROADWORD_SUPPORT runtime_owner_from_boundaries=$RUNTIME_OWNER_FROM_BOUNDARIES runtime_support_rank_setbits=$RUNTIME_SUPPORT_RANK_SETBITS runtime_sector_offset_table=$RUNTIME_SECTOR_OFFSET_TABLE)"
