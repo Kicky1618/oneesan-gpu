@@ -21,14 +21,22 @@ static_assert(P10DC_RANKCHUNK32_BYTEPACK == 0 || P10DC_RANKCHUNK32_BYTEPACK == 1
 static_assert(P10DC_RANKCHUNK32_ALIGN32 == 0 || P10DC_RANKCHUNK32_ALIGN32 == 1,
               "P10DC_RANKCHUNK32_ALIGN32 must be 0 or 1");
 
-// Both layouts use 32-code blocks. Compact mode stores the final <=4-digit
-// chunk in 7 bits and gives the prefix 9 bits. Bytepack mode keeps three clean
-// chunk bytes and uses an 8-bit prefix. Legal LOW codes satisfy #L<=#R, so a
-// K<=14 code contains at most floor(K/2)<=7 L digits; therefore the largest
-// prefix before the 32nd code is 31*7=217 and still fits in 8 bits.
-// ALIGN32 optionally pads each height start to a metadata-block boundary. A
-// warp stripe then lies in exactly one block and needs one block-base load.
-static constexpr uint32_t P10DC_RANKCHUNK32_BLOCK_LOG2 = 5u;
+#ifndef P10DC_RANKCHUNK32_BLOCK64
+#define P10DC_RANKCHUNK32_BLOCK64 0
+#endif
+static_assert(P10DC_RANKCHUNK32_BLOCK64 == 0 || P10DC_RANKCHUNK32_BLOCK64 == 1,
+              "P10DC_RANKCHUNK32_BLOCK64 must be 0 or 1");
+static_assert(!P10DC_RANKCHUNK32_BLOCK64 || !P10DC_RANKCHUNK32_BYTEPACK,
+              "block64 needs compact 23+9 packing");
+static_assert(!P10DC_RANKCHUNK32_BLOCK64 || !P10DC_RANKCHUNK32_ALIGN32,
+              "block64 experiment currently uses the no-padding layout");
+
+// Compact mode stores the final <=4-digit chunk in 7 bits and gives the prefix
+// 9 bits. Bytepack keeps three clean chunk bytes and uses an 8-bit prefix.
+// Legal LOW codes satisfy #L<=#R, so K<=14 implies at most 7 L digits. Thus
+// prefix bounds are 31*7=217 for block32 and 63*7=441 for compact block64.
+// ALIGN32 optionally pads block32 height starts to one-block warp stripes.
+static constexpr uint32_t P10DC_RANKCHUNK32_BLOCK_LOG2 = P10DC_RANKCHUNK32_BLOCK64 ? 6u : 5u;
 static constexpr uint32_t P10DC_RANKCHUNK32_BLOCK = 1u << P10DC_RANKCHUNK32_BLOCK_LOG2;
 static constexpr uint32_t P10DC_RANKCHUNK32_HEIGHT_ALIGN =
     P10DC_RANKCHUNK32_ALIGN32 ? P10DC_RANKCHUNK32_BLOCK : 1u;
@@ -38,12 +46,9 @@ static constexpr uint32_t P10DC_RANKCHUNK32_CHUNK_MASK = (1u << P10DC_RANKCHUNK3
 static constexpr uint32_t P10DC_RANKCHUNK32_MAX_L_PER_LEGAL_CODE = uint32_t(LOW_LUT_K / 2);
 static_assert(P10DC_RANKCHUNK32_CHUNK_BITS + P10DC_RANKCHUNK32_PREFIX_BITS == 32u);
 static_assert(LOW_LUT_K <= 14, "rankchunk32 assumes at most three CROSS5 chunks");
-static_assert(
-    (P10DC_RANKCHUNK32_BLOCK - 1u) *
-        (P10DC_RANKCHUNK32_BYTEPACK ? P10DC_RANKCHUNK32_MAX_L_PER_LEGAL_CODE
-                                    : uint32_t(LOW_LUT_K)) <
-        (1u << P10DC_RANKCHUNK32_PREFIX_BITS),
-    "rankchunk32 within-block prefix no longer fits selected packing");
+static_assert((P10DC_RANKCHUNK32_BLOCK - 1u) * P10DC_RANKCHUNK32_MAX_L_PER_LEGAL_CODE <
+              (1u << P10DC_RANKCHUNK32_PREFIX_BITS),
+              "rankchunk32 legal within-block prefix no longer fits selected packing");
 static_assert(p10dc_cross5_pow3_host(4) <= (1u << 7),
               "rankchunk32 four-digit tail no longer fits 7 value bits");
 static_assert(P10DC_RANKCHUNK32_HEIGHT_ALIGN == 1u ||
@@ -84,7 +89,7 @@ static constexpr uint32_t p10dc_rankchunk32_unpack_host(uint32_t packed) {
 }
 
 __constant__ uint32_t* D_P10DC_LOW_RANKCHUNKMETA32;
-// Historical symbol name retained to avoid touching callers; blocks are now 32 codes.
+// Historical symbol name retained to avoid touching callers; entries are block bases.
 __constant__ uint32_t* D_P10DC_LOW_RANKCHUNKBLOCK16;
 __constant__ uint32_t D_P10DC_LOW_RANKCHUNK_HOFF[MAXW + 2];
 
@@ -100,10 +105,9 @@ __device__ __forceinline__ void p10dc_low_rankchunk32_row(
     row = D_P10DC_LOW_RANKSTREAM + block_base + prefix;
 }
 
-// Warp-striped HIGH ranks are q*32+lane. With ALIGN32 the height offset is also
-// a multiple of 32, so every stripe is one metadata block: lane 0 loads the
-// base and broadcasts once. Without alignment an arbitrary height offset can
-// make the stripe cross one boundary; keep the existing one-/two-shuffle A/B.
+// Warp-striped HIGH ranks are q*32+lane. ALIGN32 makes block32 stripes exact
+// one-block accesses. Without alignment, block32/block64 can cross at most one
+// boundary; the one-shuffle path selects lane0 or the boundary lane.
 __device__ __forceinline__ void p10dc_low_rankchunk32_row_warpstripe(
     uint32_t h, uint32_t rank, uint32_t& packed_chunks, const uint16_t*& row
 ) {
@@ -122,7 +126,7 @@ __device__ __forceinline__ void p10dc_low_rankchunk32_row_warpstripe(
     const uint32_t block_base = __shfl_sync(active, b0_local, 0);
 #else
     const uint32_t first_off = first_compact & (P10DC_RANKCHUNK32_BLOCK - 1u);
-    const uint32_t split_lane = P10DC_RANKCHUNK32_BLOCK - first_off; // [1,32]
+    const uint32_t split_lane = P10DC_RANKCHUNK32_BLOCK - first_off;
 #if P10DC_RANKCHUNK32_ONESHFL
     uint32_t local_base = 0;
     if (lane == 0u)
@@ -282,7 +286,8 @@ struct BucketFusedDirectHighRowsRankChunk32Tables
                   << " meta_entries=" << meta.size() << " padding=" << padding
                   << " chunk_bits=" << P10DC_RANKCHUNK32_CHUNK_BITS
                   << " prefix_bits=" << P10DC_RANKCHUNK32_PREFIX_BITS
-                  << " block=32 height_align=" << P10DC_RANKCHUNK32_HEIGHT_ALIGN
+                  << " block=" << P10DC_RANKCHUNK32_BLOCK
+                  << " height_align=" << P10DC_RANKCHUNK32_HEIGHT_ALIGN
                   << " byte_aligned_chunks=" << P10DC_RANKCHUNK32_BYTEPACK
                   << " max_l_per_legal_code=" << P10DC_RANKCHUNK32_MAX_L_PER_LEGAL_CODE
                   << " block_base_loads_per_warp_max=" << (P10DC_RANKCHUNK32_ALIGN32 ? 1 : 2)
