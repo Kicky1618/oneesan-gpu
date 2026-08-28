@@ -10,6 +10,7 @@ int main() {
         std::cout << "rankformula-nometa4-abstract-block-selftest compiled_block="
                   << P10DC_RANKFORMULA_NOMETA4_BLOCK
                   << " warpshare=" << P10DC_RANKFORMULA_NOMETA_WARPSHARE
+                  << " coopgroup=" << P10DC_RANKFORMULA_NOMETA_COOPGROUP
                   << " max_locator_steps_bound="
                   << (P10DC_RANKFORMULA_NOMETA4_BLOCK - 1u)
                   << " wrapper_ok=1\n";
