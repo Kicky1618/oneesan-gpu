@@ -22,11 +22,14 @@ case "$MODE" in
   dense)
     SRC_REL="src/cuda/gridfp/gridfp_reduced_production_component_dense_microprobe.cu"
     ;;
+  inplace)
+    SRC_REL="src/cuda/gridfp/gridfp_reduced_production_component_inplace_microprobe.cu"
+    ;;
   edge)
     SRC_REL="src/cuda/gridfp/gridfp_reduced_production_row_edge_microprobe.cu"
     ;;
   *)
-    echo "invalid MODE=$MODE (forward|reverse|register|persistent|dense|edge)" >&2
+    echo "invalid MODE=$MODE (forward|reverse|register|persistent|dense|inplace|edge)" >&2
     exit 2
     ;;
 esac
