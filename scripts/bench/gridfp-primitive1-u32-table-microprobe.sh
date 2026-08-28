@@ -30,7 +30,7 @@ SRC="$ONEESAN_ROOT/src/cuda/gridfp/gridfp_primitive1_u32_table_microprobe.cu"
 PTXAS_FLAGS=()
 [[ "$PTXAS_VERBOSE" == 1 ]] && PTXAS_FLAGS+=("-Xptxas=-v")
 BINS=()
-for mode in 0 1 2; do
+for mode in 0 1 2 3; do
   BINS[$mode]="$ONEESAN_BUILD_DIR/gridfp_primitive1_u32_table_microprobe${mode}"
   TMPDIR="$ONEESAN_TMP_DIR" nvcc -O3 -std=c++17 -lineinfo -arch="$ARCH" \
     "${PTXAS_FLAGS[@]}" -DRP_PRIMITIVE1_TABLE_MODE="$mode" \
@@ -57,8 +57,9 @@ run_one() {
 }
 
 for ((r=1; r<=REPEATS; ++r)); do
-  case $(((r-1)%3)) in
-    0) order=(0 1 2);; 1) order=(1 2 0);; *) order=(2 0 1);;
+  case $(((r-1)%4)) in
+    0) order=(0 1 2 3);; 1) order=(1 2 3 0);;
+    2) order=(2 3 0 1);; *) order=(3 0 1 2);;
   esac
   for mode in "${order[@]}"; do
     echo "=== primitive1 table mode=$mode run $r/$REPEATS ===" >&2
@@ -70,8 +71,8 @@ cat "$RESULT"
 python3 - "$RESULT" "$SUMMARY" <<'PY'
 import csv, statistics, sys
 src,dst=sys.argv[1:]; rows=list(csv.DictReader(open(src),delimiter='\t')); out=[]; cs={}
-names={'0':'primitive_2d_u64','1':'sector_1d_u64','2':'dedicated_1d_u32'}
-for mode in ('0','1','2'):
+names={'0':'primitive_2d_u64','1':'sector_1d_u64','2':'dedicated_1d_u32','3':'immediate_switch'}
+for mode in ('0','1','2','3'):
     rs=[r for r in rows if r['mode']==mode]
     if not rs: raise SystemExit(f'missing mode={mode}')
     ss={r['checksum'] for r in rs}
@@ -82,13 +83,14 @@ if len(set(cs.values()))!=1: raise SystemExit(f'checksum mismatch: {cs}')
 with open(dst,'w',newline='') as f:
     w=csv.DictWriter(f,fieldnames=out[0].keys(),delimiter='\t'); w.writeheader(); w.writerows(out)
 q={r['mode']:r for r in out}; base=float(q['0']['ns_per_call_median'])
-for mode in ('1','2'):
+for mode in ('1','2','3'):
     cur=float(q[mode]['ns_per_call_median']); name=names[mode]
     print(f'primitive1_{name}_speedup={base/cur:.6f}x')
     print(f'primitive1_{name}_delta_pct={(cur/base-1)*100:.4f}%')
 print('primitive1_mode0=RP_PRIMITIVE_2d_u64')
 print('primitive1_mode1=RP_SECTOR_PRIMITIVE_1d_u64')
 print('primitive1_mode2=dedicated_14x_u32')
+print('primitive1_mode3=immediate_switch')
 print('primitive1_u32_table_bytes=56')
 print('primitive1_exact=1')
 print(f'checksum={cs["0"]}')
@@ -96,7 +98,7 @@ print(f'summary={dst}')
 PY
 
 if [[ "$PTXAS_VERBOSE" == 1 ]]; then
-  for mode in 0 1 2; do
+  for mode in 0 1 2 3; do
     echo "--- ptxas primitive1 table mode=$mode ---" >&2
     grep -E 'Used .* registers|bytes smem|bytes cmem' "$LOGDIR/mode${mode}.build.err" >&2 || true
   done
