@@ -44,7 +44,7 @@ N=27 ARCH="$ARCH" OUT="$BIN_VMM" \
 
 nvidia-smi -L >&2
 nvidia-smi topo -m >&2 || true
-printf 'mode\trun\tresidue\twall_s\tactive_max_s\tactive_sum_s\tprepare_s\n' >"$RESULT"
+printf 'mode\trun\tresidue\twall_s\tactive_max_s\tactive_sum_s\tprepare_s\tvmm_granularity_kib\tvmm_physical_min_gib\tvmm_physical_max_gib\tvmm_imbalance_kib\tvmm_main_padding_kib\tvmm_block_padding_kib\n' >"$RESULT"
 
 run_one(){
   local mode="$1" run="$2" bin
@@ -64,8 +64,18 @@ run_one(){
   field(){ sed -nE "s/.* $1=([^[:space:]]+).*/\\1/p" <<<"$line"; }
   residue="$(field residue)"; wall="$(field wall_s)"; active_max="$(field active_max_s)"; active_sum="$(field active_sum_s)"; prepare="$(field prepare_s)"
   [[ -n "$residue" && -n "$wall" && -n "$active_max" && -n "$active_sum" && -n "$prepare" ]] || { echo "$line" >&2; exit 4; }
-  if [[ "$mode" == vmm ]]; then grep -Fq 'backend=gridfp-b300-hbm32-fullmate-dropN-vmm ' <<<"$line" || exit 5; fi
-  printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\n' "$mode" "$run" "$residue" "$wall" "$active_max" "$active_sum" "$prepare" >>"$RESULT"
+
+  local gran='-' pmin='-' pmax='-' imbalance='-' mpad='-' bpad='-'
+  if [[ "$mode" == vmm ]]; then
+    grep -Fq 'backend=gridfp-b300-hbm32-fullmate-dropN-vmm ' <<<"$line" || exit 5
+    local layout
+    layout="$(grep '^VMM32 combined: ' "$err" | tail -n1 || true)"
+    [[ -n "$layout" ]] || { echo "missing VMM32 combined layout metadata" >&2; tail -n 120 "$err" >&2; exit 6; }
+    lfield(){ sed -nE "s/.* $1=([^[:space:]]+).*/\\1/p" <<<"$layout"; }
+    gran="$(lfield granularity_kib)"; pmin="$(lfield physical_min_gib)"; pmax="$(lfield physical_max_gib)"; imbalance="$(lfield imbalance_kib)"; mpad="$(lfield main_padding_kib)"; bpad="$(lfield block_padding_kib)"
+    [[ -n "$gran" && -n "$pmin" && -n "$pmax" && -n "$imbalance" && -n "$mpad" && -n "$bpad" ]] || { echo "$layout" >&2; exit 7; }
+  fi
+  printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' "$mode" "$run" "$residue" "$wall" "$active_max" "$active_sum" "$prepare" "$gran" "$pmin" "$pmax" "$imbalance" "$mpad" "$bpad" >>"$RESULT"
 }
 
 for ((r=1;r<=RUNS;++r)); do
@@ -83,6 +93,7 @@ import csv,statistics,sys
 src,dst=sys.argv[1:]
 rows=list(csv.DictReader(open(src),delimiter='\t'))
 out=[]; residues={}
+layout_keys=('vmm_granularity_kib','vmm_physical_min_gib','vmm_physical_max_gib','vmm_imbalance_kib','vmm_main_padding_kib','vmm_block_padding_kib')
 for mode in ('compare','u32','vmm'):
     rs=[r for r in rows if r['mode']==mode]
     if not rs: raise SystemExit(f'missing mode={mode}')
@@ -90,11 +101,16 @@ for mode in ('compare','u32','vmm'):
     if len(rr)!=1: raise SystemExit(f'unstable residue {mode}: {rr}')
     residues[mode]=next(iter(rr))
     def med(k): return statistics.median(float(r[k]) for r in rs)
-    out.append({'mode':mode,'runs':len(rs),'residue':residues[mode],
-                'median_wall_s':f'{med("wall_s"):.9f}',
-                'median_active_max_s':f'{med("active_max_s"):.9f}',
-                'median_active_sum_s':f'{med("active_sum_s"):.9f}',
-                'median_prepare_s':f'{med("prepare_s"):.9f}'})
+    row={'mode':mode,'runs':len(rs),'residue':residues[mode],
+         'median_wall_s':f'{med("wall_s"):.9f}',
+         'median_active_max_s':f'{med("active_max_s"):.9f}',
+         'median_active_sum_s':f'{med("active_sum_s"):.9f}',
+         'median_prepare_s':f'{med("prepare_s"):.9f}'}
+    for k in layout_keys:
+        vals={r[k] for r in rs if r[k] != '-'}
+        if mode=='vmm' and len(vals)!=1: raise SystemExit(f'unstable VMM layout field {k}: {vals}')
+        row[k]=next(iter(vals)) if vals else '-'
+    out.append(row)
 if len(set(residues.values()))!=1: raise SystemExit(f'residue mismatch {residues}')
 with open(dst,'w',newline='') as f:
     w=csv.DictWriter(f,fieldnames=out[0].keys(),delimiter='\t');w.writeheader();w.writerows(out)
@@ -105,8 +121,13 @@ for mode in ('u32','vmm'):
     print(f'b300_{mode}_wall_delta_pct_vs_compare={(w/base-1)*100:.4f}%')
     print(f'b300_{mode}_active_max_speedup_vs_compare={basea/a:.6f}x')
 best=min(out,key=lambda r:float(r['median_wall_s']))
+v=q['vmm']
 print(f'b300_vmm_ab_best_mode={best["mode"]}')
 print(f'b300_vmm_ab_best_median_wall_s={best["median_wall_s"]}')
+print(f'b300_vmm_granularity_kib={v["vmm_granularity_kib"]}')
+print(f'b300_vmm_physical_imbalance_kib={v["vmm_imbalance_kib"]}')
+print(f'b300_vmm_main_padding_kib={v["vmm_main_padding_kib"]}')
+print(f'b300_vmm_block_padding_kib={v["vmm_block_padding_kib"]}')
 print('compare=three_compare_subtract_shard_address')
 print('u32=hi32_seed_fully_u32_shard_address')
 print('vmm=contiguous_multi_gpu_virtual_address_direct_global_index')
