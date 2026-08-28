@@ -4,6 +4,8 @@
 #include "gridfp_reduced_production_p2p_traffic_microprobe.cu"
 #pragma pop_macro("main")
 
+#include <array>
+
 namespace {
 
 static constexpr int TRAFFIC_MATRIX_GPU = 8;
@@ -77,9 +79,6 @@ __global__ void p2p_cycle_traffic_matrix_kernel(
                     atomicAdd(&cross_matrix[prev_owner * TRAFFIC_MATRIX_GPU + owner], pc);
                 }
                 if (owner != leader_owner) {
-                    // The direct leader-owner implementation performs one
-                    // remote load and one remote store at every nonlocal route
-                    // position for each primitive value.
                     atomicAdd(
                         &direct_matrix[leader_owner * TRAFFIC_MATRIX_GPU + owner],
                         2ULL * pc);
