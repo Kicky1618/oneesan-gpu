@@ -1,6 +1,7 @@
 #pragma once
 
 #include "gridfp_reduced_production_runtime_subwarp.cuh"
+#include "gridfp_reduced_production_runtime_turn_low_expand_inverse.cuh"
 
 #ifndef RP_RUNTIME_TURN_LOCAL_SECTOR_TABLE
 #define RP_RUNTIME_TURN_LOCAL_SECTOR_TABLE 1
@@ -428,8 +429,12 @@ __device__ __forceinline__ bool runtime_turn_discover_inverse(
 #endif
     }
     if (!high && expand) {
+#if RP_RUNTIME_TURN_DIRECT_LOW_EXPAND_INVERSE
+        return runtime_turn_discover_expand_low_direct(dest, W, base);
+#else
         RuntimeMirrorSink<RuntimeSharedKeySetSink> sink{base, W, true};
         return discover_inverse_reduced_forward(mirror_key_device(dest, W), W, W - 1, sink);
+#endif
     }
     RuntimeMainOnlySink<RuntimeSharedKeySetSink> sink{base};
     return discover_inverse_reduced_forward(dest, W, W - 1, sink);
@@ -451,8 +456,12 @@ __device__ __forceinline__ bool runtime_turn_discover_inverse_indexed(
 #endif
     }
     if (!high && expand) {
+#if RP_RUNTIME_TURN_DIRECT_LOW_EXPAND_INVERSE
+        return runtime_turn_discover_expand_low_direct(dest, W, base);
+#else
         RuntimeMirrorSink<RuntimeIndexedSharedKeySetSink> sink{base, W, true};
         return discover_inverse_reduced_forward(mirror_key_device(dest, W), W, W - 1, sink);
+#endif
     }
     RuntimeMainOnlySink<RuntimeIndexedSharedKeySetSink> sink{base};
     return discover_inverse_reduced_forward(dest, W, W - 1, sink);
