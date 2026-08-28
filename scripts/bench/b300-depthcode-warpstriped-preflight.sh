@@ -10,11 +10,12 @@ RUN_DELTA_AB="${RUN_DELTA_AB:-0}"
 RUN_CROSS5_AB="${RUN_CROSS5_AB:-0}"
 RUN_DIRECT_AB="${RUN_DIRECT_AB:-0}"
 RUN_AFFINE_AB="${RUN_AFFINE_AB:-0}"
+RUN_PREKEY_AB="${RUN_PREKEY_AB:-0}"
 AB_N="${AB_N:-21}"
 REPEATS="${REPEATS:-3}"
 DEPTHCODE_DECODE_LOAD="${DEPTHCODE_DECODE_LOAD:-ldg}"
 
-for x in RUN_PTXAS RUN_B300_AB RUN_DELTA_AB RUN_CROSS5_AB RUN_DIRECT_AB RUN_AFFINE_AB; do
+for x in RUN_PTXAS RUN_B300_AB RUN_DELTA_AB RUN_CROSS5_AB RUN_DIRECT_AB RUN_AFFINE_AB RUN_PREKEY_AB; do
   v="${!x}"
   if [[ "$v" != 0 && "$v" != 1 ]]; then echo "$x must be 0 or 1" >&2; exit 2; fi
 done
@@ -22,70 +23,51 @@ case "$DEPTHCODE_DECODE_LOAD" in global|ldg) ;; *) echo "DEPTHCODE_DECODE_LOAD m
 
 echo '=== host schedule proof ===' >&2
 bash "$ONEESAN_ROOT/scripts/bench/pattern10-depthcode-warpstriped-schedule-selftest.sh"
-
 echo '=== W28/all-legal 10-bit bound ===' >&2
 N="$N" bash "$ONEESAN_ROOT/scripts/bench/pattern10-depthcode-bound.sh"
-
 echo '=== all-legal closure ternary-delta proof ===' >&2
 N="$N" bash "$ONEESAN_ROOT/scripts/bench/closure-ternary-delta-proof.sh"
-
 echo '=== CROSS5 automaton proof ===' >&2
 bash "$ONEESAN_ROOT/scripts/bench/cross5-automaton-proof.sh"
-
-echo '=== CROSS5 CUDA helper equivalence: PM 0/1 ===' >&2
+echo '=== CROSS5 CUDA helper equivalence, including prekey: PM 0/1 ===' >&2
 PM_ACCUM=0 ARCH="$ARCH" W=10 bash "$ONEESAN_ROOT/scripts/bench/cross5-cuda-selftest.sh"
 PM_ACCUM=1 ARCH="$ARCH" W=10 bash "$ONEESAN_ROOT/scripts/bench/cross5-cuda-selftest.sh"
-
 echo '=== direct depthcode build-plan invariants ===' >&2
 N="$N" ARCH="$ARCH" bash "$ONEESAN_ROOT/scripts/bench/pattern10-depthcode-build-plan.sh"
-
-echo '=== CUDA reference matrix: PM 0/1 x global/ldg x all stable HIGH contexts ===' >&2
+echo '=== stable CUDA reference matrix ===' >&2
 ARCH="$ARCH" W=10 bash "$ONEESAN_ROOT/scripts/bench/pattern10-depthcode-selftest-matrix.sh"
-
-echo '=== direct-resolve CROSS5 CUDA reference matrix: PM 0/1 x global/ldg ===' >&2
+echo '=== direct-resolve CROSS5 CUDA matrix ===' >&2
 ARCH="$ARCH" W=10 bash "$ONEESAN_ROOT/scripts/bench/pattern10-depthcode-direct-cross5-selftest-matrix.sh"
 
-echo '=== affine-row direct CROSS5 CUDA reference matrix: PM 0/1 x global/ldg ===' >&2
+echo '=== affine and prekey CUDA matrices: PM 0/1 x global/ldg ===' >&2
 for pm in 0 1; do
   for load in global ldg; do
-    PM_ACCUM="$pm" DECODE_LOAD="$load" ARCH="$ARCH" W=10 \
-      bash "$ONEESAN_ROOT/scripts/bench/pattern10-depthcode-affine-cross5-selftest.sh"
+    PM_ACCUM="$pm" DECODE_LOAD="$load" ARCH="$ARCH" W=10 bash "$ONEESAN_ROOT/scripts/bench/pattern10-depthcode-affine-cross5-selftest.sh"
+    PM_ACCUM="$pm" DECODE_LOAD="$load" ARCH="$ARCH" W=10 bash "$ONEESAN_ROOT/scripts/bench/pattern10-depthcode-prekey-cross5-selftest.sh"
   done
 done
 
 if [[ "$RUN_PTXAS" == 1 ]]; then
-  echo '=== ptxas resource comparison, including delta/CROSS5/direct/affine experiments ===' >&2
+  echo '=== ptxas resource comparison, including prekey ===' >&2
   N="$N" ARCH="$ARCH" bash "$ONEESAN_ROOT/scripts/bench/b300-depthcode-highctx-ptxas.sh"
 fi
-
 if [[ "$RUN_DELTA_AB" == 1 ]]; then
-  echo '=== B300 resolved vs resolved-delta plan A/B ===' >&2
-  N="$AB_N" REPEATS="$REPEATS" DEPTHCODE_DECODE_LOAD="$DEPTHCODE_DECODE_LOAD" \
-    bash "$ONEESAN_ROOT/scripts/bench/b300-depthcode-resolved-delta-ab.sh"
+  N="$AB_N" REPEATS="$REPEATS" DEPTHCODE_DECODE_LOAD="$DEPTHCODE_DECODE_LOAD" bash "$ONEESAN_ROOT/scripts/bench/b300-depthcode-resolved-delta-ab.sh"
 fi
-
 if [[ "$RUN_CROSS5_AB" == 1 ]]; then
-  echo '=== B300 warpstriped-delta vs CROSS5 A/B ===' >&2
-  N="$AB_N" REPEATS="$REPEATS" DEPTHCODE_DECODE_LOAD="$DEPTHCODE_DECODE_LOAD" \
-    bash "$ONEESAN_ROOT/scripts/bench/b300-depthcode-cross5-ab.sh"
+  N="$AB_N" REPEATS="$REPEATS" DEPTHCODE_DECODE_LOAD="$DEPTHCODE_DECODE_LOAD" bash "$ONEESAN_ROOT/scripts/bench/b300-depthcode-cross5-ab.sh"
 fi
-
 if [[ "$RUN_DIRECT_AB" == 1 ]]; then
-  echo '=== B300 CROSS5 plan-descriptor vs direct-resolve A/B ===' >&2
-  N="$AB_N" REPEATS="$REPEATS" DEPTHCODE_DECODE_LOAD="$DEPTHCODE_DECODE_LOAD" \
-    bash "$ONEESAN_ROOT/scripts/bench/b300-depthcode-direct-resolve-ab.sh"
+  N="$AB_N" REPEATS="$REPEATS" DEPTHCODE_DECODE_LOAD="$DEPTHCODE_DECODE_LOAD" bash "$ONEESAN_ROOT/scripts/bench/b300-depthcode-direct-resolve-ab.sh"
 fi
-
 if [[ "$RUN_AFFINE_AB" == 1 ]]; then
-  echo '=== B300 direct-resolve vs affine-row direct-resolve A/B ===' >&2
-  N="$AB_N" REPEATS="$REPEATS" DEPTHCODE_DECODE_LOAD="$DEPTHCODE_DECODE_LOAD" \
-    bash "$ONEESAN_ROOT/scripts/bench/b300-depthcode-affine-row-ab.sh"
+  N="$AB_N" REPEATS="$REPEATS" DEPTHCODE_DECODE_LOAD="$DEPTHCODE_DECODE_LOAD" bash "$ONEESAN_ROOT/scripts/bench/b300-depthcode-affine-row-ab.sh"
 fi
-
+if [[ "$RUN_PREKEY_AB" == 1 ]]; then
+  N="$AB_N" REPEATS="$REPEATS" DEPTHCODE_DECODE_LOAD="$DEPTHCODE_DECODE_LOAD" bash "$ONEESAN_ROOT/scripts/bench/b300-depthcode-prekey-ab.sh"
+fi
 if [[ "$RUN_B300_AB" == 1 ]]; then
-  echo '=== B300 warp vs warpstriped residue/timing A/B ===' >&2
-  N="$AB_N" REPEATS="$REPEATS" DEPTHCODE_DECODE_LOAD="$DEPTHCODE_DECODE_LOAD" \
-    bash "$ONEESAN_ROOT/scripts/bench/b300-depthcode-warpstriped-ab.sh"
+  N="$AB_N" REPEATS="$REPEATS" DEPTHCODE_DECODE_LOAD="$DEPTHCODE_DECODE_LOAD" bash "$ONEESAN_ROOT/scripts/bench/b300-depthcode-warpstriped-ab.sh"
 fi
 
-echo "b300-depthcode-warpstriped-preflight OK n=$N arch=$ARCH run_ptxas=$RUN_PTXAS run_delta_ab=$RUN_DELTA_AB run_cross5_ab=$RUN_CROSS5_AB run_direct_ab=$RUN_DIRECT_AB run_affine_ab=$RUN_AFFINE_AB run_b300_ab=$RUN_B300_AB decode_load=$DEPTHCODE_DECODE_LOAD ternary_delta_proved=1 cross5_proved=1 cross5_cuda=1 direct_resolve_cuda=1 affine_rows_cuda=1" >&2
+echo "b300-depthcode-warpstriped-preflight OK n=$N arch=$ARCH run_ptxas=$RUN_PTXAS run_delta_ab=$RUN_DELTA_AB run_cross5_ab=$RUN_CROSS5_AB run_direct_ab=$RUN_DIRECT_AB run_affine_ab=$RUN_AFFINE_AB run_prekey_ab=$RUN_PREKEY_AB run_b300_ab=$RUN_B300_AB ternary_delta_proved=1 cross5_cuda=1 direct_resolve_cuda=1 affine_rows_cuda=1 prekey_cuda=1" >&2
