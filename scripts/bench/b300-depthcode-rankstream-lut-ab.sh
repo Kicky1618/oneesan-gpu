@@ -25,12 +25,24 @@ BUCKET_GRID_X="${BUCKET_GRID_X:-16}"
 BUCKET_GRID_Y="${BUCKET_GRID_Y:-8}"
 REPEATS="${REPEATS:-5}"
 RUN_SELFTEST="${RUN_SELFTEST:-1}"
+RANK_BACKEND="${RANK_BACKEND:-rankstream}"
 
-PREFIX="${PREFIX:-$ONEESAN_ROOT/work/b300_depthcode_rankstream_lut_ab_n${N}_${TRANSPOSE_MODE}_${DEPTHCODE_DECODE_LOAD}_pm${PM_ACCUM}_t${BUCKET_THREADS}_gx${BUCKET_GRID_X}_gy${BUCKET_GRID_Y}}"
+case "$RANK_BACKEND" in
+  rankstream)
+    CTX=warpstriped_delta_direct_affine_prekey_rankstream_cross5
+    SELFTEST="$ONEESAN_ROOT/scripts/bench/pattern10-depthcode-rankstream-cross5-selftest.sh"
+    ;;
+  rankchunk32)
+    CTX=warpstriped_delta_direct_affine_rankchunk32_cross5
+    SELFTEST="$ONEESAN_ROOT/scripts/bench/pattern10-depthcode-rankchunk32-cross5-selftest.sh"
+    ;;
+  *) echo "RANK_BACKEND must be rankstream or rankchunk32" >&2; exit 2;;
+esac
+
+PREFIX="${PREFIX:-$ONEESAN_ROOT/work/b300_depthcode_${RANK_BACKEND}_lut_ab_n${N}_${TRANSPOSE_MODE}_${DEPTHCODE_DECODE_LOAD}_pm${PM_ACCUM}_t${BUCKET_THREADS}_gx${BUCKET_GRID_X}_gy${BUCKET_GRID_Y}}"
 RESULT="${RESULT:-${PREFIX}.tsv}"
 SUMMARY="${SUMMARY:-${PREFIX}_summary.tsv}"
 LOGDIR="${LOGDIR:-${PREFIX}_logs}"
-CTX=warpstriped_delta_direct_affine_prekey_rankstream_cross5
 MODES=(constant ldg ldg256)
 
 case "$TRANSPOSE_MODE" in sync|events|pipeline) ;; *) echo "invalid TRANSPOSE_MODE" >&2; exit 2;; esac
@@ -52,11 +64,18 @@ mkdir -p "$(dirname "$RESULT")" "$LOGDIR"
 
 bash "$ONEESAN_ROOT/scripts/bench/cross5-rankmask-proof.sh"
 bash "$ONEESAN_ROOT/scripts/bench/cross5-rankstream-projection-proof.sh"
+if [[ "$RANK_BACKEND" == rankchunk32 ]]; then
+  bash "$ONEESAN_ROOT/scripts/bench/rankchunk32-warpbase-proof.sh"
+fi
 if [[ "$RUN_SELFTEST" == 1 ]]; then
   for mode in "${MODES[@]}"; do
-    LUT_LOAD="$mode" PM_ACCUM="$PM_ACCUM" DECODE_LOAD="$DEPTHCODE_DECODE_LOAD" \
-      bash "$ONEESAN_ROOT/scripts/bench/pattern10-depthcode-rankstream-cross5-selftest.sh" \
-      >"$LOGDIR/selftest_${mode}.out" 2>"$LOGDIR/selftest_${mode}.err"
+    if [[ "$RANK_BACKEND" == rankstream ]]; then
+      LUT_LOAD="$mode" PM_ACCUM="$PM_ACCUM" DECODE_LOAD="$DEPTHCODE_DECODE_LOAD" \
+        bash "$SELFTEST" >"$LOGDIR/selftest_${mode}.out" 2>"$LOGDIR/selftest_${mode}.err"
+    else
+      RANKSTREAM_LUT_LOAD="$mode" PM_ACCUM="$PM_ACCUM" DECODE_LOAD="$DEPTHCODE_DECODE_LOAD" \
+        bash "$SELFTEST" >"$LOGDIR/selftest_${mode}.out" 2>"$LOGDIR/selftest_${mode}.err"
+    fi
   done
 fi
 
@@ -104,21 +123,21 @@ run_one() {
 
 for mode in "${MODES[@]}"; do
   bin="$ONEESAN_BUILD_DIR/ab_depthcode_${CTX}_${mode}_${DEPTHCODE_DECODE_LOAD}_${TRANSPOSE_MODE}_n${N}"
-  echo "=== build rankstream LUT $mode ===" >&2
+  echo "=== build $RANK_BACKEND LUT $mode ===" >&2
   build_one "$mode" "$bin"
   for ((r = 1; r <= REPEATS; ++r)); do
-    echo "=== run rankstream LUT $mode $r/$REPEATS ===" >&2
+    echo "=== run $RANK_BACKEND LUT $mode $r/$REPEATS ===" >&2
     run_one "$mode" "$bin" "$r"
   done
 done
 
 cat "$RESULT"
-python3 - "$RESULT" "$SUMMARY" <<'PY'
+python3 - "$RESULT" "$SUMMARY" "$RANK_BACKEND" <<'PY'
 import csv
 import statistics
 import sys
 
-src, dst = sys.argv[1:]
+src, dst, backend = sys.argv[1:]
 rows = list(csv.DictReader(open(src), delimiter='\t'))
 metrics = ('wall_s', 'forward_high_s', 'reverse_high_s', 'forward_low_s', 'reverse_low_s', 'transpose_s')
 modes = ('constant', 'ldg', 'ldg256')
@@ -137,26 +156,28 @@ with open(dst, 'w', newline='') as f:
     w.writerows(out)
 
 q = {r['lut_load']: r for r in out}
-def speedup(base, opt, metric, label):
+prefix = 'rankstream_lut' if backend == 'rankstream' else 'rankchunk32_lut'
+def speedup(base, opt, metric, suffix):
     if q[base][metric] == 'NA' or q[opt][metric] == 'NA':
         return
-    print(f'{label}_{metric}_speedup={float(q[base][metric]) / float(q[opt][metric]):.6f}x')
+    print(f'{prefix}_{suffix}_{metric}_speedup={float(q[base][metric]) / float(q[opt][metric]):.6f}x')
 
 for metric in ('wall_s', 'forward_high_s', 'reverse_high_s'):
-    speedup('constant', 'ldg', metric, 'rankstream_lut_ldg')
-    speedup('ldg', 'ldg256', metric, 'rankstream_lut_ldg256_vs_ldg')
-    speedup('constant', 'ldg256', metric, 'rankstream_lut_ldg256_vs_constant')
+    speedup('constant', 'ldg', metric, 'ldg')
+    speedup('ldg', 'ldg256', metric, 'ldg256_vs_ldg')
+    speedup('constant', 'ldg256', metric, 'ldg256_vs_constant')
 
-for base, opt, label in (
-    ('constant', 'ldg', 'rankstream_lut_ldg'),
-    ('ldg', 'ldg256', 'rankstream_lut_ldg256_vs_ldg'),
-    ('constant', 'ldg256', 'rankstream_lut_ldg256_vs_constant'),
+for base, opt, suffix in (
+    ('constant', 'ldg', 'ldg'),
+    ('ldg', 'ldg256', 'ldg256_vs_ldg'),
+    ('constant', 'ldg256', 'ldg256_vs_constant'),
 ):
     if all(q[x][m] != 'NA' for x in (base, opt) for m in ('forward_high_s', 'reverse_high_s')):
         b = float(q[base]['forward_high_s']) + float(q[base]['reverse_high_s'])
         o = float(q[opt]['forward_high_s']) + float(q[opt]['reverse_high_s'])
-        print(f'{label}_total_high_speedup={b / o:.6f}x')
+        print(f'{prefix}_{suffix}_total_high_speedup={b / o:.6f}x')
 
+print(f'rank_backend={backend}')
 print('rankstream_lut_logical_bytes=6561')
 print('rankstream_lut_constant_physical_bytes=6561')
 print('rankstream_lut_ldg_physical_bytes=6561')
@@ -165,7 +186,10 @@ print('rankstream_lut_ldg256_state_stride=256')
 print('rankstream_lut_ldg256_state_row_cachelines_128b=2')
 print('production_state_checks=0')
 print('production_fallback=0')
+if backend == 'rankchunk32':
+    print('rankchunk32_cross_runtime_divmod=0')
+    print('rankchunk32_block_base_loads_per_warp_max=3')
 print(f'summary={dst}')
 PY
 
-echo "depthcode-rankstream-lut-ab OK n=$N repeats=$REPEATS modes=constant,ldg,ldg256 threads=$BUCKET_THREADS gx=$BUCKET_GRID_X gy=$BUCKET_GRID_Y decode_load=$DEPTHCODE_DECODE_LOAD transpose=$TRANSPOSE_MODE result=$RESULT" >&2
+echo "depthcode-rankstream-lut-ab OK backend=$RANK_BACKEND n=$N repeats=$REPEATS modes=constant,ldg,ldg256 threads=$BUCKET_THREADS gx=$BUCKET_GRID_X gy=$BUCKET_GRID_Y decode_load=$DEPTHCODE_DECODE_LOAD transpose=$TRANSPOSE_MODE result=$RESULT" >&2
