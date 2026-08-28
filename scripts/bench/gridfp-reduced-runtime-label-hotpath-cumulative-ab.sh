@@ -85,6 +85,7 @@ build_one() {
   RUNTIME_FAST_ERASE_TWO_BITS=1 RUNTIME_FAST_DISCOVERY_VALIDITY=1 \
   RUNTIME_DISCOVERY_ENDPOINT_SCAN=1 RUNTIME_FAST_CLOSURE_NONN_SCAN=1 \
   RUNTIME_FIND_RECENT_FIRST=0 RUNTIME_FIND_SIGNATURE_FILTER=0 \
+  RUNTIME_FIND_INDEX_CACHE=0 \
   RUNTIME_FAST_MIRROR_MATE=1 RUNTIME_FAST_INCLUDE_HORIZONTAL_REVERSE=1 \
   RUNTIME_FAST_BLOCKED_EXCLUDE_REVERSE=1 RUNTIME_DIRECT_REVERSE_SMALL_STEP=1 \
   ARCH="$ARCH" PTXAS_VERBOSE="$PTXAS_VERBOSE" OUT="$bin" \
@@ -144,6 +145,7 @@ for mode in ('1','2','3','4','5'):
  print(f'runtime_label_hotpath_{name}_wall_delta_pct={(cur/base-1)*100:.4f}%')
 print('runtime_label_hotpath_exact=1')
 print('runtime_label_hotpath_signature_filter=0')
+print('runtime_label_hotpath_index_cache=0')
 print('runtime_label_hotpath_w28_trees=0')
 print(f'summary={dst}')
 PY
