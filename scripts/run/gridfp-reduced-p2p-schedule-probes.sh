@@ -19,6 +19,9 @@ build_cpu_probe() {
   printf '%s\n' "$out"
 }
 
+tie_bin="$(build_cpu_probe \
+  gridfp_reduced_p2p_tie_balance_probe \
+  src/cpp/probes/gridfp_reduced_production_p2p_tie_balance_probe.cpp)"
 worklist_bin="$(build_cpu_probe \
   gridfp_reduced_p2p_worklist_probe \
   src/cpp/probes/gridfp_reduced_production_p2p_worklist_probe.cpp)"
@@ -26,11 +29,18 @@ compiled_bin="$(build_cpu_probe \
   gridfp_reduced_p2p_compiled_schedule_probe \
   src/cpp/probes/gridfp_reduced_production_p2p_compiled_schedule_probe.cpp)"
 
+"$tie_bin" "$MAX_W" "$NGPU_MODEL"
 "$worklist_bin" "$MAX_W" "$NGPU_MODEL"
 "$compiled_bin" "$MAX_W" "$NGPU_MODEL"
 
 if [[ "$RUN_CUDA" == 1 ]]; then
   K=$(((CUDA_W - 2) / 2))
+
+  MODE=tie ARCH="$ARCH" \
+    "$(repo_path scripts/build/gridfp-reduced-p2p-schedule-probe.sh)"
+  tie_cuda_bin="$(build_path gridfp_reduced_p2p_tie)"
+  "$tie_cuda_bin" "$CUDA_W" "$NGPU_MODEL" "$CUDA_BLOCKS"
+
   MODE=ownerfirst ARCH="$ARCH" \
     "$(repo_path scripts/build/gridfp-reduced-p2p-schedule-probe.sh)"
   ownerfirst_bin="$(build_path gridfp_reduced_p2p_ownerfirst)"
