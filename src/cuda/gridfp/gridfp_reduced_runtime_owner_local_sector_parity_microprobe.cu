@@ -28,8 +28,8 @@ __global__ void owner_local_sector_probe_kernel(
     std::uint64_t acc = 0x9e3779b97f4a7c15ULL ^ tid;
 
     for (int i = 0; i < iterations; ++i) {
-        const int row = 890 + outer_ones * 15;
-        const std::uint32_t group = rp::RP_RUNTIME_OWNER_LOCAL_SECTOR_END[row + 14];
+        const std::uint32_t group = std::uint32_t(
+            rp::runtime_owner_local_sector_group_device(28, 15, outer_ones));
         seed = seed * 1664525u + 1013904223u;
         const rp::Rank64 within = (std::uint64_t(seed) * group) >> 32;
 
@@ -100,6 +100,8 @@ int main(int argc, char** argv) {
     const double ns_per_call = double(elapsed_ms) * 1.0e6 / double(calls);
     std::cout << "gridfp-runtime-owner-local-sector-parity-microprobe"
               << " parity=" << RP_RUNTIME_OWNER_LOCAL_SECTOR_PARITY
+              << " compact=" << RP_RUNTIME_OWNER_LOCAL_SECTOR_COMPACT
+              << " carry=" << RP_RUNTIME_OWNER_LOCAL_SECTOR_CARRY_BEGIN
               << " w28_tree=" << RP_RUNTIME_OWNER_LOCAL_SECTOR_W28_TREE
               << " W=28 L=15 outer_classes=14"
               << " blocks=" << blocks
