@@ -20,6 +20,9 @@ grep -Fq 'void global_store_main(Code g,Count v){D_MAIN_VBASE[g]=v;}' "$OUT"
 grep -Fq 'void global_store_block(Code g,Count v){D_BLOCK_VBASE[g]=v;}' "$OUT"
 grep -Fq 'b300_vmm::ContiguousStorage main_store,block_store;' "$OUT"
 grep -Fq 'block_store.create(blockN,ng,int(main_store.mapped_units%size_t(ng)),"auth block");' "$OUT"
+grep -Fq 'main_store.granularity!=block_store.granularity' "$OUT"
+grep -Fq 'vmm_phys_max-vmm_phys_min>main_store.granularity' "$OUT"
+grep -Fq 'VMM32 combined: granularity_kib=' "$OUT"
 grep -Fq 'mp[d]=main_base+Code(d)*mc;bp[d]=block_base+Code(d)*bc;' "$OUT"
 grep -Fq 'cudaMemcpyToSymbol(D_MAIN_VBASE,&main_base,sizeof(main_base))' "$OUT"
 grep -Fq 'cudaMemcpyToSymbol(D_BLOCK_VBASE,&block_base,sizeof(block_base))' "$OUT"
@@ -35,4 +38,4 @@ if grep -Fq 'cudaFree(mp[d])' "$OUT" || grep -Fq 'cudaFree(bp[d])' "$OUT"; then
   exit 4
 fi
 
-echo "b300-vmm-production-generate-proof OK count_bytes=4 direct_global_index=1 logical_shard_views=1 authoritative_cudaMalloc=0 authoritative_cudaFree=0 balanced_physical_rotation=1 combined_imbalance_le_one_granularity=1"
+echo "b300-vmm-production-generate-proof OK count_bytes=4 direct_global_index=1 logical_shard_views=1 authoritative_cudaMalloc=0 authoritative_cudaFree=0 balanced_physical_rotation=1 combined_imbalance_le_one_granularity=1 runtime_physical_balance_guard=1"
