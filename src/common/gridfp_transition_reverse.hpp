@@ -2,12 +2,17 @@
 
 #include "gridfp_transition.hpp"
 
+#ifndef ONEESAN_FAST_MIRROR_MATE
+#define ONEESAN_FAST_MIRROR_MATE 1
+#endif
 #ifndef ONEESAN_FAST_INCLUDE_HORIZONTAL_REVERSE
 #define ONEESAN_FAST_INCLUDE_HORIZONTAL_REVERSE 1
 #endif
 #ifndef ONEESAN_FAST_BLOCKED_EXCLUDE_REVERSE
 #define ONEESAN_FAST_BLOCKED_EXCLUDE_REVERSE 1
 #endif
+static_assert(ONEESAN_FAST_MIRROR_MATE == 0 || ONEESAN_FAST_MIRROR_MATE == 1,
+              "ONEESAN_FAST_MIRROR_MATE must be 0 or 1");
 static_assert(
     ONEESAN_FAST_INCLUDE_HORIZONTAL_REVERSE == 0 ||
     ONEESAN_FAST_INCLUDE_HORIZONTAL_REVERSE == 1,
@@ -31,15 +36,40 @@ ONEESAN_REV_HD MateValue mirror_value(MateValue v) {
     return v;
 }
 
-// Horizontal reflection of a frontier word. Reversing the position order and
-// swapping L/R preserves the noncrossing connectivity represented by the
-// Motzkin/parenthesis code.
+ONEESAN_REV_HD MateID reverse_bits64(MateID x) {
+#if defined(__CUDA_ARCH__)
+    return __brevll(x);
+#else
+    x = ((x >> 1) & 0x5555555555555555ULL) |
+        ((x & 0x5555555555555555ULL) << 1);
+    x = ((x >> 2) & 0x3333333333333333ULL) |
+        ((x & 0x3333333333333333ULL) << 2);
+    x = ((x >> 4) & 0x0f0f0f0f0f0f0f0fULL) |
+        ((x & 0x0f0f0f0f0f0f0f0fULL) << 4);
+    x = ((x >> 8) & 0x00ff00ff00ff00ffULL) |
+        ((x & 0x00ff00ff00ff00ffULL) << 8);
+    x = ((x >> 16) & 0x0000ffff0000ffffULL) |
+        ((x & 0x0000ffff0000ffffULL) << 16);
+    return (x >> 32) | (x << 32);
+#endif
+}
+
+// Reversing all 64 bits simultaneously reverses the order of 2-bit frontier
+// symbols and reverses the two bits within each symbol. The latter is exactly
+// R(01)<->L(10), while N(00) and X(11) remain unchanged.
 ONEESAN_REV_HD MateID mirror_mate(MateID m, int width) {
+#if ONEESAN_FAST_MIRROR_MATE
+    if (width <= 0) return 0;
+    const MateID rev = reverse_bits64(m);
+    const int shift = 64 - 2 * width;
+    return shift ? (rev >> shift) : rev;
+#else
     MateID out = 0;
     for (int i = 0; i < width; ++i) {
         out |= MateID(mirror_value(mget(m, i))) << (2 * (width - 1 - i));
     }
     return out;
+#endif
 }
 
 // Direct-coordinate reverse transition. This is exactly
@@ -50,14 +80,15 @@ ONEESAN_REV_HD IncludeResult include_horizontal_reverse(MateID m, int width, int
 #if ONEESAN_FAST_INCLUDE_HORIZONTAL_REVERSE
     IncludeResult z{};
     MateID t = m;
-    switch (mpair(m, p)) {
+    const MateValuePair pair = mpair(m, p);
+    switch (pair) {
     case NN:
         z.mate = msetpair(m, p, LR);
         z.valid = true;
         return z;
     case LN: case RN:
         if (p == width - 1) {
-            z.mate = msetpair(m, p, mpair(m, p) == LN ? NL : NR);
+            z.mate = msetpair(m, p, pair == LN ? NL : NR);
             z.valid = true;
             return z;
         }
