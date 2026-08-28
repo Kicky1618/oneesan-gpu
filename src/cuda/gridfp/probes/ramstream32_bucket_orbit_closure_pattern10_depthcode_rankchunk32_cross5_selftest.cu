@@ -176,7 +176,7 @@ int main() {
     ReverseLowDescHost rlow = build_reverse_low_descriptors(storage, layout); ReverseHighDescHost rhigh = build_reverse_high_descriptors(storage, layout);
     ReverseOrbitHost rlo = build_reverse_orbit(storage, layout, true), rhi = build_reverse_orbit(storage, layout, false);
     ReverseBucketAtomicHost rb = build_reverse_bucket_atomic(storage, layout, owner, rlow, rhigh, rlo, rhi); ReverseBucketFusedHost rf = build_reverse_bucket_fused_checked(layout, owner, rb);
-    auto fh = build_bucket_forward_pattern10_depthcode_placeholder(layout, bo, bf); auto rh = build_bucket_reverse_pattern10_depthcode_zero_checked(layout, bo, bf, rb, rf);
+    auto fh = build_bucket_forward_pattern10_depthcode_placeholder(layout, bo, bf); auto rh = build_bucket_reverse_pattern10_depthcode_zero_checked(layout, bo,bf,rb,rf);
 
     auto ms = gdg_enum_states(W), bs = gdg_enum_states(W - 1); std::unordered_map<MateID,size_t> mi,di;
     for (size_t i=0;i<ms.size();++i) mi.emplace(ms[i],i); for (size_t i=0;i<bs.size();++i) di.emplace(bs[i],i);
@@ -201,7 +201,8 @@ int main() {
               << " prefix_bits=" << P10DC_RANKCHUNK32_PREFIX_BITS
               << " block=" << P10DC_RANKCHUNK32_BLOCK
               << " height_align=" << P10DC_RANKCHUNK32_HEIGHT_ALIGN
-              << " third_chunk_bits=7 block_base_loads_per_warp_max=2"
+              << " third_chunk_bits=7 block_base_loads_per_warp_max="
+              << (P10DC_RANKCHUNK32_ALIGN32 ? 1 : 2)
               << " cross_runtime_div=0 cross_runtime_mod=0 cross_runtime_direct_lookup=0"
               << " old_prekey_offset_arrays_freed=1 fallback_structurally_unreachable=1\n";
     return 0;
