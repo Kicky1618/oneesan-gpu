@@ -16,7 +16,7 @@ PTXAS_VERBOSE="${PTXAS_VERBOSE:-0}"
 
 if (( LOW_LUT_K <= 0 || HIGH_LUT_K <= 0 || LOW_LUT_K + HIGH_LUT_K + 1 != W )); then echo "invalid factor split" >&2; exit 2; fi
 if (( LOW_LUT_K > 14 || HIGH_LUT_K > 14 )); then echo "pattern10 depthcode requires half widths <=14" >&2; exit 2; fi
-case "$HIGH_CTX" in thread|resolved|warp|warpstriped|warpstriped_delta) ;; *) echo "HIGH_CTX must be thread, resolved, warp, warpstriped, or warpstriped_delta" >&2; exit 2;; esac
+case "$HIGH_CTX" in thread|resolved|resolved_delta|warp|warpstriped|warpstriped_delta) ;; *) echo "HIGH_CTX must be thread, resolved, resolved_delta, warp, warpstriped, or warpstriped_delta" >&2; exit 2;; esac
 case "$DEPTHCODE_DECODE_LOAD" in global|ldg) ;; *) echo "DEPTHCODE_DECODE_LOAD must be global or ldg" >&2; exit 2;; esac
 if [[ "$PM_ACCUM" != 0 && "$PM_ACCUM" != 1 ]]; then echo "PM_ACCUM must be 0 or 1" >&2; exit 2; fi
 if [[ "$TERNARY_KEY4" != 0 && "$TERNARY_KEY4" != 1 ]]; then echo "TERNARY_KEY4 must be 0 or 1" >&2; exit 2; fi
@@ -24,6 +24,7 @@ if [[ "$PTXAS_VERBOSE" != 0 && "$PTXAS_VERBOSE" != 1 ]]; then echo "PTXAS_VERBOS
 
 base="oneesan_cuda_gridfp_b300_bucket_snake_onepass_pattern10_depthcode"
 [[ "$HIGH_CTX" == resolved ]] && base="${base}_resolved"
+[[ "$HIGH_CTX" == resolved_delta ]] && base="${base}_resolved_delta"
 [[ "$HIGH_CTX" == warp ]] && base="${base}_warpctx"
 [[ "$HIGH_CTX" == warpstriped ]] && base="${base}_warpstriped"
 [[ "$HIGH_CTX" == warpstriped_delta ]] && base="${base}_warpstriped_delta"
@@ -35,6 +36,7 @@ case "$TRANSPOSE_MODE" in
 esac
 
 P10DC_DECODE_LDG=0
+[[ "$DEPTHCODE_DECODE_LOAD" == lg ]] && P10DC_DECODE_LDG=1
 [[ "$DEPTHCODE_DECODE_LOAD" == ldg ]] && P10DC_DECODE_LDG=1
 SUFFIX="_payload_${HIGH_CTX}_${TRANSPOSE_MODE}"
 [[ "$DEPTHCODE_DECODE_LOAD" == ldg ]] && SUFFIX="${SUFFIX}_ldg"
