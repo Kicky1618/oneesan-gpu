@@ -139,7 +139,8 @@ int main() {
     std::cout << "bucket-closure-pattern10-depthcode-rankformula-cross5-selftest OK W=" << W
               << " forward_exact=1 reverse_exact=1"
               << " rankstream_bytes=0 chunk_meta_bytes_per_code=4"
-              << " dense_base16=1 formula_ballot=1"
+              << " base16=1 formula_ballot=1"
+              << " sparse_base=" << P10DC_RANKFORMULA_SPARSE_BASE
               << " fused13=" << P10DC_RANKDELTA8_FUSED13
               << " cross_runtime_div=0 cross_runtime_mod=0\n";
     return 0;
