@@ -19,6 +19,9 @@ namespace oneesan::gridfp::reducedprod {
 #ifndef RP_RUNTIME_FIND_RECENT_UNROLLED
 #define RP_RUNTIME_FIND_RECENT_UNROLLED 1
 #endif
+#ifndef RP_RUNTIME_FIND_SIGNATURE_FILTER
+#define RP_RUNTIME_FIND_SIGNATURE_FILTER 0
+#endif
 static_assert(RP_RUNTIME_PACK_SHARED_KEYS == 0 || RP_RUNTIME_PACK_SHARED_KEYS == 1,
               "RP_RUNTIME_PACK_SHARED_KEYS must be 0 or 1");
 static_assert(RP_RUNTIME_FAST_DISCOVERY_VALIDITY == 0 ||
@@ -32,6 +35,9 @@ static_assert(RP_RUNTIME_FIND_RECENT_FIRST == 0 || RP_RUNTIME_FIND_RECENT_FIRST 
 static_assert(RP_RUNTIME_FIND_RECENT_UNROLLED == 0 ||
               RP_RUNTIME_FIND_RECENT_UNROLLED == 1,
               "RP_RUNTIME_FIND_RECENT_UNROLLED must be 0 or 1");
+static_assert(RP_RUNTIME_FIND_SIGNATURE_FILTER == 0 ||
+              RP_RUNTIME_FIND_SIGNATURE_FILTER == 1,
+              "RP_RUNTIME_FIND_SIGNATURE_FILTER must be 0 or 1");
 
 static constexpr std::uint64_t RP_RUNTIME_SHARED_BLOCKED_BIT = 1ULL << 63;
 static constexpr std::uint64_t RP_RUNTIME_SHARED_MATE_MASK =
@@ -62,6 +68,14 @@ __device__ __forceinline__ DeviceKey runtime_shared_key_decode(RuntimeSharedKey 
 #else
     return k;
 #endif
+}
+
+__device__ __forceinline__ std::uint64_t runtime_shared_key_signature_bit(DeviceKey k) {
+    std::uint64_t x = std::uint64_t(k.mate) |
+        (k.blocked ? RP_RUNTIME_SHARED_BLOCKED_BIT : 0ULL);
+    x ^= x >> 7;
+    x ^= x >> 14;
+    return 1ULL << (x & 63ULL);
 }
 
 __device__ __forceinline__ int runtime_find_shared_key(
@@ -112,14 +126,39 @@ __device__ __forceinline__ int runtime_find_shared_key(
     return -1;
 }
 
+__device__ __forceinline__ int runtime_find_shared_key_filtered(
+    const RuntimeSharedKey* a,
+    int n,
+    DeviceKey k,
+    std::uint64_t signature
+) {
+#if RP_RUNTIME_FIND_SIGNATURE_FILTER
+    if ((signature & runtime_shared_key_signature_bit(k)) == 0) return -1;
+#else
+    (void)signature;
+#endif
+    return runtime_find_shared_key(a, n, k);
+}
+
 struct RuntimeSharedKeySetSink {
     RuntimeSharedKey* out = nullptr;
     int* n = nullptr;
     int cap = 0;
+    std::uint64_t* signature = nullptr;
     __device__ __forceinline__ bool emit(DeviceKey k) {
+#if RP_RUNTIME_FIND_SIGNATURE_FILTER
+        const std::uint64_t bit = runtime_shared_key_signature_bit(k);
+        if (!signature || ((*signature & bit) != 0)) {
+            if (runtime_find_shared_key(out, *n, k) >= 0) return true;
+        }
+#else
         if (runtime_find_shared_key(out, *n, k) >= 0) return true;
+#endif
         if (*n >= cap) return false;
         out[(*n)++] = runtime_shared_key_encode(k);
+#if RP_RUNTIME_FIND_SIGNATURE_FILTER
+        if (signature) *signature |= bit;
+#endif
         return true;
     }
 };
@@ -387,9 +426,10 @@ __device__ __forceinline__ bool runtime_discover_inverse_reduced_forward(
 
 __device__ __forceinline__ bool runtime_discover_inverse_direction_to_shared(
     DeviceKey dest, int W, int p, bool reverse,
-    RuntimeSharedKey* source_set, int& source_count, int capacity
+    RuntimeSharedKey* source_set, int& source_count, int capacity,
+    std::uint64_t* source_signature = nullptr
 ) {
-    RuntimeSharedKeySetSink base{source_set, &source_count, capacity};
+    RuntimeSharedKeySetSink base{source_set, &source_count, capacity, source_signature};
     if (!reverse)
         return runtime_discover_inverse_reduced_forward(dest, W, p, base);
 
