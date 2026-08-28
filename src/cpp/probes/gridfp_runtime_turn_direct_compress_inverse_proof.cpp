@@ -18,6 +18,9 @@ struct Key {
     bool operator<(const Key& o) const {
         return blocked != o.blocked ? blocked < o.blocked : mate < o.mate;
     }
+    bool operator==(const Key& o) const {
+        return mate == o.mate && blocked == o.blocked;
+    }
 };
 
 bool valid_mate(MateID m, int len) {
@@ -78,18 +81,11 @@ std::set<Key> direct_inverse(MateID d, int W) {
     std::set<Key> out;
     out.insert(Key{d, false});
     const MateValuePair pair = mpair(d, 1);
-
-    // For a valid production destination, only NN/NR/RN/LR/RR can occur at
-    // the final two positions. The three local invertible rewrites below are
-    // automatically valid and map back to d.
     if (pair == LR) out.insert(Key{msetpair(d, 1, NN), false});
     if (pair == RN) out.insert(Key{msetpair(d, 1, NR), false});
     if (pair == NR) out.insert(Key{msetpair(d, 1, RN), false});
 
     if (pair == NN) {
-        // RL at the physical low boundary would take height 0 to -1, so it is
-        // never a valid source. RR closure candidates selected by this balance
-        // scan are valid by construction and need no include recheck.
         int bal = 0;
         for (int q = 2; q < W; ++q) {
             const MateValue v = mget(d, q);
@@ -104,10 +100,7 @@ std::set<Key> direct_inverse(MateID d, int W) {
         }
     }
 
-    // The only valid destination with bit1=N and bit0 occupied is NR. Removing
-    // that N therefore directly recovers the retained blocked predecessor.
-    if (pair == NR)
-        out.insert(Key{mshrink(d, 1), true});
+    if (pair == NR) out.insert(Key{mshrink(d, 1), true});
     return out;
 }
 
@@ -205,7 +198,6 @@ void check_one(MateID d, int W,
         if (!valid_mate(b, W - 1) || mget(b, 0) == N ||
             blocked_exclude(b, 1) != d) std::exit(6);
     }
-    // LN and NL cannot be suffixes of a valid one-defect Motzkin word.
     if (pair == LN || pair == NL || pair == LL || pair == RL) std::exit(7);
 }
 
