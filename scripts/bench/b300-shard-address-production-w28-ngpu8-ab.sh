@@ -22,10 +22,11 @@ if (( visible < 8 )); then echo "need 8 visible GPUs; got $visible" >&2; exit 2;
 
 bash "$ONEESAN_ROOT/scripts/bench/b300-shard-address8-proof.sh"
 bash "$ONEESAN_ROOT/scripts/bench/b300-shard-owner-mulhi-w28-ngpu8-proof.sh"
+bash "$ONEESAN_ROOT/scripts/bench/b300-shard-owner-u32limb-w28-ngpu8-proof.sh"
 mkdir -p "$(dirname "$RESULT")" "$LOGDIR"
 
 BINS=()
-for mode in 1 2; do
+for mode in 1 2 3; do
   BINS[$mode]="$ONEESAN_BUILD_DIR/oneesan_cuda_gridfp_b300_hbm32_n27_shardmode${mode}"
   N=27 SHARD_ADDRESS_MODE="$mode" ARCH="$ARCH" OUT="${BINS[$mode]}" \
     bash "$ONEESAN_ROOT/scripts/build/b300-hbm32-shard-address-mode.sh" \
@@ -52,7 +53,11 @@ run_one(){
 }
 
 for ((r=1;r<=RUNS;++r)); do
-  if (( r & 1 )); then order=(1 2); else order=(2 1); fi
+  case $(( (r-1)%3 )) in
+    0) order=(1 2 3) ;;
+    1) order=(2 3 1) ;;
+    2) order=(3 1 2) ;;
+  esac
   for mode in "${order[@]}"; do run_one "$mode" "$r"; done
 done
 cat "$RESULT"
@@ -62,7 +67,7 @@ import csv, statistics, sys
 src,dst=sys.argv[1:]
 rows=list(csv.DictReader(open(src),delimiter='\t'))
 out=[]; residues={}
-for mode in ('1','2'):
+for mode in ('1','2','3'):
     rs=[r for r in rows if r['mode']==mode]
     if not rs: raise SystemExit(f'missing mode={mode}')
     rr={r['residue'] for r in rs}
@@ -74,18 +79,24 @@ for mode in ('1','2'):
                 'median_active_max_s':f'{med("active_max_s"):.9f}',
                 'median_active_sum_s':f'{med("active_sum_s"):.9f}',
                 'median_prepare_s':f'{med("prepare_s"):.9f}'})
-if residues['1']!=residues['2']:
-    raise SystemExit(f'residue mismatch compare={residues["1"]} mulhi_mask={residues["2"]}')
+if len(set(residues.values()))!=1:
+    raise SystemExit(f'residue mismatch {residues}')
 with open(dst,'w',newline='') as f:
     w=csv.DictWriter(f,fieldnames=out[0].keys(),delimiter='\t'); w.writeheader(); w.writerows(out)
 q={r['mode']:r for r in out}
-a=float(q['1']['median_wall_s']); b=float(q['2']['median_wall_s'])
-print(f'b300_shard_address_mulhi_mask_wall_speedup={a/b:.6f}x')
-print(f'b300_shard_address_mulhi_mask_wall_delta_pct={(b/a-1)*100:.4f}%')
-a=float(q['1']['median_active_max_s']); b=float(q['2']['median_active_max_s'])
-print(f'b300_shard_address_mulhi_mask_active_max_speedup={a/b:.6f}x')
+base_wall=float(q['1']['median_wall_s'])
+base_active=float(q['1']['median_active_max_s'])
+for mode,name in [('2','mulhi64_mask'),('3','u32limb_mask')]:
+    wall=float(q[mode]['median_wall_s']); active=float(q[mode]['median_active_max_s'])
+    print(f'b300_shard_address_{name}_wall_speedup={base_wall/wall:.6f}x')
+    print(f'b300_shard_address_{name}_wall_delta_pct={(wall/base_wall-1)*100:.4f}%')
+    print(f'b300_shard_address_{name}_active_max_speedup={base_active/active:.6f}x')
+best=min(out,key=lambda r:float(r['median_wall_s']))
+print(f'b300_shard_address_best_mode={best["mode"]}')
+print(f'b300_shard_address_best_median_wall_s={best["median_wall_s"]}')
 print('mode1=three_compare_subtract_stages')
-print('mode2=w28x8_mulhi_shift_plus_owner_bit_masked_base')
+print('mode2=w28x8_mulhi64_shift_plus_owner_bit_masked_base')
+print('mode3=w28x8_pure_u32_high64_limb_plus_owner_bit_masked_base')
 print(f'residue={residues["1"]}')
 print(f'summary={dst}')
 PY
