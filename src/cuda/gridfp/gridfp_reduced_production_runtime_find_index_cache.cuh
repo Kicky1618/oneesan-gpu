@@ -18,12 +18,11 @@ struct RuntimeFindIndexCache {
 };
 static_assert(sizeof(RuntimeFindIndexCache) == 64,
               "runtime find index cache footprint regression");
+static constexpr int RP_RUNTIME_FIND_INDEX_CACHE_BYTES_PER_SET =
+    int(sizeof(RuntimeFindIndexCache));
 static constexpr int RP_RUNTIME_FIND_INDEX_CACHE_BYTES_PER_SUBGROUP =
-    2 * int(sizeof(RuntimeFindIndexCache));
-static constexpr int RP_RUNTIME_FIND_INDEX_CACHE_BYTES_PER_BLOCK =
-    RP_RUNTIME_FIND_INDEX_CACHE_BYTES_PER_SUBGROUP *
-    RP_RUNTIME_WARPS_PER_BLOCK * RP_RUNTIME_SUBGROUPS_PER_WARP;
-static_assert(RP_RUNTIME_FIND_INDEX_CACHE_BYTES_PER_BLOCK == 4096);
+    2 * RP_RUNTIME_FIND_INDEX_CACHE_BYTES_PER_SET;
+static_assert(RP_RUNTIME_FIND_INDEX_CACHE_BYTES_PER_SUBGROUP == 128);
 
 __device__ __forceinline__ int runtime_find_index_bucket(DeviceKey k) {
     std::uint64_t x = std::uint64_t(k.mate) |
