@@ -25,6 +25,9 @@ namespace oneesan::gridfp::reducedprod {
 #ifndef RP_RUNTIME_SECTOR_OFFSET_TABLE
 #define RP_RUNTIME_SECTOR_OFFSET_TABLE 1
 #endif
+#ifndef RP_RUNTIME_CACHE_SECTOR_ROW_BASE
+#define RP_RUNTIME_CACHE_SECTOR_ROW_BASE 1
+#endif
 #ifndef RP_RUNTIME_OUTER_GROUP_TABLE
 #define RP_RUNTIME_OUTER_GROUP_TABLE 1
 #endif
@@ -42,6 +45,8 @@ static_assert(RP_RUNTIME_SUPPORT_RANK_SETBITS == 0 || RP_RUNTIME_SUPPORT_RANK_SE
               "RP_RUNTIME_SUPPORT_RANK_SETBITS must be 0 or 1");
 static_assert(RP_RUNTIME_SECTOR_OFFSET_TABLE == 0 || RP_RUNTIME_SECTOR_OFFSET_TABLE == 1,
               "RP_RUNTIME_SECTOR_OFFSET_TABLE must be 0 or 1");
+static_assert(RP_RUNTIME_CACHE_SECTOR_ROW_BASE == 0 || RP_RUNTIME_CACHE_SECTOR_ROW_BASE == 1,
+              "RP_RUNTIME_CACHE_SECTOR_ROW_BASE must be 0 or 1");
 static_assert(RP_RUNTIME_OUTER_GROUP_TABLE == 0 || RP_RUNTIME_OUTER_GROUP_TABLE == 1,
               "RP_RUNTIME_OUTER_GROUP_TABLE must be 0 or 1");
 
@@ -65,9 +70,6 @@ static_assert(sizeof(RP_RUNTIME_OUTER_GROUP_SIZE) == 396);
 static_assert(sizeof(RP_RUNTIME_OUTER_GROUP_PREFIX) == 792);
 
 #if RP_RUNTIME_OWNER_FIXED54
-// Exact on every production midpoint owner case for W=8..28 and ngpu=2..16.
-// The largest numerator*magic product is only 58 bits, so owner division is one
-// ordinary 64-bit multiply plus a constant shift: no mulhi and no correction.
 __device__ __constant__ Rank64 RP_RUNTIME_OWNER_MAGIC54[11] = {
     28503795109939ULL,4047269941469ULL,555537006490ULL,
     74312840109ULL,9741361862ULL,1256304905ULL,
@@ -75,7 +77,6 @@ __device__ __constant__ Rank64 RP_RUNTIME_OWNER_MAGIC54[11] = {
 };
 static_assert(sizeof(RP_RUNTIME_OWNER_MAGIC54) == 88);
 #elif RP_RUNTIME_OWNER_RECIPROCAL
-// Production total dimensions and ceil(2^64/total) reciprocals for even W.
 __device__ __constant__ Rank64 RP_RUNTIME_OWNER_TOTAL[11] = {
     632ULL,4451ULL,32427ULL,242413ULL,1849269ULL,14339193ULL,
     112685373ULL,895517316ULL,7184644894ULL,58113695597ULL,
@@ -199,11 +200,17 @@ __device__ __forceinline__ int runtime_outer_group_row_base_device(int W) {
 }
 
 __device__ __forceinline__ Rank64 runtime_group_local_sector_offset_device(
-    std::uint16_t sector_row_base, int L, int outer_ones, int local_ones
+    int W, std::uint16_t sector_row_base, int L, int outer_ones, int local_ones
 ) {
 #if RP_RUNTIME_SECTOR_OFFSET_TABLE
-    if (sector_row_base != RP_RUNTIME_INVALID_SECTOR_ROW) {
-        const int index = int(sector_row_base) + outer_ones * (L + 1) + local_ones;
+#if RP_RUNTIME_CACHE_SECTOR_ROW_BASE
+    const int base = sector_row_base == RP_RUNTIME_INVALID_SECTOR_ROW
+        ? -1 : int(sector_row_base);
+#else
+    const int base = runtime_sector_offset_row_base_device(W);
+#endif
+    if (base >= 0 && L == W / 2 + 1) {
+        const int index = base + outer_ones * (L + 1) + local_ones;
         return RP_RUNTIME_LOCAL_SECTOR_OFFSET[index];
     }
 #endif
@@ -290,7 +297,11 @@ __device__ __forceinline__ GroupedComponentContextDevice grouped_component_conte
     int owner = runtime_owner_from_group_base_device(
         group_base, group, W, K, ngpu, owner_begin);
     if (owner < 0) owner = weighted_outer_owner_device(outer, L, O, ngpu);
+#if RP_RUNTIME_CACHE_SECTOR_ROW_BASE
     const int row = L == W / 2 + 1 ? runtime_sector_offset_row_base_device(W) : -1;
+#else
+    const int row = -1;
+#endif
     return GroupedComponentContextDevice{
         owner,
         lo,
@@ -315,7 +326,7 @@ __device__ __forceinline__ GroupedDeviceRank grouped_rank_in_component_device(
 
     const Rank64 pr = runtime_primitive_rank_support_device(full_mate, W, occupied, full);
     Rank64 within = runtime_group_local_sector_offset_device(
-        ctx.sector_row_base, ctx.L, int(ctx.outer_ones), local_ones);
+        W, ctx.sector_row_base, ctx.L, int(ctx.outer_ones), local_ones);
 
     if (!k.blocked) {
         const Rank64 sr = runtime_compact_support_rank_device(local_mask, ctx.L, local_ones);
