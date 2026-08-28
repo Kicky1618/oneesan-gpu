@@ -6,9 +6,14 @@
 namespace {
 
 constexpr int MAX_W = 28;
-constexpr int OUTER_SLOTS = 14;
-constexpr int LOCAL_SLOTS = 16;
+constexpr int TABLE_ENTRIES = 1199;
 using Rank64 = std::uint64_t;
+
+constexpr std::uint32_t EMBEDDED[TABLE_ENTRIES] = {
+#include "../../cuda/gridfp/gridfp_reduced_production_runtime_sector_offset_values.inc"
+};
+constexpr int ROW_BASE[11] = {0, 24, 59, 107, 170, 250, 349, 469, 612, 780, 975};
+static_assert(sizeof(EMBEDDED) == 4796);
 
 Rank64 binom(int n, int k) {
     if (n < 0 || k < 0 || k > n) return 0;
@@ -47,11 +52,14 @@ int main() {
     std::uint64_t configurations = 0;
     std::uint64_t active_entries = 0;
     Rank64 max_offset = 0;
-    for (int W = 8; W <= MAX_W; W += 2) {
+    int sequential_index = 0;
+
+    for (int wi = 0; wi < 11; ++wi) {
+        const int W = 8 + 2 * wi;
         const int K = (W - 2) / 2;
         const int L = K + 2;
         const int O = W - L;
-        std::uint32_t table[OUTER_SLOTS][LOCAL_SLOTS]{};
+        if (ROW_BASE[wi] != sequential_index) return 2;
         for (int r = 0; r <= O; ++r) {
             for (int local = 0; local <= L; ++local) {
                 const Rank64 off = sector_offset(p, L, r, local);
@@ -59,27 +67,34 @@ int main() {
                     std::cerr << "sector offset does not fit uint32 W=" << W
                               << " outer=" << r << " local=" << local
                               << " offset=" << off << '\n';
-                    return 2;
+                    return 3;
                 }
-                table[r][local] = static_cast<std::uint32_t>(off);
+                if (sequential_index >= TABLE_ENTRIES ||
+                    EMBEDDED[sequential_index] != off) {
+                    std::cerr << "embedded sector offset mismatch W=" << W
+                              << " outer=" << r << " local=" << local
+                              << " index=" << sequential_index
+                              << " embedded=" << (sequential_index < TABLE_ENTRIES ? EMBEDDED[sequential_index] : 0)
+                              << " expected=" << off << '\n';
+                    return 4;
+                }
                 if (off > max_offset) max_offset = off;
                 ++active_entries;
+                ++sequential_index;
             }
         }
-        for (int r = 0; r <= O; ++r)
-            for (int local = 0; local <= L; ++local)
-                if (table[r][local] != sector_offset(p, L, r, local)) return 3;
         ++configurations;
     }
-    if (configurations != 11 || active_entries != 1199 ||
-        max_offset != 1805186805ULL) return 4;
+    if (configurations != 11 || active_entries != TABLE_ENTRIES ||
+        sequential_index != TABLE_ENTRIES || max_offset != 1805186805ULL)
+        return 5;
 
     std::cout << "gridfp-runtime-sector-offset-table-proof OK"
               << " W_configs=" << configurations
               << " active_entries=" << active_entries
-              << " runtime_table_entries=" << OUTER_SLOTS * LOCAL_SLOTS
-              << " runtime_table_bytes=" << OUTER_SLOTS * LOCAL_SLOTS * sizeof(std::uint32_t)
+              << " table_entries=" << TABLE_ENTRIES
+              << " table_bytes=" << sizeof(EMBEDDED)
               << " max_offset=" << max_offset
-              << " uint32_exact=1 table_exact=1\n";
+              << " row_bases_exact=1 uint32_exact=1 embedded_exact=1\n";
     return 0;
 }
