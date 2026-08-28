@@ -19,6 +19,9 @@ namespace oneesan::gridfp::reducedprod {
 #ifndef RP_RUNTIME_OWNER_FIXED54
 #define RP_RUNTIME_OWNER_FIXED54 RP_RUNTIME_OWNER_RECIPROCAL
 #endif
+#ifndef RP_RUNTIME_OWNER_FIXED52
+#define RP_RUNTIME_OWNER_FIXED52 0
+#endif
 #ifndef RP_RUNTIME_SUPPORT_RANK_SETBITS
 #define RP_RUNTIME_SUPPORT_RANK_SETBITS 1
 #endif
@@ -41,6 +44,8 @@ static_assert(RP_RUNTIME_OWNER_RECIPROCAL == 0 || RP_RUNTIME_OWNER_RECIPROCAL ==
               "RP_RUNTIME_OWNER_RECIPROCAL must be 0 or 1");
 static_assert(RP_RUNTIME_OWNER_FIXED54 == 0 || RP_RUNTIME_OWNER_FIXED54 == 1,
               "RP_RUNTIME_OWNER_FIXED54 must be 0 or 1");
+static_assert(RP_RUNTIME_OWNER_FIXED52 == 0 || RP_RUNTIME_OWNER_FIXED52 == 1,
+              "RP_RUNTIME_OWNER_FIXED52 must be 0 or 1");
 static_assert(RP_RUNTIME_SUPPORT_RANK_SETBITS == 0 || RP_RUNTIME_SUPPORT_RANK_SETBITS == 1,
               "RP_RUNTIME_SUPPORT_RANK_SETBITS must be 0 or 1");
 static_assert(RP_RUNTIME_SECTOR_OFFSET_TABLE == 0 || RP_RUNTIME_SECTOR_OFFSET_TABLE == 1,
@@ -69,7 +74,16 @@ RP_RUNTIME_OUTER_GROUP_PREFIX[RP_RUNTIME_OUTER_GROUP_ENTRIES] = {
 static_assert(sizeof(RP_RUNTIME_OUTER_GROUP_SIZE) == 396);
 static_assert(sizeof(RP_RUNTIME_OUTER_GROUP_PREFIX) == 792);
 
-#if RP_RUNTIME_OWNER_FIXED54
+#if RP_RUNTIME_OWNER_FIXED52
+// Production two-row schedule has at most 8 GPUs. 52-bit fixed-point division
+// is exact for every W=8..28 midpoint owner case in that domain; 51 bits is not.
+__device__ __constant__ Rank64 RP_RUNTIME_OWNER_MAGIC52[11] = {
+    7125948777484ULL,1011817485367ULL,138884251622ULL,
+    18578210027ULL,2435340465ULL,314076226ULL,
+    39966142ULL,5029048ULL,626836ULL,77496ULL,9513ULL
+};
+static_assert(sizeof(RP_RUNTIME_OWNER_MAGIC52) == 88);
+#elif RP_RUNTIME_OWNER_FIXED54
 __device__ __constant__ Rank64 RP_RUNTIME_OWNER_MAGIC54[11] = {
     28503795109939ULL,4047269941469ULL,555537006490ULL,
     74312840109ULL,9741361862ULL,1256304905ULL,
@@ -240,7 +254,15 @@ __device__ __forceinline__ int runtime_owner_from_group_base_device(
     Rank64 group_base, Rank64 group, int W, int K, int ngpu,
     const Rank64* owner_begin
 ) {
-#if RP_RUNTIME_OWNER_FIXED54
+#if RP_RUNTIME_OWNER_FIXED52
+    if (W >= 8 && W <= RP_MAX_W && !(W & 1) && K == (W - 2) / 2) {
+        const int wi = (W - 8) >> 1;
+        const Rank64 numerator =
+            (group_base + group / 2) * static_cast<Rank64>(ngpu);
+        const Rank64 q = (numerator * RP_RUNTIME_OWNER_MAGIC52[wi]) >> 52;
+        return static_cast<int>(q);
+    }
+#elif RP_RUNTIME_OWNER_FIXED54
     if (W >= 8 && W <= RP_MAX_W && !(W & 1) && K == (W - 2) / 2) {
         const int wi = (W - 8) >> 1;
         const Rank64 numerator =
