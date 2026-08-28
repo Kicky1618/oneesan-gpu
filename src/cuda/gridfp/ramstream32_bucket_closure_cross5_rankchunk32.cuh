@@ -67,7 +67,7 @@ p10dc_resolved_low_preimages_cross5_rankchunk32_fixed(
 ) {
     uint32_t packed_chunks = 0;
     const uint16_t* rank_row = nullptr;
-    p10dc_low_rankchunk32_row(h, rank, packed_chunks, rank_row);
+    p10dc_low_rankchunk32_row_warpstripe(h, rank, packed_chunks, rank_row);
     return p10dc_resolved_low_preimages_cross5_rankchunk32_fast(
         packed_chunks, depth, source_row, rank_row);
 }
