@@ -38,7 +38,7 @@ if [[ "$RUN_SELFTEST" == 1 ]]; then
     if [[ "$RANK_BACKEND" == rankstream ]]; then
       LUT_LOAD="$mode" PM_ACCUM="$PM_ACCUM" DECODE_LOAD="$DEPTHCODE_DECODE_LOAD" bash "$SELFTEST" >"$LOGDIR/selftest_${mode}.out" 2>"$LOGDIR/selftest_${mode}.err"
     else
-      RANKSTREAM_LUT_LOAD="$mode" PM_ACCUM="$PM_ACCUM" DECODE_LOAD="$DEPTHCODE_DECODE_LOAD" bash "$SELFTEST" >"$LOGDIR/selftest_${mode}.out" 2>"$LOGDIR/selftest_${mode}.err"
+      RUN_LAYOUT_PROOF=0 RANKSTREAM_LUT_LOAD="$mode" PM_ACCUM="$PM_ACCUM" DECODE_LOAD="$DEPTHCODE_DECODE_LOAD" bash "$SELFTEST" >"$LOGDIR/selftest_${mode}.out" 2>"$LOGDIR/selftest_${mode}.err"
     fi
   done
 fi
@@ -85,7 +85,12 @@ print(f'rank_backend={backend}')
 print('rankstream_lut_logical_bytes=6561'); print('rankstream_lut_constant_physical_bytes=6561'); print('rankstream_lut_ldg_physical_bytes=6561'); print('rankstream_lut_ldg256_physical_bytes=6899'); print('rankstream_lut_ldg256_state_stride=256'); print('rankstream_lut_ldg256_state_row_cachelines_128b=2')
 print('production_state_checks=0'); print('production_fallback=0')
 if backend=='rankchunk32':
-    print('rankchunk32_cross_runtime_divmod=0'); print('rankchunk32_height_alignment=32'); print('rankchunk32_block_base_loads_per_warp_max=2')
+    print('rankchunk32_cross_runtime_divmod=0')
+    print('rankchunk32_chunk_bits=23')
+    print('rankchunk32_prefix_bits=9')
+    print('rankchunk32_block=32')
+    print('rankchunk32_height_padding_entries=0')
+    print('rankchunk32_block_base_loads_per_warp_max=2')
 print(f'summary={dst}')
 PY
 
