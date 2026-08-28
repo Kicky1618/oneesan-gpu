@@ -293,8 +293,8 @@ int main(int argc, char** argv) {
     ck(cudaMalloc(&d_source, kSourceN * sizeof(uint32_t)), "source alloc");
     ck(cudaMalloc(&d_partial, threads * sizeof(uint64_t)), "partial alloc");
     ck(cudaMemcpy(d_masks, h_masks.data(), n * sizeof(uint8_t), cudaMemcpyHostToDevice), "masks H2D");
-    ck(cudaMemcpy(d_ranks, h_ranks.data(), n * kChunk * sizeof(uint16_t)), "ranks H2D");
-    ck(cudaMemcpy(d_source, h_source.data(), kSourceN * sizeof(uint32_t)), cudaMemcpyHostToDevice), "source H2D");
+    ck(cudaMemcpy(d_ranks, h_ranks.data(), n * kChunk * sizeof(uint16_t), cudaMemcpyHostToDevice), "ranks H2D");
+    ck(cudaMemcpy(d_source, h_source.data(), kSourceN * sizeof(uint32_t), cudaMemcpyHostToDevice), "source H2D");
 
     rankmask5_kernel<kDecodeFfs><<<blocks, kBlock>>>(d_masks, d_ranks, d_source, n, d_partial);
     rankmask5_kernel<kDecodeUnrolled5><<<blocks, kBlock>>>(d_masks, d_ranks, d_source, n, d_partial);
