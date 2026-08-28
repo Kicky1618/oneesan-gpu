@@ -2,11 +2,12 @@
 
 #include "ramstream32_bucket_closure_cross5_rankformula_nometa4.cuh"
 
+static constexpr uint32_t P10DC_RANKFORMULA_ABSTRACT_MAX_K = 14u;
 static constexpr uint32_t P10DC_RANKFORMULA_ABSTRACT_DESC_N = 7060u;
 static constexpr uint32_t P10DC_RANKFORMULA_ABSTRACT_RANK_N = 32743u;
-static constexpr uint32_t P10DC_RANKFORMULA_ABSTRACT_OFF_N = (LOW_LUT_K + 1u) * 16u;
-static constexpr uint32_t P10DC_RANKFORMULA_ABSTRACT_LP_BITS = LOW_LUT_K;
-static_assert(LOW_LUT_K <= 14);
+static constexpr uint32_t P10DC_RANKFORMULA_ABSTRACT_OFF_N = (P10DC_RANKFORMULA_ABSTRACT_MAX_K + 1u) * 16u;
+static constexpr uint32_t P10DC_RANKFORMULA_ABSTRACT_LP_BITS = P10DC_RANKFORMULA_ABSTRACT_MAX_K;
+static_assert(LOW_LUT_K <= int(P10DC_RANKFORMULA_ABSTRACT_MAX_K));
 
 __device__ __align__(128) uint32_t
     D_P10DC_RANKFORMULA_ABSTRACT_DESC[P10DC_RANKFORMULA_ABSTRACT_DESC_N];
@@ -62,7 +63,7 @@ struct P10DCRankFormulaAbstractHost {
 static P10DCRankFormulaAbstractHost p10dc_rankformula_abstract_build_host() {
     P10DCRankFormulaAbstractHost out{};
     uint32_t dn = 0, rn = 0;
-    for (int n = 0; n <= LOW_LUT_K; ++n) {
+    for (int n = 0; n <= int(P10DC_RANKFORMULA_ABSTRACT_MAX_K); ++n) {
         for (int h = 0; h < 16; ++h) {
             if (dn >= 65536u) std::exit(768);
             out.off[size_t(n) * 16u + size_t(h)] = uint16_t(dn);
@@ -71,7 +72,7 @@ static P10DCRankFormulaAbstractHost p10dc_rankformula_abstract_build_host() {
                 if (dn >= P10DC_RANKFORMULA_ABSTRACT_DESC_N ||
                     rn >= (1u << 15)) std::exit(769);
                 const uint32_t lp = p10dc_rankformula_abstract_lpattern_host(n, h, j);
-                if (lp == 0xffffffffu || lp >= (1u << LOW_LUT_K)) std::exit(770);
+                if (lp == 0xffffffffu || lp >= (1u << P10DC_RANKFORMULA_ABSTRACT_MAX_K)) std::exit(770);
                 const uint32_t roff = rn;
                 out.desc[dn++] = lp | (roff << P10DC_RANKFORMULA_ABSTRACT_LP_BITS);
                 for (int ord = 0; ord < n; ++ord) {
