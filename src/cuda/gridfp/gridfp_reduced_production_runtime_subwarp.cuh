@@ -209,6 +209,10 @@ __global__ void owner_component_runtime_subwarp_kernel(
                 if (ctx.owner != gpu_id) {
                     runtime_set_error(error, 302);
                 } else {
+#if RP_RUNTIME_FIND_SIGNATURE_FILTER
+                    std::uint64_t source_signature = runtime_shared_key_signature_bit(seed);
+                    std::uint64_t destination_signature = 0;
+#endif
                     sh_src[warp][subgroup][0] = runtime_shared_key_encode(seed);
                     sh_ns[warp][subgroup] = 1;
                     int cursor = 0;
@@ -227,8 +231,14 @@ __global__ void owner_component_runtime_subwarp_kernel(
                         for (int ei = 0; ei < edge.n; ++ei) {
                             if (!edge.v[ei].coef) continue;
                             const DeviceKey d = edge.v[ei].key;
+#if RP_RUNTIME_FIND_SIGNATURE_FILTER
+                            int destination_ix = runtime_find_shared_key_filtered(
+                                sh_dst[warp][subgroup], sh_nd[warp][subgroup], d,
+                                destination_signature);
+#else
                             int destination_ix = runtime_find_shared_key(
                                 sh_dst[warp][subgroup], sh_nd[warp][subgroup], d);
+#endif
                             if (destination_ix < 0) {
                                 if (sh_nd[warp][subgroup] >= RP_RUNTIME_MAX_PAIRS) {
                                     runtime_set_error(error, 304);
@@ -238,10 +248,18 @@ __global__ void owner_component_runtime_subwarp_kernel(
                                 destination_ix = sh_nd[warp][subgroup]++;
                                 sh_dst[warp][subgroup][destination_ix] =
                                     runtime_shared_key_encode(d);
+#if RP_RUNTIME_FIND_SIGNATURE_FILTER
+                                destination_signature |= runtime_shared_key_signature_bit(d);
+                                if (!runtime_discover_inverse_direction_to_shared(
+                                        d, W, q, reverse,
+                                        sh_src[warp][subgroup], sh_ns[warp][subgroup],
+                                        RP_RUNTIME_MAX_PAIRS, &source_signature)) {
+#else
                                 if (!runtime_discover_inverse_direction_to_shared(
                                         d, W, q, reverse,
                                         sh_src[warp][subgroup], sh_ns[warp][subgroup],
                                         RP_RUNTIME_MAX_PAIRS)) {
+#endif
                                     runtime_set_error(error, 305);
                                     cursor = RP_RUNTIME_MAX_PAIRS;
                                     break;
