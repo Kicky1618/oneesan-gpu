@@ -13,7 +13,7 @@ NVCC="$NVCC" GPUS=8 ARCH="$ARCH" ITERS="$MICRO_ITERS" REPEATS="$MICRO_REPEATS" R
 COPY_SPEEDUP="$(python3 - "$MICRO_RESULT" <<'PY'
 import csv,statistics,sys
 r=list(csv.DictReader(open(sys.argv[1]),delimiter='\t'))
-print(f"{statistics.median(float(x['speedup']) for x in r):.9f}")
+print(f"{statistics.median(float(x['packed_speedup_vs_unpacked']) for x in r):.9f}")
 PY
 )"
 echo "b300_group_meta_copy_median_speedup=${COPY_SPEEDUP}x" >&2
