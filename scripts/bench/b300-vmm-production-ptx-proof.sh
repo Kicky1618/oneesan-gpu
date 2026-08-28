@@ -18,9 +18,9 @@ mkdir -p "$OUTDIR"
 bash "$ONEESAN_ROOT/scripts/bench/b300-vmm-production-generate-proof.sh"
 python3 "$GEN" "$SRC" "$GENSRC"
 python3 "$PRUNE" "$GENSRC" "$GENSRC"
-for stale in D_MAIN_PTR D_BLOCK_PTR D_MAIN_CHUNK D_BLOCK_CHUNK D_NGPU; do
+for stale in D_MAIN_PTR D_BLOCK_PTR D_MAIN_CHUNK D_BLOCK_CHUNK D_NGPU D_MAIN_W D_BLOCK_W; do
   if grep -Fq "$stale" "$GENSRC"; then
-    echo "PTX input still contains stale shard symbol $stale" >&2
+    echo "PTX input still contains stale symbol $stale" >&2
     exit 3
   fi
 done
@@ -70,9 +70,9 @@ for k in main_load block_load main_store block_store; do
     echo "$k VMM direct path missing constant base pointer load" >&2
     exit 6
   fi
-  for stale in D_MAIN_PTR D_BLOCK_PTR D_MAIN_CHUNK D_BLOCK_CHUNK D_NGPU; do
+  for stale in D_MAIN_PTR D_BLOCK_PTR D_MAIN_CHUNK D_BLOCK_CHUNK D_NGPU D_MAIN_W D_BLOCK_W; do
     if grep -Fq "$stale" "$body"; then
-      echo "$k VMM direct PTX still references stale shard symbol $stale" >&2
+      echo "$k VMM direct PTX still references stale symbol $stale" >&2
       exit 7
     fi
   done
@@ -84,4 +84,4 @@ grep -Fq 'D_BLOCK_VBASE' "$OUTDIR/block_load.body.ptx"
 grep -Fq 'D_MAIN_VBASE' "$OUTDIR/main_store.body.ptx"
 grep -Fq 'D_BLOCK_VBASE' "$OUTDIR/block_store.body.ptx"
 
-echo "b300-vmm-production-ptx-proof OK arch=$ARCH owner_div64=0 owner_mul64=0 owner_compare64=0 dynamic_shard_ptr_index=0 stale_shard_symbols=0 direct_global_index=1"
+echo "b300-vmm-production-ptx-proof OK arch=$ARCH owner_div64=0 owner_mul64=0 owner_compare64=0 dynamic_shard_ptr_index=0 stale_shard_symbols=0 stale_width_symbols=0 direct_global_index=1"
