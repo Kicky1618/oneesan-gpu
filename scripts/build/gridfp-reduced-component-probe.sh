@@ -58,8 +58,11 @@ case "$MODE" in
   p2p-cycle)
     SRC_REL="src/cuda/gridfp/gridfp_reduced_production_p2p_cycle_microprobe.cu"
     ;;
+  two-row-multigpu)
+    SRC_REL="src/cuda/gridfp/gridfp_reduced_production_two_row_multigpu_microprobe.cu"
+    ;;
   *)
-    echo "invalid MODE=$MODE (forward|reverse|register|persistent|dense|edge|grouped|inplace|cycle|shift-cycle|turn|owner-component|owner-lean|owner-subwarp|turn-owner-subwarp|turn-high-owner-subwarp|p2p-cycle)" >&2
+    echo "invalid MODE=$MODE (forward|reverse|register|persistent|dense|edge|grouped|inplace|cycle|shift-cycle|turn|owner-component|owner-lean|owner-subwarp|turn-owner-subwarp|turn-high-owner-subwarp|p2p-cycle|two-row-multigpu)" >&2
     exit 2
     ;;
 esac
