@@ -37,8 +37,10 @@ PREP_END_NEW='''    size_t staged_group_count=0;for(auto const&pw:schedule)stage
     std::vector<DeviceGroupMeta> staged_group_meta;staged_group_meta.reserve(staged_group_count);
     for(auto&pw:schedule)for(auto&pg:pw.groups){pg.meta_id=staged_group_meta.size();DeviceGroupMeta m{};std::memcpy(m.main_dp,pg.ms.dp,sizeof(pg.ms.dp));std::memcpy(m.block_dp,pg.ds.dp,sizeof(pg.ds.dp));m.main_fixed=pg.mf;m.main_occ=pg.mo;m.block_fixed=pg.bf;m.block_occ=pg.bo;staged_group_meta.push_back(m);}
     size_t staged_group_meta_bytes=staged_group_meta.size()*sizeof(DeviceGroupMeta);
+    unsigned long long staged_group_meta_max_mib=512;if(const char*e=std::getenv("B300_STAGED_META_MAX_MIB")){char*end=nullptr;unsigned long long v=std::strtoull(e,&end,10);if(!end||*end||v<1){std::cerr<<"invalid B300_STAGED_META_MAX_MIB="<<e<<"\n";return 13;}staged_group_meta_max_mib=v;}
+    if(staged_group_meta_max_mib>std::numeric_limits<size_t>::max()/(1ull<<20)||staged_group_meta_bytes>size_t(staged_group_meta_max_mib)*(1ull<<20)){std::cerr<<"staged group meta exceeds cap: bytes_per_gpu="<<staged_group_meta_bytes<<" cap_mib="<<staged_group_meta_max_mib<<" groups="<<staged_group_count<<"\n";return 13;}
     for(auto&c:ctx)c.stage_group_meta(staged_group_meta);
-    std::cerr<<"staged group meta: groups="<<staged_group_count<<" bytes_per_gpu="<<staged_group_meta_bytes<<" mib_per_gpu="<<double(staged_group_meta_bytes)/(1<<20)<<" total_h2d_gib="<<double(staged_group_meta_bytes)*ng/(1ull<<30)<<" copy_mode=H2D_once_then_D2D_per_group\n";
+    std::cerr<<"staged group meta: groups="<<staged_group_count<<" bytes_per_gpu="<<staged_group_meta_bytes<<" mib_per_gpu="<<double(staged_group_meta_bytes)/(1<<20)<<" cap_mib="<<staged_group_meta_max_mib<<" total_h2d_gib="<<double(staged_group_meta_bytes)*ng/(1ull<<30)<<" copy_mode=H2D_once_then_D2D_per_group\n";
     staged_group_meta.clear();staged_group_meta.shrink_to_fit();
     double prepare_s=std::chrono::duration<double>(std::chrono::steady_clock::now()-prep0).count();
     std::cerr<<"prepared windows="<<schedule.size()<<" max_groups="<<maxgroups<<" prepare_s="<<prepare_s<<"\n";'''
@@ -61,9 +63,9 @@ def main()->None:
     text=once(text,PREP_END_OLD,PREP_END_NEW,'schedule metadata staging')
     for stale in ('cudaMemcpyToSymbol(D_GROUP_META,&hmeta','DeviceGroupMeta hmeta{}'):
         if stale in text: raise SystemExit(f'per-group host metadata artifact remains: {stale}')
-    for required in ('DeviceGroupMeta*dGroupMeta=nullptr','void stage_group_meta(const std::vector<DeviceGroupMeta>& h)','size_t meta_id=0','cudaMemcpyDeviceToDevice','staged group meta: groups=','staged_group_meta.clear()'):
+    for required in ('DeviceGroupMeta*dGroupMeta=nullptr','void stage_group_meta(const std::vector<DeviceGroupMeta>& h)','size_t meta_id=0','cudaMemcpyDeviceToDevice','B300_STAGED_META_MAX_MIB','staged group meta exceeds cap:','cap_mib=','staged_group_meta.clear()'):
         if required not in text: raise SystemExit(f'missing staged metadata artifact: {required}')
     a.out.parent.mkdir(parents=True,exist_ok=True);a.out.write_text(text)
-    print(f'lowered {a.out} staged_group_meta=1 per_group_meta_source=device staged_h2d_once=1 per_group_constant_copy=d2d_sync host_meta_rebuild_per_group=0')
+    print(f'lowered {a.out} staged_group_meta=1 per_group_meta_source=device staged_h2d_once=1 per_group_constant_copy=d2d_sync host_meta_rebuild_per_group=0 default_stage_cap_mib=512')
 
 if __name__=='__main__':main()
