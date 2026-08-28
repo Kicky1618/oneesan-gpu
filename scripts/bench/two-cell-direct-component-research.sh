@@ -18,3 +18,4 @@ build_and_run() {
 
 build_and_run two_cell_direct_component_probe
 build_and_run two_cell_direct_face_preimage_probe
+build_and_run two_cell_linear_face_formula_probe
