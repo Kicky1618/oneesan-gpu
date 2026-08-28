@@ -25,6 +25,9 @@ namespace oneesan::gridfp::reducedprod {
 #ifndef RP_RUNTIME_OWNER_U32LIMB
 #define RP_RUNTIME_OWNER_U32LIMB 0
 #endif
+#ifndef RP_RUNTIME_OWNER_W28_NGPU8_DIRECT
+#define RP_RUNTIME_OWNER_W28_NGPU8_DIRECT 0
+#endif
 #ifndef RP_RUNTIME_SUPPORT_RANK_SETBITS
 #define RP_RUNTIME_SUPPORT_RANK_SETBITS 1
 #endif
@@ -57,6 +60,11 @@ static_assert(RP_RUNTIME_OWNER_FIXED52 == 0 || RP_RUNTIME_OWNER_FIXED52 == 1,
               "RP_RUNTIME_OWNER_FIXED52 must be 0 or 1");
 static_assert(RP_RUNTIME_OWNER_U32LIMB == 0 || RP_RUNTIME_OWNER_U32LIMB == 1,
               "RP_RUNTIME_OWNER_U32LIMB must be 0 or 1");
+static_assert(RP_RUNTIME_OWNER_W28_NGPU8_DIRECT == 0 ||
+              RP_RUNTIME_OWNER_W28_NGPU8_DIRECT == 1,
+              "RP_RUNTIME_OWNER_W28_NGPU8_DIRECT must be 0 or 1");
+static_assert(!RP_RUNTIME_OWNER_W28_NGPU8_DIRECT || RP_RUNTIME_OWNER_U32LIMB,
+              "RP_RUNTIME_OWNER_W28_NGPU8_DIRECT requires RP_RUNTIME_OWNER_U32LIMB");
 static_assert(RP_RUNTIME_SUPPORT_RANK_SETBITS == 0 || RP_RUNTIME_SUPPORT_RANK_SETBITS == 1,
               "RP_RUNTIME_SUPPORT_RANK_SETBITS must be 0 or 1");
 static_assert(RP_RUNTIME_FUSE_PRIMITIVE_SUPPORT_RANK == 0 ||
@@ -390,17 +398,25 @@ __device__ __forceinline__ int runtime_owner_from_group_base_device(
 ) {
 #if RP_RUNTIME_OWNER_U32LIMB
     if (W >= 8 && W <= RP_MAX_W && !(W & 1) && K == (W - 2) / 2) {
+        const Rank64 midpoint = group_base + group / 2;
+#if RP_RUNTIME_OWNER_W28_NGPU8_DIRECT
+        if (W == 28 && ngpu == 8) {
+            const std::uint32_t lo = static_cast<std::uint32_t>(midpoint);
+            const std::uint32_t hi = static_cast<std::uint32_t>(midpoint >> 32);
+            const std::uint32_t upper = hi * 9513u + __umulhi(lo, 9513u);
+            return static_cast<int>(upper >> 17);
+        }
+#endif
         const int wi = (W - 8) >> 1;
         const std::uint32_t meta = RP_RUNTIME_OWNER_U32_META[wi];
         const unsigned shift = meta >> 16;
         const std::uint32_t magic = meta & 0xffffu;
         const std::uint32_t scale =
             magic * static_cast<std::uint32_t>(ngpu);
-        const Rank64 midpoint = group_base + group / 2;
         const std::uint32_t lo = static_cast<std::uint32_t>(midpoint);
-        const std::uint32_t product_lo = lo * scale;
         const std::uint32_t product_hi = __umulhi(lo, scale);
         if (shift < 32) {
+            const std::uint32_t product_lo = lo * scale;
             const std::uint32_t q =
                 (product_lo >> shift) | (product_hi << (32 - shift));
             return static_cast<int>(q);
