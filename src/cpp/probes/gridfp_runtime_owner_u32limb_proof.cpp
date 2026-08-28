@@ -48,15 +48,18 @@ Rank64 group_size(
     return s;
 }
 
-Rank64 owner_u32limb(Rank64 numerator, std::uint32_t meta) {
+Rank64 owner_u32limb(Rank64 midpoint, int ngpu, std::uint32_t meta) {
     const unsigned shift = meta >> 16;
     const std::uint32_t magic = meta & 0xffffu;
-    const std::uint32_t lo = static_cast<std::uint32_t>(numerator);
+    // Reassociate midpoint * ngpu * magic so the 64-bit midpoint never takes
+    // part in an integer multiply. scale is at most 17 bits for ngpu<=8.
+    const std::uint32_t scale = magic * static_cast<std::uint32_t>(ngpu);
+    const std::uint32_t lo = static_cast<std::uint32_t>(midpoint);
     if (shift < 32)
-        return (Rank64(lo) * magic) >> shift;
-    const std::uint32_t hi = static_cast<std::uint32_t>(numerator >> 32);
+        return (Rank64(lo) * scale) >> shift; // logical 32x32 -> 64 wide multiply
+    const std::uint32_t hi = static_cast<std::uint32_t>(midpoint >> 32);
     const std::uint32_t upper =
-        hi * magic + static_cast<std::uint32_t>((Rank64(lo) * magic) >> 32);
+        hi * scale + static_cast<std::uint32_t>((Rank64(lo) * scale) >> 32);
     return upper >> (shift - 32);
 }
 }  // namespace
@@ -64,7 +67,7 @@ Rank64 owner_u32limb(Rank64 numerator, std::uint32_t meta) {
 int main() {
     const auto p = primitive_table();
     std::uint64_t groups = 0, owner_cases = 0, previous_shift_failures = 0;
-    std::uint32_t max_magic = 0, max_upper = 0;
+    std::uint32_t max_magic = 0, max_scale = 0, max_upper = 0, max_midpoint_hi = 0;
     unsigned max_shift = 0;
 
     for (int wi = 0; wi < 11; ++wi) {
@@ -89,13 +92,17 @@ int main() {
             const Rank64 count = binom(O, r);
             for (Rank64 sr = 0; sr < count; ++sr) {
                 const Rank64 midpoint = prefix + sr * group + group / 2;
+                max_midpoint_hi = std::max(
+                    max_midpoint_hi, static_cast<std::uint32_t>(midpoint >> 32));
                 ++groups;
                 for (int ngpu = 2; ngpu <= MAX_GPU; ++ngpu) {
                     const Rank64 numerator = midpoint * Rank64(ngpu);
                     const Rank64 exact = numerator / total;
-                    const Rank64 fast = owner_u32limb(numerator, meta);
+                    const Rank64 fast = owner_u32limb(midpoint, ngpu, meta);
                     if (fast != exact || fast >= Rank64(ngpu)) return 4;
 
+                    const std::uint32_t scale = magic * static_cast<std::uint32_t>(ngpu);
+                    max_scale = std::max(max_scale, scale);
                     const unsigned previous_shift = shift - 1;
                     const Rank64 previous_magic =
                         (Rank64(1) << previous_shift) / total;
@@ -103,23 +110,26 @@ int main() {
                         ++previous_shift_failures;
 
                     if (shift >= 32) {
-                        const std::uint32_t lo = static_cast<std::uint32_t>(numerator);
-                        const std::uint32_t hi = static_cast<std::uint32_t>(numerator >> 32);
-                        const std::uint32_t upper = hi * magic +
-                            static_cast<std::uint32_t>((Rank64(lo) * magic) >> 32);
+                        const std::uint32_t lo = static_cast<std::uint32_t>(midpoint);
+                        const std::uint32_t hi = static_cast<std::uint32_t>(midpoint >> 32);
+                        const std::uint32_t upper = hi * scale +
+                            static_cast<std::uint32_t>((Rank64(lo) * scale) >> 32);
                         max_upper = std::max(max_upper, upper);
+                    } else if (midpoint >> 32) {
+                        return 5;
                     }
                     ++owner_cases;
                 }
             }
             prefix += count * group;
         }
-        if (prefix != total) return 5;
+        if (prefix != total) return 6;
     }
 
     if (groups != 16376ULL || owner_cases != 114632ULL ||
         previous_shift_failures != 37ULL || max_magic != 9757u ||
-        max_upper != 8372291u) return 6;
+        max_scale != 78056u || max_upper != 8372291u || max_midpoint_hi != 110u)
+        return 7;
 
     std::cout << "gridfp-runtime-owner-u32limb-proof OK"
               << " W_min=8 W_max=28 W_step=2"
@@ -129,11 +139,15 @@ int main() {
               << " previous_shift_failures=" << previous_shift_failures
               << " max_magic=" << max_magic
               << " max_magic_bits=14"
+              << " max_scale=" << max_scale
+              << " max_scale_bits=17"
               << " max_shift=" << max_shift
+              << " max_midpoint_hi=" << max_midpoint_hi
+              << " max_midpoint_bits=39"
               << " max_upper=" << max_upper
               << " max_upper_bits=23"
               << " table_entries=" << META.size()
               << " table_bytes=" << META.size() * sizeof(std::uint32_t)
-              << " mul64_general=0 clamp_required=0 exact=1\n";
+              << " midpoint_mul64=0 mul64_general=0 clamp_required=0 exact=1\n";
     return 0;
 }
