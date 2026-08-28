@@ -113,6 +113,7 @@ int main(int argc, char** argv) {
     std::cout << "gridfp-materialize-primitive-last-r-microprobe"
               << " setbits=" << RP_FAST_MATERIALIZE_PRIMITIVE_SETBITS
               << " last_r=" << RP_FAST_MATERIALIZE_PRIMITIVE_LAST_R
+              << " packed=" << RP_FAST_MATERIALIZE_PRIMITIVE_PACKED
               << " occupied_min=1 occupied_max=27"
               << " blocks=" << blocks << " threads=" << threads
               << " iterations=" << iterations << " calls=" << calls
