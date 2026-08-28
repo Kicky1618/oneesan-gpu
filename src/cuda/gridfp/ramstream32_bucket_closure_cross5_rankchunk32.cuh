@@ -3,6 +3,12 @@
 #include "ramstream32_bucket_closure_cross5_rankstream.cuh"
 #include "ramstream32_bucket_low_rankchunk32.cuh"
 
+#ifndef P10DC_RANKCHUNK32_ONESHFL
+#define P10DC_RANKCHUNK32_ONESHFL 1
+#endif
+static_assert(P10DC_RANKCHUNK32_ONESHFL == 0 || P10DC_RANKCHUNK32_ONESHFL == 1,
+              "P10DC_RANKCHUNK32_ONESHFL must be 0 or 1");
+
 // Height-local rankchunk metadata is 32-entry aligned.  A warp stripe therefore
 // covers at most the two fixed 16-entry blocks sourced by lanes 0 and 16.
 // Each source lane loads one block base and every active lane selects its half
@@ -91,7 +97,11 @@ p10dc_resolved_low_preimages_cross5_rankchunk32_fixed(
 ) {
     uint32_t packed_chunks = 0;
     const uint16_t* rank_row = nullptr;
+#if P10DC_RANKCHUNK32_ONESHFL
     p10dc_low_rankchunk32_row_warpstripe_oneshfl(h, rank, packed_chunks, rank_row);
+#else
+    p10dc_low_rankchunk32_row_warpstripe(h, rank, packed_chunks, rank_row);
+#endif
     return p10dc_resolved_low_preimages_cross5_rankchunk32_fast(
         packed_chunks, depth, source_row, rank_row);
 }
