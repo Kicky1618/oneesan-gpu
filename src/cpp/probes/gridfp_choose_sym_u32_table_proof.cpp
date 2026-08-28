@@ -7,11 +7,15 @@ using Rank64 = std::uint64_t;
 static constexpr int MAX = 28;
 static constexpr int SYM_ENTRIES = 225;
 static constexpr int TRI_ENTRIES = 435;
+static constexpr int FULL_ENTRIES = (MAX + 1) * (MAX + 1);
 static constexpr std::array<std::uint32_t, SYM_ENTRIES> SYM = {
 #include "../../cuda/gridfp/gridfp_reduced_production_choose_sym_u32_values.inc"
 };
 static constexpr std::array<std::uint32_t, TRI_ENTRIES> TRI = {
 #include "../../cuda/gridfp/gridfp_reduced_production_choose_tri_u32_values.inc"
+};
+static constexpr std::array<std::uint32_t, FULL_ENTRIES> FULL = {
+#include "../../cuda/gridfp/gridfp_reduced_production_choose_full_u32_values.inc"
 };
 
 std::array<std::array<Rank64, MAX + 1>, MAX + 1> build_choose() {
@@ -40,6 +44,10 @@ std::uint32_t tri_choose(int n, int k) {
     if (n < 0 || n > MAX || k < 0 || k > n) return 0;
     return TRI[std::size_t(tri_row_base(n) + k)];
 }
+std::uint32_t full_choose(int n, int k) {
+    if (n < 0 || n > MAX || k < 0 || k > n) return 0;
+    return FULL[std::size_t(n * (MAX + 1) + k)];
+}
 }
 
 int main() {
@@ -63,16 +71,23 @@ int main() {
             const Rank64 ref = (k < 0 || k > n) ? 0 : choose[n][k];
             const std::uint32_t sym = sym_choose(n, k);
             const std::uint32_t tri = tri_choose(n, k);
-            if (ref != sym || ref != tri) {
+            const std::uint32_t full = full_choose(n, k);
+            if (ref != sym || ref != tri || ref != full) {
                 std::cerr << "choose mismatch n=" << n << " k=" << k
                           << " ref=" << ref << " sym=" << sym
-                          << " tri=" << tri << '\n';
+                          << " tri=" << tri << " full=" << full << '\n';
                 return 3;
             }
             if (k >= 0 && k <= n) {
                 ++cases;
                 if (ref > 0xffffffffULL) return 4;
                 if (sym > max_value) max_value = sym;
+            }
+        }
+        for (int k = n + 1; k <= MAX; ++k) {
+            if (FULL[std::size_t(n * (MAX + 1) + k)] != 0) {
+                std::cerr << "full padding nonzero n=" << n << " k=" << k << '\n';
+                return 8;
             }
         }
     }
@@ -82,20 +97,26 @@ int main() {
     constexpr std::uint64_t old_bytes = 29ULL * 29ULL * 8ULL;
     constexpr std::uint64_t sym_bytes = SYM_ENTRIES * 4ULL;
     constexpr std::uint64_t tri_bytes = TRI_ENTRIES * 4ULL;
+    constexpr std::uint64_t full_bytes = FULL_ENTRIES * 4ULL;
     static_assert(old_bytes == 6728);
     static_assert(sym_bytes == 900);
     static_assert(tri_bytes == 1740);
+    static_assert(full_bytes == 3364);
     std::cout << "gridfp-choose-sym-u32-table-proof OK"
               << " production_n_max=28"
               << " valid_choose_cases=" << cases
               << " sym_entries=" << SYM_ENTRIES
               << " tri_entries=" << TRI_ENTRIES
+              << " full_entries=" << FULL_ENTRIES
               << " old_bytes=" << old_bytes
               << " sym_bytes=" << sym_bytes
               << " tri_bytes=" << tri_bytes
+              << " full_bytes=" << full_bytes
               << " sym_saved_bytes=" << (old_bytes - sym_bytes)
               << " tri_saved_bytes=" << (old_bytes - tri_bytes)
+              << " full_saved_bytes=" << (old_bytes - full_bytes)
               << " max_value=" << max_value
-              << " symmetry_exact=1 triangle_exact=1 row_base_exact=1 uint32_exact=1 exact=1\n";
+              << " symmetry_exact=1 triangle_exact=1 full_shape_exact=1"
+              << " row_base_exact=1 uint32_exact=1 exact=1\n";
     return 0;
 }
