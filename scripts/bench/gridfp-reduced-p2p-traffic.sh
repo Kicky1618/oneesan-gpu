@@ -17,6 +17,7 @@ MATRIX_BLOCKS="${MATRIX_BLOCKS:-4096}"
 RUN_MATRIX="${RUN_MATRIX:-1}"
 RUN_MAILBOX="${RUN_MAILBOX:-1}"
 RUN_TOKEN_CYCLE="${RUN_TOKEN_CYCLE:-1}"
+RUN_TOKEN_PLAN="${RUN_TOKEN_PLAN:-1}"
 NGPU="${NGPU:-8}"
 MAX_DIRECT_OVER_LOGICAL="${MAX_DIRECT_OVER_LOGICAL:-0}"
 
@@ -24,6 +25,7 @@ BUILD_SCRIPT="$(repo_path scripts/build/gridfp-reduced-component-probe.sh)"
 CAP_BIN="$(build_path gridfp_reduced_component_p2p-capability)"
 MAILBOX_BIN="$(build_path gridfp_reduced_component_p2p-mailbox)"
 TOKEN_BIN="$(build_path gridfp_reduced_component_p2p-token-cycle)"
+TOKEN_PLAN_BIN="$(build_path gridfp_reduced_component_p2p-token-plan)"
 PROOF_BIN="$(build_path gridfp_reduced_component_support-rank)"
 LUT_BIN="$(build_path gridfp_reduced_component_p2p-owner-lut)"
 TRAFFIC_BIN="$(build_path gridfp_reduced_component_p2p-traffic)"
@@ -44,6 +46,10 @@ if [[ "$RUN_MAILBOX" == 1 ]]; then
 fi
 if [[ "$RUN_TOKEN_CYCLE" == 1 ]]; then
   MODE=p2p-token-cycle ARCH="$ARCH" OUT="$(basename "$TOKEN_BIN")" \
+    bash "$BUILD_SCRIPT"
+fi
+if [[ "$RUN_TOKEN_PLAN" == 1 ]]; then
+  MODE=p2p-token-plan ARCH="$ARCH" OUT="$(basename "$TOKEN_PLAN_BIN")" \
     bash "$BUILD_SCRIPT"
 fi
 if [[ "$RUN_MATRIX" == 1 ]]; then
@@ -87,6 +93,12 @@ echo "== support-only slab-rank equivalence =="
 
 echo "== production owner-LUT equivalence =="
 "$LUT_BIN" "$TRAFFIC_W" "$TRAFFIC_K" "$PROOF_BLOCKS" "$NGPU"
+
+if [[ "$RUN_TOKEN_PLAN" == 1 ]]; then
+  echo "== production-width token queue plan =="
+  "$TOKEN_PLAN_BIN" "$TRAFFIC_W" "$TRAFFIC_K" "$TRAFFIC_S" \
+    "$TRAFFIC_BLOCKS" "$NGPU"
+fi
 
 echo "== production-width P2P traffic =="
 OUTPUT="$($TRAFFIC_BIN "$TRAFFIC_W" "$TRAFFIC_K" "$TRAFFIC_S" \
