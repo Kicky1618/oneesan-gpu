@@ -8,10 +8,12 @@ TRANSPOSE_MODE="${TRANSPOSE_MODE:-pipeline}"
 DEPTHCODE_DECODE_LOAD="${DEPTHCODE_DECODE_LOAD:-ldg}"; RANKSTREAM_LUT_LOAD="${RANKSTREAM_LUT_LOAD:-ldg}"
 RANKFORMULA_NOMETA_BLOCK="${RANKFORMULA_NOMETA_BLOCK:-4}"
 RANKFORMULA_NOMETA_WARPSHARE="${RANKFORMULA_NOMETA_WARPSHARE:-0}"
+RANKFORMULA_NOMETA_COOPGROUP="${RANKFORMULA_NOMETA_COOPGROUP:-0}"
 PM_ACCUM="${PM_ACCUM:-0}"; TERNARY_KEY4="${TERNARY_KEY4:-1}"; PTXAS_VERBOSE="${PTXAS_VERBOSE:-0}"
 if (( LOW_LUT_K <= 0 || HIGH_LUT_K <= 0 || LOW_LUT_K + HIGH_LUT_K + 1 != W || LOW_LUT_K > 14 || HIGH_LUT_K > 14 )); then exit 2; fi
 case "$RANKFORMULA_NOMETA_BLOCK" in 4|8|16) ;; *) echo "RANKFORMULA_NOMETA_BLOCK must be 4, 8, or 16" >&2; exit 2;; esac
-[[ "$RANKFORMULA_NOMETA_WARPSHARE" == 0 || "$RANKFORMULA_NOMETA_WARPSHARE" == 1 ]] || { echo "RANKFORMULA_NOMETA_WARPSHARE must be 0 or 1" >&2; exit 2; }
+for x in RANKFORMULA_NOMETA_WARPSHARE RANKFORMULA_NOMETA_COOPGROUP PM_ACCUM TERNARY_KEY4 PTXAS_VERBOSE; do v="${!x}"; [[ "$v" == 0 || "$v" == 1 ]] || { echo "$x must be 0 or 1" >&2; exit 2; }; done
+if [[ "$RANKFORMULA_NOMETA_COOPGROUP" == 1 && "$RANKFORMULA_NOMETA_WARPSHARE" != 1 ]]; then echo "COOPGROUP requires WARPSHARE=1" >&2; exit 2; fi
 case "$TRANSPOSE_MODE" in
   sync) SRC_NAME="oneesan_cuda_gridfp_b300_bucket_snake_onepass_pattern10_depthcode_warpstriped_delta_direct_affine_rankformula_nometa4_abstract_graph_batch.cu" ;;
   events) SRC_NAME="oneesan_cuda_gridfp_b300_bucket_snake_onepass_pattern10_depthcode_warpstriped_delta_direct_affine_rankformula_nometa4_abstract_graph_batch_events.cu" ;;
@@ -21,10 +23,9 @@ esac
 case "$DEPTHCODE_DECODE_LOAD" in global) P10DC_DECODE_LDG=0 ;; ldg) P10DC_DECODE_LDG=1 ;; *) exit 2;; esac
 P10DC_RANKSTREAM_LUT_LDG=0; P10DC_RANKSTREAM_LUT_PAD256=0
 case "$RANKSTREAM_LUT_LOAD" in constant) ;; ldg) P10DC_RANKSTREAM_LUT_LDG=1 ;; ldg256) P10DC_RANKSTREAM_LUT_LDG=1; P10DC_RANKSTREAM_LUT_PAD256=1 ;; *) exit 2;; esac
-for x in PM_ACCUM TERNARY_KEY4 PTXAS_VERBOSE; do v="${!x}"; [[ "$v" == 0 || "$v" == 1 ]] || exit 2; done
 SRC="$(repo_path "src/cuda/b300/$SRC_NAME")"
-warp_suffix=""; [[ "$RANKFORMULA_NOMETA_WARPSHARE" == 1 ]] && warp_suffix="_warpshare"
-OUT="$(build_path "${OUT:-oneesan_cuda_gridfp_b300_rankformula_nometa4_abstract_b${RANKFORMULA_NOMETA_BLOCK}${warp_suffix}_${TRANSPOSE_MODE}_n${N}}")"
+mode_suffix=""; [[ "$RANKFORMULA_NOMETA_WARPSHARE" == 1 ]] && mode_suffix="_warpshare"; [[ "$RANKFORMULA_NOMETA_COOPGROUP" == 1 ]] && mode_suffix="_coopgroup"
+OUT="$(build_path "${OUT:-oneesan_cuda_gridfp_b300_rankformula_nometa4_abstract_b${RANKFORMULA_NOMETA_BLOCK}${mode_suffix}_${TRANSPOSE_MODE}_n${N}}")"
 NVCC_EXTRA=(); [[ "$PTXAS_VERBOSE" == 1 ]] && NVCC_EXTRA+=("-Xptxas=-v")
 TMPDIR="$ONEESAN_TMP_DIR" nvcc -O3 -std=c++17 -lineinfo -arch="$ARCH" \
   "${NVCC_EXTRA[@]}" -DTARGET_W="$W" -DLOW_LUT_K="$LOW_LUT_K" -DHIGH_LUT_K="$HIGH_LUT_K" \
@@ -33,9 +34,10 @@ TMPDIR="$ONEESAN_TMP_DIR" nvcc -O3 -std=c++17 -lineinfo -arch="$ARCH" \
   -DP10DC_RANKSTREAM_LUT_PAD256="$P10DC_RANKSTREAM_LUT_PAD256" \
   -DP10DC_RANKFORMULA_NOMETA_BLOCK="$RANKFORMULA_NOMETA_BLOCK" \
   -DP10DC_RANKFORMULA_NOMETA_WARPSHARE="$RANKFORMULA_NOMETA_WARPSHARE" \
+  -DP10DC_RANKFORMULA_NOMETA_COOPGROUP="$RANKFORMULA_NOMETA_COOPGROUP" \
   -DP10DC_RANKCHUNK32_ONESHFL=1 -DP10DC_RANKCHUNK32_FUSED16=0 -DP10DC_RANKCHUNK32_BYTEPACK=0 \
   -DP10DC_RANKCHUNK32_ALIGN32=0 -DP10DC_RANKCHUNK32_BLOCK64=0 -DP10DC_RANKDELTA8_FUSED13=1 \
   -DP10DC_RANKFORMULA_SPARSE_BASE=1 -DP10DC_RANKFORMULA_RAWCODE=1 -DP10DC_RANKFORMULA_INLINE_CROSS=1 \
   -DP10DC_RANKFORMULA_BASE_DELTA=0 -DP10DC_RANKFORMULA_SLOTMETA=0 -DP10DC_RANKFORMULA_SLOTROW32=0 \
   "$SRC" -o "$OUT"
-echo "built $OUT (closure=pattern10-depthcode high_ctx=rankformula-nometa-abstract block=$RANKFORMULA_NOMETA_BLOCK warpshare=$RANKFORMULA_NOMETA_WARPSHARE per_code_metadata_bytes=0 abstract_lut_bytes=94206 ballot_runtime_loads=0 transpose=$TRANSPOSE_MODE ptxas_verbose=$PTXAS_VERBOSE)"
+echo "built $OUT (closure=pattern10-depthcode high_ctx=rankformula-nometa-abstract block=$RANKFORMULA_NOMETA_BLOCK warpshare=$RANKFORMULA_NOMETA_WARPSHARE coopgroup=$RANKFORMULA_NOMETA_COOPGROUP per_code_metadata_bytes=0 abstract_lut_bytes=94206 ballot_runtime_loads=0 transpose=$TRANSPOSE_MODE ptxas_verbose=$PTXAS_VERBOSE)"
