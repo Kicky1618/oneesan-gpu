@@ -281,8 +281,8 @@ p10dc_resolved_low_preimages_cross5_rankformula_fast(
     }
 #endif
 
-    const uint32_t dest_base = p10dc_low_rankformula_base(h, mask);
-    const uint32_t source_base = p10dc_low_rankformula_base(h + 2u, mask);
+    uint32_t dest_base = 0, source_base = 0;
+    p10dc_low_rankformula_base_pair(h, mask, dest_base, source_base);
     const uint32_t dest_local = rank - dest_base;
     uint32_t state = depth;
     uint32_t rem = uint32_t(__popc(mask));
