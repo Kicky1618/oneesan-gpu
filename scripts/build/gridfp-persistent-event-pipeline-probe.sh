@@ -4,17 +4,25 @@ source "$(dirname -- "${BASH_SOURCE[0]}")/../lib/common.sh"
 
 ARCH="${ARCH:-native}"
 PTXAS_VERBOSE="${PTXAS_VERBOSE:-1}"
+SCHEDULE="${SCHEDULE:-eager}"
+case "$SCHEDULE" in
+  eager|staged) ;;
+  *) echo "invalid SCHEDULE=$SCHEDULE (eager|staged)" >&2; exit 2 ;;
+esac
 BASE_SRC="$(repo_path src/cuda/gridfp/gridfp_reduced_production_p2p_host_persistent_pipeline_microprobe.cu)"
 SRC_DIR="$(dirname "$BASE_SRC")"
-GEN_SRC="$(build_path gridfp_reduced_production_p2p_host_persistent_event_pipeline_generated.cu)"
-OUT="$(build_path "${OUT:-gridfp_reduced_component_p2p-host-persistent-event-pipeline}")"
+GEN_SRC="$(build_path "gridfp_reduced_production_p2p_host_persistent_event_pipeline_${SCHEDULE}_generated.cu")"
+OUT="$(build_path "${OUT:-gridfp_reduced_component_p2p-host-persistent-event-pipeline-${SCHEDULE}}")"
 
-python3 - "$BASE_SRC" "$GEN_SRC" <<'PY'
+python3 - "$BASE_SRC" "$GEN_SRC" "$SCHEDULE" <<'PY'
 from pathlib import Path
 import sys
 
 src_path = Path(sys.argv[1])
 out_path = Path(sys.argv[2])
+schedule = sys.argv[3]
+if schedule not in {"eager", "staged"}:
+    raise SystemExit("event pipeline generator: bad schedule")
 s = src_path.read_text()
 
 setup_marker = "    const double setup_ms = std::chrono::duration<double, std::milli>(\n"
@@ -65,6 +73,7 @@ scheduler = r'''    // Event-driven global A barrier.  Each GPU records A_done a
                 lists.batch[static_cast<std::size_t>(g)][static_cast<std::size_t>(batch)].size();
             ck(cudaSetDevice(g), "event pipeline phase A set device");
             auto& c = ctx[static_cast<std::size_t>(g)];
+__STAGED_A_WAIT__
             if (count) {
                 const unsigned blocks = static_cast<unsigned>(
                     std::max<std::size_t>(1, std::min<std::size_t>(requested_blocks, count)));
@@ -120,6 +129,18 @@ scheduler = r'''    // Event-driven global A barrier.  Each GPU records A_done a
     }
 
 '''
+if schedule == "staged":
+    stage_wait = r'''            // Preserve the analytic pipeline schedule: A_b starts only
+            // after all GPUs completed A_{b-1}, but it may overlap B_{b-1}.
+            if (batch > 0)
+                ck(cudaStreamWaitEvent(
+                       c.stream[plane],
+                       barrier_done[static_cast<std::size_t>(batch - 1)], 0),
+                   "event pipeline staged A wait");'''
+else:
+    stage_wait = r'''            // Eager schedule: adjacent cycle-closed A batches may overlap.
+            // This can fill owner imbalance, at the cost of possible HBM contention.'''
+scheduler = scheduler.replace("__STAGED_A_WAIT__", stage_wait)
 s = s[:start] + scheduler + s[end:]
 
 free_marker = '''    for (int g = 0; g < ngpu; ++g) {
@@ -146,9 +167,6 @@ if s.count(old_tag) != 1:
 s = s.replace(old_tag, new_tag)
 
 flag = '              << " cycle_closed_batches=1"\n'
-# The Python string above uses \n as an actual newline.  Keep this assertion so
-# upstream formatting changes fail loudly instead of silently generating the
-# host-barrier executor.
 if s.count(flag) != 1:
     raise SystemExit("event pipeline generator: output flag mismatch")
 s = s.replace(
@@ -156,22 +174,25 @@ s = s.replace(
     flag +
     '              << " host_batch_barriers=0"\n'
     '              << " cross_device_events=1"\n'
-    '              << " event_barrier_fanin=1"\n')
+    '              << " event_barrier_fanin=1"\n'
+    f'              << " event_schedule={schedule}"\n'
+    f'              << " adjacent_A_overlap={1 if schedule == "eager" else 0}"\n')
 
 old_ok = 'std::cout << "ALL_OK gridfp_p2p_host_persistent_pipeline=1\\n";'
 new_ok = 'std::cout << "ALL_OK gridfp_p2p_host_persistent_event_pipeline=1\\n";'
-# old_ok/new_ok contain one literal C++ backslash before n.
 if s.count(old_ok) != 1:
     raise SystemExit("event pipeline generator: ALL_OK marker mismatch")
 s = s.replace(old_ok, new_ok)
 
-# Generation-time audit: batch-local host synchronization must be gone, while
-# the one-time local-cycle drain and final two-stream drain remain in place.
 body = s[start:s.find(end_marker, start)]
 if 'cudaStreamSynchronize' in body:
     raise SystemExit("event pipeline generator: host batch synchronize survived")
 if 'cudaStreamWaitEvent' not in body or 'barrier_done' not in body:
     raise SystemExit("event pipeline generator: event barrier missing")
+if schedule == "staged" and 'event pipeline staged A wait' not in body:
+    raise SystemExit("event pipeline generator: staged A dependency missing")
+if schedule == "eager" and 'event pipeline staged A wait' in body:
+    raise SystemExit("event pipeline generator: eager schedule accidentally staged")
 
 out_path.parent.mkdir(parents=True, exist_ok=True)
 out_path.write_text(s)
@@ -181,4 +202,4 @@ PTXAS_FLAGS=()
 if [[ "$PTXAS_VERBOSE" == 1 ]]; then PTXAS_FLAGS+=("-Xptxas=-v"); fi
 TMPDIR="$ONEESAN_TMP_DIR" nvcc -O3 -std=c++17 -lineinfo -arch="$ARCH" \
   -I"$SRC_DIR" "${PTXAS_FLAGS[@]}" "$GEN_SRC" -o "$OUT"
-echo "built $OUT (persistent_event_pipeline=1 arch=$ARCH generated=$GEN_SRC)"
+echo "built $OUT (persistent_event_pipeline=1 schedule=$SCHEDULE arch=$ARCH generated=$GEN_SRC)"
