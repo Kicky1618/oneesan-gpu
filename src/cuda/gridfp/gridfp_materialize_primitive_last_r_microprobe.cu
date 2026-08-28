@@ -12,6 +12,11 @@ namespace rp = oneesan::gridfp::reducedprod;
 
 namespace {
 
+__device__ __constant__ std::uint32_t PROBE_PRIMITIVE_COUNT[14] = {
+    1u, 2u, 5u, 14u, 42u, 132u, 429u,
+    1430u, 4862u, 16796u, 58786u, 208012u, 742900u, 2674440u
+};
+
 void cuda_check(cudaError_t err, const char* what) {
     if (err != cudaSuccess) {
         std::cerr << what << ": " << cudaGetErrorString(err) << '\n';
@@ -42,7 +47,7 @@ __global__ void probe_kernel(std::uint64_t* output, int iterations) {
 
     for (int i = 0; i < iterations; ++i) {
         const int occupied = 1 + (sector << 1);
-        const rp::Rank64 count = rp::RP_PRIMITIVE[occupied][1];
+        const std::uint32_t count = PROBE_PRIMITIVE_COUNT[sector];
         seed = seed * 1664525u + 1013904223u;
         const rp::Rank64 rank =
             (std::uint64_t(seed) * std::uint64_t(count)) >> 32;
