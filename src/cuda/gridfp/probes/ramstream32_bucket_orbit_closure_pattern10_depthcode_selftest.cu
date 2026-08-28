@@ -5,6 +5,7 @@
 #pragma pop_macro("main")
 
 #include "../ramstream32_bucket_orbit_closure_pattern10_depthcode_warpstriped.cuh"
+#include "ramstream32_pattern10_depthcode_delta_plan_equiv.cuh"
 
 static void p10dc_run_low(
     BucketHostGrid&g,const StorageLayout&layout,const BucketPhysicalLayoutHost&phy,
@@ -58,6 +59,7 @@ int main(){
     auto ms=gdg_enum_states(W),bs=gdg_enum_states(W-1);std::unordered_map<MateID,size_t>mi,di;for(size_t i=0;i<ms.size();++i)mi.emplace(ms[i],i);for(size_t i=0;i<bs.size();++i)di.emplace(bs[i],i);std::mt19937_64 rng(0x1618dc0deULL);std::vector<Count>im(ms.size()),ib(bs.size());for(auto&x:im)x=Count(rng()%mod);for(auto&x:ib)x=Count(rng()%mod);
     auto[flm,flb]=gdg_reference_window(W,L,1,mod,ms,bs,mi,di,im,ib);auto[fhm,fhb]=gdg_reference_window(W,W-1,L+1,mod,ms,bs,mi,di,im,ib);auto[rlm,rlb]=bra_reference(1,L,mod,ms,bs,mi,di,im,ib);auto[rhm,rhb]=bra_reference(L+1,W-1,mod,ms,bs,mi,di,im,ib);
     ck(cudaMemcpyToSymbol(D_MOD,&mod,sizeof(mod)),"p10dc modulus");BucketFusedDeviceTables dt;dt.install_metadata(layout,bo,bf);BucketForwardPattern10DepthCodeDeviceTables fdt;fdt.install(fh);BucketReversePattern10DepthCodeDeviceTables rdt;rdt.install(rh);
+    if(!p10dc_run_delta_plan_equiv(layout,phy,dt)){std::cerr<<"pattern10 depthcode delta plan mismatch\n";return 23;}
     auto g=bkft_make_grid(ms,bs,im,ib,storage,layout,owner,phy);p10dc_run_low(g,layout,phy,dt,false);if(!bkft_compare("pattern10-depthcode-forward-low",g,ms,bs,flm,flb,storage,layout,owner,phy))return 10;
     g=bkft_make_grid(ms,bs,im,ib,storage,layout,owner,phy);p10dc_run_high_ctx(g,layout,phy,dt,false,P10DC_TEST_THREAD);if(!bkft_compare("pattern10-depthcode-forward-high-thread",g,ms,bs,fhm,fhb,storage,layout,owner,phy))return 11;
     g=bkft_make_grid(ms,bs,im,ib,storage,layout,owner,phy);p10dc_run_low(g,layout,phy,dt,true);if(!bkft_compare("pattern10-depthcode-reverse-low",g,ms,bs,rlm,rlb,storage,layout,owner,phy))return 12;
@@ -71,5 +73,5 @@ int main(){
     g=bkft_make_grid(ms,bs,im,ib,storage,layout,owner,phy);p10dc_run_high_ctx(g,layout,phy,dt,false,P10DC_TEST_WARPSTRIPED);if(!bkft_compare("pattern10-depthcode-forward-high-warpstriped",g,ms,bs,fhm,fhb,storage,layout,owner,phy))return 20;
     g=bkft_make_grid(ms,bs,im,ib,storage,layout,owner,phy);p10dc_run_high_ctx(g,layout,phy,dt,true,P10DC_TEST_WARPSTRIPED);if(!bkft_compare("pattern10-depthcode-reverse-high-warpstriped",g,ms,bs,rhm,rhb,storage,layout,owner,phy))return 21;
     if(!p10dc_warpstriped_threads_ok(256)||p10dc_warpstriped_threads_ok(65)){std::cerr<<"warpstriped thread validator mismatch\n";return 22;}
-    std::cout<<"bucket-closure-pattern10-depthcode-selftest OK W="<<W<<" mode="<<rh.codebook.mode<<" codebook_bytes="<<rh.codebook.bytes()<<" sidecar_bytes_per_orbit=0 temporary_depth_bytes=0 decode_unrank=0 payload_masks=1 high_ctx=thread,resolved,warp,warpstriped decode_load="<<(P10DC_DECODE_LDG?"ldg":"global")<<" warpctx_dynamic_smem=1 warpctx_threads=256,65 warpctx_smem_bytes_256="<<p10dc_warpctx_smem_bytes(256)<<" warpctx_smem_bytes_65="<<p10dc_warpctx_smem_bytes(65)<<" warpstriped_threads=256 warpstriped_full_warp_required=1\n";rdt.release();fdt.release();dt.release();return 0;
+    std::cout<<"bucket-closure-pattern10-depthcode-selftest OK W="<<W<<" mode="<<rh.codebook.mode<<" codebook_bytes="<<rh.codebook.bytes()<<" sidecar_bytes_per_orbit=0 temporary_depth_bytes=0 decode_unrank=0 payload_masks=1 high_ctx=thread,resolved,warp,warpstriped decode_load="<<(P10DC_DECODE_LDG?"ldg":"global")<<" warpctx_dynamic_smem=1 warpctx_threads=256,65 warpctx_smem_bytes_256="<<p10dc_warpctx_smem_bytes(256)<<" warpctx_smem_bytes_65="<<p10dc_warpctx_smem_bytes(65)<<" warpstriped_threads=256 warpstriped_full_warp_required=1 delta_plan_exact=1\n";rdt.release();fdt.release();dt.release();return 0;
 }
