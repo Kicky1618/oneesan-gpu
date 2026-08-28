@@ -19,6 +19,9 @@ namespace oneesan::gridfp::reducedprod {
 #ifndef RP_RUNTIME_SECTOR_OFFSET_TABLE
 #define RP_RUNTIME_SECTOR_OFFSET_TABLE 1
 #endif
+#ifndef RP_RUNTIME_OUTER_GROUP_TABLE
+#define RP_RUNTIME_OUTER_GROUP_TABLE 1
+#endif
 static_assert(RP_RUNTIME_PRIMITIVE_RANK_SETBITS == 0 || RP_RUNTIME_PRIMITIVE_RANK_SETBITS == 1,
               "RP_RUNTIME_PRIMITIVE_RANK_SETBITS must be 0 or 1");
 static_assert(RP_RUNTIME_BROADWORD_SUPPORT == 0 || RP_RUNTIME_BROADWORD_SUPPORT == 1,
@@ -29,6 +32,8 @@ static_assert(RP_RUNTIME_SUPPORT_RANK_SETBITS == 0 || RP_RUNTIME_SUPPORT_RANK_SE
               "RP_RUNTIME_SUPPORT_RANK_SETBITS must be 0 or 1");
 static_assert(RP_RUNTIME_SECTOR_OFFSET_TABLE == 0 || RP_RUNTIME_SECTOR_OFFSET_TABLE == 1,
               "RP_RUNTIME_SECTOR_OFFSET_TABLE must be 0 or 1");
+static_assert(RP_RUNTIME_OUTER_GROUP_TABLE == 0 || RP_RUNTIME_OUTER_GROUP_TABLE == 1,
+              "RP_RUNTIME_OUTER_GROUP_TABLE must be 0 or 1");
 
 static constexpr int RP_RUNTIME_SECTOR_TABLE_ENTRIES = 1199;
 __device__ __constant__ std::uint32_t
@@ -36,6 +41,18 @@ RP_RUNTIME_LOCAL_SECTOR_OFFSET[RP_RUNTIME_SECTOR_TABLE_ENTRIES] = {
 #include "gridfp_reduced_production_runtime_sector_offset_values.inc"
 };
 static_assert(sizeof(RP_RUNTIME_LOCAL_SECTOR_OFFSET) == 4796);
+
+static constexpr int RP_RUNTIME_OUTER_GROUP_ENTRIES = 99;
+__device__ __constant__ std::uint32_t
+RP_RUNTIME_OUTER_GROUP_SIZE[RP_RUNTIME_OUTER_GROUP_ENTRIES] = {
+#include "gridfp_reduced_production_runtime_outer_group_values.inc"
+};
+__device__ __constant__ Rank64
+RP_RUNTIME_OUTER_GROUP_PREFIX[RP_RUNTIME_OUTER_GROUP_ENTRIES] = {
+#include "gridfp_reduced_production_runtime_outer_prefix_values.inc"
+};
+static_assert(sizeof(RP_RUNTIME_OUTER_GROUP_SIZE) == 396);
+static_assert(sizeof(RP_RUNTIME_OUTER_GROUP_PREFIX) == 792);
 
 struct GroupedComponentContextDevice {
     int owner = -1;
@@ -124,18 +141,19 @@ __device__ __forceinline__ Rank64 runtime_primitive_rank_support_device(
 
 __device__ __forceinline__ int runtime_sector_offset_row_base_device(int W) {
     switch (W) {
-    case 8: return 0;
-    case 10: return 24;
-    case 12: return 59;
-    case 14: return 107;
-    case 16: return 170;
-    case 18: return 250;
-    case 20: return 349;
-    case 22: return 469;
-    case 24: return 612;
-    case 26: return 780;
-    case 28: return 975;
-    default: return -1;
+    case 8: return 0; case 10: return 24; case 12: return 59;
+    case 14: return 107; case 16: return 170; case 18: return 250;
+    case 20: return 349; case 22: return 469; case 24: return 612;
+    case 26: return 780; case 28: return 975; default: return -1;
+    }
+}
+
+__device__ __forceinline__ int runtime_outer_group_row_base_device(int W) {
+    switch (W) {
+    case 8: return 0; case 10: return 4; case 12: return 9;
+    case 14: return 15; case 16: return 22; case 18: return 30;
+    case 20: return 39; case 22: return 49; case 24: return 60;
+    case 26: return 72; case 28: return 85; default: return -1;
     }
 }
 
@@ -150,6 +168,25 @@ __device__ __forceinline__ Rank64 runtime_group_local_sector_offset_device(
     }
 #endif
     return group_local_sector_offset_device(L, outer_ones, local_ones);
+}
+
+__device__ __forceinline__ bool runtime_outer_group_context_device(
+    int W, int L, int O, int outer_ones, Rank64& group, Rank64& prefix
+) {
+#if RP_RUNTIME_OUTER_GROUP_TABLE
+    const int base = runtime_outer_group_row_base_device(W);
+    if (base >= 0 && L == W / 2 + 1 && O == W - L) {
+        const int index = base + outer_ones;
+        group = RP_RUNTIME_OUTER_GROUP_SIZE[index];
+        prefix = RP_RUNTIME_OUTER_GROUP_PREFIX[index];
+        return true;
+    }
+#endif
+    group = outer_group_size_device(L, outer_ones);
+    prefix = 0;
+    for (int t = 0; t < outer_ones; ++t)
+        prefix += choose_device(O, t) * outer_group_size_device(L, t);
+    return false;
 }
 
 __device__ __forceinline__ int runtime_owner_from_group_base_device(
@@ -181,11 +218,9 @@ __device__ __forceinline__ GroupedComponentContextDevice grouped_component_conte
     const std::uint32_t full = runtime_full_support_device(seed, W, q, reverse);
     const std::uint32_t outer = compact_outside_window_device(full, W, lo, hi);
     const int outer_ones = __popc(outer);
-    const Rank64 group = outer_group_size_device(L, outer_ones);
+    Rank64 group = 0, prefix = 0;
+    runtime_outer_group_context_device(W, L, O, outer_ones, group, prefix);
     const Rank64 sr_outer = runtime_compact_support_rank_device(outer, O, outer_ones);
-    Rank64 prefix = 0;
-    for (int t = 0; t < outer_ones; ++t)
-        prefix += choose_device(O, t) * outer_group_size_device(L, t);
     const Rank64 group_base = prefix + sr_outer * group;
 
     int owner = runtime_owner_from_group_base_device(group_base, W, K, ngpu, owner_begin);
