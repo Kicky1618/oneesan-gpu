@@ -1,5 +1,4 @@
 #include <algorithm>
-#include <array>
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
@@ -16,9 +15,9 @@ static void build_full_dp(){
 static Code spec_size(int width,std::uint32_t fixed,std::uint32_t occ){
     Code prev[MAXW+2]{},cur[MAXW+2]{};prev[0]=1;
     for(int w=1;w<=width;++w){
-        std::fill(std::begin(cur),std::end(cur),Code(0));int pos=w-1;bool f=(fixed>>pos)&1u,o=(occ>>pos)&1u;
+        std::fill(cur,cur+MAXW+2,Code(0));int pos=w-1;bool f=(fixed>>pos)&1u,o=(occ>>pos)&1u;
         for(int h=0;h<=MAXW;++h){Code x=0;if(!f||!o)x+=prev[h];if(!f||o){if(h>0)x+=prev[h-1];if(h<MAXW+1)x+=prev[h+1];}cur[h]=x;}
-        std::copy(std::begin(cur),std::end(cur),std::begin(prev));
+        std::copy(cur,cur+MAXW+2,prev);
     }
     return prev[1];
 }
