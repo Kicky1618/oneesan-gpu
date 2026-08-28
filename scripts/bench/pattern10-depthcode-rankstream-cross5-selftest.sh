@@ -22,8 +22,9 @@ if grep -Fq "OK W=$W" <<<"$out"; then
   grep -Fq 'prekey_scope=fixed_owner prekey_table_exact=1 rankstream_table_exact=1' <<<"$out"
   grep -Fq 'rankstream_model=offset32+rank16_per_L' <<<"$out"
   grep -Fq 'cross_runtime_ternary_fold=0 cross_runtime_direct_lookup=0' <<<"$out"
-  grep -Fq 'fallback_structurally_unreachable=1' <<<"$out"
-  grep -Fq 'cross5_table_bytes=6561' <<<"$out"
+  grep -Fq 'cross_runtime_ordinal_popcount=0 constant_loads_per_chunk=2' <<<"$out"
+  grep -Fq 'fallback_structurally_unreachable=1 rankstream_lut_bytes=6561' <<<"$out"
+  grep -Fq 'ordinary_cross5_lut_present=0' <<<"$out"
   grep -Fq "pm_accum=$PM_ACCUM" <<<"$out"
 fi
-echo "pattern10-depthcode-rankstream-cross5-selftest OK W=$W pm_accum=$PM_ACCUM decode_load=$DECODE_LOAD rankstream=1" >&2
+echo "pattern10-depthcode-rankstream-cross5-selftest OK W=$W pm_accum=$PM_ACCUM decode_load=$DECODE_LOAD rankstream=1 ordinary_cross5_lut=0" >&2
