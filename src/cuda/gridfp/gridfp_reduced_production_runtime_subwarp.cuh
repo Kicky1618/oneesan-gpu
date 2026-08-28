@@ -25,21 +25,62 @@ static constexpr int RP_RUNTIME_THREADS = 32 * RP_RUNTIME_WARPS_PER_BLOCK;
 static_assert(RP_RUNTIME_SUBGROUP_WIDTH == 8);
 static_assert(RP_RUNTIME_MAX_DESTINATIONS_PER_LANE == 3);
 
+// RuntimeSmallTerms is formed from at most three primitive contributions.
+// Interior steps contain +1,+1,-1 and turn compression contains +1,+1, so after
+// merging equal keys every emitted coefficient is in [-1,2]. Destination indices
+// are in [0,19]. Pack both into one byte: bits 0..4 destination, bits 5..6 coef+1.
+static constexpr int RP_RUNTIME_EDGE_DEST_BITS = 5;
+static constexpr std::uint8_t RP_RUNTIME_EDGE_DEST_MASK =
+    (std::uint8_t(1u) << RP_RUNTIME_EDGE_DEST_BITS) - 1u;
+static constexpr int RP_RUNTIME_EDGE_COEF_MIN = -1;
+static constexpr int RP_RUNTIME_EDGE_COEF_MAX = 2;
+static constexpr int RP_RUNTIME_EDGE_COEF_BIAS = 1;
+static_assert(RP_RUNTIME_MAX_PAIRS <= (1 << RP_RUNTIME_EDGE_DEST_BITS));
+
 // Compact source->destination topology recorded while the component is already
-// being discovered. Destination keys themselves remain in sh_dst; the hot
-// accumulation loop needs only a byte-sized destination index and coefficient.
-// 20*(1 + 3 + 3) = 140 bytes/subgroup, or 4480 bytes/block.
+// being discovered. 20*(1 count byte + 3 packed edge bytes) = 80 bytes/subgroup,
+// or 2560 bytes/block for 32 subgroups.
 struct RuntimeEdgeCache {
     std::uint8_t count[RP_RUNTIME_MAX_PAIRS];
-    std::uint8_t destination[RP_RUNTIME_MAX_PAIRS][RP_RUNTIME_MAX_EDGE_TERMS];
-    std::int8_t coefficient[RP_RUNTIME_MAX_PAIRS][RP_RUNTIME_MAX_EDGE_TERMS];
+    std::uint8_t packed[RP_RUNTIME_MAX_PAIRS][RP_RUNTIME_MAX_EDGE_TERMS];
 };
-static_assert(sizeof(RuntimeEdgeCache) == 140,
+static_assert(sizeof(RuntimeEdgeCache) == 80,
               "runtime edge cache footprint regression");
 static constexpr int RP_RUNTIME_EDGE_CACHE_BYTES_PER_BLOCK =
     int(sizeof(RuntimeEdgeCache)) * RP_RUNTIME_WARPS_PER_BLOCK *
     RP_RUNTIME_SUBGROUPS_PER_WARP;
-static_assert(RP_RUNTIME_EDGE_CACHE_BYTES_PER_BLOCK == 4480);
+static_assert(RP_RUNTIME_EDGE_CACHE_BYTES_PER_BLOCK == 2560);
+
+__device__ __forceinline__ bool runtime_edge_cache_append(
+    RuntimeEdgeCache& cache,
+    int source_ix,
+    int destination_ix,
+    int coefficient
+) {
+    if (source_ix < 0 || source_ix >= RP_RUNTIME_MAX_PAIRS ||
+        destination_ix < 0 || destination_ix >= RP_RUNTIME_MAX_PAIRS ||
+        coefficient < RP_RUNTIME_EDGE_COEF_MIN ||
+        coefficient > RP_RUNTIME_EDGE_COEF_MAX)
+        return false;
+    const std::uint8_t slot = cache.count[source_ix];
+    if (slot >= RP_RUNTIME_MAX_EDGE_TERMS) return false;
+    cache.count[source_ix] = std::uint8_t(slot + 1u);
+    cache.packed[source_ix][slot] = std::uint8_t(
+        std::uint8_t(destination_ix) |
+        (std::uint8_t(coefficient + RP_RUNTIME_EDGE_COEF_BIAS)
+         << RP_RUNTIME_EDGE_DEST_BITS));
+    return true;
+}
+
+__device__ __forceinline__ std::uint8_t runtime_edge_destination(
+    std::uint8_t packed
+) {
+    return packed & RP_RUNTIME_EDGE_DEST_MASK;
+}
+
+__device__ __forceinline__ int runtime_edge_coefficient(std::uint8_t packed) {
+    return int(packed >> RP_RUNTIME_EDGE_DEST_BITS) - RP_RUNTIME_EDGE_COEF_BIAS;
+}
 
 // Production-path interior transfer. There is deliberately no per-component
 // accounting atomic: exactness probes can wrap this kernel externally, while
@@ -144,12 +185,12 @@ __global__ void owner_component_runtime_subwarp_kernel(
                                 }
                             }
 #if RP_RUNTIME_CACHE_EDGES
-                            const std::uint8_t slot =
-                                sh_edge[warp][subgroup].count[source_ix]++;
-                            sh_edge[warp][subgroup].destination[source_ix][slot] =
-                                static_cast<std::uint8_t>(destination_ix);
-                            sh_edge[warp][subgroup].coefficient[source_ix][slot] =
-                                edge.v[ei].coef;
+                            if (!runtime_edge_cache_append(
+                                    sh_edge[warp][subgroup], source_ix,
+                                    destination_ix, int(edge.v[ei].coef))) {
+                                runtime_set_error(error, 310);
+                                break;
+                            }
 #endif
                         }
                         if (error && *error) break;
@@ -186,13 +227,12 @@ __global__ void owner_component_runtime_subwarp_kernel(
             const long long value = static_cast<long long>(sh_value[warp][subgroup][si]);
             const std::uint8_t nedge = sh_edge[warp][subgroup].count[si];
             for (std::uint8_t ei = 0; ei < nedge; ++ei) {
-                const std::uint8_t destination_ix =
-                    sh_edge[warp][subgroup].destination[si][ei];
+                const std::uint8_t packed = sh_edge[warp][subgroup].packed[si][ei];
+                const std::uint8_t destination_ix = runtime_edge_destination(packed);
                 if ((destination_ix & (RP_RUNTIME_SUBGROUP_WIDTH - 1)) == sublane) {
                     const int slot = destination_ix >> 3;
-                    accum[slot] += static_cast<long long>(
-                                       sh_edge[warp][subgroup].coefficient[si][ei]) *
-                                   value;
+                    accum[slot] +=
+                        static_cast<long long>(runtime_edge_coefficient(packed)) * value;
                 }
             }
         }
