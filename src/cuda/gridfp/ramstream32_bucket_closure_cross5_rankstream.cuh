@@ -6,21 +6,35 @@
 #ifndef P10DC_RANKSTREAM_LUT_LDG
 #define P10DC_RANKSTREAM_LUT_LDG 0
 #endif
+#ifndef P10DC_RANKSTREAM_LUT_PAD256
+#define P10DC_RANKSTREAM_LUT_PAD256 0
+#endif
 static_assert(P10DC_RANKSTREAM_LUT_LDG == 0 || P10DC_RANKSTREAM_LUT_LDG == 1,
               "P10DC_RANKSTREAM_LUT_LDG must be 0 or 1");
+static_assert(P10DC_RANKSTREAM_LUT_PAD256 == 0 || P10DC_RANKSTREAM_LUT_PAD256 == 1,
+              "P10DC_RANKSTREAM_LUT_PAD256 must be 0 or 1");
+static_assert(!P10DC_RANKSTREAM_LUT_PAD256 || P10DC_RANKSTREAM_LUT_LDG,
+              "256-byte rankstream row padding is only meaningful for LDG mode");
 
 // Warp-striped execution gives every lane a different LOW rank/key. Constant
-// memory is therefore not always a broadcast. Keep both storage modes behind
-// one compile-time switch so B300 can A/B constant-cache serialization against
-// ordinary read-only/L1 loads without changing the automaton representation.
+// memory is therefore not always a broadcast. Keep the storage mode behind a
+// compile-time switch so B300 can compare constant-cache serialization with
+// ordinary read-only/L1 loads. In the padded LDG experiment every 243-byte
+// state row gets a 256-byte stride, making every row 128-byte aligned and
+// limiting a complete state row to exactly two 128-byte cache lines.
+static constexpr int P10DC_RANKSTREAM_LUT_STRIDE =
+    P10DC_RANKSTREAM_LUT_PAD256 ? 256 : P10DC_CROSS5_KEYS;
+static_assert(P10DC_CROSS5_KEYS == 243);
+static_assert(P10DC_RANKSTREAM_LUT_STRIDE >= P10DC_CROSS5_KEYS);
+
 #if P10DC_RANKSTREAM_LUT_LDG
 __device__ __align__(128) uint8_t D_P10DC_RANKSTREAM_META[P10DC_CROSS5_KEYS];
 __device__ __align__(128) uint8_t
-    D_P10DC_RANKSTREAM_CROSS5[P10DC_CROSS5_STATES * P10DC_CROSS5_KEYS];
+    D_P10DC_RANKSTREAM_CROSS5[P10DC_CROSS5_STATES * P10DC_RANKSTREAM_LUT_STRIDE];
 #else
 __constant__ uint8_t D_P10DC_RANKSTREAM_META[P10DC_CROSS5_KEYS];
 __constant__ uint8_t
-    D_P10DC_RANKSTREAM_CROSS5[P10DC_CROSS5_STATES * P10DC_CROSS5_KEYS];
+    D_P10DC_RANKSTREAM_CROSS5[P10DC_CROSS5_STATES * P10DC_RANKSTREAM_LUT_STRIDE];
 #endif
 
 static constexpr uint8_t P10DC_RANKSTREAM_META_LCOUNT_MASK = 0x07u;
@@ -28,7 +42,7 @@ static constexpr int P10DC_RANKSTREAM_META_DELTA_SHIFT = 3;
 static constexpr int P10DC_RANKSTREAM_META_DELTA_BIAS = 5;
 static_assert(P10DC_CROSS5_CHUNK == 5, "rankstream metadata packing assumes CROSS5");
 static_assert(P10DC_CROSS5_STATES * P10DC_CROSS5_KEYS + P10DC_CROSS5_KEYS == 6561,
-              "rankstream CROSS5 LUT size regression");
+              "rankstream CROSS5 logical LUT size regression");
 
 static constexpr uint8_t p10dc_rankstream_lmask_host(uint32_t key) {
     uint8_t mask = 0;
@@ -82,12 +96,12 @@ p10dc_rankstream_meta_table() {
     return out;
 }
 
-static std::array<uint8_t, P10DC_CROSS5_STATES * P10DC_CROSS5_KEYS>
+static std::array<uint8_t, P10DC_CROSS5_STATES * P10DC_RANKSTREAM_LUT_STRIDE>
 p10dc_rankstream_cross5_table() {
-    std::array<uint8_t, P10DC_CROSS5_STATES * P10DC_CROSS5_KEYS> out{};
+    std::array<uint8_t, P10DC_CROSS5_STATES * P10DC_RANKSTREAM_LUT_STRIDE> out{};
     for (uint32_t s = 0; s < P10DC_CROSS5_STATES; ++s) {
         for (uint32_t k = 0; k < P10DC_CROSS5_KEYS; ++k) {
-            out[size_t(s) * P10DC_CROSS5_KEYS + k] =
+            out[size_t(s) * P10DC_RANKSTREAM_LUT_STRIDE + k] =
                 p10dc_rankstream_host_entry(k, s);
         }
     }
@@ -141,7 +155,7 @@ __device__ __forceinline__ uint32_t p10dc_cross5_apply_chunk_rankstream(
     }
 
     const uint8_t e = p10dc_rankstream_entry_load(
-        size_t(state) * P10DC_CROSS5_KEYS + chunk);
+        size_t(state) * P10DC_RANKSTREAM_LUT_STRIDE + chunk);
     uint8_t rankmask = uint8_t(e & P10DC_CROSS5_MASK_MASK);
     while (rankmask) {
         const int ordinal = __ffs(int(rankmask)) - 1;
