@@ -18,6 +18,9 @@ namespace gp = oneesan::gridfp;
 
 namespace {
 
+constexpr std::uint32_t INPUT_COUNT = 1u << 16;
+constexpr std::uint32_t INPUT_MASK = INPUT_COUNT - 1u;
+
 void cuda_check(cudaError_t err, const char* what) {
     if (err != cudaSuccess) {
         std::cerr << what << ": " << cudaGetErrorString(err) << '\n';
@@ -56,10 +59,7 @@ __device__ __forceinline__ std::uint32_t scan_turn_nn(
     return candidates;
 }
 
-__device__ __forceinline__ gp::MateID make_mate(
-    std::uint32_t seed,
-    int nonn_percent
-) {
+gp::MateID make_host_mate(std::uint32_t seed, int nonn_percent) {
     gp::MateID mate = 0;
     mate = gp::msetpair(mate, 1, gp::NN);
     for (int q = 2; q < 28; ++q) {
@@ -73,17 +73,17 @@ __device__ __forceinline__ gp::MateID make_mate(
 }
 
 __global__ void probe_kernel(
-    std::uint64_t* output,
-    int iterations,
-    int nonn_percent
+    const gp::MateID* __restrict__ inputs,
+    std::uint64_t* __restrict__ output,
+    int iterations
 ) {
     const std::uint32_t tid = blockIdx.x * blockDim.x + threadIdx.x;
     std::uint32_t seed = tid * 747796405u + 2891336453u;
     std::uint64_t acc = 0x9e3779b97f4a7c15ULL ^ tid;
 
     for (int i = 0; i < iterations; ++i) {
-        seed = seed * 747796405u + 2891336453u;
-        const gp::MateID mate = make_mate(seed, nonn_percent);
+        seed = seed * 1664525u + 1013904223u;
+        const gp::MateID mate = inputs[seed & INPUT_MASK];
         int balance = 0;
         const std::uint32_t candidates = scan_turn_nn(mate, 28, balance);
         const std::uint64_t value =
@@ -108,12 +108,29 @@ int main(int argc, char** argv) {
         return 2;
     }
 
-    const std::size_t nthreads = std::size_t(blocks) * std::size_t(threads);
+    std::vector<gp::MateID> inputs(INPUT_COUNT);
+    std::uint64_t occupied_total = 0;
+    for (std::uint32_t i = 0; i < INPUT_COUNT; ++i) {
+        inputs[i] = make_host_mate(i * 747796405u + 2891336453u, nonn_percent);
+        occupied_total += std::uint64_t(__builtin_popcount(
+            gp::mate_non_n_mask(inputs[i], 28) & ~std::uint32_t(3u)));
+    }
+    const double actual_nonn_fraction =
+        double(occupied_total) / double(std::uint64_t(INPUT_COUNT) * 26u);
+
+    gp::MateID* d_inputs = nullptr;
     std::uint64_t* d_output = nullptr;
-    cuda_check(cudaMalloc(&d_output, nthreads * sizeof(std::uint64_t)), "cudaMalloc");
+    const std::size_t nthreads = std::size_t(blocks) * std::size_t(threads);
+    cuda_check(cudaMalloc(&d_inputs, inputs.size() * sizeof(gp::MateID)),
+               "cudaMalloc(inputs)");
+    cuda_check(cudaMalloc(&d_output, nthreads * sizeof(std::uint64_t)),
+               "cudaMalloc(output)");
+    cuda_check(cudaMemcpy(
+        d_inputs, inputs.data(), inputs.size() * sizeof(gp::MateID),
+        cudaMemcpyHostToDevice), "cudaMemcpy(inputs)");
 
     for (int i = 0; i < warmup; ++i) {
-        probe_kernel<<<blocks, threads>>>(d_output, iterations, nonn_percent);
+        probe_kernel<<<blocks, threads>>>(d_inputs, d_output, iterations);
         cuda_check(cudaGetLastError(), "warmup launch");
     }
     cuda_check(cudaDeviceSynchronize(), "warmup sync");
@@ -122,7 +139,7 @@ int main(int argc, char** argv) {
     cuda_check(cudaEventCreate(&start), "cudaEventCreate(start)");
     cuda_check(cudaEventCreate(&stop), "cudaEventCreate(stop)");
     cuda_check(cudaEventRecord(start), "cudaEventRecord(start)");
-    probe_kernel<<<blocks, threads>>>(d_output, iterations, nonn_percent);
+    probe_kernel<<<blocks, threads>>>(d_inputs, d_output, iterations);
     cuda_check(cudaGetLastError(), "timed launch");
     cuda_check(cudaEventRecord(stop), "cudaEventRecord(stop)");
     cuda_check(cudaEventSynchronize(stop), "cudaEventSynchronize(stop)");
@@ -147,6 +164,8 @@ int main(int argc, char** argv) {
     std::cout << "gridfp-runtime-turn-discovery-nonn-scan-microprobe"
               << " nonn_scan=" << RP_RUNTIME_TURN_DISCOVERY_NONN_SCAN
               << " W=28 nonn_percent=" << nonn_percent
+              << " actual_nonn_fraction=" << actual_nonn_fraction
+              << " input_count=" << INPUT_COUNT
               << " blocks=" << blocks
               << " threads=" << threads
               << " iterations=" << iterations
@@ -158,5 +177,6 @@ int main(int argc, char** argv) {
     cudaEventDestroy(stop);
     cudaEventDestroy(start);
     cudaFree(d_output);
+    cudaFree(d_inputs);
     return 0;
 }
