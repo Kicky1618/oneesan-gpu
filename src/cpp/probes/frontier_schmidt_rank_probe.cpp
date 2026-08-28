@@ -31,6 +31,22 @@ static U64 powp(U64 a, U64 e) {
 }
 static U64 invp(U64 a) { return powp(a, P - 2); }
 
+// A111960 / central-trinomial renewal-array entry:
+// C(r,h)=[x^(r-h)](1-2x-3x^2)^(-(h+1)/2).
+static U64 universal_channel_rank(int r, int h) {
+    if (h < 0 || h > r) return 0;
+    int nmax = r - h;
+    std::vector<U64> c(nmax + 1);
+    c[0] = 1;
+    for (int n = 0; n < nmax; ++n) {
+        __uint128_t z = __uint128_t(2 * n + h + 1) * c[n];
+        if (n) z += __uint128_t(3 * (n + h)) * c[n - 1];
+        if (z % U64(n + 1)) std::abort();
+        c[n + 1] = U64(z / U64(n + 1));
+    }
+    return c[nmax];
+}
+
 static std::vector<Mate> code_states(MateCodec const& mc) {
     std::vector<Mate> out(mc.codeSize());
     for (Code bi = 0; bi < mc.codeSizeL(); ++bi) {
@@ -55,9 +71,7 @@ static U32 segment_code(Mate m, int first, int len) {
     return z;
 }
 
-// Balanced W/2 | W/2 cut.  This is the natural Schmidt cut: only one
-// horizontal cell update per row crosses it.  The shared block label is the
-// intermediate Motzkin height after the HIGH half has been consumed.
+// Balanced W/2 | W/2 cut. Only one horizontal cell update per row crosses it.
 static int cut_height(Mate m, int W) {
     const int k = W / 2;
     int h = 1;
@@ -151,6 +165,17 @@ static RankStats measure(PathCounter<Modnum<U64>>& pc,
         }
         int rank = rank_dense(mat, Rn, Cn);
         U64 R0 = ri.size(), C0 = ci.size();
+        U64 predicted_universal = universal_channel_rank(row, b.h);
+        U64 predicted = std::min(predicted_universal, std::min(R0, C0));
+        if (U64(rank) != predicted) {
+            std::cerr << "RENEWAL-RANK MISMATCH W=" << W
+                      << " row=" << row << " h=" << b.h
+                      << " rank=" << rank
+                      << " universal=" << predicted_universal
+                      << " side_cap=" << std::min(R0, C0)
+                      << " predicted=" << predicted << "\n";
+            std::exit(3);
+        }
         U64 env = R0 * C0;
         U64 fac = U64(rank) * (R0 + C0);
         double be = (R0 + C0) ? double(env) / double(R0 + C0) : 0.0;
@@ -160,6 +185,7 @@ static RankStats measure(PathCounter<Modnum<U64>>& pc,
                   << " cols=" << C0
                   << " nnz=" << b.entries.size()
                   << " rank=" << rank
+                  << " renewal=" << predicted_universal
                   << " break_even_rank=" << be
                   << " factor/original=" << ratio
                   << (double(rank) < be ? " WIN" : " LOSE")
@@ -176,7 +202,7 @@ static RankStats measure(PathCounter<Modnum<U64>>& pc,
               << " factor_elems=" << total.factor_elems
               << " factor/original="
               << (total.envelope ? double(total.factor_elems) / double(total.envelope) : 0.0)
-              << " max_rank=" << total.max_rank << "\n";
+              << " max_rank=" << total.max_rank << " renewal=OK\n";
     return total;
 }
 
