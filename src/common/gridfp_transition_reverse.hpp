@@ -2,6 +2,14 @@
 
 #include "gridfp_transition.hpp"
 
+#ifndef ONEESAN_FAST_BLOCKED_EXCLUDE_REVERSE
+#define ONEESAN_FAST_BLOCKED_EXCLUDE_REVERSE 1
+#endif
+static_assert(
+    ONEESAN_FAST_BLOCKED_EXCLUDE_REVERSE == 0 ||
+    ONEESAN_FAST_BLOCKED_EXCLUDE_REVERSE == 1,
+    "ONEESAN_FAST_BLOCKED_EXCLUDE_REVERSE must be 0 or 1");
+
 namespace oneesan::gridfp {
 
 #if defined(__CUDACC__)
@@ -38,11 +46,18 @@ ONEESAN_REV_HD IncludeResult include_horizontal_reverse(MateID m, int width, int
     return z;
 }
 
-// Reverse-scan counterpart of blocked_exclude().
+// Reverse-scan counterpart of blocked_exclude(). Reflection maps the inserted
+// position width-p back to p-1, while the two L/R swaps cancel. Therefore the
+// full mirror -> insert -> mirror sequence is exactly one direct insertion.
 ONEESAN_REV_HD MateID blocked_exclude_reverse(MateID compressed, int width, int p) {
+#if ONEESAN_FAST_BLOCKED_EXCLUDE_REVERSE
+    (void)width;
+    return minsert(compressed, p - 1, N);
+#else
     MateID mirrored = mirror_mate(compressed, width - 1);
     MateID expanded = blocked_exclude(mirrored, width - p);
     return mirror_mate(expanded, width);
+#endif
 }
 
 #undef ONEESAN_REV_HD
