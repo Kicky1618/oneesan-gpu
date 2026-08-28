@@ -92,7 +92,7 @@ def main()->None:
     for token in ('D_MAIN_PTR','D_BLOCK_PTR','D_MAIN_CHUNK','D_BLOCK_CHUNK','D_NGPU','D_MAIN_W','D_BLOCK_W'):
         if token in text:
             raise SystemExit(f'stale VMM symbol remains after prune: {token}')
-    for token in ('Code mc=','bc=(blockN+ng-1)/ng','std::vector<Code>ml','ml[d]','bl[d]','mp[','bp[','prepare_group(W,pw.wp,g,mc,bc,ng)','make_peer_intervals(pg.ms,mc,ng'):
+    for token in ('Code mc=','bc=(blockN+ng-1)/ng','Count*mp[MAXGPU]','*bp[MAXGPU]','std::vector<Code>ml','ml[d]=','bl[d]=','int io=int(ig/mc)','int fo=int(fg/mc)','prepare_group(W,pw.wp,g,mc,bc,ng)','make_peer_intervals(pg.ms,mc,ng'):
         if token in text:
             raise SystemExit(f'logical shard artifact remains after prune: {token}')
     a.out.parent.mkdir(parents=True,exist_ok=True)
