@@ -83,7 +83,9 @@ int main() {
     uint64_t mismatches = 0;
     int min_offset = std::numeric_limits<int>::max();
     int max_offset = std::numeric_limits<int>::min();
-    uint32_t max_dest_contrib = 0, max_prefix_corr = 0, max_source_local = 0;
+    int min_prefix_corr = std::numeric_limits<int>::max();
+    int max_prefix_corr = std::numeric_limits<int>::min();
+    uint32_t max_dest_contrib = 0, max_source_local = 0;
 
     for (int h = 0; h <= L + 1; ++h) {
         for (uint32_t m = 0; m < LM; ++m) {
@@ -99,6 +101,8 @@ int main() {
                 int s = h;
                 int rem = __builtin_popcount(m);
                 int prefix_corr = 0;
+                min_prefix_corr = std::min(min_prefix_corr, prefix_corr);
+                max_prefix_corr = std::max(max_prefix_corr, prefix_corr);
                 for (int pos = L - 1; pos >= 0; --pos) {
                     if (((m >> pos) & 1u) == 0u) continue;
                     const uint32_t sym = (code >> (2 * pos)) & 3u;
@@ -133,10 +137,11 @@ int main() {
                         min_offset = std::min(min_offset, off);
                         max_offset = std::max(max_offset, off);
                         max_dest_contrib = std::max(max_dest_contrib, dest_contrib);
-                        max_prefix_corr = std::max(max_prefix_corr, uint32_t(prefix_corr));
                         max_source_local = std::max(max_source_local, expected_local);
 
                         prefix_corr += int(raised_contrib) - int(dest_contrib);
+                        min_prefix_corr = std::min(min_prefix_corr, prefix_corr);
+                        max_prefix_corr = std::max(max_prefix_corr, prefix_corr);
                         ++s;
                     } else if (sym == uint32_t(R)) {
                         if (s <= 0) return 9;
@@ -163,6 +168,7 @@ int main() {
               << " min_offset=" << min_offset
               << " max_offset=" << max_offset
               << " max_dest_contrib=" << max_dest_contrib
+              << " min_prefix_corr=" << min_prefix_corr
               << " max_prefix_corr=" << max_prefix_corr
               << " max_source_local=" << max_source_local
               << " dense_base_bytes_per_owner=" << dense_base_bytes
