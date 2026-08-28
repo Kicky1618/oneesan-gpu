@@ -8,6 +8,10 @@
 #undef P10DC_DIRECT_RESOLVED_NO_CROSS5
 #include "ramstream32_bucket_closure_cross5_rankstream.cuh"
 
+#ifdef P10DC_CROSS5_ORDINARY_LUT_DEFINED
+#error "rankstream CROSS5 variant must not pull in the ordinary CROSS5 device LUT"
+#endif
+
 __device__ __forceinline__ Count p10dc_direct_resolved_high_plan_sum_cross5_prekey_rankstream(
     const P10DCDirectHighResolvedCtx& c, const BucketPhysicalBlock& db, uint32_t lr
 ) {
