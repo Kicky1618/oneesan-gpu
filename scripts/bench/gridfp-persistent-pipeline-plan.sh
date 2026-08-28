@@ -11,9 +11,11 @@ MIN_B300_HEADROOM_GIB="${MIN_B300_HEADROOM_GIB:-18}"
 PLAN_SRC="$(repo_path src/cpp/probes/gridfp_reduced_production_persistent_pipeline_plan_probe.cpp)"
 ORDER_SRC="$(repo_path src/cpp/probes/gridfp_reduced_production_persistent_pipeline_order_probe.cpp)"
 RACE_SRC="$(repo_path src/cpp/probes/gridfp_reduced_production_persistent_pipeline_race_probe.cpp)"
+EVENT_RACE_SRC="$(repo_path src/cpp/probes/gridfp_reduced_production_persistent_event_race_probe.cpp)"
 PLAN_BIN="$(build_path gridfp_reduced_production_persistent_pipeline_plan_probe)"
 ORDER_BIN="$(build_path gridfp_reduced_production_persistent_pipeline_order_probe)"
 RACE_BIN="$(build_path gridfp_reduced_production_persistent_pipeline_race_probe)"
+EVENT_RACE_BIN="$(build_path gridfp_reduced_production_persistent_event_race_probe)"
 
 # shellcheck disable=SC2086
 "$CXX" $CXXFLAGS "$PLAN_SRC" -o "$PLAN_BIN"
@@ -21,13 +23,17 @@ RACE_BIN="$(build_path gridfp_reduced_production_persistent_pipeline_race_probe)
 "$CXX" $CXXFLAGS "$ORDER_SRC" -o "$ORDER_BIN"
 # shellcheck disable=SC2086
 "$CXX" $CXXFLAGS "$RACE_SRC" -o "$RACE_BIN"
+# shellcheck disable=SC2086
+"$CXX" $CXXFLAGS "$EVENT_RACE_SRC" -o "$EVENT_RACE_BIN"
 
 PLAN_OUTPUT="$($PLAN_BIN "$NODE_HBM_TBPS" "$NODE_NVLINK_TBPS")"
 ORDER_OUTPUT="$($ORDER_BIN "$NODE_HBM_TBPS" "$NODE_NVLINK_TBPS")"
 RACE_OUTPUT="$($RACE_BIN)"
+EVENT_RACE_OUTPUT="$($EVENT_RACE_BIN)"
 printf '%s\n' "$PLAN_OUTPUT"
 printf '%s\n' "$ORDER_OUTPUT"
 printf '%s\n' "$RACE_OUTPUT"
+printf '%s\n' "$EVENT_RACE_OUTPUT"
 
 if ! printf '%s\n' "$PLAN_OUTPUT" | grep -q 'ALL_OK production_persistent_pipeline_plan=1'; then
   echo "persistent pipeline plan missing ALL_OK" >&2
@@ -40,6 +46,10 @@ fi
 if ! printf '%s\n' "$RACE_OUTPUT" | grep -q 'ALL_OK persistent_pipeline_race=1'; then
   echo "persistent pipeline race proof missing ALL_OK" >&2
   exit 8
+fi
+if ! printf '%s\n' "$EVENT_RACE_OUTPUT" | grep -q 'ALL_OK persistent_event_pipeline_race=1'; then
+  echo "persistent event pipeline race proof missing ALL_OK" >&2
+  exit 9
 fi
 
 for direction in forward reverse; do
@@ -65,4 +75,4 @@ for direction in forward reverse; do
 
 done
 
-echo "persistent-pipeline-plan exact=OK batches=16 double_scratch=1 exact_order_dp=1 overlap_race_proof=1 node_HBM_TBps=$NODE_HBM_TBPS node_NVLink_TBps=$NODE_NVLINK_TBPS"
+echo "persistent-pipeline-plan exact=OK batches=16 double_scratch=1 exact_order_dp=1 overlap_race_proof=1 event_fanin_race_proof=1 node_HBM_TBps=$NODE_HBM_TBPS node_NVLink_TBps=$NODE_NVLINK_TBPS"
