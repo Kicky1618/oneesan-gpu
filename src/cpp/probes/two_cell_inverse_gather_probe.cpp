@@ -168,6 +168,113 @@ std::set<Key> inverse_K(const Key& dst, int W, int i) {
     return out;
 }
 
+// Rank/unrank codec for the canonical reduced layout. `fixed` forbids N at
+// one position; this is exactly the canonical C block condition. The DP is
+// O(W^2) words and replaces the dense Key->rank maps used by the oracle.
+struct WordRankCodec {
+    int len = 0;
+    int fixed = -1;
+    std::vector<std::vector<Rank>> dp;
+
+    WordRankCodec(int len_, int fixed_ = -1)
+        : len(len_), fixed(fixed_),
+          dp(static_cast<std::size_t>(len_ + 1),
+             std::vector<Rank>(static_cast<std::size_t>(len_ + 2), 0)) {
+        dp[len][0] = 1;
+        for (int pos = len - 1; pos >= 0; --pos) {
+            for (int h = 0; h <= len; ++h) {
+                Rank z = 0;
+                if (pos != fixed) z += dp[pos + 1][h];
+                if (h > 0) z += dp[pos + 1][h - 1];
+                z += dp[pos + 1][h + 1];
+                dp[pos][h] = z;
+            }
+        }
+    }
+
+    Rank size() const { return dp[0][1]; }
+    std::size_t logical_bytes() const {
+        return std::size_t(len + 1) * std::size_t(len + 2) * sizeof(Rank);
+    }
+
+    static int order(char c) { return c == N ? 0 : (c == R ? 1 : 2); }
+
+    Rank rank(const Word& w) const {
+        assert(static_cast<int>(w.size()) == len);
+        if (fixed >= 0) assert(w[fixed] != N);
+        Rank r = 0;
+        int h = 1;
+        const char options[3] = {N, R, L};
+        for (int pos = 0; pos < len; ++pos) {
+            for (char x : options) {
+                if (pos == fixed && x == N) continue;
+                if (order(x) >= order(w[pos])) break;
+                if (x == R && h == 0) continue;
+                const int nh = h + (x == L ? 1 : (x == R ? -1 : 0));
+                if (nh >= 0 && nh < static_cast<int>(dp[pos + 1].size()))
+                    r += dp[pos + 1][nh];
+            }
+            h += w[pos] == L ? 1 : (w[pos] == R ? -1 : 0);
+            assert(h >= 0);
+        }
+        assert(h == 0);
+        return r;
+    }
+
+    Word unrank(Rank r) const {
+        assert(r < size());
+        Word w;
+        w.reserve(static_cast<std::size_t>(len));
+        int h = 1;
+        const char options[3] = {N, R, L};
+        for (int pos = 0; pos < len; ++pos) {
+            bool found = false;
+            for (char x : options) {
+                if (pos == fixed && x == N) continue;
+                if (x == R && h == 0) continue;
+                const int nh = h + (x == L ? 1 : (x == R ? -1 : 0));
+                Rank z = 0;
+                if (nh >= 0 && nh < static_cast<int>(dp[pos + 1].size()))
+                    z = dp[pos + 1][nh];
+                if (r < z) {
+                    w.push_back(x);
+                    h = nh;
+                    found = true;
+                    break;
+                }
+                r -= z;
+            }
+            assert(found);
+        }
+        assert(h == 0 && valid_word(w));
+        return w;
+    }
+};
+
+struct ReducedRankCodec {
+    int W = 0;
+    int fixed = 0;
+    WordRankCodec a;
+    WordRankCodec c;
+
+    ReducedRankCodec(int W_, int fixed_)
+        : W(W_), fixed(fixed_), a(W_ - 1), c(W_ - 2, fixed_) {}
+
+    Rank size() const { return a.size() + c.size(); }
+    std::size_t logical_bytes() const { return a.logical_bytes() + c.logical_bytes(); }
+
+    Rank rank(const Key& k) const {
+        if (k.type == 'A') return a.rank(k.w);
+        assert(k.type == 'C');
+        return a.size() + c.rank(k.w);
+    }
+
+    Key unrank(Rank r) const {
+        if (r < a.size()) return Key{'A', a.unrank(r)};
+        return Key{'C', c.unrank(r - a.size())};
+    }
+};
+
 } // namespace
 
 int main(int argc, char** argv) {
@@ -188,42 +295,72 @@ int main(int argc, char** argv) {
         const Rank nnz = 2 * m1 + m2 - 2 * m3;
         Rank max_indeg = 0;
         Rank max_c_indeg = 0;
+        std::size_t max_unique_codec_bytes = 0;
 
         for (int i = 0; i <= W - 4; ++i) {
             const ReducedLayout src = make_layout(W, i, words);
             const ReducedLayout dst = make_layout(W, i + 1, words);
-            if (src.size() != dim || dst.size() != dim) std::abort();
+            const ReducedRankCodec src_codec(W, i);
+            const ReducedRankCodec dst_codec(W, i + 1);
+            if (src.size() != dim || dst.size() != dim ||
+                src_codec.size() != dim || dst_codec.size() != dim)
+                std::abort();
 
-            std::vector<std::vector<Rank>> incoming(static_cast<std::size_t>(dst.size()));
-            for (Rank s = 0; s < src.size(); ++s) {
+            // The A codec is identical for source and destination, so a
+            // production step only needs A + C_i + C_{i+1} count tables.
+            max_unique_codec_bytes = std::max(
+                max_unique_codec_bytes,
+                src_codec.a.logical_bytes() + src_codec.c.logical_bytes() +
+                    dst_codec.c.logical_bytes());
+
+            for (Rank r = 0; r < dim; ++r) {
+                if (!(src_codec.unrank(r) == src.key[r]) || src_codec.rank(src.key[r]) != r)
+                    fail("source codec mismatch W=" + std::to_string(W) +
+                         " i=" + std::to_string(i) + " r=" + std::to_string(r));
+                if (!(dst_codec.unrank(r) == dst.key[r]) || dst_codec.rank(dst.key[r]) != r)
+                    fail("destination codec mismatch W=" + std::to_string(W) +
+                         " i=" + std::to_string(i) + " r=" + std::to_string(r));
+            }
+
+            std::vector<std::vector<Rank>> incoming(static_cast<std::size_t>(dim));
+            for (Rank s = 0; s < dim; ++s) {
+                if (src_codec.rank(src.key[s]) != s) std::abort();
                 for (const auto& [k, c] : K_basis(src.key[s], W, i)) {
                     if (c != 1) std::abort();
-                    const auto it = dst.rank.find(k);
-                    if (it == dst.rank.end()) std::abort();
-                    incoming[it->second].push_back(s);
+                    incoming[dst_codec.rank(k)].push_back(s);
                 }
             }
 
-            for (Rank d = 0; d < dst.size(); ++d) {
+            std::vector<std::uint64_t> value(static_cast<std::size_t>(dim));
+            std::vector<std::uint64_t> scatter(static_cast<std::size_t>(dim));
+            std::vector<std::uint64_t> gather(static_cast<std::size_t>(dim));
+            for (Rank s = 0; s < dim; ++s)
+                value[s] = 1 + ((s * 0x9e3779b97f4a7c15ULL) ^
+                                (Rank(W) << 32) ^ Rank(i));
+
+            for (Rank d = 0; d < dim; ++d) {
+                const Key dst_key = dst_codec.unrank(d);
                 std::vector<Rank> got;
-                for (const Key& k : inverse_K(dst.key[d], W, i)) {
-                    const auto it = src.rank.find(k);
-                    if (it == src.rank.end())
-                        fail("inverse source outside layout W=" + std::to_string(W) +
-                             " i=" + std::to_string(i));
-                    got.push_back(it->second);
-                }
+                for (const Key& k : inverse_K(dst_key, W, i))
+                    got.push_back(src_codec.rank(k));
                 std::sort(got.begin(), got.end());
                 if (got != incoming[d])
-                    fail("table-free inverse mismatch W=" + std::to_string(W) +
+                    fail("rank-table-free inverse mismatch W=" + std::to_string(W) +
                          " i=" + std::to_string(i) + " d=" + std::to_string(d));
+
                 max_indeg = std::max<Rank>(max_indeg, got.size());
-                if (dst.key[d].type == 'C') {
+                if (dst_key.type == 'C') {
                     max_c_indeg = std::max<Rank>(max_c_indeg, got.size());
                     if (got.size() != 1)
                         fail("C destination must have one preimage W=" + std::to_string(W));
                 }
+
+                for (Rank s : incoming[d]) scatter[d] += value[s];
+                for (Rank s : got) gather[d] += value[s];
             }
+            if (scatter != gather)
+                fail("rank-table-free gather mismatch W=" + std::to_string(W) +
+                     " i=" + std::to_string(i));
         }
 
         const Rank csr_bytes = (dim + 1 + nnz) * sizeof(Rank);
@@ -234,10 +371,13 @@ int main(int argc, char** argv) {
                   << " max_c_indeg=" << max_c_indeg
                   << " csr_kib=" << double(csr_bytes) / 1024.0
                   << " inverse_table_bytes=0"
+                  << " rank_lookup_bytes=0"
+                  << " codec_kib=" << double(max_unique_codec_bytes) / 1024.0
                   << " inverse_scan=O(W)"
                   << " OK\n";
     }
 
-    std::cout << "ALL_OK maxW=" << maxW << " table_free_inverse=1\n";
+    std::cout << "ALL_OK maxW=" << maxW
+              << " table_free_inverse=1 rank_table_free=1\n";
     return 0;
 }
