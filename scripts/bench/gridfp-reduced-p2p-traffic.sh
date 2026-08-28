@@ -6,6 +6,9 @@ ARCH="${ARCH:-native}"
 PROOF_W="${PROOF_W:-11}"
 PROOF_K="${PROOF_K:-4}"
 PROOF_BLOCKS="${PROOF_BLOCKS:-256}"
+TOKEN_W="${TOKEN_W:-10}"
+TOKEN_K="${TOKEN_K:-4}"
+TOKEN_S="${TOKEN_S:-3}"
 TRAFFIC_W="${TRAFFIC_W:-28}"
 TRAFFIC_K="${TRAFFIC_K:-13}"
 TRAFFIC_S="${TRAFFIC_S:-13}"
@@ -13,12 +16,14 @@ TRAFFIC_BLOCKS="${TRAFFIC_BLOCKS:-4096}"
 MATRIX_BLOCKS="${MATRIX_BLOCKS:-4096}"
 RUN_MATRIX="${RUN_MATRIX:-1}"
 RUN_MAILBOX="${RUN_MAILBOX:-1}"
+RUN_TOKEN_CYCLE="${RUN_TOKEN_CYCLE:-1}"
 NGPU="${NGPU:-8}"
 MAX_DIRECT_OVER_LOGICAL="${MAX_DIRECT_OVER_LOGICAL:-0}"
 
 BUILD_SCRIPT="$(repo_path scripts/build/gridfp-reduced-component-probe.sh)"
 CAP_BIN="$(build_path gridfp_reduced_component_p2p-capability)"
 MAILBOX_BIN="$(build_path gridfp_reduced_component_p2p-mailbox)"
+TOKEN_BIN="$(build_path gridfp_reduced_component_p2p-token-cycle)"
 PROOF_BIN="$(build_path gridfp_reduced_component_support-rank)"
 LUT_BIN="$(build_path gridfp_reduced_component_p2p-owner-lut)"
 TRAFFIC_BIN="$(build_path gridfp_reduced_component_p2p-traffic)"
@@ -35,6 +40,10 @@ for spec in \
 done
 if [[ "$RUN_MAILBOX" == 1 ]]; then
   MODE=p2p-mailbox ARCH="$ARCH" OUT="$(basename "$MAILBOX_BIN")" \
+    bash "$BUILD_SCRIPT"
+fi
+if [[ "$RUN_TOKEN_CYCLE" == 1 ]]; then
+  MODE=p2p-token-cycle ARCH="$ARCH" OUT="$(basename "$TOKEN_BIN")" \
     bash "$BUILD_SCRIPT"
 fi
 if [[ "$RUN_MATRIX" == 1 ]]; then
@@ -61,6 +70,15 @@ if [[ "$RUN_MAILBOX" == 1 ]]; then
     "$MAILBOX_BIN" "$NGPU"
   else
     echo "SKIP native-atomic P2P mailbox ring: full native atomic mesh unavailable"
+  fi
+fi
+
+if [[ "$RUN_TOKEN_CYCLE" == 1 ]]; then
+  if [[ "${NATIVE_FASTPATH:-0}" == 1 ]]; then
+    echo "== real GridFP token/hole shift cycle =="
+    "$TOKEN_BIN" "$TOKEN_W" "$TOKEN_K" "$TOKEN_S" "$NGPU"
+  else
+    echo "SKIP real GridFP token cycle: full native atomic mesh unavailable"
   fi
 fi
 
