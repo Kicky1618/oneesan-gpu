@@ -3,6 +3,7 @@ set -euo pipefail
 source "$(dirname -- "${BASH_SOURCE[0]}")/../lib/common.sh"
 
 PROOFS=(
+  gridfp-runtime-ab-env-proof.sh
   gridfp-runtime-owner-prefix-carry-begin-proof.sh
   gridfp-runtime-owner-local-sector-carry-begin-proof.sh
   gridfp-runtime-owner-local-sector-compact-table-proof.sh
