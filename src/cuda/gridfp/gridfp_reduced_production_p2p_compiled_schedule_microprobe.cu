@@ -6,11 +6,27 @@
 
 namespace {
 
+static constexpr int P2P_COMPILED_LEN_SHIFT = 24;
+static constexpr std::uint32_t P2P_COMPILED_PC_MASK =
+    (std::uint32_t(1) << P2P_COMPILED_LEN_SHIFT) - 1u;
+
 struct P2PCompiledHeader {
     std::uint32_t run_begin = 0;
-    std::uint32_t primitive_count = 0;
+    std::uint32_t primitive_and_len = 0;
 };
 static_assert(sizeof(P2PCompiledHeader) == 8);
+
+__host__ __device__ __forceinline__ std::uint32_t p2p_compiled_pc(
+    P2PCompiledHeader h
+) {
+    return h.primitive_and_len & P2P_COMPILED_PC_MASK;
+}
+
+__host__ __device__ __forceinline__ int p2p_compiled_len(
+    P2PCompiledHeader h
+) {
+    return int(h.primitive_and_len >> P2P_COMPILED_LEN_SHIFT);
+}
 
 __global__ void p2p_compiled_count_kernel(
     Rank64 base_supports,
@@ -94,13 +110,19 @@ __global__ void p2p_compiled_fill_kernel(
             const unsigned long long ci = atomicAdd(cycle_cursor + exec, 1ULL);
             const unsigned long long rb = atomicAdd(
                 run_cursor + exec, static_cast<unsigned long long>(len));
-            if (rb > 0xffffffffULL) {
+            if (rb + static_cast<unsigned long long>(len) > 0xffffffffULL) {
                 atomicCAS(error, 0, 355);
                 continue;
             }
             const Rank64 pc = RP_PRIMITIVE[__popc(root.support)][1];
+            if (pc > P2P_COMPILED_PC_MASK) {
+                atomicCAS(error, 0, 357);
+                continue;
+            }
             header[header_offset[exec] + ci] = P2PCompiledHeader{
-                static_cast<std::uint32_t>(rb), static_cast<std::uint32_t>(pc)};
+                static_cast<std::uint32_t>(rb),
+                static_cast<std::uint32_t>(pc) |
+                    (static_cast<std::uint32_t>(len) << P2P_COMPILED_LEN_SHIFT)};
 
             std::uint32_t cur = root.support;
             for (int h = 0; h < len; ++h) {
@@ -126,6 +148,7 @@ __global__ void p2p_compiled_execute_kernel(
     const P2PCompiledHeader* __restrict__ header,
     const std::uint64_t* __restrict__ packed_run,
     Rank64 cycles,
+    Rank64 run_count,
     int gpu_id,
     unsigned long long* __restrict__ executed,
     unsigned long long* __restrict__ remote_value_ops,
@@ -144,18 +167,19 @@ __global__ void p2p_compiled_execute_kernel(
         if (lane == 0) {
             sh_len[warp] = 0;
             const P2PCompiledHeader a = header[ci];
-            const P2PCompiledHeader b = header[ci + 1];
-            if (b.run_begin <= a.run_begin || b.run_begin - a.run_begin > RP_MAX_W) {
+            const int len = p2p_compiled_len(a);
+            const Rank64 pc = p2p_compiled_pc(a);
+            const Rank64 end = Rank64(a.run_begin) + Rank64(len);
+            if (len < 2 || len > RP_MAX_W || !pc || end > run_count) {
                 atomicCAS(error, 0, 361);
             } else {
-                const int len = int(b.run_begin - a.run_begin);
                 for (int h = 0; h < len; ++h) {
                     const std::uint64_t z = packed_run[Rank64(a.run_begin) + h];
                     sh_owner[warp][h] = int(z & 7u);
                     sh_local[warp][h] = Rank64(z >> 3);
                 }
                 sh_len[warp] = len;
-                sh_pc[warp] = a.primitive_count;
+                sh_pc[warp] = pc;
             }
         }
         __syncwarp();
@@ -237,7 +261,6 @@ void run_p2p_compiled_schedule_probe(
                       cudaMemcpyHostToDevice), "compiled copy peer table");
     }
 
-    // Compile the support permutation once on device 0.
     ck(cudaSetDevice(0), "compiled builder set device");
     install_tables(tables);
     unsigned long long *d_cycle_counts = nullptr, *d_run_counts = nullptr;
@@ -286,7 +309,7 @@ void run_p2p_compiled_schedule_probe(
     for (int g = 0; g < ngpu; ++g) {
         h_header_offset[static_cast<std::size_t>(g)] = total_headers;
         h_run_offset[static_cast<std::size_t>(g)] = total_runs;
-        total_headers += h_cycle_counts[static_cast<std::size_t>(g)] + 1ULL;
+        total_headers += h_cycle_counts[static_cast<std::size_t>(g)];
         total_runs += h_run_counts[static_cast<std::size_t>(g)];
     }
     ck(cudaMemcpy(d_header_offset, h_header_offset.data(),
@@ -311,19 +334,6 @@ void run_p2p_compiled_schedule_probe(
         d_header_offset, d_run_offset, d_cycle_cursor, d_run_cursor,
         d_all_header, d_all_run, ctx[0].owner_begin, d_build_error);
     ck(cudaGetLastError(), "compiled fill launch");
-
-    // One sentinel per executor slice gives cycle length as next.run_begin-current.run_begin.
-    for (int g = 0; g < ngpu; ++g) {
-        if (h_run_counts[static_cast<std::size_t>(g)] > 0xffffffffULL)
-            fail("compiled owner run list exceeds u32");
-        const P2PCompiledHeader sentinel{
-            static_cast<std::uint32_t>(h_run_counts[static_cast<std::size_t>(g)]), 0};
-        ck(cudaMemcpy(
-               d_all_header + h_header_offset[static_cast<std::size_t>(g)] +
-                   h_cycle_counts[static_cast<std::size_t>(g)],
-               &sentinel, sizeof(sentinel), cudaMemcpyHostToDevice),
-           "compiled write sentinel");
-    }
     ck(cudaEventRecord(e2), "compiled record 2");
     ck(cudaEventSynchronize(e2), "compiled fill sync");
     float count_ms = 0.0f, fill_ms = 0.0f;
@@ -334,27 +344,47 @@ void run_p2p_compiled_schedule_probe(
                   cudaMemcpyDeviceToHost), "compiled copy build error");
     if (build_error) fail("compiled builder device error=" + std::to_string(build_error));
 
+    std::vector<unsigned long long> h_cycle_cursor(static_cast<std::size_t>(ngpu));
+    std::vector<unsigned long long> h_run_cursor(static_cast<std::size_t>(ngpu));
+    ck(cudaMemcpy(h_cycle_cursor.data(), d_cycle_cursor,
+                  ngpu * sizeof(unsigned long long), cudaMemcpyDeviceToHost),
+       "compiled copy cycle cursor");
+    ck(cudaMemcpy(h_run_cursor.data(), d_run_cursor,
+                  ngpu * sizeof(unsigned long long), cudaMemcpyDeviceToHost),
+       "compiled copy run cursor");
+    for (int g = 0; g < ngpu; ++g) {
+        if (h_cycle_cursor[static_cast<std::size_t>(g)] !=
+                h_cycle_counts[static_cast<std::size_t>(g)] ||
+            h_run_cursor[static_cast<std::size_t>(g)] !=
+                h_run_counts[static_cast<std::size_t>(g)])
+            fail("compiled fill cursor/count mismatch");
+    }
+
     for (int g = 0; g < ngpu; ++g) {
         auto& c = ctx[static_cast<std::size_t>(g)];
         c.cycle_count = h_cycle_counts[static_cast<std::size_t>(g)];
         c.run_count = h_run_counts[static_cast<std::size_t>(g)];
         ck(cudaSetDevice(g), "compiled distribute set device");
-        ck(cudaMalloc(&c.header, (c.cycle_count + 1) * sizeof(P2PCompiledHeader)),
+        ck(cudaMalloc(&c.header,
+                      std::max<Rank64>(1, c.cycle_count) * sizeof(P2PCompiledHeader)),
            "compiled alloc local headers");
-        ck(cudaMalloc(&c.run, c.run_count * sizeof(std::uint64_t)),
+        ck(cudaMalloc(&c.run,
+                      std::max<Rank64>(1, c.run_count) * sizeof(std::uint64_t)),
            "compiled alloc local runs");
         const auto* hs = d_all_header + h_header_offset[static_cast<std::size_t>(g)];
         const auto* rs = d_all_run + h_run_offset[static_cast<std::size_t>(g)];
         if (g == 0) {
-            ck(cudaMemcpy(c.header, hs, (c.cycle_count + 1) * sizeof(P2PCompiledHeader),
-                          cudaMemcpyDeviceToDevice), "compiled local header copy");
+            if (c.cycle_count)
+                ck(cudaMemcpy(c.header, hs, c.cycle_count * sizeof(P2PCompiledHeader),
+                              cudaMemcpyDeviceToDevice), "compiled local header copy");
             if (c.run_count)
                 ck(cudaMemcpy(c.run, rs, c.run_count * sizeof(std::uint64_t),
                               cudaMemcpyDeviceToDevice), "compiled local run copy");
         } else {
-            ck(cudaMemcpyPeer(c.header, g, hs, 0,
-                              (c.cycle_count + 1) * sizeof(P2PCompiledHeader)),
-               "compiled peer header copy");
+            if (c.cycle_count)
+                ck(cudaMemcpyPeer(c.header, g, hs, 0,
+                                  c.cycle_count * sizeof(P2PCompiledHeader)),
+                   "compiled peer header copy");
             if (c.run_count)
                 ck(cudaMemcpyPeer(c.run, g, rs, 0,
                                   c.run_count * sizeof(std::uint64_t)),
@@ -371,7 +401,7 @@ void run_p2p_compiled_schedule_probe(
         const unsigned launch_blocks = static_cast<unsigned>(
             std::max<Rank64>(1, std::min<Rank64>(blocks, one_pass)));
         p2p_compiled_execute_kernel<<<launch_blocks, THREADS>>>(
-            c.peer, c.header, c.run, c.cycle_count, g,
+            c.peer, c.header, c.run, c.cycle_count, c.run_count, g,
             c.cycles, c.cross_values, c.error);
         ck(cudaGetLastError(), "compiled execute launch");
     }
@@ -421,6 +451,7 @@ void run_p2p_compiled_schedule_probe(
               << " execute_wall_ms=" << exec_ms
               << " remote_u32_load_store_ops=" << remote_ops
               << " remote_GiB=" << double(remote_ops) * 4.0 / double(1ULL << 30)
+              << " header_order_independent=1"
               << " support_ops_per_row=0 owner_ops_per_row=0 grouped_rank_ops_per_row=0"
               << " reusable_schedule=1 staging_state_bytes=0 exact=OK\n";
 
@@ -457,7 +488,7 @@ int main(int argc, char** argv) {
             constexpr unsigned long long cycles = 21566612ULL;
             constexpr unsigned long long bytes =
                 nonfixed_runs * sizeof(std::uint64_t) +
-                (cycles + 8ULL) * sizeof(P2PCompiledHeader);
+                cycles * sizeof(P2PCompiledHeader);
             std::cout << "gridfp-reduced-production-p2p-compiled-schedule-plan"
                       << " W=28 K=13 ngpu=" << ngpu
                       << " cycles=" << cycles
@@ -467,6 +498,7 @@ int main(int argc, char** argv) {
                       << double(bytes) / double(ngpu) / double(1ULL << 20)
                       << " forward_reverse_both_GiB="
                       << 2.0 * double(bytes) / double(1ULL << 30)
+                      << " header_len_bits=5 primitive_bits=24"
                       << " state_stream_GiB_per_gpu=220.442683"
                       << " support_ops_per_row=0 owner_ops_per_row=0 grouped_rank_ops_per_row=0\n";
             return 0;
