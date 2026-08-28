@@ -30,6 +30,8 @@ __device__ __align__(128) uint32_t
 __device__ __align__(128) uint16_t
     D_P10DC_RANKFORMULA_ABSTRACT_SRC[P10DC_RANKFORMULA_ABSTRACT_RANK_N];
 #if P10DC_RANKFORMULA_ABSTRACT_SELECT8
+// Depth-major: all lanes in a HIGH warp share cross_depth, so nearby abstract
+// descriptor indices touch adjacent bytes instead of a 13-byte lane stride.
 __device__ __align__(128) uint8_t
     D_P10DC_RANKFORMULA_ABSTRACT_SELECT[P10DC_RANKFORMULA_ABSTRACT_SELECT_N];
 #endif
@@ -124,7 +126,7 @@ static P10DCRankFormulaAbstractHost p10dc_rankformula_abstract_build_host() {
 #if P10DC_RANKFORMULA_ABSTRACT_SELECT8
                 out.roff[di] = uint16_t(roff);
                 for (uint32_t depth = 1; depth <= P10DC_RANKFORMULA_ABSTRACT_SELECT_DEPTHS; ++depth) {
-                    out.select[size_t(di) * P10DC_RANKFORMULA_ABSTRACT_SELECT_DEPTHS + size_t(depth - 1u)] =
+                    out.select[size_t(depth - 1u) * P10DC_RANKFORMULA_ABSTRACT_DESC_N + size_t(di)] =
                         p10dc_rankformula_abstract_select_host(lp, n, depth);
                 }
                 if (p10dc_rankformula_abstract_select_host(lp, n, 14u) != 0u ||
@@ -212,7 +214,7 @@ p10dc_resolved_low_preimages_cross5_rankformula_nometa4_abstract_fixed(
 #if P10DC_RANKFORMULA_ABSTRACT_SELECT8
     const uint32_t rp = p10dc_rankformula_abstract_roff_load(di);
     uint32_t select = p10dc_rankformula_abstract_select_load(
-        di * P10DC_RANKFORMULA_ABSTRACT_SELECT_DEPTHS + (depth - 1u));
+        (depth - 1u) * P10DC_RANKFORMULA_ABSTRACT_DESC_N + di);
     while (select) {
         const uint32_t li = uint32_t(__ffs(int(select)) - 1);
         select &= select - 1u;
