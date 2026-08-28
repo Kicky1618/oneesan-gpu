@@ -16,19 +16,26 @@ namespace oneesan::gridfp::reducedprod {
 #ifndef RP_RUNTIME_SUPPORT_RANK_SETBITS
 #define RP_RUNTIME_SUPPORT_RANK_SETBITS 1
 #endif
-static_assert(
-    RP_RUNTIME_PRIMITIVE_RANK_SETBITS == 0 ||
-    RP_RUNTIME_PRIMITIVE_RANK_SETBITS == 1,
-    "RP_RUNTIME_PRIMITIVE_RANK_SETBITS must be 0 or 1");
-static_assert(
-    RP_RUNTIME_BROADWORD_SUPPORT == 0 || RP_RUNTIME_BROADWORD_SUPPORT == 1,
-    "RP_RUNTIME_BROADWORD_SUPPORT must be 0 or 1");
-static_assert(
-    RP_RUNTIME_OWNER_FROM_BOUNDARIES == 0 || RP_RUNTIME_OWNER_FROM_BOUNDARIES == 1,
-    "RP_RUNTIME_OWNER_FROM_BOUNDARIES must be 0 or 1");
-static_assert(
-    RP_RUNTIME_SUPPORT_RANK_SETBITS == 0 || RP_RUNTIME_SUPPORT_RANK_SETBITS == 1,
-    "RP_RUNTIME_SUPPORT_RANK_SETBITS must be 0 or 1");
+#ifndef RP_RUNTIME_SECTOR_OFFSET_TABLE
+#define RP_RUNTIME_SECTOR_OFFSET_TABLE 0
+#endif
+static_assert(RP_RUNTIME_PRIMITIVE_RANK_SETBITS == 0 || RP_RUNTIME_PRIMITIVE_RANK_SETBITS == 1,
+              "RP_RUNTIME_PRIMITIVE_RANK_SETBITS must be 0 or 1");
+static_assert(RP_RUNTIME_BROADWORD_SUPPORT == 0 || RP_RUNTIME_BROADWORD_SUPPORT == 1,
+              "RP_RUNTIME_BROADWORD_SUPPORT must be 0 or 1");
+static_assert(RP_RUNTIME_OWNER_FROM_BOUNDARIES == 0 || RP_RUNTIME_OWNER_FROM_BOUNDARIES == 1,
+              "RP_RUNTIME_OWNER_FROM_BOUNDARIES must be 0 or 1");
+static_assert(RP_RUNTIME_SUPPORT_RANK_SETBITS == 0 || RP_RUNTIME_SUPPORT_RANK_SETBITS == 1,
+              "RP_RUNTIME_SUPPORT_RANK_SETBITS must be 0 or 1");
+static_assert(RP_RUNTIME_SECTOR_OFFSET_TABLE == 0 || RP_RUNTIME_SECTOR_OFFSET_TABLE == 1,
+              "RP_RUNTIME_SECTOR_OFFSET_TABLE must be 0 or 1");
+
+static constexpr int RP_RUNTIME_SECTOR_OUTER_SLOTS = 14;
+static constexpr int RP_RUNTIME_SECTOR_LOCAL_SLOTS = 16;
+__device__ __constant__ std::uint32_t
+RP_RUNTIME_LOCAL_SECTOR_OFFSET[RP_RUNTIME_SECTOR_OUTER_SLOTS]
+                              [RP_RUNTIME_SECTOR_LOCAL_SLOTS];
+static_assert(sizeof(RP_RUNTIME_LOCAL_SECTOR_OFFSET) == 896);
 
 struct GroupedComponentContextDevice {
     int owner = -1;
@@ -39,8 +46,7 @@ struct GroupedComponentContextDevice {
 };
 
 __device__ __forceinline__ std::uint32_t runtime_support_from_mate_device(
-    MateID mate,
-    int len
+    MateID mate, int len
 ) {
 #if RP_RUNTIME_BROADWORD_SUPPORT
     std::uint64_t x = (std::uint64_t(mate) | (std::uint64_t(mate) >> 1)) &
@@ -62,10 +68,7 @@ __device__ __forceinline__ std::uint32_t runtime_support_from_mate_device(
 }
 
 __device__ __forceinline__ std::uint32_t runtime_full_support_device(
-    DeviceKey k,
-    int W,
-    int q,
-    bool reverse
+    DeviceKey k, int W, int q, bool reverse
 ) {
     const MateID full = !k.blocked ? k.mate
         : (reverse ? blocked_exclude_reverse(k.mate, W, q)
@@ -74,9 +77,7 @@ __device__ __forceinline__ std::uint32_t runtime_full_support_device(
 }
 
 __device__ __forceinline__ Rank64 runtime_compact_support_rank_device(
-    std::uint32_t mask,
-    int len,
-    int ones
+    std::uint32_t mask, int len, int ones
 ) {
 #if RP_RUNTIME_SUPPORT_RANK_SETBITS
     if (len < 32) mask &= (std::uint32_t(1) << len) - 1u;
@@ -95,18 +96,14 @@ __device__ __forceinline__ Rank64 runtime_compact_support_rank_device(
 }
 
 __device__ __forceinline__ Rank64 runtime_primitive_rank_support_device(
-    MateID m,
-    int len,
-    int occupied,
-    std::uint32_t support
+    MateID m, int len, int occupied, std::uint32_t support
 ) {
 #if RP_RUNTIME_PRIMITIVE_RANK_SETBITS
     int h = 1;
     int seen = 0;
     Rank64 rank = 0;
     std::uint32_t mask = support;
-    if (len < 32)
-        mask &= (std::uint32_t(1) << len) - 1u;
+    if (len < 32) mask &= (std::uint32_t(1) << len) - 1u;
     while (mask) {
         const int bit = 31 - __clz(mask);
         const MateValue c = mget(m, bit);
@@ -125,12 +122,18 @@ __device__ __forceinline__ Rank64 runtime_primitive_rank_support_device(
 #endif
 }
 
+__device__ __forceinline__ Rank64 runtime_group_local_sector_offset_device(
+    int L, int outer_ones, int local_ones
+) {
+#if RP_RUNTIME_SECTOR_OFFSET_TABLE
+    return RP_RUNTIME_LOCAL_SECTOR_OFFSET[outer_ones][local_ones];
+#else
+    return group_local_sector_offset_device(L, outer_ones, local_ones);
+#endif
+}
+
 __device__ __forceinline__ int runtime_owner_from_group_base_device(
-    Rank64 group_base,
-    int W,
-    int K,
-    int ngpu,
-    const Rank64* owner_begin
+    Rank64 group_base, int W, int K, int ngpu, const Rank64* owner_begin
 ) {
 #if RP_RUNTIME_OWNER_FROM_BOUNDARIES
     if (W >= 8 && W <= RP_MAX_W && !(W & 1) && K == (W - 2) / 2) {
@@ -148,14 +151,8 @@ __device__ __forceinline__ int runtime_owner_from_group_base_device(
 }
 
 __device__ __forceinline__ GroupedComponentContextDevice grouped_component_context_device(
-    DeviceKey seed,
-    int W,
-    int q,
-    bool reverse,
-    int tile_start,
-    int K,
-    int ngpu,
-    const Rank64* owner_begin
+    DeviceKey seed, int W, int q, bool reverse, int tile_start, int K,
+    int ngpu, const Rank64* owner_begin
 ) {
     const int L = K + 2;
     const int O = W - L;
@@ -171,19 +168,14 @@ __device__ __forceinline__ GroupedComponentContextDevice grouped_component_conte
         prefix += choose_device(O, t) * outer_group_size_device(L, t);
     const Rank64 group_base = prefix + sr_outer * group;
 
-    int owner = runtime_owner_from_group_base_device(
-        group_base, W, K, ngpu, owner_begin);
-    if (owner < 0)
-        owner = weighted_outer_owner_device(outer, L, O, ngpu);
+    int owner = runtime_owner_from_group_base_device(group_base, W, K, ngpu, owner_begin);
+    if (owner < 0) owner = weighted_outer_owner_device(outer, L, O, ngpu);
     return GroupedComponentContextDevice{
         owner, lo, L, outer_ones, group_base - owner_begin[owner]};
 }
 
 __device__ __forceinline__ GroupedDeviceRank grouped_rank_in_component_device(
-    DeviceKey k,
-    int W,
-    int q,
-    bool reverse,
+    DeviceKey k, int W, int q, bool reverse,
     const GroupedComponentContextDevice& ctx
 ) {
     const MateID full_mate = !k.blocked ? k.mate
@@ -195,13 +187,12 @@ __device__ __forceinline__ GroupedDeviceRank grouped_rank_in_component_device(
     const int occupied = ctx.outer_ones + local_ones;
     const Rank64 pc = RP_PRIMITIVE[occupied][1];
 
-    const Rank64 pr = runtime_primitive_rank_support_device(
-        full_mate, W, occupied, full);
-    Rank64 within = group_local_sector_offset_device(ctx.L, ctx.outer_ones, local_ones);
+    const Rank64 pr = runtime_primitive_rank_support_device(full_mate, W, occupied, full);
+    Rank64 within = runtime_group_local_sector_offset_device(
+        ctx.L, ctx.outer_ones, local_ones);
 
     if (!k.blocked) {
-        const Rank64 sr = runtime_compact_support_rank_device(
-            local_mask, ctx.L, local_ones);
+        const Rank64 sr = runtime_compact_support_rank_device(local_mask, ctx.L, local_ones);
         within += sr * pc + pr;
     } else {
         const int missing_bit = reverse ? q - 1 : q;
