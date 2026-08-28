@@ -46,11 +46,14 @@ case "$MODE" in
   owner-lean)
     SRC_REL="src/cuda/gridfp/gridfp_reduced_production_owner_component_lean_microprobe.cu"
     ;;
+  owner-subwarp)
+    SRC_REL="src/cuda/gridfp/gridfp_reduced_production_owner_subwarp_microprobe.cu"
+    ;;
   p2p-cycle)
     SRC_REL="src/cuda/gridfp/gridfp_reduced_production_p2p_cycle_microprobe.cu"
     ;;
   *)
-    echo "invalid MODE=$MODE (forward|reverse|register|persistent|dense|edge|grouped|inplace|cycle|shift-cycle|turn|owner-component|owner-lean|p2p-cycle)" >&2
+    echo "invalid MODE=$MODE (forward|reverse|register|persistent|dense|edge|grouped|inplace|cycle|shift-cycle|turn|owner-component|owner-lean|owner-subwarp|p2p-cycle)" >&2
     exit 2
     ;;
 esac
