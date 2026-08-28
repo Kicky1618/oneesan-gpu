@@ -1,7 +1,87 @@
 #pragma once
 
-#include "ramstream32_bucket_closure_cross5_rankchunk32.cuh"
+#include "ramstream32_bucket_closure_cross5_rankstream.cuh"
 #include "ramstream32_bucket_low_rankdelta8.cuh"
+
+#ifndef P10DC_RANKDELTA8_FUSED13
+#ifdef P10DC_RANKCHUNK32_FUSED16
+#define P10DC_RANKDELTA8_FUSED13 P10DC_RANKCHUNK32_FUSED16
+#else
+#define P10DC_RANKDELTA8_FUSED13 1
+#endif
+#endif
+static_assert(P10DC_RANKDELTA8_FUSED13 == 0 || P10DC_RANKDELTA8_FUSED13 == 1,
+              "P10DC_RANKDELTA8_FUSED13 must be 0 or 1");
+
+static constexpr uint32_t P10DC_RANKDELTA8_PAIR_CONSUME_SHIFT = 6u;
+static constexpr uint32_t P10DC_RANKDELTA8_PAIR_CONSUME_MASK = 0x7u;
+static constexpr uint32_t P10DC_RANKDELTA8_PAIR_DELTA_SHIFT = 9u;
+static constexpr uint32_t P10DC_RANKDELTA8_PAIR_DELTA_MASK = 0xfu;
+
+static constexpr uint8_t p10dc_rankdelta8_consume_host(uint8_t e, uint8_t meta) {
+    const bool halt = ((e >> P10DC_CROSS5_HALT_SHIFT) & 1u) != 0;
+    if (!halt) return uint8_t(meta & P10DC_RANKSTREAM_META_LCOUNT_MASK);
+    const uint8_t rankmask = uint8_t(e & P10DC_CROSS5_MASK_MASK);
+    uint8_t consume = 0;
+    for (uint8_t i = 0; i < P10DC_CROSS5_CHUNK; ++i)
+        if (rankmask & uint8_t(1u << i)) consume = uint8_t(i + 1u);
+    return consume;
+}
+
+static constexpr uint16_t p10dc_rankdelta8_pair_host(uint32_t key, uint32_t state) {
+    const uint8_t e = p10dc_rankstream_host_entry(key, state);
+    const uint8_t meta = p10dc_rankstream_meta_host(key);
+    const uint32_t consume = p10dc_rankdelta8_consume_host(e, meta);
+    const uint32_t delta_bias = uint32_t(meta >> P10DC_RANKSTREAM_META_DELTA_SHIFT);
+    return uint16_t(
+        uint32_t(e & uint8_t(P10DC_CROSS5_MASK_MASK | (1u << P10DC_CROSS5_HALT_SHIFT))) |
+        (consume << P10DC_RANKDELTA8_PAIR_CONSUME_SHIFT) |
+        (delta_bias << P10DC_RANKDELTA8_PAIR_DELTA_SHIFT));
+}
+static_assert(P10DC_CROSS5_MASK_MASK == 0x1fu && P10DC_CROSS5_HALT_SHIFT == 5);
+static_assert(P10DC_RANKDELTA8_PAIR_CONSUME_SHIFT == 6u);
+static_assert(P10DC_RANKDELTA8_PAIR_DELTA_SHIFT == 9u);
+static_assert(P10DC_RANKSTREAM_META_DELTA_BIAS == 5);
+
+#if P10DC_RANKDELTA8_FUSED13
+#if P10DC_RANKSTREAM_LUT_LDG
+__device__ __align__(128) uint16_t
+    D_P10DC_RANKDELTA8_FUSED13[P10DC_CROSS5_STATES * P10DC_RANKSTREAM_LUT_STRIDE];
+#else
+__constant__ uint16_t
+    D_P10DC_RANKDELTA8_FUSED13[P10DC_CROSS5_STATES * P10DC_RANKSTREAM_LUT_STRIDE];
+#endif
+
+static std::array<uint16_t, P10DC_CROSS5_STATES * P10DC_RANKSTREAM_LUT_STRIDE>
+p10dc_rankdelta8_fused13_table() {
+    std::array<uint16_t, P10DC_CROSS5_STATES * P10DC_RANKSTREAM_LUT_STRIDE> out{};
+    for (uint32_t s = 0; s < P10DC_CROSS5_STATES; ++s)
+        for (uint32_t k = 0; k < P10DC_CROSS5_KEYS; ++k)
+            out[size_t(s) * P10DC_RANKSTREAM_LUT_STRIDE + k] =
+                p10dc_rankdelta8_pair_host(k, s);
+    return out;
+}
+
+static void p10dc_install_rankdelta8_lut() {
+    static const auto table = p10dc_rankdelta8_fused13_table();
+    ck(cudaMemcpyToSymbol(D_P10DC_RANKDELTA8_FUSED13, table.data(),
+                          table.size() * sizeof(uint16_t)),
+       "p10dc rankdelta8 fused13 CROSS5 table");
+}
+
+__device__ __forceinline__ uint16_t p10dc_rankdelta8_pair_load(
+    uint32_t state, uint32_t chunk
+) {
+    const size_t ix = size_t(state) * P10DC_RANKSTREAM_LUT_STRIDE + chunk;
+#if P10DC_RANKSTREAM_LUT_LDG
+    return __ldg(D_P10DC_RANKDELTA8_FUSED13 + ix);
+#else
+    return D_P10DC_RANKDELTA8_FUSED13[ix];
+#endif
+}
+#else
+static void p10dc_install_rankdelta8_lut() { p10dc_install_rankstream_lut(); }
+#endif
 
 struct P10DCRankDelta8Cursor {
     const uint8_t* p = nullptr;
@@ -38,21 +118,27 @@ __device__ __forceinline__ uint32_t p10dc_cross5_apply_rankdelta8(
     uint32_t chunk, uint32_t& state, const Count* source_row,
     P10DCRankDelta8Cursor& cursor, BkczCrossAccum& sum
 ) {
-#if P10DC_RANKCHUNK32_FUSED16
-    const uint16_t pair = p10dc_rankchunk32_pair_load(state, chunk);
-    const uint8_t e = uint8_t(pair);
-    const uint8_t meta = uint8_t(pair >> 8);
+    uint32_t rankmask, consume, delta_bias;
+    bool halt;
+#if P10DC_RANKDELTA8_FUSED13
+    const uint32_t pair = uint32_t(p10dc_rankdelta8_pair_load(state, chunk));
+    rankmask = pair & P10DC_CROSS5_MASK_MASK;
+    halt = ((pair >> P10DC_CROSS5_HALT_SHIFT) & 1u) != 0;
+    consume = (pair >> P10DC_RANKDELTA8_PAIR_CONSUME_SHIFT) &
+              P10DC_RANKDELTA8_PAIR_CONSUME_MASK;
+    delta_bias = (pair >> P10DC_RANKDELTA8_PAIR_DELTA_SHIFT) &
+                 P10DC_RANKDELTA8_PAIR_DELTA_MASK;
 #else
     const uint8_t e = p10dc_rankstream_entry_load(
         size_t(state) * P10DC_RANKSTREAM_LUT_STRIDE + chunk);
     const uint8_t meta = p10dc_rankstream_meta_load(chunk);
-#endif
-    const uint32_t lcount = uint32_t(meta & P10DC_RANKSTREAM_META_LCOUNT_MASK);
-    const uint32_t rankmask = uint32_t(e & P10DC_CROSS5_MASK_MASK);
-    const bool halt = ((e >> P10DC_CROSS5_HALT_SHIFT) & 1u) != 0;
-    const uint32_t consume = halt
+    rankmask = uint32_t(e & P10DC_CROSS5_MASK_MASK);
+    halt = ((e >> P10DC_CROSS5_HALT_SHIFT) & 1u) != 0;
+    consume = halt
         ? (rankmask ? 32u - uint32_t(__clz(rankmask)) : 0u)
-        : lcount;
+        : uint32_t(meta & P10DC_RANKSTREAM_META_LCOUNT_MASK);
+    delta_bias = uint32_t(meta >> P10DC_RANKSTREAM_META_DELTA_SHIFT);
+#endif
 #pragma unroll
     for (uint32_t ordinal = 0; ordinal < P10DC_CROSS5_CHUNK; ++ordinal) {
         if (ordinal < consume) {
@@ -63,8 +149,7 @@ __device__ __forceinline__ uint32_t p10dc_cross5_apply_rankdelta8(
     }
     if (halt) return 1u;
     state = uint32_t(
-        int(state) + int(meta >> P10DC_RANKSTREAM_META_DELTA_SHIFT)
-        - P10DC_RANKSTREAM_META_DELTA_BIAS);
+        int(state) + int(delta_bias) - P10DC_RANKSTREAM_META_DELTA_BIAS);
     return 0u;
 }
 
