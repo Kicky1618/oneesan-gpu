@@ -1,13 +1,7 @@
 #pragma push_macro("main")
 #undef main
-#define main two_cell_reverse_stationary_probe_main_unused
-#include "two_cell_reverse_stationary_probe.cpp"
-#pragma pop_macro("main")
-
-#pragma push_macro("main")
-#undef main
-#define main two_cell_turn_closed_device_probe_main_unused
-#include "two_cell_turn_closed_device_probe.cpp"
+#define main two_cell_turn_closed_block_probe_main_unused
+#include "two_cell_turn_closed_block_probe.cpp"
 #pragma pop_macro("main")
 
 #include "../../common/two_cell_stationary_rank.hpp"
@@ -22,6 +16,17 @@ Value mmul(Value a, std::int64_t b) {
     return (a * static_cast<Value>(b % static_cast<std::int64_t>(kMod))) % kMod;
 }
 
+oneesan::twocell::PackedKey snake_pack(const Key& k) {
+    oneesan::twocell::PackedKey z{};
+    z.type = static_cast<std::uint8_t>(k.type == 'C');
+    for (int p = 0; p < static_cast<int>(k.w.size()); ++p) {
+        const std::uint32_t bit = std::uint32_t(1) << p;
+        if (k.w[p] != N) z.support |= bit;
+        if (k.w[p] == L) z.left |= bit;
+    }
+    return z;
+}
+
 Rank snake_rank(
     const Key& k,
     int W,
@@ -29,9 +34,24 @@ Rank snake_rank(
     const oneesan::twocell::RankTables& rt,
     const oneesan::twocell::StationaryRankTables& st
 ) {
-    return oneesan::twocell::stationary_rank(
-        reverse_stationary_pack(k), W, active, rt, st);
+    return oneesan::twocell::stationary_rank(snake_pack(k), W, active, rt, st);
 }
+
+struct Dsu {
+    std::vector<int> p;
+    explicit Dsu(int n) : p(static_cast<std::size_t>(n), -1) {}
+    int find(int x) {
+        if (p[static_cast<std::size_t>(x)] < 0) return x;
+        return p[static_cast<std::size_t>(x)] = find(p[static_cast<std::size_t>(x)]);
+    }
+    void unite(int a, int b) {
+        a = find(a); b = find(b);
+        if (a == b) return;
+        if (p[static_cast<std::size_t>(a)] > p[static_cast<std::size_t>(b)]) std::swap(a, b);
+        p[static_cast<std::size_t>(a)] += p[static_cast<std::size_t>(b)];
+        p[static_cast<std::size_t>(b)] = a;
+    }
+};
 
 std::map<Key, Value> exact_forward(
     const std::map<Key, Value>& in, int W, int i
@@ -64,74 +84,67 @@ std::map<Key, Value> exact_turn(
     return out;
 }
 
-void local_forward_inplace(
-    std::vector<Value>& v,
+template <class ColumnFn>
+Rank generic_component_inplace(
+    std::vector<Value>& values,
+    const std::vector<Key>& source_basis,
     int W,
-    int i,
-    const std::vector<std::vector<Word>>& words,
+    int source_active,
+    int destination_active,
     const oneesan::twocell::RankTables& rt,
-    const oneesan::twocell::StationaryRankTables& st
+    const oneesan::twocell::StationaryRankTables& st,
+    ColumnFn column
 ) {
-    for (const Word& u : words[W - 2]) {
-        const auto packed = packed_direct_component_sources(pack_word(u), W, i);
-        std::vector<Key> src;
-        for (int q = 0; q < packed.size; ++q) src.push_back(unpack_key(packed.value[q]));
-        std::vector<Rank> rank(src.size());
-        std::map<Rank, int> slot;
-        std::vector<Value> x(src.size()), y(src.size());
-        for (int q = 0; q < static_cast<int>(src.size()); ++q) {
-            rank[q] = snake_rank(src[q], W, i, rt, st);
-            if (!slot.emplace(rank[q], q).second) fail("snake forward local rank collision");
-            x[q] = v[static_cast<std::size_t>(rank[q])];
-        }
-        for (int q = 0; q < static_cast<int>(src.size()); ++q) {
-            for (const auto& [d, c] : K_basis(src[q], W, i)) {
-                const Rank dr = snake_rank(d, W, i + 1, rt, st);
-                const auto it = slot.find(dr);
-                if (it == slot.end()) fail("snake forward destination leaves component");
-                y[it->second] = madd(y[it->second], mmul(x[q], c));
-            }
-        }
-        for (int q = 0; q < static_cast<int>(src.size()); ++q)
-            v[static_cast<std::size_t>(rank[q])] = y[q];
-    }
-}
+    const int n = static_cast<int>(values.size());
+    if (static_cast<int>(source_basis.size()) != n)
+        fail("snake generic source dimension");
 
-void local_reverse_inplace(
-    std::vector<Value>& v,
-    int W,
-    int pair,
-    const std::vector<std::vector<Word>>& words,
-    const oneesan::twocell::RankTables& rt,
-    const oneesan::twocell::StationaryRankTables& st
-) {
-    const int i = W - 2 - pair;
-    const int src_active = pair - 1;
-    const int dst_active = pair - 2;
-    for (const Word& u : words[W - 2]) {
-        const auto packed = packed_direct_component_sources(pack_word(u), W, i);
-        std::vector<Key> src;
-        for (int q = 0; q < packed.size; ++q)
-            src.push_back(reflect_key(unpack_key(packed.value[q])));
-        std::vector<Rank> rank(src.size());
-        std::map<Rank, int> slot;
-        std::vector<Value> x(src.size()), y(src.size());
-        for (int q = 0; q < static_cast<int>(src.size()); ++q) {
-            rank[q] = snake_rank(src[q], W, src_active, rt, st);
-            if (!slot.emplace(rank[q], q).second) fail("snake reverse local rank collision");
-            x[q] = v[static_cast<std::size_t>(rank[q])];
+    std::vector<Key> source_at_rank(static_cast<std::size_t>(n));
+    std::vector<std::uint8_t> seen(static_cast<std::size_t>(n));
+    Dsu dsu(n);
+    for (const Key& s : source_basis) {
+        const Rank sr64 = snake_rank(s, W, source_active, rt, st);
+        if (sr64 >= static_cast<Rank>(n)) fail("snake generic source rank");
+        const int sr = static_cast<int>(sr64);
+        if (seen[static_cast<std::size_t>(sr)]++) fail("snake generic rank collision");
+        source_at_rank[static_cast<std::size_t>(sr)] = s;
+        for (const auto& [d, c] : column(s)) {
+            if (!c) continue;
+            const Rank dr64 = snake_rank(d, W, destination_active, rt, st);
+            if (dr64 >= static_cast<Rank>(n)) fail("snake generic destination rank");
+            dsu.unite(sr, static_cast<int>(dr64));
         }
-        for (int q = 0; q < static_cast<int>(src.size()); ++q) {
-            for (const auto& [d, c] : K_reverse_basis(src[q], W, pair)) {
-                const Rank dr = snake_rank(d, W, dst_active, rt, st);
-                const auto it = slot.find(dr);
-                if (it == slot.end()) fail("snake reverse destination leaves component");
-                y[it->second] = madd(y[it->second], mmul(x[q], c));
+    }
+
+    std::map<int, std::vector<int>> component;
+    for (int r = 0; r < n; ++r) component[dsu.find(r)].push_back(r);
+
+    for (const auto& [root, ranks] : component) {
+        (void)root;
+        std::map<int, int> local;
+        std::vector<Value> x(ranks.size()), y(ranks.size());
+        for (int q = 0; q < static_cast<int>(ranks.size()); ++q) {
+            local.emplace(ranks[static_cast<std::size_t>(q)], q);
+            x[static_cast<std::size_t>(q)] =
+                values[static_cast<std::size_t>(ranks[static_cast<std::size_t>(q)])];
+        }
+        for (int q = 0; q < static_cast<int>(ranks.size()); ++q) {
+            const int sr = ranks[static_cast<std::size_t>(q)];
+            const Key& s = source_at_rank[static_cast<std::size_t>(sr)];
+            for (const auto& [d, c] : column(s)) {
+                const int dr = static_cast<int>(snake_rank(
+                    d, W, destination_active, rt, st));
+                const auto it = local.find(dr);
+                if (it == local.end()) fail("snake generic edge leaves component");
+                y[static_cast<std::size_t>(it->second)] = madd(
+                    y[static_cast<std::size_t>(it->second)], mmul(x[static_cast<std::size_t>(q)], c));
             }
         }
-        for (int q = 0; q < static_cast<int>(src.size()); ++q)
-            v[static_cast<std::size_t>(rank[q])] = y[q];
+        for (int q = 0; q < static_cast<int>(ranks.size()); ++q)
+            values[static_cast<std::size_t>(ranks[static_cast<std::size_t>(q)])] =
+                y[static_cast<std::size_t>(q)];
     }
+    return component.size();
 }
 
 void local_turn_inplace(
@@ -155,14 +168,13 @@ void local_turn_inplace(
             for (const Key& p : r.passive) c.passive.push_back(reflect_key(p));
         }
         const auto states = c.states();
-        std::vector<Value> x(states.size());
+        std::vector<Value> x(states.size()), y(states.size());
         std::vector<Rank> rank(states.size());
         for (int q = 0; q < static_cast<int>(states.size()); ++q) {
-            rank[q] = snake_rank(states[q], W, active, rt, st);
-            x[q] = v[static_cast<std::size_t>(rank[q])];
+            rank[static_cast<std::size_t>(q)] = snake_rank(states[static_cast<std::size_t>(q)], W, active, rt, st);
+            x[static_cast<std::size_t>(q)] = v[static_cast<std::size_t>(rank[static_cast<std::size_t>(q)])];
         }
 
-        std::vector<Value> y(states.size());
         if (c.singular) {
             const Value t0 = madd(x[0], x[2]);
             const Value t1 = madd(x[1], x[2]);
@@ -176,7 +188,7 @@ void local_turn_inplace(
             for (std::size_t q = 2; q < x.size(); ++q) y[q] = madd(x[q], x[q]);
         }
         for (int q = 0; q < static_cast<int>(states.size()); ++q)
-            v[static_cast<std::size_t>(rank[q])] = y[q];
+            v[static_cast<std::size_t>(rank[static_cast<std::size_t>(q)])] = y[static_cast<std::size_t>(q)];
     }
 }
 
@@ -203,9 +215,13 @@ int main(int argc, char** argv) {
         }
 
         Rank forward_steps = 0, reverse_steps = 0;
+        Rank component_partitions = 0;
         for (int i = 0; i <= W - 4; ++i) {
             exact = exact_forward(exact, W, i);
-            local_forward_inplace(stationary, W, i, words, rt, st);
+            const auto basis = q_basis(W, i, words);
+            component_partitions += generic_component_inplace(
+                stationary, basis, W, i, i + 1, rt, st,
+                [&](const Key& s) { return K_basis(s, W, i); });
             ++forward_steps;
         }
         exact = exact_turn(exact, W, true);
@@ -213,7 +229,10 @@ int main(int argc, char** argv) {
 
         for (int pair = W - 2; pair >= 2; --pair) {
             exact = exact_reverse(exact, W, pair);
-            local_reverse_inplace(stationary, W, pair, words, rt, st);
+            const auto basis = reverse_q_basis(W, pair, words);
+            component_partitions += generic_component_inplace(
+                stationary, basis, W, pair - 1, pair - 2, rt, st,
+                [&](const Key& s) { return K_reverse_basis(s, W, pair); });
             ++reverse_steps;
         }
         exact = exact_turn(exact, W, false);
@@ -235,6 +254,7 @@ int main(int argc, char** argv) {
                   << " reverse_steps=" << reverse_steps
                   << " turns=2"
                   << " transfer_steps=" << transfers
+                  << " component_partitions=" << component_partitions
                   << " layout_conversions=0"
                   << " global_vectors=1"
                   << " stationary_cycle=OK\n";
