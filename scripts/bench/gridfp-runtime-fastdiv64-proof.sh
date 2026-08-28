@@ -16,9 +16,10 @@ out="$($BIN)"
 printf '%s\n' "$out"
 
 grep -Fq 'gridfp-runtime-fastdiv64-proof OK' <<<"$out"
+grep -Fq 'primitive_magic_entries=29 primitive_nonzero_divisors=14 primitive_magic_exact=1' <<<"$out"
 grep -Fq 'small_bits=12' <<<"$out"
 grep -Fq 'random64=2000000' <<<"$out"
 grep -Fq 'production_max_numerator=473397057701' <<<"$out"
 grep -Fq 'quotient_error_bound=1 product_overflow_checked=1 exact=1' <<<"$out"
 
-echo 'gridfp-runtime-fastdiv64-proof OK exact reciprocal divmod64' >&2
+echo 'gridfp-runtime-fastdiv64-proof OK primitive_magic_exact=1 exact_divmod64=1' >&2
