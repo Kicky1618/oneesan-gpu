@@ -36,6 +36,7 @@ printf 'backend\tkernel\tregisters\tstack_bytes\tspill_store_bytes\tspill_load_b
 {
   build_one thread
   build_one resolved
+  build_one resolved_delta
   build_one warp
   build_one warp ldg
   build_one warpstriped
@@ -51,7 +52,7 @@ rows=list(csv.DictReader(open(sys.argv[1]),delimiter='\t'))
 def ints(group,key):
     return [int(r[key]) for r in group if r[key] != 'NA']
 for backend in (
-    'depthcode_payload_thread','depthcode_payload_resolved',
+    'depthcode_payload_thread','depthcode_payload_resolved','depthcode_payload_resolved_delta',
     'depthcode_payload_warp','depthcode_payload_warp_ldg',
     'depthcode_payload_warpstriped','depthcode_payload_warpstriped_ldg',
     'depthcode_payload_warpstriped_delta','depthcode_payload_warpstriped_delta_ldg'):
