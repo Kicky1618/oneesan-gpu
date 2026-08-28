@@ -2,6 +2,12 @@
 
 #include "two_cell_recoupling_rank.hpp"
 
+#if defined(__CUDACC__)
+#define ONEESAN_TC_ST_HD __host__ __device__ __forceinline__
+#else
+#define ONEESAN_TC_ST_HD inline
+#endif
+
 namespace oneesan::twocell {
 
 struct StationaryRankTables {
@@ -11,7 +17,7 @@ struct StationaryRankTables {
     Rank total[kMaxWidth + 1]{};
 };
 
-ONEESAN_TC_HD std::uint32_t stationary_c_support(
+ONEESAN_TC_ST_HD std::uint32_t stationary_c_support(
     std::uint32_t support,
     int active
 ) {
@@ -23,7 +29,7 @@ ONEESAN_TC_HD std::uint32_t stationary_c_support(
     return (support & suffix) | 1u | ((support & prefix) << 1);
 }
 
-ONEESAN_TC_HD Rank support_rank_fixed(
+ONEESAN_TC_ST_HD Rank support_rank_fixed(
     std::uint32_t support,
     int len,
     int ones,
@@ -40,7 +46,7 @@ ONEESAN_TC_HD Rank support_rank_fixed(
     return rank;
 }
 
-ONEESAN_TC_HD Rank stationary_rank_A_with_primitive(
+ONEESAN_TC_ST_HD Rank stationary_rank_A_with_primitive(
     std::uint32_t support,
     int W,
     Rank primitive,
@@ -52,7 +58,7 @@ ONEESAN_TC_HD Rank stationary_rank_A_with_primitive(
     return s.a_sector[W][occupied] + sr * t.primitive[occupied][1] + primitive;
 }
 
-ONEESAN_TC_HD Rank stationary_rank_C_with_primitive(
+ONEESAN_TC_ST_HD Rank stationary_rank_C_with_primitive(
     std::uint32_t support,
     int W,
     int active,
@@ -68,7 +74,7 @@ ONEESAN_TC_HD Rank stationary_rank_C_with_primitive(
     return s.c_sector[W][occupied] + sr * t.primitive[occupied][1] + primitive;
 }
 
-ONEESAN_TC_HD Rank stationary_rank_with_primitive(
+ONEESAN_TC_ST_HD Rank stationary_rank_with_primitive(
     PackedKey key,
     int W,
     int active,
@@ -81,7 +87,7 @@ ONEESAN_TC_HD Rank stationary_rank_with_primitive(
         : stationary_rank_C_with_primitive(key.support, W, active, primitive, t, s);
 }
 
-ONEESAN_TC_HD Rank stationary_rank(
+ONEESAN_TC_ST_HD Rank stationary_rank(
     PackedKey key,
     int W,
     int active,
@@ -116,3 +122,5 @@ inline StationaryRankTables make_stationary_rank_tables(const RankTables& t) {
 #endif
 
 } // namespace oneesan::twocell
+
+#undef ONEESAN_TC_ST_HD
