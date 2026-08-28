@@ -11,6 +11,7 @@ PROOFS=(
   gridfp-materialize-primitive-last-r-proof.sh
   gridfp-materialize-primitive-packed-proof.sh
   gridfp-runtime-primitive-rank-packed-proof.sh
+  gridfp-primitive1-u32-table-proof.sh
   gridfp-support-unrank-len13-table-proof.sh
   gridfp-runtime-turn-local-sector-carry-begin-proof.sh
   gridfp-runtime-turn-local-sector-w28-tree-proof.sh
