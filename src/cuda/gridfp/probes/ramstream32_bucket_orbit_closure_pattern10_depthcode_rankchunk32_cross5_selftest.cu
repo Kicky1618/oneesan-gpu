@@ -167,4 +167,39 @@ int main() {
 
     build_full_dp(); G_FACTOR = build_factor_tables();
     StorageFactorHost storage = build_storage_factor_tables(G_FACTOR); StorageLayout layout = build_storage_layout(storage);
-    LowDescHost lowdesc = build_low_descriptors(storage, layout); HighDescHost highdesc = build_high_descriptors(storage, layout, highdesc);
+    LowDescHost lowdesc = build_low_descriptors(storage, layout); HighDescHost highdesc = build_high_descriptors(storage, layout);
+    LowOrbitHost loworbit = build_cpu_low_orbit(storage, layout, lowdesc); CpuHighDirectHost highdirect = build_cpu_high_direct(storage, layout, highdesc);
+    GpuDirectGatherHost ordinary = build_gpu_direct_gather(layout, lowdesc, loworbit, highdirect); GpuDirectCrossGatherHost cross = build_gpu_direct_cross_gather(storage, layout, lowdesc, loworbit, highdirect);
+    GpuDirectFusedHost fused = build_gpu_direct_fused_checked(layout, ordinary, cross); CpuLowSparseHost lowsparse = build_cpu_low_sparse(storage, layout, lowdesc, loworbit);
+    BucketOwnerHost owner = build_bucket_owners(G_FACTOR, storage); BucketPhysicalLayoutHost phy = build_bucket_physical_layout(layout, owner);
+    BucketOrbitStreamsHost bo = build_bucket_orbits(storage, layout, owner, lowsparse, highdirect); BucketFusedHost bf = build_bucket_fused(storage, layout, owner, ordinary, cross, fused);
+    ReverseLowDescHost rlow = build_reverse_low_descriptors(storage, layout); ReverseHighDescHost rhigh = build_reverse_high_descriptors(storage, layout);
+    ReverseOrbitHost rlo = build_reverse_orbit(storage, layout, true), rhi = build_reverse_orbit(storage, layout, false);
+    ReverseBucketAtomicHost rb = build_reverse_bucket_atomic(storage, layout, owner, rlow, rhigh, rlo, rhi); ReverseBucketFusedHost rf = build_reverse_bucket_fused_checked(layout, owner, rb);
+    auto fh = build_bucket_forward_pattern10_depthcode_placeholder(layout, bo, bf); auto rh = build_bucket_reverse_pattern10_depthcode_zero_checked(layout, bo, bf, rb, rf);
+
+    auto ms = gdg_enum_states(W), bs = gdg_enum_states(W - 1); std::unordered_map<MateID,size_t> mi,di;
+    for (size_t i=0;i<ms.size();++i) mi.emplace(ms[i],i); for (size_t i=0;i<bs.size();++i) di.emplace(bs[i],i);
+    std::mt19937_64 rng(0x16181624ULL); std::vector<Count> im(ms.size()),ib(bs.size()); for(auto&x:im)x=Count(rng()%mod); for(auto&x:ib)x=Count(rng()%mod);
+    auto [fhm,fhb]=gdg_reference_window(W,W-1,L+1,mod,ms,bs,mi,di,im,ib); auto [rhm,rhb]=bra_reference(L+1,W-1,mod,ms,bs,mi,di,im,ib);
+
+    ck(cudaMemcpyToSymbol(D_MOD,&mod,sizeof(mod)),"p10dc rankchunk32 modulus");
+    BucketFusedDirectHighRowsRankChunk32Tables dt; dt.install_metadata(layout,bo,bf);
+    BucketForwardPattern10DepthCodeDeviceTables fdt; fdt.install(fh); BucketReversePattern10DepthCodeDeviceTables rdt; rdt.install(rh);
+    p10dc_install_cross5_lut(); p10dc_install_rankchunk32_lut();
+
+    auto g0=bkft_make_grid(ms,bs,im,ib,storage,layout,owner,phy); p10dc_rankchunk32_run_high(g0,layout,phy,bf,dt,false,false); if(!bkft_compare("pattern10-depthcode-forward-high-resolved-rankchunk32-control",g0,ms,bs,fhm,fhb,storage,layout,owner,phy))return 90;
+    auto g1=bkft_make_grid(ms,bs,im,ib,storage,layout,owner,phy); p10dc_rankchunk32_run_high(g1,layout,phy,bf,dt,false,true); if(!bkft_compare("pattern10-depthcode-forward-high-rankchunk32-cross5",g1,ms,bs,fhm,fhb,storage,layout,owner,phy))return 91;
+    auto g2=bkft_make_grid(ms,bs,im,ib,storage,layout,owner,phy); p10dc_rankchunk32_run_high(g2,layout,phy,bf,dt,true,false); if(!bkft_compare("pattern10-depthcode-reverse-high-resolved-rankchunk32-control",g2,ms,bs,rhm,rhb,storage,layout,owner,phy))return 92;
+    auto g3=bkft_make_grid(ms,bs,im,ib,storage,layout,owner,phy); p10dc_rankchunk32_run_high(g3,layout,phy,bf,dt,true,true); if(!bkft_compare("pattern10-depthcode-reverse-high-rankchunk32-cross5",g3,ms,bs,rhm,rhb,storage,layout,owner,phy))return 93;
+    for(uint32_t g=0;g<BUCKET_NGPU;++g) if(!P10DC_RANKCHUNK32_TABLE_VERIFIED[g]) return 94;
+    rdt.release(); fdt.release(); dt.release();
+    std::cout << "bucket-closure-pattern10-depthcode-rankchunk32-cross5-selftest OK W=" << W
+              << " control=resolved experiment=warpstriped_delta_direct_affine_rankchunk32_cross5"
+              << " forward_exact=1 reverse_exact=1 rankchunk32_table_exact=1 padding_exact=1"
+              << " chunk_bits=24 prefix_bits=8 block=16 height_align=32"
+              << " block_base_loads_per_warp_max=2"
+              << " cross_runtime_div=0 cross_runtime_mod=0 cross_runtime_direct_lookup=0"
+              << " old_prekey_offset_arrays_freed=1 fallback_structurally_unreachable=1\n";
+    return 0;
+}
