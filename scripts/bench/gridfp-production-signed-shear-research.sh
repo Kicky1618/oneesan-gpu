@@ -7,8 +7,14 @@ MAX_W="${MAX_W:-10}"
 OUTDIR="${OUTDIR:-$ROOT/build/gridfp-production-signed-shear}"
 mkdir -p "$OUTDIR"
 
-SRC="$ROOT/src/cpp/probes/gridfp_reduced_production_signed_shear_probe.cpp"
-BIN="$OUTDIR/gridfp_reduced_production_signed_shear_probe"
+build_and_run() {
+  local stem="$1"
+  local src="$ROOT/src/cpp/probes/${stem}.cpp"
+  local bin="$OUTDIR/$stem"
+  echo "=== $stem ===" >&2
+  "$CXX" -O3 -std=c++17 -Wall -Wextra -pedantic "$src" -o "$bin"
+  "$bin" "$MAX_W"
+}
 
-"$CXX" -O3 -std=c++17 -Wall -Wextra -pedantic "$SRC" -o "$BIN"
-"$BIN" "$MAX_W"
+build_and_run gridfp_reduced_production_signed_shear_probe
+build_and_run gridfp_reduced_production_nilpotent_probe
