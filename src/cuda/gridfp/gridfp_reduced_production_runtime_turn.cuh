@@ -361,12 +361,12 @@ __global__ void owner_turn_runtime_subwarp_kernel(
                             }
                         }
 #if RP_RUNTIME_CACHE_EDGES
-                        const std::uint8_t slot =
-                            sh_edge[warp][subgroup].count[source_ix]++;
-                        sh_edge[warp][subgroup].destination[source_ix][slot] =
-                            static_cast<std::uint8_t>(destination_ix);
-                        sh_edge[warp][subgroup].coefficient[source_ix][slot] =
-                            edge.v[ei].coef;
+                        if (!runtime_edge_cache_append(
+                                sh_edge[warp][subgroup], source_ix,
+                                destination_ix, int(edge.v[ei].coef))) {
+                            runtime_set_error(error, 328);
+                            break;
+                        }
 #endif
                     }
                     if (error && *error) break;
@@ -396,13 +396,12 @@ __global__ void owner_turn_runtime_subwarp_kernel(
             const long long value = static_cast<long long>(sh_value[warp][subgroup][si]);
             const std::uint8_t nedge = sh_edge[warp][subgroup].count[si];
             for (std::uint8_t ei = 0; ei < nedge; ++ei) {
-                const std::uint8_t destination_ix =
-                    sh_edge[warp][subgroup].destination[si][ei];
+                const std::uint8_t packed = sh_edge[warp][subgroup].packed[si][ei];
+                const std::uint8_t destination_ix = runtime_edge_destination(packed);
                 if ((destination_ix & (RP_RUNTIME_SUBGROUP_WIDTH - 1)) == sublane) {
                     const int slot = destination_ix >> 3;
-                    accum[slot] += static_cast<long long>(
-                                       sh_edge[warp][subgroup].coefficient[si][ei]) *
-                                   value;
+                    accum[slot] +=
+                        static_cast<long long>(runtime_edge_coefficient(packed)) * value;
                 }
             }
         }
