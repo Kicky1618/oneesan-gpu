@@ -36,24 +36,20 @@ SUMMARY="${SUMMARY:-${PREFIX}_summary.tsv}"
 LOGDIR="${LOGDIR:-${PREFIX}_logs}"
 mkdir -p "$(dirname "$RESULT")" "$LOGDIR"
 
-bash "$ONEESAN_ROOT/scripts/bench/gridfp-runtime-edgecache-proof.sh" \
-  >"$LOGDIR/edgecache-proof.out" 2>"$LOGDIR/edgecache-proof.err"
-bash "$ONEESAN_ROOT/scripts/bench/gridfp-runtime-p32m5-mod-proof.sh" \
-  >"$LOGDIR/p32m5-proof.out" 2>"$LOGDIR/p32m5-proof.err"
-bash "$ONEESAN_ROOT/scripts/bench/gridfp-runtime-sharedkey-proof.sh" \
-  >"$LOGDIR/sharedkey-proof.out" 2>"$LOGDIR/sharedkey-proof.err"
-bash "$ONEESAN_ROOT/scripts/bench/gridfp-runtime-fastdiv64-proof.sh" \
-  >"$LOGDIR/fastdiv64-proof.out" 2>"$LOGDIR/fastdiv64-proof.err"
-bash "$ONEESAN_ROOT/scripts/bench/gridfp-runtime-primitive-rank-setbits-proof.sh" \
-  >"$LOGDIR/setbits-proof.out" 2>"$LOGDIR/setbits-proof.err"
+bash "$ONEESAN_ROOT/scripts/bench/gridfp-runtime-edgecache-proof.sh" >"$LOGDIR/edgecache-proof.out" 2>"$LOGDIR/edgecache-proof.err"
+bash "$ONEESAN_ROOT/scripts/bench/gridfp-runtime-p32m5-mod-proof.sh" >"$LOGDIR/p32m5-proof.out" 2>"$LOGDIR/p32m5-proof.err"
+bash "$ONEESAN_ROOT/scripts/bench/gridfp-runtime-sharedkey-proof.sh" >"$LOGDIR/sharedkey-proof.out" 2>"$LOGDIR/sharedkey-proof.err"
+bash "$ONEESAN_ROOT/scripts/bench/gridfp-runtime-fastdiv64-proof.sh" >"$LOGDIR/fastdiv64-proof.out" 2>"$LOGDIR/fastdiv64-proof.err"
+bash "$ONEESAN_ROOT/scripts/bench/gridfp-runtime-primitive-rank-setbits-proof.sh" >"$LOGDIR/setbits-proof.out" 2>"$LOGDIR/setbits-proof.err"
+bash "$ONEESAN_ROOT/scripts/bench/gridfp-runtime-broadword-support-proof.sh" >"$LOGDIR/broadword-proof.out" 2>"$LOGDIR/broadword-proof.err"
 
 build_one() {
   local mode="$1" bin="$2"
-  local cache fast poll packed fastdiv setbits
+  local cache fast poll packed fastdiv setbits broadword
   if [[ "$mode" == baseline ]]; then
-    cache=0; fast=0; poll=1; packed=0; fastdiv=0; setbits=0
+    cache=0; fast=0; poll=1; packed=0; fastdiv=0; setbits=0; broadword=0
   else
-    cache=1; fast=1; poll=0; packed=1; fastdiv=1; setbits=1
+    cache=1; fast=1; poll=0; packed=1; fastdiv=1; setbits=1; broadword=1
   fi
   MODE=two-row-runtime-multigpu \
     RUNTIME_CACHE_EDGES="$cache" \
@@ -62,6 +58,7 @@ build_one() {
     RUNTIME_PACK_SHARED_KEYS="$packed" \
     RUNTIME_FAST_DIV64="$fastdiv" \
     RUNTIME_PRIMITIVE_RANK_SETBITS="$setbits" \
+    RUNTIME_BROADWORD_SUPPORT="$broadword" \
     ARCH="$ARCH" PTXAS_VERBOSE="$PTXAS_VERBOSE" OUT="$bin" \
     bash "$ONEESAN_ROOT/scripts/build/gridfp-reduced-component-probe.sh" \
     >"$LOGDIR/${mode}.build.out" 2>"$LOGDIR/${mode}.build.err"
@@ -79,17 +76,8 @@ run_one() {
   "$bin" "$W" "$NGPU" "$BLOCKS" "$MOD" >"$out" 2>"$err"
   local line
   line="$(grep '^gridfp-reduced-two-row-runtime-multigpu ' "$out" | tail -n1 || true)"
-  [[ -n "$line" ]] || {
-    echo "$mode $phase$rep missing runtime result" >&2
-    cat "$out" >&2 || true
-    cat "$err" >&2 || true
-    exit 3
-  }
-  grep -Fq ' exact=OK' <<<"$line" || {
-    echo "$mode $phase$rep failed exactness" >&2
-    echo "$line" >&2
-    exit 4
-  }
+  [[ -n "$line" ]] || { echo "$mode $phase$rep missing runtime result" >&2; cat "$out" >&2 || true; cat "$err" >&2 || true; exit 3; }
+  grep -Fq ' exact=OK' <<<"$line" || { echo "$mode $phase$rep failed exactness" >&2; echo "$line" >&2; exit 4; }
   if [[ "$phase" == run ]]; then
     local wall
     wall="$(sed -nE 's/.* wall_ms=([^[:space:]]+).*/\1/p' <<<"$line")"
@@ -118,37 +106,22 @@ python3 - "$RESULT" "$SUMMARY" <<'PY'
 import csv
 import statistics
 import sys
-
 src, dst = sys.argv[1:]
 rows = list(csv.DictReader(open(src), delimiter='\t'))
 out = []
 for mode in ('baseline', 'fast'):
     xs = [float(r['wall_ms']) for r in rows if r['runtime_stack'] == mode]
-    if not xs:
-        raise SystemExit(f'missing runtime_stack={mode} samples')
-    out.append({
-        'runtime_stack': mode,
-        'repeats': len(xs),
-        'wall_ms_median': f'{statistics.median(xs):.9f}',
-        'wall_ms_min': f'{min(xs):.9f}',
-        'wall_ms_max': f'{max(xs):.9f}',
-    })
-
+    if not xs: raise SystemExit(f'missing runtime_stack={mode} samples')
+    out.append({'runtime_stack': mode, 'repeats': len(xs), 'wall_ms_median': f'{statistics.median(xs):.9f}', 'wall_ms_min': f'{min(xs):.9f}', 'wall_ms_max': f'{max(xs):.9f}'})
 with open(dst, 'w', newline='') as f:
-    w = csv.DictWriter(
-        f,
-        fieldnames=('runtime_stack', 'repeats', 'wall_ms_median', 'wall_ms_min', 'wall_ms_max'),
-        delimiter='\t')
-    w.writeheader()
-    w.writerows(out)
-
+    w = csv.DictWriter(f, fieldnames=('runtime_stack','repeats','wall_ms_median','wall_ms_min','wall_ms_max'), delimiter='\t')
+    w.writeheader(); w.writerows(out)
 q = {r['runtime_stack']: r for r in out}
-old = float(q['baseline']['wall_ms_median'])
-new = float(q['fast']['wall_ms_median'])
+old = float(q['baseline']['wall_ms_median']); new = float(q['fast']['wall_ms_median'])
 print(f'runtime_fast_stack_wall_speedup={old / new:.6f}x')
 print(f'runtime_fast_stack_wall_delta_pct={(new / old - 1.0) * 100.0:.4f}%')
-print('runtime_fast_stack_baseline=edge_cache0,fast_mod0,error_poll1,packed_keys0,fast_div640,primitive_setbits0')
-print('runtime_fast_stack_fast=edge_cache1,fast_mod1,error_poll0,packed_keys1,fast_div641,primitive_setbits1')
+print('runtime_fast_stack_baseline=edge_cache0,fast_mod0,error_poll1,packed_keys0,fast_div640,primitive_setbits0,broadword_support0')
+print('runtime_fast_stack_fast=edge_cache1,fast_mod1,error_poll0,packed_keys1,fast_div641,primitive_setbits1,broadword_support1')
 print('runtime_fast_stack_key_shared_bytes_saved_per_block=10240')
 print('runtime_fast_stack_edge_cache_shared_bytes_added_per_block=2560')
 print('runtime_fast_stack_net_known_shared_bytes_delta_per_block=-7680')
@@ -157,6 +130,7 @@ print('runtime_fast_stack_signed_64bit_divisions_at_mod4294967291=0')
 print('runtime_fast_stack_dynamic_label_divmod_pairs_remaining=0')
 print('runtime_fast_stack_global_error_polls_per_discovered_source=0')
 print('runtime_fast_stack_primitive_rank_scan=occupied')
+print('runtime_fast_stack_support_extraction=fixed_6_stage_broadword')
 print(f'summary={dst}')
 PY
 
