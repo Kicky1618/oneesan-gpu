@@ -25,6 +25,7 @@ TRAFFIC_S="${TRAFFIC_S:-13}"
 TRAFFIC_BLOCKS="${TRAFFIC_BLOCKS:-4096}"
 MATRIX_BLOCKS="${MATRIX_BLOCKS:-4096}"
 SCRATCH_BASE_BATCH="${SCRATCH_BASE_BATCH:-65536}"
+CYCLE_BATCHES="${CYCLE_BATCHES:-8}"
 PAIR_QUEUE_WORDS="${PAIR_QUEUE_WORDS:-1024}"
 PAIR_QUEUE_MESSAGES="${PAIR_QUEUE_MESSAGES:-256}"
 PAIR_QUEUE_BATCH="${PAIR_QUEUE_BATCH:-8}"
@@ -38,6 +39,7 @@ RUN_SCRATCH_CYCLE="${RUN_SCRATCH_CYCLE:-1}"
 RUN_SCRATCH_FULL="${RUN_SCRATCH_FULL:-1}"
 RUN_SCRATCH_OWNER="${RUN_SCRATCH_OWNER:-1}"
 RUN_SCRATCH_PLAN="${RUN_SCRATCH_PLAN:-1}"
+RUN_CYCLE_BATCH_PLAN="${RUN_CYCLE_BATCH_PLAN:-1}"
 RUN_OWNER_SUPPORT="${RUN_OWNER_SUPPORT:-1}"
 NGPU="${NGPU:-8}"
 MAX_DIRECT_OVER_LOGICAL="${MAX_DIRECT_OVER_LOGICAL:-0}"
@@ -52,6 +54,7 @@ SCRATCH_CYCLE_BIN="$(build_path gridfp_reduced_component_p2p-scratch-cycle)"
 SCRATCH_FULL_BIN="$(build_path gridfp_reduced_component_p2p-scratch-full)"
 SCRATCH_OWNER_BIN="$(build_path gridfp_reduced_component_p2p-scratch-owner)"
 SCRATCH_PLAN_BIN="$(build_path gridfp_reduced_component_p2p-scratch-plan)"
+CYCLE_BATCH_BIN="$(build_path gridfp_reduced_component_p2p-cycle-batch-plan)"
 OWNER_SUPPORT_BIN="$(build_path gridfp_reduced_component_owner-support)"
 PROOF_BIN="$(build_path gridfp_reduced_component_support-rank)"
 LUT_BIN="$(build_path gridfp_reduced_component_p2p-owner-lut)"
@@ -101,6 +104,10 @@ if [[ "$RUN_SCRATCH_OWNER" == 1 ]]; then
 fi
 if [[ "$RUN_SCRATCH_PLAN" == 1 ]]; then
   MODE=p2p-scratch-plan ARCH="$ARCH" OUT="$(basename "$SCRATCH_PLAN_BIN")" \
+    bash "$BUILD_SCRIPT"
+fi
+if [[ "$RUN_CYCLE_BATCH_PLAN" == 1 ]]; then
+  MODE=p2p-cycle-batch-plan ARCH="$ARCH" OUT="$(basename "$CYCLE_BATCH_BIN")" \
     bash "$BUILD_SCRIPT"
 fi
 if [[ "$RUN_MATRIX" == 1 ]]; then
@@ -207,6 +214,41 @@ MAX_OVERHEAD="$(printf '%s\n' "$OUTPUT" | awk '
   END { printf "%.9f", max + 0 }
 ')"
 
+if [[ "$RUN_CYCLE_BATCH_PLAN" == 1 ]]; then
+  echo "== cycle-closed count-free scratch batch plan =="
+  CYCLE_OUTPUT="$($CYCLE_BATCH_BIN "$TRAFFIC_W" "$TRAFFIC_K" "$TRAFFIC_S" \
+    "$CYCLE_BATCHES" "$TRAFFIC_BLOCKS" "$NGPU")"
+  printf '%s\n' "$CYCLE_OUTPUT"
+  for direction in forward reverse; do
+    TRAFFIC_LOGICAL="$(printf '%s\n' "$OUTPUT" | awk -v want="$direction" '
+      /gridfp-reduced-production-p2p-traffic/ {
+        have=0; value="";
+        for (i=1;i<=NF;++i) {
+          if ($i == "direction=" want) have=1;
+          if ($i ~ /^logical_peer_values=/) { split($i,a,"="); value=a[2]; }
+        }
+        if (have && value != "") { print value; exit }
+      }
+    ')"
+    BATCH_LOGICAL="$(printf '%s\n' "$CYCLE_OUTPUT" | awk -v want="$direction" '
+      /gridfp-p2p-cycle-batch-plan/ {
+        have=0; value="";
+        for (i=1;i<=NF;++i) {
+          if ($i == "direction=" want) have=1;
+          if ($i ~ /^logical_peer_values=/) { split($i,a,"="); value=a[2]; }
+        }
+        if (have && value != "") { print value; exit }
+      }
+    ')"
+    if [[ -z "$TRAFFIC_LOGICAL" || -z "$BATCH_LOGICAL" ||
+          "$TRAFFIC_LOGICAL" != "$BATCH_LOGICAL" ]]; then
+      echo "cycle-batch logical traffic mismatch direction=$direction traffic=$TRAFFIC_LOGICAL batch=$BATCH_LOGICAL" >&2
+      exit 6
+    fi
+    echo "cycle-batch-traffic-equivalence direction=$direction logical_peer_values=$BATCH_LOGICAL exact=OK"
+  done
+fi
+
 printf 'p2p-traffic-summary W=%s Kwin=%s shift=%s ngpu=%s max_direct_over_logical=%s native_atomic_fastpath=%s\n' \
   "$TRAFFIC_W" "$TRAFFIC_K" "$TRAFFIC_S" "$NGPU" "$MAX_OVERHEAD" \
   "${NATIVE_FASTPATH:-unknown}"
@@ -223,7 +265,7 @@ else
   echo "p2p-recommendation token-mailbox-native-atomic candidate=0 reason=no-full-native-atomic-mesh"
 fi
 
-echo "p2p-recommendation two-phase-local-scratch candidate=1 native_atomic_required=0 remote_state_reads=0 owner_local_scan=1"
+echo "p2p-recommendation cycle-closed-two-phase-scratch candidate=1 batches=$CYCLE_BATCHES native_atomic_required=0 remote_state_reads=0 runtime_count_pass_required=0"
 
 if awk -v limit="$MAX_DIRECT_OVER_LOGICAL" -v got="$MAX_OVERHEAD" \
   'BEGIN { exit !(limit > 0 && got > limit) }'; then
