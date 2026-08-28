@@ -36,7 +36,7 @@ fi
 if [[ ! -x "$BIN" ]]; then
   echo "$BIN not found; building n=$N shard-address mode=$MODE" >&2
   N="$N" SHARD_ADDRESS_MODE="$MODE" OUT="$BIN" \
-    "$ONEESAN_ROOT/scripts/build/b300-hbm32-shard-address-mode.sh"
+    bash "$ONEESAN_ROOT/scripts/build/b300-hbm32-shard-address-mode.sh"
 fi
 
 nvidia-smi -L
