@@ -14,11 +14,15 @@ PIPE_BUILD="$(repo_path scripts/build/gridfp-persistent-pipeline-probe.sh)"
 EVENT_BUILD="$(repo_path scripts/build/gridfp-persistent-event-pipeline-probe.sh)"
 HOST_BIN="$(build_path gridfp_reduced_component_p2p-host-persistent-pipeline-event-ab)"
 EVENT_BIN="$(build_path gridfp_reduced_component_p2p-host-persistent-event-pipeline-ab)"
-CAP_BIN="$(build_path gridfp_reduced_production_cross_device_event_probe)"
-CAP_SRC="$(repo_path src/cuda/gridfp/gridfp_reduced_production_cross_device_event_probe.cu)"
+PAIR_BIN="$(build_path gridfp_reduced_production_cross_device_event_probe)"
+PAIR_SRC="$(repo_path src/cuda/gridfp/gridfp_reduced_production_cross_device_event_probe.cu)"
+FANIN_BIN="$(build_path gridfp_reduced_production_cross_device_event_fanin_probe)"
+FANIN_SRC="$(repo_path src/cuda/gridfp/gridfp_reduced_production_cross_device_event_fanin_probe.cu)"
 
 TMPDIR="$ONEESAN_TMP_DIR" nvcc -O3 -std=c++17 -lineinfo -arch="$ARCH" \
-  "$CAP_SRC" -o "$CAP_BIN"
+  "$PAIR_SRC" -o "$PAIR_BIN"
+TMPDIR="$ONEESAN_TMP_DIR" nvcc -O3 -std=c++17 -lineinfo -arch="$ARCH" \
+  "$FANIN_SRC" -o "$FANIN_BIN"
 VARIANT=segment ARCH="$ARCH" PTXAS_VERBOSE=0 OUT="$(basename "$HOST_BIN")" \
   bash "$PIPE_BUILD"
 ARCH="$ARCH" PTXAS_VERBOSE=0 OUT="$(basename "$EVENT_BIN")" \
@@ -30,25 +34,32 @@ if (( NGPU < 2 )); then
 fi
 
 for ((g=1; g<NGPU; ++g)); do
-  CAP_OUTPUT="$($CAP_BIN 0 "$g")"
-  printf '%s\n' "$CAP_OUTPUT"
-  if ! grep -q 'ALL_OK gridfp_cross_device_event=1' <<<"$CAP_OUTPUT"; then
+  PAIR_OUTPUT="$($PAIR_BIN 0 "$g")"
+  printf '%s\n' "$PAIR_OUTPUT"
+  if ! grep -q 'ALL_OK gridfp_cross_device_event=1' <<<"$PAIR_OUTPUT"; then
     echo "cross-device event capability failed gpu0<->gpu$g" >&2
     exit 3
   fi
 done
 
-echo "persistent-event-star-capability ngpu=$NGPU exact=OK"
+FANIN_OUTPUT="$($FANIN_BIN "$NGPU")"
+printf '%s\n' "$FANIN_OUTPUT"
+if ! grep -q 'ALL_OK gridfp_cross_device_event_fanin=1' <<<"$FANIN_OUTPUT"; then
+  echo "cross-device event fanin/fanout capability failed" >&2
+  exit 4
+fi
+
+echo "persistent-event-star-capability ngpu=$NGPU pairwise=1 fanin_fanout=1 exact=OK"
 
 HOST_OUTPUT="$($HOST_BIN "$W" "$K" "$S" "$BATCHES" "$BLOCKS" "$NGPU")"
 EVENT_OUTPUT="$($EVENT_BIN "$W" "$K" "$S" "$BATCHES" "$BLOCKS" "$NGPU")"
 printf '%s\n' "$HOST_OUTPUT"
 printf '%s\n' "$EVENT_OUTPUT"
 
-grep -q 'ALL_OK gridfp_p2p_host_persistent_pipeline=1' <<<"$HOST_OUTPUT" || exit 4
-grep -q 'ALL_OK gridfp_p2p_host_persistent_event_pipeline=1' <<<"$EVENT_OUTPUT" || exit 5
-grep -q 'host_batch_barriers=0' <<<"$EVENT_OUTPUT" || exit 6
-grep -q 'cross_device_events=1' <<<"$EVENT_OUTPUT" || exit 7
+grep -q 'ALL_OK gridfp_p2p_host_persistent_pipeline=1' <<<"$HOST_OUTPUT" || exit 5
+grep -q 'ALL_OK gridfp_p2p_host_persistent_event_pipeline=1' <<<"$EVENT_OUTPUT" || exit 6
+grep -q 'host_batch_barriers=0' <<<"$EVENT_OUTPUT" || exit 7
+grep -q 'cross_device_events=1' <<<"$EVENT_OUTPUT" || exit 8
 
 extract_ms() {
   local text="$1" tag="$2" direction="$3"
@@ -69,7 +80,7 @@ for direction in forward reverse; do
   EVENT_MS="$(extract_ms "$EVENT_OUTPUT" gridfp-p2p-host-persistent-event-pipeline "$direction")"
   if [[ -z "$HOST_MS" || -z "$EVENT_MS" ]]; then
     echo "missing event pipeline timing direction=$direction" >&2
-    exit 8
+    exit 9
   fi
   SPEEDUP="$(awk -v a="$HOST_MS" -v b="$EVENT_MS" 'BEGIN{if(b>0)printf "%.6f",a/b;else print "0"}')"
   echo "persistent-event-pipeline-ab direction=$direction batches=$BATCHES host_barrier_ms=$HOST_MS event_fanin_ms=$EVENT_MS event_speedup=$SPEEDUP"
