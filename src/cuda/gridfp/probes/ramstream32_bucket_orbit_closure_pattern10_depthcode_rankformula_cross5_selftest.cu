@@ -8,7 +8,7 @@
 
 static void p10dc_rankformula_run_high(
     BucketHostGrid& g, const StorageLayout& layout, const BucketPhysicalLayoutHost& phy,
-    BucketFusedDirectHighRowsRankFormulaTables& dt,
+    BucketFusedDirectHighRowsRankFormulaActiveTables& dt,
     bool rev, bool experiment
 ) {
     constexpr int threads = 256, gx = 4, gy = 4;
@@ -105,7 +105,7 @@ int main() {
     auto [rhm, rhb] = bra_reference(L + 1, W - 1, mod, ms, bs, mi, di, im, ib);
 
     ck(cudaMemcpyToSymbol(D_MOD, &mod, sizeof(mod)), "p10dc rankformula modulus");
-    BucketFusedDirectHighRowsRankFormulaTables dt;
+    BucketFusedDirectHighRowsRankFormulaActiveTables dt;
     dt.install_metadata(layout, bo, bf);
     BucketForwardPattern10DepthCodeDeviceTables fdt;
     fdt.install(fh);
@@ -145,9 +145,11 @@ int main() {
               << " base_values_per_lookup=" << (P10DC_RANKFORMULA_BASE_DELTA ? 1 : 2)
               << " rawcode=" << P10DC_RANKFORMULA_RAWCODE
               << " slotmeta=" << P10DC_RANKFORMULA_SLOTMETA
+              << " slotrow32=" << P10DC_RANKFORMULA_SLOTROW32
               << " chunkinfo_elided=" << (P10DC_RANKFORMULA_RAWCODE || P10DC_RANKFORMULA_SLOTMETA)
               << " broadword_support_elided=" << P10DC_RANKFORMULA_SLOTMETA
               << " direct_mask_slot_elided=" << P10DC_RANKFORMULA_SLOTMETA
+              << " support_delta_loads=" << (P10DC_RANKFORMULA_SLOTROW32 ? 1 : (P10DC_RANKFORMULA_SLOTMETA ? 2 : 0))
               << " inline_cross=" << P10DC_RANKFORMULA_INLINE_CROSS
               << " cross_lut_elided=" << P10DC_RANKFORMULA_INLINE_CROSS
               << " fused13=" << P10DC_RANKDELTA8_FUSED13
