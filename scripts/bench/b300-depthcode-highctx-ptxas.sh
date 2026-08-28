@@ -57,6 +57,8 @@ printf 'backend\tkernel\tregisters\tstack_bytes\tspill_store_bytes\tspill_load_b
   build_one warpstriped_delta_direct_affine_prekey_rankstream_cross5 ldg
   build_one warpstriped_delta_direct_affine_rankstream32_cross5
   build_one warpstriped_delta_direct_affine_rankstream32_cross5 ldg
+  build_one warpstriped_delta_direct_affine_rankchunk32_cross5
+  build_one warpstriped_delta_direct_affine_rankchunk32_cross5 ldg
 } >>"$OUT"
 
 cat "$OUT"
@@ -75,7 +77,8 @@ backends=(
     'depthcode_payload_warpstriped_delta_direct_affine_prekey_cross5','depthcode_payload_warpstriped_delta_direct_affine_prekey_cross5_ldg',
     'depthcode_payload_warpstriped_delta_direct_affine_prekey_rank16_cross5','depthcode_payload_warpstriped_delta_direct_affine_prekey_rank16_cross5_ldg',
     'depthcode_payload_warpstriped_delta_direct_affine_prekey_rankstream_cross5','depthcode_payload_warpstriped_delta_direct_affine_prekey_rankstream_cross5_ldg',
-    'depthcode_payload_warpstriped_delta_direct_affine_rankstream32_cross5','depthcode_payload_warpstriped_delta_direct_affine_rankstream32_cross5_ldg')
+    'depthcode_payload_warpstriped_delta_direct_affine_rankstream32_cross5','depthcode_payload_warpstriped_delta_direct_affine_rankstream32_cross5_ldg',
+    'depthcode_payload_warpstriped_delta_direct_affine_rankchunk32_cross5','depthcode_payload_warpstriped_delta_direct_affine_rankchunk32_cross5_ldg')
 for backend in backends:
     all_rows=[r for r in rows if r['backend']==backend]; high=[r for r in all_rows if 'high' in r['kernel'].lower()]
     if not high: continue
@@ -86,21 +89,16 @@ for backend in backends:
     print(f'{backend}_high_spill_load_bytes={sum(loads) if loads else "NA"}')
     print(f'{backend}_max_cmem0_bytes={max(cmem) if cmem else "NA"}')
     if cmem and max(cmem) >= 60*1024: print(f'{backend}_cmem0_headroom_warning=1')
-print('warp_dynamic_smem_note=warp-striped variants allocate one runtime HIGH context per warp; direct variants use the compact context without BkczPlan')
-print('cross5_constant_table_bytes=6561')
-print('direct_resolve_intermediate_local_descriptors=0')
-print('affine_high_row_descriptor_bytes=8')
-print('affine_high_row_base_storage=constant_memory')
-print('prekey_scope=fixed_owner')
-print('prekey_cross_runtime_ternary_fold=0')
-print('rank16_cross_runtime_direct_lookup=0')
-print('rankstream_model=offset32+rank16_per_L')
-print('rankstream_cross_runtime_direct_lookup=0')
 print('rankstream32_model=key23+prefix9_per_code+blockbase32+rank16_per_L')
 print('rankstream32_per_code_meta_bytes=4')
 print('rankstream32_block_base_bytes_per_code=0.125')
-print('rankstream32_cross_runtime_direct_lookup=0')
-print('rankstream_extra_constant_lmask_bytes=243')
+print('rankstream32_cross_runtime_divmod=1')
+print('rankchunk32_model=chunk24+prefix8_per_code+blockbase16+rank16_per_L')
+print('rankchunk32_per_code_meta_bytes=4')
+print('rankchunk32_block_base_bytes_per_code=0.25')
+print('rankchunk32_extra_block_base_bytes_per_code_vs_rankstream32=0.125')
+print('rankchunk32_cross_runtime_divmod=0')
+print('rankchunk32_cross_runtime_direct_lookup=0')
 PY
 
-echo "depthcode-highctx-ptxas OK n=$N arch=$ARCH transpose=$TRANSPOSE_MODE result=$OUT logs=$LOGDIR ternary_delta=1 cross5=1 direct_resolve=1 affine_rows=1 prekey=1 rank16=1 rankstream=1 rankstream32=1" >&2
+echo "depthcode-highctx-ptxas OK n=$N arch=$ARCH transpose=$TRANSPOSE_MODE result=$OUT logs=$LOGDIR rankstream32=1 rankchunk32=1" >&2
