@@ -8,7 +8,7 @@ PTX_ARCH="${PTX_ARCH:-sm_80}"
 BLOCKS="${BLOCKS:-256}"
 THREADS="${THREADS:-256}"
 ITERS="${ITERS:-8192}"
-RUNS="${RUNS:-9}"
+RUNS="${RUNS:-12}"
 PTXAS_VERBOSE="${PTXAS_VERBOSE:-1}"
 if (( BLOCKS < 1 || THREADS < 1 || THREADS > 1024 || ITERS < 1 || RUNS < 1 )); then
   echo "invalid BLOCKS/THREADS/ITERS/RUNS" >&2
@@ -37,7 +37,7 @@ build_one() {
     "$SRC" -o "$bin" >"$LOGDIR/mode_${mode}.build.out" 2>"$LOGDIR/mode_${mode}.build.err"
 }
 BINS=()
-for mode in 0 1 2; do
+for mode in 0 1 2 3; do
   BINS[$mode]="$ONEESAN_BUILD_DIR/b300_shard_owner_mulhi_w28_g8_mode${mode}"
   build_one "$mode" "${BINS[$mode]}"
 done
@@ -58,10 +58,11 @@ run_one() {
   printf '%s\t%s\t%s\t%s\t%s\n' "$mode" "$run" "$ms" "$rate" "$checksum" >>"$RESULT"
 }
 for ((r=1; r<=RUNS; ++r)); do
-  case $(( (r-1) % 3 )) in
-    0) order=(0 1 2) ;;
-    1) order=(1 2 0) ;;
-    2) order=(2 0 1) ;;
+  case $(( (r-1) % 4 )) in
+    0) order=(0 1 2 3) ;;
+    1) order=(1 2 3 0) ;;
+    2) order=(2 3 0 1) ;;
+    3) order=(3 0 1 2) ;;
   esac
   for mode in "${order[@]}"; do
     echo "=== b300 W28x8 shard owner mode=$mode run $r/$RUNS ===" >&2
@@ -76,7 +77,7 @@ src, dst = sys.argv[1:]
 rows = list(csv.DictReader(open(src), delimiter='\t'))
 out = []
 checks = {}
-for mode in ('0','1','2'):
+for mode in ('0','1','2','3'):
     rs = [r for r in rows if r['mode'] == mode]
     xs = [float(r['median_ms']) for r in rs]
     rates = [float(r['Gaddr_s']) for r in rs]
@@ -100,13 +101,18 @@ with open(dst, 'w', newline='') as f:
     w.writeheader(); w.writerows(out)
 q = {r['mode']: r for r in out}
 base = float(q['0']['median_ms'])
-for mode, name in [('1','mulhi_mul'),('2','mulhi_table')]:
+for mode, name in [('1','mulhi_mul'),('2','mulhi_table'),('3','mulhi_mask')]:
     new = float(q[mode]['median_ms'])
     print(f'b300_shard_owner_{name}_speedup={base/new:.6f}x')
     print(f'b300_shard_owner_{name}_delta_pct={(new/base-1)*100:.4f}%')
+best = min(out, key=lambda r: float(r['median_ms']))
+print(f'b300_shard_owner_best_mode={best["mode"]}')
+print(f'b300_shard_owner_best_median_ms={best["median_ms"]}')
 print('mode0=three_compare_subtract_stages')
 print('mode1=mulhi_shift_plus_owner_times_chunk')
 print('mode2=mulhi_shift_plus_constant_base_lookup')
+print('mode3=mulhi_shift_plus_owner_bit_masked_base')
+print('mode3_div64=0 mode3_mod64=0 mode3_mullo64=0 mode3_table_load=0')
 print('main_magic=195888106327 main_high_shift=9')
 print('block_magic=139905900989 block_high_shift=7')
 print(f'checksum={checks["0"]}')
@@ -114,7 +120,7 @@ print(f'summary={dst}')
 PY
 
 if [[ "$PTXAS_VERBOSE" == 1 ]]; then
-  for mode in 0 1 2; do
+  for mode in 0 1 2 3; do
     echo "--- ptxas shard-owner mode=$mode ---" >&2
     grep -E 'Used .* registers|bytes smem|bytes cmem' "$LOGDIR/mode_${mode}.build.err" >&2 || true
   done
