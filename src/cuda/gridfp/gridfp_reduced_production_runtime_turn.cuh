@@ -245,7 +245,7 @@ __device__ __forceinline__ bool runtime_turn_discover_inverse(
 
 // Counter-free turn kernel for both physical row edges and both phases.
 // Compression enumerates M_{W-1} components; expansion enumerates the ordinary
-// reduced component set M_{W-1}-M_{W-3}.  Four independent components share a
+// reduced component set M_{W-1}-M_{W-3}. Four independent components share a
 // warp using 8-lane subgroups.
 __global__ void owner_turn_runtime_subwarp_kernel(
     std::uint32_t* __restrict__ state,
@@ -276,6 +276,10 @@ __global__ void owner_turn_runtime_subwarp_kernel(
                                                    [RP_RUNTIME_SUBGROUPS_PER_WARP];
     __shared__ int sh_ns[RP_RUNTIME_WARPS_PER_BLOCK][RP_RUNTIME_SUBGROUPS_PER_WARP];
     __shared__ int sh_nd[RP_RUNTIME_WARPS_PER_BLOCK][RP_RUNTIME_SUBGROUPS_PER_WARP];
+#if RP_RUNTIME_CACHE_EDGES
+    __shared__ RuntimeEdgeCache sh_edge[RP_RUNTIME_WARPS_PER_BLOCK]
+                                       [RP_RUNTIME_SUBGROUPS_PER_WARP];
+#endif
 
     const int lane = threadIdx.x & 31;
     const int warp = threadIdx.x >> 5;
@@ -326,30 +330,44 @@ __global__ void owner_turn_runtime_subwarp_kernel(
                 sh_ns[warp][subgroup] = 1;
                 int cursor = 0;
                 while (cursor < sh_ns[warp][subgroup]) {
+                    const int source_ix = cursor++;
+#if RP_RUNTIME_CACHE_EDGES
+                    sh_edge[warp][subgroup].count[source_ix] = 0;
+#endif
                     RuntimeSmallTerms edge;
                     if (!runtime_turn_step(
-                            sh_src[warp][subgroup][cursor++], W, high, expand, edge)) {
+                            sh_src[warp][subgroup][source_ix], W, high, expand, edge)) {
                         runtime_set_error(error, 322);
                         break;
                     }
                     for (int ei = 0; ei < edge.n; ++ei) {
                         if (!edge.v[ei].coef) continue;
                         const DeviceKey d = edge.v[ei].key;
-                        if (runtime_find_key(
-                                sh_dst[warp][subgroup], sh_nd[warp][subgroup], d) >= 0)
-                            continue;
-                        if (sh_nd[warp][subgroup] >= RP_RUNTIME_MAX_PAIRS) {
-                            runtime_set_error(error, 323);
-                            break;
+                        int destination_ix = runtime_find_key(
+                            sh_dst[warp][subgroup], sh_nd[warp][subgroup], d);
+                        if (destination_ix < 0) {
+                            if (sh_nd[warp][subgroup] >= RP_RUNTIME_MAX_PAIRS) {
+                                runtime_set_error(error, 323);
+                                break;
+                            }
+                            destination_ix = sh_nd[warp][subgroup]++;
+                            sh_dst[warp][subgroup][destination_ix] = d;
+                            if (!runtime_turn_discover_inverse(
+                                    d, W, high, expand,
+                                    sh_src[warp][subgroup], sh_ns[warp][subgroup],
+                                    RP_RUNTIME_MAX_PAIRS)) {
+                                runtime_set_error(error, 324);
+                                break;
+                            }
                         }
-                        sh_dst[warp][subgroup][sh_nd[warp][subgroup]++] = d;
-                        if (!runtime_turn_discover_inverse(
-                                d, W, high, expand,
-                                sh_src[warp][subgroup], sh_ns[warp][subgroup],
-                                RP_RUNTIME_MAX_PAIRS)) {
-                            runtime_set_error(error, 324);
-                            break;
-                        }
+#if RP_RUNTIME_CACHE_EDGES
+                        const std::uint8_t slot =
+                            sh_edge[warp][subgroup].count[source_ix]++;
+                        sh_edge[warp][subgroup].destination[source_ix][slot] =
+                            static_cast<std::uint8_t>(destination_ix);
+                        sh_edge[warp][subgroup].coefficient[source_ix][slot] =
+                            edge.v[ei].coef;
+#endif
                     }
                     if (error && *error) break;
                 }
@@ -381,6 +399,17 @@ __global__ void owner_turn_runtime_subwarp_kernel(
                 continue;
             }
             long long acc = 0;
+#if RP_RUNTIME_CACHE_EDGES
+            for (int si = 0; si < ns; ++si) {
+                const std::uint8_t nedge = sh_edge[warp][subgroup].count[si];
+                for (std::uint8_t ei = 0; ei < nedge; ++ei) {
+                    if (sh_edge[warp][subgroup].destination[si][ei] == di)
+                        acc += static_cast<long long>(
+                                   sh_edge[warp][subgroup].coefficient[si][ei]) *
+                               static_cast<long long>(sh_value[warp][subgroup][si]);
+                }
+            }
+#else
             for (int si = 0; si < ns; ++si) {
                 RuntimeSmallTerms edge;
                 if (!runtime_turn_step(
@@ -394,6 +423,7 @@ __global__ void owner_turn_runtime_subwarp_kernel(
                                static_cast<long long>(sh_value[warp][subgroup][si]);
                 }
             }
+#endif
             long long z = acc % static_cast<long long>(mod);
             if (z < 0) z += mod;
             state[dgr.local] = static_cast<std::uint32_t>(z);
