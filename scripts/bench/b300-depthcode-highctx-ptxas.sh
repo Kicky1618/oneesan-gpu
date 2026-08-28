@@ -85,7 +85,8 @@ print('warp_dynamic_smem_note=warp-striped variants allocate one runtime HIGH co
 print('cross5_constant_table_bytes=6561')
 print('cross5_old_constant_table_bytes=15552')
 print('direct_resolve_intermediate_local_descriptors=0')
-print('affine_high_row_descriptor_bytes=16')
+print('affine_high_row_descriptor_bytes=8')
+print('affine_high_row_stride_storage=constant_by_hs')
 PY
 
-echo "depthcode-highctx-ptxas OK n=$N arch=$ARCH transpose=$TRANSPOSE_MODE result=$OUT logs=$LOGDIR ternary_delta=1 cross5=1 cross5_table_bytes=6561 direct_resolve=1 affine_rows=1" >&2
+echo "depthcode-highctx-ptxas OK n=$N arch=$ARCH transpose=$TRANSPOSE_MODE result=$OUT logs=$LOGDIR ternary_delta=1 cross5=1 cross5_table_bytes=6561 direct_resolve=1 affine_rows=1 affine_entry_bytes=8" >&2
