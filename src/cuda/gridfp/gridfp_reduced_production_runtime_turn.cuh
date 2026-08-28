@@ -5,9 +5,15 @@
 #ifndef RP_RUNTIME_TURN_LOCAL_SECTOR_TABLE
 #define RP_RUNTIME_TURN_LOCAL_SECTOR_TABLE 1
 #endif
+#ifndef RP_RUNTIME_TURN_LOCAL_SECTOR_W28_TREE
+#define RP_RUNTIME_TURN_LOCAL_SECTOR_W28_TREE 0
+#endif
 static_assert(RP_RUNTIME_TURN_LOCAL_SECTOR_TABLE == 0 ||
               RP_RUNTIME_TURN_LOCAL_SECTOR_TABLE == 1,
               "RP_RUNTIME_TURN_LOCAL_SECTOR_TABLE must be 0 or 1");
+static_assert(RP_RUNTIME_TURN_LOCAL_SECTOR_W28_TREE == 0 ||
+              RP_RUNTIME_TURN_LOCAL_SECTOR_W28_TREE == 1,
+              "RP_RUNTIME_TURN_LOCAL_SECTOR_W28_TREE must be 0 or 1");
 
 namespace oneesan::gridfp::reducedprod {
 
@@ -25,6 +31,72 @@ __device__ __forceinline__ int runtime_turn_local_sector_width_base_device(int W
     case 20: return 155; case 22: return 210; case 24: return 276;
     case 26: return 354; case 28: return 445; default: return -1;
     }
+}
+
+__device__ __forceinline__ void runtime_turn_local_sector_w28_tree_device(
+    int row,
+    int first,
+    bool eight,
+    Rank64 within,
+    int& local_ones,
+    Rank64& local_within
+) {
+    // W=28,L=15 has seven active sectors for even outer popcount and eight
+    // for odd outer popcount. Production `within` is a remainder modulo the
+    // row group, hence is below the final endpoint. A fixed lower_bound tree
+    // can therefore omit the sentinel branch and reuse the compared
+    // predecessor as `begin`: at most three constant-table loads vs up to
+    // four comparisons plus one begin reload in the generic path.
+    const Rank64 e3 = RP_RUNTIME_TURN_LOCAL_SECTOR_END[row + 3];
+    int index = 0;
+    Rank64 begin = 0;
+    if (within < e3) {
+        const Rank64 e1 = RP_RUNTIME_TURN_LOCAL_SECTOR_END[row + 1];
+        if (within < e1) {
+            const Rank64 e0 = RP_RUNTIME_TURN_LOCAL_SECTOR_END[row];
+            if (within < e0) {
+                index = 0;
+            } else {
+                index = 1;
+                begin = e0;
+            }
+        } else {
+            const Rank64 e2 = RP_RUNTIME_TURN_LOCAL_SECTOR_END[row + 2];
+            if (within < e2) {
+                index = 2;
+                begin = e1;
+            } else {
+                index = 3;
+                begin = e2;
+            }
+        }
+    } else {
+        const Rank64 e5 = RP_RUNTIME_TURN_LOCAL_SECTOR_END[row + 5];
+        if (within < e5) {
+            const Rank64 e4 = RP_RUNTIME_TURN_LOCAL_SECTOR_END[row + 4];
+            if (within < e4) {
+                index = 4;
+                begin = e3;
+            } else {
+                index = 5;
+                begin = e4;
+            }
+        } else if (eight) {
+            const Rank64 e6 = RP_RUNTIME_TURN_LOCAL_SECTOR_END[row + 6];
+            if (within < e6) {
+                index = 6;
+                begin = e5;
+            } else {
+                index = 7;
+                begin = e6;
+            }
+        } else {
+            index = 6;
+            begin = e5;
+        }
+    }
+    local_ones = first + (index << 1);
+    local_within = within - begin;
 }
 
 __device__ __forceinline__ bool runtime_turn_local_sector_device(
@@ -46,6 +118,13 @@ __device__ __forceinline__ bool runtime_turn_local_sector_device(
         const int row = base + prior_even_r * odd_l + prior_odd_r * even_l;
         const int first = (outer_ones & 1) ? 0 : 1;
         const int count = (outer_ones & 1) ? even_l : odd_l;
+#if RP_RUNTIME_TURN_LOCAL_SECTOR_W28_TREE
+        if (W == 28 && L == 15) {
+            runtime_turn_local_sector_w28_tree_device(
+                row, first, count == 8, within, local_ones, local_within);
+            return true;
+        }
+#endif
         int lo = 0;
         int hi = count;
         while (lo < hi) {
