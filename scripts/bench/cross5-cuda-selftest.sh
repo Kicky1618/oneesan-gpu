@@ -23,6 +23,7 @@ if grep -Fq "OK W=$W" <<<"$out"; then
   grep -Fq 'mismatches=0' <<<"$out"
   grep -Fq 'table_bytes=6561' <<<"$out"
   grep -Fq 'scalar_equivalent=1' <<<"$out"
+  grep -Fq 'prekey_equivalent=1' <<<"$out"
   grep -Fq "pm_accum=$PM_ACCUM" <<<"$out"
 fi
-echo "cross5-cuda-selftest OK W=$W low=$LOW_LUT_K high=$HIGH_LUT_K pm_accum=$PM_ACCUM" >&2
+echo "cross5-cuda-selftest OK W=$W low=$LOW_LUT_K high=$HIGH_LUT_K pm_accum=$PM_ACCUM prekey=1" >&2
