@@ -415,9 +415,7 @@ __global__ void owner_turn_runtime_subwarp_kernel(
                 runtime_set_error(error, 326);
                 continue;
             }
-            long long z = accum[accumulator_ix] % static_cast<long long>(mod);
-            if (z < 0) z += mod;
-            state[dgr.local] = static_cast<std::uint32_t>(z);
+            state[dgr.local] = runtime_reduce_accum(accum[accumulator_ix], mod);
         }
 #else
         for (int di = sublane; di < nd; di += RP_RUNTIME_SUBGROUP_WIDTH) {
@@ -442,9 +440,7 @@ __global__ void owner_turn_runtime_subwarp_kernel(
                                static_cast<long long>(sh_value[warp][subgroup][si]);
                 }
             }
-            long long z = acc % static_cast<long long>(mod);
-            if (z < 0) z += mod;
-            state[dgr.local] = static_cast<std::uint32_t>(z);
+            state[dgr.local] = runtime_reduce_accum(acc, mod);
         }
 #endif
         __syncwarp(subgroup_mask);
