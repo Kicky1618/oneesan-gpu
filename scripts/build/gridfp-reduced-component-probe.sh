@@ -5,6 +5,12 @@ source "$(dirname -- "${BASH_SOURCE[0]}")/../lib/common.sh"
 MODE="${MODE:-dense}"
 ARCH="${ARCH:-native}"
 PTXAS_VERBOSE="${PTXAS_VERBOSE:-1}"
+RUNTIME_CACHE_EDGES="${RUNTIME_CACHE_EDGES:-1}"
+
+if [[ "$RUNTIME_CACHE_EDGES" != 0 && "$RUNTIME_CACHE_EDGES" != 1 ]]; then
+  echo "RUNTIME_CACHE_EDGES must be 0 or 1" >&2
+  exit 2
+fi
 
 case "$MODE" in
   forward)
@@ -71,11 +77,17 @@ case "$MODE" in
 esac
 
 SRC="$(repo_path "$SRC_REL")"
-OUT="$(build_path "${OUT:-gridfp_reduced_component_${MODE}}")"
+DEFAULT_OUT="gridfp_reduced_component_${MODE}"
+if [[ "$MODE" == two-row-runtime-multigpu && "$RUNTIME_CACHE_EDGES" == 0 ]]; then
+  DEFAULT_OUT="${DEFAULT_OUT}_edgecache0"
+fi
+OUT="$(build_path "${OUT:-$DEFAULT_OUT}")"
 PTXAS_FLAGS=()
 if [[ "$PTXAS_VERBOSE" == 1 ]]; then PTXAS_FLAGS+=("-Xptxas=-v"); fi
 
 TMPDIR="$ONEESAN_TMP_DIR" nvcc -O3 -std=c++17 -lineinfo -arch="$ARCH" \
-  "${PTXAS_FLAGS[@]}" "$SRC" -o "$OUT"
+  "${PTXAS_FLAGS[@]}" \
+  -DRP_RUNTIME_CACHE_EDGES="$RUNTIME_CACHE_EDGES" \
+  "$SRC" -o "$OUT"
 
-echo "built $OUT (mode=$MODE arch=$ARCH)"
+echo "built $OUT (mode=$MODE arch=$ARCH runtime_cache_edges=$RUNTIME_CACHE_EDGES)"
