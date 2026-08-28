@@ -11,7 +11,7 @@
 
 #ifndef P10DC_SPARSE_CROSS5_INSTALL_COMPAT_DEFINED
 #define P10DC_SPARSE_CROSS5_INSTALL_COMPAT_DEFINED 1
-static inline void p10dc_install_cross5_lut() { p10dc_install_rankchunk32_lut(); }
+static inline void p10dc_install_cross5_lut() { p10dc_install_rankdelta8_lut(); }
 #endif
 
 __device__ __forceinline__ Count p10dc_direct_resolved_high_plan_sum_cross5_rankdelta8(
