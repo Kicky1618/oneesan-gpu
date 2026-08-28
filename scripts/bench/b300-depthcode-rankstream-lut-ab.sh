@@ -31,6 +31,7 @@ RESULT="${RESULT:-${PREFIX}.tsv}"
 SUMMARY="${SUMMARY:-${PREFIX}_summary.tsv}"
 LOGDIR="${LOGDIR:-${PREFIX}_logs}"
 CTX=warpstriped_delta_direct_affine_prekey_rankstream_cross5
+MODES=(constant ldg ldg256)
 
 case "$TRANSPOSE_MODE" in sync|events|pipeline) ;; *) echo "invalid TRANSPOSE_MODE" >&2; exit 2;; esac
 case "$DEPTHCODE_DECODE_LOAD" in global|ldg) ;; *) echo "invalid DEPTHCODE_DECODE_LOAD" >&2; exit 2;; esac
@@ -52,7 +53,7 @@ mkdir -p "$(dirname "$RESULT")" "$LOGDIR"
 bash "$ONEESAN_ROOT/scripts/bench/cross5-rankmask-proof.sh"
 bash "$ONEESAN_ROOT/scripts/bench/cross5-rankstream-projection-proof.sh"
 if [[ "$RUN_SELFTEST" == 1 ]]; then
-  for mode in constant ldg; do
+  for mode in "${MODES[@]}"; do
     LUT_LOAD="$mode" PM_ACCUM="$PM_ACCUM" DECODE_LOAD="$DEPTHCODE_DECODE_LOAD" \
       bash "$ONEESAN_ROOT/scripts/bench/pattern10-depthcode-rankstream-cross5-selftest.sh" \
       >"$LOGDIR/selftest_${mode}.out" 2>"$LOGDIR/selftest_${mode}.err"
@@ -101,7 +102,7 @@ run_one() {
     "${fl:-NA}" "${rl:-NA}" "${ts:-NA}" >>"$RESULT"
 }
 
-for mode in constant ldg; do
+for mode in "${MODES[@]}"; do
   bin="$ONEESAN_BUILD_DIR/ab_depthcode_${CTX}_${mode}_${DEPTHCODE_DECODE_LOAD}_${TRANSPOSE_MODE}_n${N}"
   echo "=== build rankstream LUT $mode ===" >&2
   build_one "$mode" "$bin"
@@ -120,8 +121,9 @@ import sys
 src, dst = sys.argv[1:]
 rows = list(csv.DictReader(open(src), delimiter='\t'))
 metrics = ('wall_s', 'forward_high_s', 'reverse_high_s', 'forward_low_s', 'reverse_low_s', 'transpose_s')
+modes = ('constant', 'ldg', 'ldg256')
 out = []
-for mode in ('constant', 'ldg'):
+for mode in modes:
     group = [r for r in rows if r['lut_load'] == mode]
     z = {'lut_load': mode, 'repeats': str(len(group))}
     for metric in metrics:
@@ -135,21 +137,35 @@ with open(dst, 'w', newline='') as f:
     w.writerows(out)
 
 q = {r['lut_load']: r for r in out}
+def speedup(base, opt, metric, label):
+    if q[base][metric] == 'NA' or q[opt][metric] == 'NA':
+        return
+    print(f'{label}_{metric}_speedup={float(q[base][metric]) / float(q[opt][metric]):.6f}x')
+
 for metric in ('wall_s', 'forward_high_s', 'reverse_high_s'):
-    if q['constant'][metric] != 'NA' and q['ldg'][metric] != 'NA':
-        c = float(q['constant'][metric])
-        g = float(q['ldg'][metric])
-        print(f'rankstream_lut_ldg_{metric}_speedup={c / g:.6f}x')
-if all(q[x][m] != 'NA' for x in ('constant', 'ldg') for m in ('forward_high_s', 'reverse_high_s')):
-    c = float(q['constant']['forward_high_s']) + float(q['constant']['reverse_high_s'])
-    g = float(q['ldg']['forward_high_s']) + float(q['ldg']['reverse_high_s'])
-    print(f'rankstream_lut_ldg_total_high_speedup={c / g:.6f}x')
-print('rankstream_lut_bytes=6561')
-print('rankstream_lut_constant_mode=constant_cache')
-print('rankstream_lut_ldg_mode=readonly_global_l1')
+    speedup('constant', 'ldg', metric, 'rankstream_lut_ldg')
+    speedup('ldg', 'ldg256', metric, 'rankstream_lut_ldg256_vs_ldg')
+    speedup('constant', 'ldg256', metric, 'rankstream_lut_ldg256_vs_constant')
+
+for base, opt, label in (
+    ('constant', 'ldg', 'rankstream_lut_ldg'),
+    ('ldg', 'ldg256', 'rankstream_lut_ldg256_vs_ldg'),
+    ('constant', 'ldg256', 'rankstream_lut_ldg256_vs_constant'),
+):
+    if all(q[x][m] != 'NA' for x in (base, opt) for m in ('forward_high_s', 'reverse_high_s')):
+        b = float(q[base]['forward_high_s']) + float(q[base]['reverse_high_s'])
+        o = float(q[opt]['forward_high_s']) + float(q[opt]['reverse_high_s'])
+        print(f'{label}_total_high_speedup={b / o:.6f}x')
+
+print('rankstream_lut_logical_bytes=6561')
+print('rankstream_lut_constant_physical_bytes=6561')
+print('rankstream_lut_ldg_physical_bytes=6561')
+print('rankstream_lut_ldg256_physical_bytes=6899')
+print('rankstream_lut_ldg256_state_stride=256')
+print('rankstream_lut_ldg256_state_row_cachelines_128b=2')
 print('production_state_checks=0')
 print('production_fallback=0')
 print(f'summary={dst}')
 PY
 
-echo "depthcode-rankstream-lut-ab OK n=$N repeats=$REPEATS threads=$BUCKET_THREADS gx=$BUCKET_GRID_X gy=$BUCKET_GRID_Y decode_load=$DEPTHCODE_DECODE_LOAD transpose=$TRANSPOSE_MODE result=$RESULT" >&2
+echo "depthcode-rankstream-lut-ab OK n=$N repeats=$REPEATS modes=constant,ldg,ldg256 threads=$BUCKET_THREADS gx=$BUCKET_GRID_X gy=$BUCKET_GRID_Y decode_load=$DEPTHCODE_DECODE_LOAD transpose=$TRANSPOSE_MODE result=$RESULT" >&2
