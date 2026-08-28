@@ -12,5 +12,6 @@ grep -Fq 'gridfp-rankformula-slotrow32 OK' <<<"$out"
 grep -Fq 'codes=1201917' <<<"$out"
 grep -Fq 'packed_bits=30 word_bytes=4' <<<"$out"
 grep -Fq 'max_slot=2049' <<<"$out"
-grep -Fq 'loads_per_lookup=1 separate_slot_support=0' <<<"$out"
-echo 'rankformula-slotrow32-proof OK packed30=1 load1=1' >&2
+grep -Fq 'loads_per_lookup=1' <<<"$out"
+grep -Fq 'top_support_preserved=1 separate_slot_support=0' <<<"$out"
+echo 'rankformula-slotrow32-proof OK packed30=1 load1=1 top_support=1' >&2
