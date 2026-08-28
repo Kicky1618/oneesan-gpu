@@ -61,6 +61,54 @@ __device__ __forceinline__ void p10dc_low_rankchunk32_row(
     row = D_P10DC_LOW_RANKSTREAM + block_base + prefix;
 }
 
+// Warp-striped HIGH kernels visit ranks as base32+lane.  Because rankchunk32
+// uses 16-code metadata blocks, one 32-lane stripe can intersect at most three
+// blocks.  Load each required block base once in the lane where that block
+// begins, then broadcast it with shuffles.  Final partial stripes have a
+// contiguous low-lane active mask, so every broadcast source is active exactly
+// when some active lane needs that block.
+__device__ __forceinline__ void p10dc_low_rankchunk32_row_warpstripe(
+    uint32_t h, uint32_t rank, uint32_t& packed_chunks, const uint16_t*& row
+) {
+    const uint32_t lane = uint32_t(threadIdx.x) & 31u;
+    const unsigned active = __activemask();
+    const uint32_t compact = D_P10DC_LOW_PREKEY_HOFF[h] + rank;
+    const uint32_t meta = D_P10DC_LOW_RANKCHUNKMETA32[compact];
+    packed_chunks = meta & P10DC_RANKCHUNK32_CHUNK_MASK;
+    const uint32_t prefix = meta >> P10DC_RANKCHUNK32_CHUNK_BITS;
+
+    const uint32_t first_compact = compact - lane;
+    const uint32_t first_block = first_compact >> P10DC_RANKCHUNK32_BLOCK_LOG2;
+    const uint32_t first_off = first_compact & (P10DC_RANKCHUNK32_BLOCK - 1u);
+    const uint32_t split1 = P10DC_RANKCHUNK32_BLOCK - first_off; // [1,16]
+    const uint32_t split2 = split1 + P10DC_RANKCHUNK32_BLOCK;    // [17,32]
+
+    uint32_t b0_local = 0;
+    if (lane == 0u) b0_local = D_P10DC_LOW_RANKCHUNKBLOCK16[first_block];
+    uint32_t block_base = __shfl_sync(active, b0_local, 0);
+
+    const unsigned split1_bit = 1u << split1;
+    if (active & split1_bit) {
+        uint32_t b1_local = 0;
+        if (lane == split1)
+            b1_local = D_P10DC_LOW_RANKCHUNKBLOCK16[first_block + 1u];
+        const uint32_t b1 = __shfl_sync(active, b1_local, int(split1));
+        if (lane >= split1) block_base = b1;
+    }
+
+    if (split2 < 32u) {
+        const unsigned split2_bit = 1u << split2;
+        if (active & split2_bit) {
+            uint32_t b2_local = 0;
+            if (lane == split2)
+                b2_local = D_P10DC_LOW_RANKCHUNKBLOCK16[first_block + 2u];
+            const uint32_t b2 = __shfl_sync(active, b2_local, int(split2));
+            if (lane >= split2) block_base = b2;
+        }
+    }
+    row = D_P10DC_LOW_RANKSTREAM + block_base + prefix;
+}
+
 struct BucketFusedDirectHighRowsRankChunk32Tables
     : BucketFusedDirectHighRowsPrekeyRankStreamTables {
     uint32_t* low_rankchunkmeta32 = nullptr;
@@ -155,6 +203,7 @@ struct BucketFusedDirectHighRowsRankChunk32Tables
                   << " codes=" << meta.size() << " blocks=" << blocks.size()
                   << " l_ranks=" << low_rankstream_count << " bytes=" << bytes
                   << " chunk_bits=24 prefix_bits=8 block=16"
+                  << " block_base_loads_per_warp_max=3"
                   << " chunk_div_runtime=0 chunk_mod_runtime=0"
                   << " old_prekey_offset_arrays_freed=1 direct_lookup_runtime=0\n";
     }
