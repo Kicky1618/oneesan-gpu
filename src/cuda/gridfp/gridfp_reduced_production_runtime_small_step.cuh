@@ -10,6 +10,9 @@ namespace oneesan::gridfp::reducedprod {
 #ifndef RP_RUNTIME_DIRECT_REVERSE_P1_MAIN_STEP
 #define RP_RUNTIME_DIRECT_REVERSE_P1_MAIN_STEP 1
 #endif
+#ifndef RP_RUNTIME_DIRECT_FORWARD_LAST_MAIN_STEP
+#define RP_RUNTIME_DIRECT_FORWARD_LAST_MAIN_STEP 1
+#endif
 static_assert(
     RP_RUNTIME_DIRECT_REVERSE_SMALL_STEP == 0 ||
     RP_RUNTIME_DIRECT_REVERSE_SMALL_STEP == 1,
@@ -18,6 +21,10 @@ static_assert(
     RP_RUNTIME_DIRECT_REVERSE_P1_MAIN_STEP == 0 ||
     RP_RUNTIME_DIRECT_REVERSE_P1_MAIN_STEP == 1,
     "RP_RUNTIME_DIRECT_REVERSE_P1_MAIN_STEP must be 0 or 1");
+static_assert(
+    RP_RUNTIME_DIRECT_FORWARD_LAST_MAIN_STEP == 0 ||
+    RP_RUNTIME_DIRECT_FORWARD_LAST_MAIN_STEP == 1,
+    "RP_RUNTIME_DIRECT_FORWARD_LAST_MAIN_STEP must be 0 or 1");
 
 struct RuntimeSmallTerms {
     DeviceTerm v[3]{};
@@ -70,16 +77,22 @@ __device__ __forceinline__ bool runtime_reverse_p1_project_q2_blocked_direct(
            runtime_small_add(z, DeviceKey{msetpair(nn, 2, LR), 0}, -1);
 }
 
-// Exact specialization of the direct reverse step for p=1 and a main source.
-// This is the low-row expansion hotspot: expand the local reverse transition
-// and Q_2 projection directly instead of constructing IncludeResult and then
-// redispatching through runtime_project_reverse().
+__device__ __forceinline__ bool runtime_forward_last_project_blocked_direct(
+    MateID blocked_mate, int W, RuntimeSmallTerms& z
+) {
+    const int q = W - 2;
+    if (mget(blocked_mate, q - 1) != N)
+        return runtime_small_add(z, DeviceKey{blocked_mate, 1}, 1);
+    const MateID nn = blocked_exclude(blocked_mate, q);
+    return runtime_small_add(z, DeviceKey{nn, 0}, 1) &&
+           runtime_small_add(z, DeviceKey{msetpair(nn, q, LR), 0}, -1);
+}
+
 __device__ __forceinline__ bool runtime_small_step_reverse_p1_main_direct(
     MateID mate, int W, RuntimeSmallTerms& z
 ) {
     const DeviceKey src{mate, 0};
     if (!runtime_small_add(z, src, 1)) return false;
-
     switch (mpair(mate, 1)) {
     case NN:
         return runtime_small_add(z, DeviceKey{msetpair(mate, 1, LR), 0}, 1);
@@ -106,10 +119,46 @@ __device__ __forceinline__ bool runtime_small_step_reverse_p1_main_direct(
     }
 }
 
+__device__ __forceinline__ bool runtime_small_step_forward_last_main_direct(
+    MateID mate, int W, RuntimeSmallTerms& z
+) {
+    const DeviceKey src{mate, 0};
+    if (!runtime_small_add(z, src, 1)) return false;
+    const int p = W - 1;
+    switch (mpair(mate, p)) {
+    case NN:
+        return runtime_small_add(z, DeviceKey{msetpair(mate, p, LR), 0}, 1);
+    case NR: case NL:
+        return runtime_forward_last_project_blocked_direct(
+            mshrink(mate, p), W, z);
+    case RN:
+        return runtime_small_add(z, DeviceKey{msetpair(mate, p, NR), 0}, 1);
+    case LN:
+        return runtime_small_add(z, DeviceKey{msetpair(mate, p, NL), 0}, 1);
+    case LL: {
+        MateID t = msetpair(mate, p, NN);
+        const int q = closure_match_left(t, p);
+        if (q < 0) return true;
+        t = mset(t, q, L);
+        return runtime_forward_last_project_blocked_direct(
+            mshrink(t, p - 1), W, z);
+    }
+    case RL:
+        return runtime_forward_last_project_blocked_direct(
+            mshrink(msetpair(mate, p, NN), p - 1), W, z);
+    default:
+        return true;
+    }
+}
+
 __device__ __forceinline__ bool runtime_small_step_forward(
     DeviceKey src, int W, int p, RuntimeSmallTerms& z
 ) {
     if (!src.blocked) {
+#if RP_RUNTIME_DIRECT_FORWARD_LAST_MAIN_STEP
+        if (W >= 3 && p == W - 1)
+            return runtime_small_step_forward_last_main_direct(src.mate, W, z);
+#endif
         if (!runtime_small_add(z, src, 1)) return false;
         const IncludeResult x = include_horizontal(src.mate, W, p);
         if (!x.valid) return true;
