@@ -14,32 +14,34 @@ bash "$ONEESAN_ROOT/scripts/bench/rankformula-nometa-coopgroup-proof.sh"
 bash "$ONEESAN_ROOT/scripts/bench/rankformula-abstract-lut-proof.sh"
 bash "$ONEESAN_ROOT/scripts/bench/rankformula-abstract-lazy-load-proof.sh"
 bash "$ONEESAN_ROOT/scripts/bench/rankformula-abstract-select8-proof.sh"
+bash "$ONEESAN_ROOT/scripts/bench/rankformula-abstract-depth4-proof.sh"
 bash "$ONEESAN_ROOT/scripts/bench/rankformula-abstract-srcpack10-proof.sh"
 
 for spec in \
-  '4 0 0 1 0 0' \
-  '8 0 0 1 0 0' \
-  '8 1 0 1 0 0' \
-  '8 1 1 1 0 0' \
-  '16 1 1 1 0 0' \
-  '16 1 1 0 0 0' \
-  '16 1 1 0 1 0' \
-  '16 1 1 0 1 1'; do
-  read -r block ws coop unroll select8 srcpack10 <<<"$spec"
-  echo "=== abstract nometa exact CUDA block=$block warpshare=$ws coopgroup=$coop unroll=$unroll select8=$select8 srcpack10=$srcpack10 ===" >&2
+  '4 0 0 1 0 0 0' \
+  '8 0 0 1 0 0 0' \
+  '8 1 0 1 0 0 0' \
+  '8 1 1 1 0 0 0' \
+  '16 1 1 1 0 0 0' \
+  '16 1 1 0 0 0 0' \
+  '16 1 1 0 1 0 0' \
+  '16 1 1 0 1 0 1' \
+  '16 1 1 0 1 1 1'; do
+  read -r block ws coop unroll select8 depth4 srcpack10 <<<"$spec"
+  echo "=== abstract nometa exact CUDA block=$block warpshare=$ws coopgroup=$coop unroll=$unroll select8=$select8 depth4=$depth4 srcpack10=$srcpack10 ===" >&2
   RANKFORMULA_NOMETA_BLOCK="$block" RANKFORMULA_NOMETA_WARPSHARE="$ws" RANKFORMULA_NOMETA_COOPGROUP="$coop" \
-    RANKFORMULA_NOMETA_COOP_UNROLL="$unroll" RANKFORMULA_ABSTRACT_SELECT8="$select8" RANKFORMULA_ABSTRACT_SRCPACK10="$srcpack10" \
-    ARCH="$ARCH" W="$W" DECODE_LOAD="$DECODE_LOAD" RANKSTREAM_LUT_LOAD="$RANKSTREAM_LUT_LOAD" \
+    RANKFORMULA_NOMETA_COOP_UNROLL="$unroll" RANKFORMULA_ABSTRACT_SELECT8="$select8" RANKFORMULA_ABSTRACT_DEPTH4="$depth4" \
+    RANKFORMULA_ABSTRACT_SRCPACK10="$srcpack10" ARCH="$ARCH" W="$W" DECODE_LOAD="$DECODE_LOAD" RANKSTREAM_LUT_LOAD="$RANKSTREAM_LUT_LOAD" \
     bash "$ONEESAN_ROOT/scripts/bench/pattern10-depthcode-rankformula-nometa4-abstract-block-selftest.sh"
 done
 
 if [[ "$RUN_BUILD_SMOKE" == 1 ]]; then
-  echo '=== abstract nometa B300 production compile smoke block=16 coopgroup=1 rolled select8=1 srcpack10=1 ===' >&2
+  echo '=== abstract nometa B300 production compile smoke block=16 coopgroup=1 rolled depth4=1 srcpack10=1 ===' >&2
   N="$N" ARCH="$ARCH" RANKFORMULA_NOMETA_BLOCK=16 RANKFORMULA_NOMETA_WARPSHARE=1 RANKFORMULA_NOMETA_COOPGROUP=1 \
-    RANKFORMULA_NOMETA_COOP_UNROLL=0 RANKFORMULA_ABSTRACT_SELECT8=1 RANKFORMULA_ABSTRACT_SRCPACK10=1 \
+    RANKFORMULA_NOMETA_COOP_UNROLL=0 RANKFORMULA_ABSTRACT_SELECT8=1 RANKFORMULA_ABSTRACT_DEPTH4=1 RANKFORMULA_ABSTRACT_SRCPACK10=1 \
     DEPTHCODE_DECODE_LOAD="$DECODE_LOAD" RANKSTREAM_LUT_LOAD="$RANKSTREAM_LUT_LOAD" \
-    TRANSPOSE_MODE=pipeline PTXAS_VERBOSE=1 OUT="$ONEESAN_BUILD_DIR/rankformula_nometa_abstract_b16_rolled_select8_srcpack10_preflight_n${N}" \
+    TRANSPOSE_MODE=pipeline PTXAS_VERBOSE=1 OUT="$ONEESAN_BUILD_DIR/rankformula_nometa_abstract_b16_rolled_depth4_srcpack10_preflight_n${N}" \
     bash "$ONEESAN_ROOT/scripts/build/b300-bucket-snake-pattern10-depthcode-rankformula-nometa4-abstract.sh"
 fi
 
-echo "rankformula-nometa4-abstract-preflight OK w=$W n=$N metadata_bytes_per_code=0 exact_modes=b4_scalar,b8_scalar,b8_warpshare,b8_coopgroup,b16_coop_unrolled,b16_coop_rolled,b16_coop_rolled_select8,b16_coop_rolled_select8_srcpack10 packed_group64_bits=59 self_group_index=1 support_positions_runtime=0 b16_aux_bytes_all=707406 b16_coopgroup_table_loads_model=215509 b16_avg_early_ballots=2.251382 base_abstract_lut_bytes=94206 select8_abstract_lut_bytes=171866 select8_srcpack10_lut_bytes=149598 select8_table_bytes=91780 srcpack10_source_bytes=57338 depth14_15_fast_zero=1 ballot_runtime_loads=0 build_smoke_b16_rolled_select8_srcpack10=$RUN_BUILD_SMOKE" >&2
+echo "rankformula-nometa4-abstract-preflight OK w=$W n=$N metadata_bytes_per_code=0 exact_modes=b4_scalar,b8_scalar,b8_warpshare,b8_coopgroup,b16_coop_unrolled,b16_coop_rolled,b16_coop_rolled_select8,b16_coop_rolled_select8_srcpack10,b16_coop_rolled_depth4_srcpack10 packed_group64_bits=59 self_group_index=1 support_positions_runtime=0 b16_aux_bytes_all=707406 b16_coopgroup_table_loads_model=215509 b16_avg_early_ballots=2.251382 base_abstract_lut_bytes=94206 select8_abstract_lut_bytes=171866 select8_srcpack10_lut_bytes=149598 depth4_srcpack10_lut_bytes=86058 select8_table_bytes=91780 depth4_table_bytes=28240 srcpack10_source_bytes=57338 srcpack10_dynamic_source_bytes=7668848 depth14_15_fast_zero=1 ballot_runtime_loads=0 build_smoke_b16_rolled_depth4_srcpack10=$RUN_BUILD_SMOKE" >&2
