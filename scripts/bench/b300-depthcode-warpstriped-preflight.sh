@@ -30,6 +30,10 @@ N="$N" bash "$ONEESAN_ROOT/scripts/bench/closure-ternary-delta-proof.sh"
 echo '=== CROSS5 automaton proof ===' >&2
 bash "$ONEESAN_ROOT/scripts/bench/cross5-automaton-proof.sh"
 
+echo '=== CROSS5 CUDA helper equivalence: PM 0/1 ===' >&2
+PM_ACCUM=0 ARCH="$ARCH" W=10 bash "$ONEESAN_ROOT/scripts/bench/cross5-cuda-selftest.sh"
+PM_ACCUM=1 ARCH="$ARCH" W=10 bash "$ONEESAN_ROOT/scripts/bench/cross5-cuda-selftest.sh"
+
 echo '=== direct depthcode build-plan invariants ===' >&2
 N="$N" ARCH="$ARCH" bash "$ONEESAN_ROOT/scripts/bench/pattern10-depthcode-build-plan.sh"
 
@@ -59,4 +63,4 @@ if [[ "$RUN_B300_AB" == 1 ]]; then
     bash "$ONEESAN_ROOT/scripts/bench/b300-depthcode-warpstriped-ab.sh"
 fi
 
-echo "b300-depthcode-warpstriped-preflight OK n=$N arch=$ARCH run_ptxas=$RUN_PTXAS run_delta_ab=$RUN_DELTA_AB run_cross5_ab=$RUN_CROSS5_AB run_b300_ab=$RUN_B300_AB decode_load=$DEPTHCODE_DECODE_LOAD ternary_delta_proved=1 cross5_proved=1" >&2
+echo "b300-depthcode-warpstriped-preflight OK n=$N arch=$ARCH run_ptxas=$RUN_PTXAS run_delta_ab=$RUN_DELTA_AB run_cross5_ab=$RUN_CROSS5_AB run_b300_ab=$RUN_B300_AB decode_load=$DEPTHCODE_DECODE_LOAD ternary_delta_proved=1 cross5_proved=1 cross5_cuda=1" >&2
