@@ -73,6 +73,9 @@ case "$MODE" in
   p2p-persistent-segment)
     SRC_REL="src/cuda/gridfp/gridfp_reduced_production_p2p_persistent_segment_microprobe.cu"
     ;;
+  p2p-persistent-pipeline)
+    SRC_REL="src/cuda/gridfp/gridfp_reduced_production_p2p_persistent_pipeline_microprobe.cu"
+    ;;
   p2p-host-persistent-list)
     SRC_REL="src/cuda/gridfp/gridfp_reduced_production_p2p_host_persistent_list_microprobe.cu"
     ;;
@@ -107,7 +110,7 @@ case "$MODE" in
     SRC_REL="src/cuda/gridfp/gridfp_reduced_production_grouped_support_rank_probe.cu"
     ;;
   *)
-    echo "invalid MODE=$MODE (forward|reverse|register|persistent|dense|edge|grouped|inplace|cycle|shift-cycle|turn|owner-component|owner-lean|owner-support|p2p-cycle|p2p-token-cycle|p2p-token-plan|p2p-pair-queue|p2p-scratch-cycle|p2p-scratch-full|p2p-scratch-owner|p2p-persistent-segment|p2p-host-persistent-list|p2p-host-persistent-descriptorless|p2p-cycle-owner-descriptorless|p2p-scratch-plan|p2p-cycle-batch-plan|p2p-traffic|p2p-traffic-matrix|p2p-capability|p2p-mailbox|p2p-owner-lut|support-rank)" >&2
+    echo "invalid MODE=$MODE (forward|reverse|register|persistent|dense|edge|grouped|inplace|cycle|shift-cycle|turn|owner-component|owner-lean|owner-support|p2p-cycle|p2p-token-cycle|p2p-token-plan|p2p-pair-queue|p2p-scratch-cycle|p2p-scratch-full|p2p-scratch-owner|p2p-persistent-segment|p2p-persistent-pipeline|p2p-host-persistent-list|p2p-host-persistent-descriptorless|p2p-cycle-owner-descriptorless|p2p-scratch-plan|p2p-cycle-batch-plan|p2p-traffic|p2p-traffic-matrix|p2p-capability|p2p-mailbox|p2p-owner-lut|support-rank)" >&2
     exit 2
     ;;
 esac
