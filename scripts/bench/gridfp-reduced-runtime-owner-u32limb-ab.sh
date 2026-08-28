@@ -4,8 +4,9 @@ source "$(dirname -- "${BASH_SOURCE[0]}")/../lib/common.sh"
 
 W="${W:-10}"; NGPU="${NGPU:-2}"; BLOCKS="${BLOCKS:-256}"; MOD="${MOD:-4294967291}"
 REPEATS="${REPEATS:-7}"; WARMUP="${WARMUP:-1}"; ARCH="${ARCH:-native}"; PTX_ARCH="${PTX_ARCH:-sm_80}"; PTXAS_VERBOSE="${PTXAS_VERBOSE:-1}"
-if (( W < 8 || W > 28 || W % 2 != 0 || NGPU < 2 || NGPU > 8 || BLOCKS < 1 || REPEATS < 1 || WARMUP < 0 )); then
-  echo "invalid W/NGPU/BLOCKS/REPEATS/WARMUP" >&2; exit 2
+if (( W < 8 || W > 10 || W % 2 != 0 || NGPU < 2 || NGPU > 8 || BLOCKS < 1 || REPEATS < 1 || WARMUP < 0 )); then
+  echo "full runtime owner A/B execution supports even W=8..10; use gridfp-runtime-owner-u32limb-ngpu8-microprobe.sh for production-width owner arithmetic" >&2
+  exit 2
 fi
 if ! command -v nvcc >/dev/null || ! command -v nvidia-smi >/dev/null; then
   echo "nvcc and nvidia-smi are required" >&2; exit 2
@@ -101,6 +102,7 @@ print('runtime_owner_u32limb_new_mul_wide_u32_arithmetic=0')
 print('runtime_owner_u32limb_new_pure_u32=1')
 print('runtime_owner_u32limb_new_clamp=0')
 print('runtime_owner_u32limb_ptx_u64_mul_div_required=0')
+print('runtime_owner_u32limb_full_runtime_W_max=10')
 print(f'summary={dst}')
 PY
 
