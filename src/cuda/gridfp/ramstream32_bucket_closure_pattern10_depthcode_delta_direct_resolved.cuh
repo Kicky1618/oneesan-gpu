@@ -6,12 +6,28 @@
 // Experimental HIGH-only direct resolver. The canonical delta builder first
 // packs every closure source into BkczPlan.local[], then p10dc_resolve_high_rows
 // immediately unpacks those descriptors to produce row pointers. This helper
-// resolves the direct-table result straight into local_base[]/cross_base and
-// keeps only CROSS depth in plan.meta. Orbit format and depthcode payload stay
-// unchanged.
+// resolves the direct-table result straight into local_base[]/cross_base.
+// The direct context therefore carries only CROSS depth, not a 36-byte BkczPlan.
+// Orbit format and depthcode payload stay unchanged.
+struct P10DCDirectHighResolvedCtx {
+    BucketPhysicalBlock xb{}, jb{}, db{};
+    Count* ip_base = nullptr;
+    Count* jp_base = nullptr;
+    Count* dp_base = nullptr;
+    Count* local_base[BKCZ_MAX_LOCAL]{};
+    Count* cross_base = nullptr;
+    uint32_t n0 = 0, n1 = 0, total = 0, cross_depth = 0;
+    uint8_t local_n = 0, kind = 0, valid = 0, pad = 0;
+};
+static_assert(sizeof(P10DCDirectHighResolvedCtx) < sizeof(P10DCHighResolvedCtx),
+              "direct-resolved context must be smaller than canonical resolved context");
+
+static inline size_t p10dc_direct_warpctx_smem_bytes(int threads) {
+    return size_t((threads + 31) / 32) * sizeof(P10DCDirectHighResolvedCtx);
+}
 
 __device__ __forceinline__ void p10dc_direct_resolve_high_io(
-    P10DCHighResolvedCtx& c,
+    P10DCDirectHighResolvedCtx& c,
     uint32_t ss, uint32_t js, uint32_t ds,
     uint32_t sr, uint32_t jr, uint32_t dr
 ) {
@@ -21,7 +37,7 @@ __device__ __forceinline__ void p10dc_direct_resolve_high_io(
 }
 
 __device__ __forceinline__ bool p10dc_direct_add_high_base(
-    P10DCHighResolvedCtx& c, uint32_t key, uint32_t center, int fixed_hs
+    P10DCDirectHighResolvedCtx& c, uint32_t key, uint32_t center, int fixed_hs
 ) {
     if (fixed_hs < 0 || fixed_hs > LOW_LUT_K + 1 || center > uint32_t(::L)) return false;
     int he = fixed_hs - bkci_delta(center);
@@ -41,7 +57,7 @@ __device__ __forceinline__ bool p10dc_direct_add_high_base(
 }
 
 __device__ __forceinline__ void p10dc_direct_set_high_cross_base(
-    P10DCHighResolvedCtx& c, uint32_t key, uint32_t center, int fixed_hs, uint32_t depth
+    P10DCDirectHighResolvedCtx& c, uint32_t key, uint32_t center, int fixed_hs, uint32_t depth
 ) {
     if (!depth || fixed_hs < 0 || fixed_hs > LOW_LUT_K + 1 || center > uint32_t(::L)) return;
     int he = fixed_hs - bkci_delta(center);
@@ -54,15 +70,15 @@ __device__ __forceinline__ void p10dc_direct_set_high_cross_base(
     BucketPhysicalBlock sb = bkf_high_main(owner, bid);
     if (!sb.valid) return;
     c.cross_base = bkf_ptr(owner, sb.off + Code(bkf_loc_rank(loc)) * sb.cols);
-    c.plan.meta = uint32_t(depth) << BKCZ_META_DEPTH_SHIFT;
+    c.cross_depth = depth;
 }
 
 __device__ __forceinline__ void p10dc_build_high_resolved_delta_direct(
-    P10DCHighResolvedCtx& c, MateID d, int fixed_hs, int p, uint32_t payload
+    P10DCDirectHighResolvedCtx& c, MateID d, int fixed_hs, int p, uint32_t payload
 ) {
-    c.plan = BkczPlan{};
     c.local_n = 0;
     c.cross_base = nullptr;
+    c.cross_depth = 0;
     if (!p10dc_payload_valid(payload) || mpair(d, p) != NN) return;
     constexpr uint64_t MASK = (uint64_t(1) << (2 * HIGH_LUT_K)) - 1ull;
     uint32_t factor = uint32_t((d >> 2) & MASK);
@@ -105,7 +121,7 @@ __device__ __forceinline__ void p10dc_build_high_resolved_delta_direct(
 }
 
 __device__ __forceinline__ void p10dc_prepare_forward_high_delta_direct(
-    P10DCHighResolvedCtx& c, uint32_t payload, uint32_t loc, int p,
+    P10DCDirectHighResolvedCtx& c, uint32_t payload, uint32_t loc, int p,
     uint32_t ss, uint32_t js, uint32_t ds, uint32_t sr, uint32_t jr, uint32_t dr
 ) {
     p10dc_direct_resolve_high_io(c, ss, js, ds, sr, jr, dr);
@@ -116,7 +132,7 @@ __device__ __forceinline__ void p10dc_prepare_forward_high_delta_direct(
 }
 
 __device__ __forceinline__ void p10dc_prepare_reverse_high_delta_direct(
-    P10DCHighResolvedCtx& c, uint32_t payload, uint32_t loc,
+    P10DCDirectHighResolvedCtx& c, uint32_t payload, uint32_t loc,
     const BucketPhysicalBlock& plan_db, int p, bool edge,
     uint32_t ss, uint32_t js, uint32_t ds, uint32_t sr, uint32_t jr, uint32_t dr
 ) {
@@ -130,7 +146,7 @@ __device__ __forceinline__ void p10dc_prepare_reverse_high_delta_direct(
 }
 
 __device__ __forceinline__ Count p10dc_direct_resolved_high_plan_sum_cross5(
-    const P10DCHighResolvedCtx& c, const BucketPhysicalBlock& db, uint32_t lr
+    const P10DCDirectHighResolvedCtx& c, const BucketPhysicalBlock& db, uint32_t lr
 ) {
 #if GPU_DIRECT_PM_ACCUM
     uint64_t sum = 0;
@@ -148,7 +164,7 @@ __device__ __forceinline__ Count p10dc_direct_resolved_high_plan_sum_cross5(
 #endif
         }
     }
-    uint32_t depth = bkcz_plan_cross_depth(c.plan);
+    uint32_t depth = c.cross_depth;
     if (depth) {
         uint32_t dc = D_BKF_LOW_CODES[
             D_BKF_LOW_CODE_OFF[size_t(D_BKF_FIXED_OWNER) * D_BKF_CODE_PITCH + db.hs] + lr];
