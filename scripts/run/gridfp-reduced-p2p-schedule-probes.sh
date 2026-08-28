@@ -28,10 +28,14 @@ worklist_bin="$(build_cpu_probe \
 compiled_bin="$(build_cpu_probe \
   gridfp_reduced_p2p_compiled_schedule_probe \
   src/cpp/probes/gridfp_reduced_production_p2p_compiled_schedule_probe.cpp)"
+packed_bin="$(build_cpu_probe \
+  gridfp_reduced_p2p_packed_schedule_probe \
+  src/cpp/probes/gridfp_reduced_production_p2p_packed_schedule_probe.cpp)"
 
 "$tie_bin" "$MAX_W" "$NGPU_MODEL"
 "$worklist_bin" "$MAX_W" "$NGPU_MODEL"
 "$compiled_bin" "$MAX_W" "$NGPU_MODEL"
+"$packed_bin" "$MAX_W" "$NGPU_MODEL"
 
 if [[ "$RUN_CUDA" == 1 ]]; then
   K=$(((CUDA_W - 2) / 2))
@@ -55,6 +59,11 @@ if [[ "$RUN_CUDA" == 1 ]]; then
     "$(repo_path scripts/build/gridfp-reduced-p2p-schedule-probe.sh)"
   compiled_cuda_bin="$(build_path gridfp_reduced_p2p_compiled)"
   "$compiled_cuda_bin" "$CUDA_W" "$K" "$CUDA_BLOCKS" "$CUDA_NGPU"
+
+  MODE=packed ARCH="$ARCH" \
+    "$(repo_path scripts/build/gridfp-reduced-p2p-schedule-probe.sh)"
+  packed_cuda_bin="$(build_path gridfp_reduced_p2p_packed)"
+  "$packed_cuda_bin" "$CUDA_W" "$K" "$CUDA_BLOCKS" "$CUDA_NGPU"
 fi
 
 echo "ALL_OK local_p2p_schedule_regressions=1"
