@@ -1,13 +1,6 @@
 #pragma once
 
 #include "gridfp_reduced_production_discovery_device.cuh"
-#include "gridfp_reduced_production_runtime_label_unrank.cuh"
-
-// Everything including this header is part of the counter-free runtime path.
-// Redirect only subsequent runtime call sites; legacy owner-component probes
-// were parsed before this macro and keep their original division-based unrank.
-#define owner_component_label_unrank_planned_device \
-    runtime_owner_component_label_unrank_planned_device
 
 namespace oneesan::gridfp::reducedprod {
 
