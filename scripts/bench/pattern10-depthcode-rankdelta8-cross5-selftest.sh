@@ -35,7 +35,7 @@ grep -Eq "bucket-closure-pattern10-depthcode-rankdelta8-cross5-selftest (OK W=$W
 if grep -Fq "OK W=$W" <<<"$out"; then
   grep -Fq 'forward_exact=1 reverse_exact=1 table_exact=1 stream_exact=1' <<<"$out"
   grep -Fq 'chunk_bits=23 prefix_bits=9 block=32' <<<"$out"
-  grep -Fq 'delta_varint=7_or_14_bits' <<<"$out"
+  grep -Fq 'delta_fast8_escape16=1' <<<"$out"
   grep -Fq 'cross_runtime_div=0 cross_runtime_mod=0' <<<"$out"
 fi
 echo "pattern10-depthcode-rankdelta8-cross5-selftest OK W=$W pm=$PM_ACCUM lut=$RANKSTREAM_LUT_LOAD fused16=$RANKCHUNK32_FUSED16 align32=$RANKDELTA8_ALIGN32" >&2
