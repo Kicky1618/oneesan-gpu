@@ -26,6 +26,39 @@ __global__ void verify_logical_views(Code na,Code nb,unsigned long long* errors)
 
 static void ck(cudaError_t e,const char*w){if(e!=cudaSuccess){std::fprintf(stderr,"%s: %s\n",w,cudaGetErrorString(e));std::exit(1);}}
 
+static int physical_owner(const b300_vmm::ContiguousStorage& s,Code g){const size_t byte=size_t(g)*sizeof(Count);for(int d=0;d<s.ngpu;++d)if(byte>=s.offsets[size_t(d)]&&byte<s.offsets[size_t(d)+1])return d;return -1;}
+
+static Code find_logical_physical_mismatch(const b300_vmm::ContiguousStorage& s,Code logical,Code chunk){
+    for(int d=0;d<s.ngpu;++d){
+        const Code lo=Code(d)*chunk;if(lo>=logical)break;const Code hi=std::min<Code>(logical,(Code(d)+1)*chunk);
+        const Code cand[4]={lo,std::min<Code>(hi-1,lo+1),hi-1,lo+(hi-lo)/2};
+        for(Code g:cand)if(g<logical&&physical_owner(s,g)!=d)return g;
+    }
+    for(int p=1;p<s.ngpu;++p){
+        const Code g=Code(s.offsets[size_t(p)]/sizeof(Count));
+        if(g<logical){const int lo=int(g/chunk);if(physical_owner(s,g)!=lo)return g;if(g&&physical_owner(s,g-1)!=int((g-1)/chunk))return g-1;}
+    }
+    return ~Code(0);
+}
+
+static void verify_runtime_memcpy_view(const char* tag,b300_vmm::ContiguousStorage& s,Count* base,Count* const* ptrs,Code logical,Code chunk){
+    const Code g=find_logical_physical_mismatch(s,logical,chunk);
+    if(g==~Code(0)){std::fprintf(stderr,"%s could not find logical/physical shard mismatch for memcpy preflight\n",tag);std::exit(7);}
+    int owner=int(g/chunk);if(owner>=s.ngpu)owner=s.ngpu-1;const Code local=g-Code(owner)*chunk;const int phys=physical_owner(s,g);
+    if(phys<0||phys==owner){std::fprintf(stderr,"%s mismatch selection failed g=%llu logical=%d physical=%d\n",tag,(unsigned long long)g,owner,phys);std::exit(7);}
+    Count* view=ptrs[owner]+local;
+    ck(cudaSetDevice(owner),"memcpy logical-owner set device");
+    const Count marker=0x6a09e667u^Count(g);Count got=0;
+    ck(cudaMemcpy(view,&marker,sizeof(marker),cudaMemcpyHostToDevice),"memcpy host to remote VMM logical view");
+    ck(cudaMemcpy(&got,view,sizeof(got),cudaMemcpyDeviceToHost),"memcpy remote VMM logical view to host");
+    if(got!=marker){std::fprintf(stderr,"%s runtime memcpy mismatch got=%u expected=%u\n",tag,got,marker);std::exit(7);}
+    const Count restore=Count((g*2654435761ULL+0x9e3779b9ULL)&0xffffffffu);
+    ck(cudaMemcpy(view,&restore,sizeof(restore),cudaMemcpyHostToDevice),"restore remote VMM logical view");
+    Count direct=0;ck(cudaMemcpy(&direct,base+g,sizeof(direct),cudaMemcpyDeviceToHost),"verify restored direct VMM value");
+    if(direct!=restore){std::fprintf(stderr,"%s restore mismatch\n",tag);std::exit(7);}
+    std::fprintf(stderr,"%s logical-view memcpy: g=%llu logical_owner=%d physical_owner=%d remote_physical=1 OK\n",tag,(unsigned long long)g,owner,phys);
+}
+
 int main(int argc,char**argv){
     const int ng=argc>1?std::atoi(argv[1]):8;
     const Code elems=argc>2?std::strtoull(argv[2],nullptr,10):8388731ULL;
@@ -62,6 +95,9 @@ int main(int argc,char**argv){
         ck(cudaMemcpyToSymbol(D_HELPER_NGPU,&ng,sizeof(ng)),"copy logical ngpu");
     }
 
+    verify_runtime_memcpy_view("helper-a",a,abase,ap,elems,mc);
+    verify_runtime_memcpy_view("helper-b",b,bbase,bp,elems_b,bc);
+
     unsigned long long total_errors=0;
     for(int d=0;d<ng;++d){
         ck(cudaSetDevice(d),"verify set device");unsigned long long* err=nullptr;ck(cudaMalloc(&err,sizeof(*err)),"err alloc");ck(cudaMemset(err,0,sizeof(*err)),"err zero");
@@ -74,6 +110,6 @@ int main(int argc,char**argv){
     if(max_combined-min_combined>a.granularity){std::fprintf(stderr,"combined physical imbalance too large\n");return 5;}
     if(total_errors){std::fprintf(stderr,"VMM helper verification errors=%llu\n",total_errors);return 6;}
 
-    std::printf("gridfp-b300-vmm-storage-helper-microprobe OK gpus=%d elems_a=%llu elems_b=%llu granularity=%zu padding_a=%zu padding_b=%zu combined_imbalance=%zu direct_base_index=1 logical_shard_views=1 logical_shard_gpu_access=OK physical_boundary_independent=1 all_gpu_read=OK exact=OK\n",ng,(unsigned long long)elems,(unsigned long long)elems_b,a.granularity,a.mapped_bytes-a.logical_bytes,b.mapped_bytes-b.logical_bytes,max_combined-min_combined);
+    std::printf("gridfp-b300-vmm-storage-helper-microprobe OK gpus=%d elems_a=%llu elems_b=%llu granularity=%zu padding_a=%zu padding_b=%zu combined_imbalance=%zu direct_base_index=1 logical_shard_views=1 logical_shard_gpu_access=OK runtime_memcpy_logical_view=OK logical_physical_mismatch_tested=1 physical_boundary_independent=1 all_gpu_read=OK exact=OK\n",ng,(unsigned long long)elems,(unsigned long long)elems_b,a.granularity,a.mapped_bytes-a.logical_bytes,b.mapped_bytes-b.logical_bytes,max_combined-min_combined);
     a.destroy();b.destroy();return 0;
 }
