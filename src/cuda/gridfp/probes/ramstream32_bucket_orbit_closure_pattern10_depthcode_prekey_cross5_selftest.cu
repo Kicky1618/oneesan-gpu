@@ -6,9 +6,68 @@
 
 #include "../ramstream32_bucket_orbit_closure_pattern10_depthcode_warpstriped_delta_direct_affine_prekey_cross5.cuh"
 
+static std::array<uint8_t, BUCKET_NGPU> P10DC_PREKEY_TABLE_VERIFIED{};
+
+static void p10dc_verify_compact_prekey_table(
+    const BucketFusedHost& bf, const BucketFusedDirectHighRowsPrekeyTables& dt, uint32_t fixed
+) {
+    if (P10DC_PREKEY_TABLE_VERIFIED[fixed]) return;
+    constexpr size_t P = size_t(MAXW + 2);
+    const size_t owner_base = size_t(fixed) * P;
+    const uint32_t owner_begin = bf.low_code_off[owner_base];
+    const uint32_t owner_end = fixed + 1u < BUCKET_NGPU
+        ? bf.low_code_off[size_t(fixed + 1u) * P]
+        : uint32_t(bf.low_codes.size());
+    const size_t expected_count = size_t(owner_end - owner_begin);
+    if (dt.low_prekey_count != expected_count) {
+        std::cerr << "p10dc compact prekey count mismatch owner=" << fixed
+                  << " got=" << dt.low_prekey_count << " expected=" << expected_count << '\n';
+        std::exit(625);
+    }
+
+    std::vector<uint32_t> got(expected_count);
+    if (!got.empty())
+        ck(cudaMemcpy(got.data(), dt.low_prekey, got.size() * sizeof(uint32_t), cudaMemcpyDeviceToHost),
+           "p10dc compact prekey verify D2H");
+    std::array<uint32_t, MAXW + 2> got_hoff{};
+    ck(cudaMemcpyFromSymbol(got_hoff.data(), D_P10DC_LOW_PREKEY_HOFF,
+                            got_hoff.size() * sizeof(uint32_t)),
+       "p10dc compact prekey verify height offsets");
+
+    size_t pos = 0;
+    for (uint32_t h = 0; h < uint32_t(MAXW + 2); ++h) {
+        if (got_hoff[h] != pos) {
+            std::cerr << "p10dc compact prekey height offset mismatch owner=" << fixed
+                      << " h=" << h << " got=" << got_hoff[h] << " expected=" << pos << '\n';
+            std::exit(626);
+        }
+        uint32_t a = bf.low_code_off[owner_base + h];
+        uint32_t b = h + 1u < uint32_t(MAXW + 2)
+            ? bf.low_code_off[owner_base + h + 1u]
+            : owner_end;
+        for (uint32_t i = a; i < b; ++i, ++pos) {
+            uint32_t expected = gpu_direct_ternary_key_host(bf.low_codes[i], LOW_LUT_K);
+            if (pos >= got.size() || got[pos] != expected) {
+                std::cerr << "p10dc compact prekey value mismatch owner=" << fixed
+                          << " h=" << h << " rank=" << (i - a)
+                          << " got=" << (pos < got.size() ? got[pos] : 0xffffffffu)
+                          << " expected=" << expected << '\n';
+                std::exit(627);
+            }
+        }
+    }
+    if (pos != got.size()) {
+        std::cerr << "p10dc compact prekey verify size mismatch owner=" << fixed
+                  << " walked=" << pos << " stored=" << got.size() << '\n';
+        std::exit(628);
+    }
+    P10DC_PREKEY_TABLE_VERIFIED[fixed] = 1;
+}
+
 static void p10dc_prekey_run_high(
     BucketHostGrid& g, const StorageLayout& layout, const BucketPhysicalLayoutHost& phy,
-    BucketFusedDirectHighRowsPrekeyTables& dt, bool rev, bool prekey
+    const BucketFusedHost& bf, BucketFusedDirectHighRowsPrekeyTables& dt,
+    bool rev, bool prekey
 ) {
     constexpr int threads = 256, gx = 4, gy = 4;
     dim3 block(threads), grid(gx, gy, unsigned(layout.main_blocks.size()));
@@ -22,6 +81,7 @@ static void p10dc_prekey_run_high(
                                "p10dc prekey high H2D");
         }
         dt.bind_owner(fixed, phy, d);
+        p10dc_verify_compact_prekey_table(bf, dt, fixed);
         if (!rev) {
             for (int p = TARGET_W - 1; p >= LOW_LUT_K + 1; --p) {
                 if (prekey)
@@ -103,24 +163,28 @@ int main() {
     p10dc_install_cross5_lut();
 
     auto g0 = bkft_make_grid(ms, bs, im, ib, storage, layout, owner, phy);
-    p10dc_prekey_run_high(g0, layout, phy, dt, false, false);
+    p10dc_prekey_run_high(g0, layout, phy, bf, dt, false, false);
     if (!bkft_compare("pattern10-depthcode-forward-high-resolved-prekey-control", g0, ms, bs, fhm, fhb, storage, layout, owner, phy)) return 50;
     auto g1 = bkft_make_grid(ms, bs, im, ib, storage, layout, owner, phy);
-    p10dc_prekey_run_high(g1, layout, phy, dt, false, true);
+    p10dc_prekey_run_high(g1, layout, phy, bf, dt, false, true);
     if (!bkft_compare("pattern10-depthcode-forward-high-prekey-cross5", g1, ms, bs, fhm, fhb, storage, layout, owner, phy)) return 51;
 
     auto g2 = bkft_make_grid(ms, bs, im, ib, storage, layout, owner, phy);
-    p10dc_prekey_run_high(g2, layout, phy, dt, true, false);
+    p10dc_prekey_run_high(g2, layout, phy, bf, dt, true, false);
     if (!bkft_compare("pattern10-depthcode-reverse-high-resolved-prekey-control", g2, ms, bs, rhm, rhb, storage, layout, owner, phy)) return 52;
     auto g3 = bkft_make_grid(ms, bs, im, ib, storage, layout, owner, phy);
-    p10dc_prekey_run_high(g3, layout, phy, dt, true, true);
+    p10dc_prekey_run_high(g3, layout, phy, bf, dt, true, true);
     if (!bkft_compare("pattern10-depthcode-reverse-high-prekey-cross5", g3, ms, bs, rhm, rhb, storage, layout, owner, phy)) return 53;
 
+    for (uint32_t g = 0; g < BUCKET_NGPU; ++g)
+        if (!P10DC_PREKEY_TABLE_VERIFIED[g]) return 54;
     rdt.release(); fdt.release(); dt.release();
     std::cout << "bucket-closure-pattern10-depthcode-prekey-cross5-selftest OK W=" << W
               << " control=resolved experiment=warpstriped_delta_direct_affine_prekey_cross5"
               << " forward_exact=1 reverse_exact=1 prekey_bytes_per_low_code=4"
-              << " cross_runtime_ternary_fold=0 affine_base_storage=constant"
+              << " prekey_scope=fixed_owner prekey_table_exact=1"
+              << " cross_runtime_ternary_fold=0 hot_code_load=0 hot_code_off_load=0"
+              << " fallback_structurally_unreachable=1 affine_base_storage=constant"
               << " cross5_table_bytes=6561 pm_accum=" << GPU_DIRECT_PM_ACCUM << '\n';
     return 0;
 }
