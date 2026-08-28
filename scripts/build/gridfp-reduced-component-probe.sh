@@ -7,6 +7,7 @@ ARCH="${ARCH:-native}"
 PTXAS_VERBOSE="${PTXAS_VERBOSE:-1}"
 RUNTIME_CACHE_EDGES="${RUNTIME_CACHE_EDGES:-1}"
 RUNTIME_FAST_P32M5_MOD="${RUNTIME_FAST_P32M5_MOD:-1}"
+RUNTIME_POLL_GLOBAL_ERROR="${RUNTIME_POLL_GLOBAL_ERROR:-0}"
 
 if [[ "$RUNTIME_CACHE_EDGES" != 0 && "$RUNTIME_CACHE_EDGES" != 1 ]]; then
   echo "RUNTIME_CACHE_EDGES must be 0 or 1" >&2
@@ -14,6 +15,10 @@ if [[ "$RUNTIME_CACHE_EDGES" != 0 && "$RUNTIME_CACHE_EDGES" != 1 ]]; then
 fi
 if [[ "$RUNTIME_FAST_P32M5_MOD" != 0 && "$RUNTIME_FAST_P32M5_MOD" != 1 ]]; then
   echo "RUNTIME_FAST_P32M5_MOD must be 0 or 1" >&2
+  exit 2
+fi
+if [[ "$RUNTIME_POLL_GLOBAL_ERROR" != 0 && "$RUNTIME_POLL_GLOBAL_ERROR" != 1 ]]; then
+  echo "RUNTIME_POLL_GLOBAL_ERROR must be 0 or 1" >&2
   exit 2
 fi
 
@@ -89,6 +94,9 @@ fi
 if [[ "$MODE" == two-row-runtime-multigpu && "$RUNTIME_FAST_P32M5_MOD" == 0 ]]; then
   DEFAULT_OUT="${DEFAULT_OUT}_slowmod"
 fi
+if [[ "$MODE" == two-row-runtime-multigpu && "$RUNTIME_POLL_GLOBAL_ERROR" == 1 ]]; then
+  DEFAULT_OUT="${DEFAULT_OUT}_errorpoll"
+fi
 OUT="$(build_path "${OUT:-$DEFAULT_OUT}")"
 PTXAS_FLAGS=()
 if [[ "$PTXAS_VERBOSE" == 1 ]]; then PTXAS_FLAGS+=("-Xptxas=-v"); fi
@@ -97,6 +105,7 @@ TMPDIR="$ONEESAN_TMP_DIR" nvcc -O3 -std=c++17 -lineinfo -arch="$ARCH" \
   "${PTXAS_FLAGS[@]}" \
   -DRP_RUNTIME_CACHE_EDGES="$RUNTIME_CACHE_EDGES" \
   -DRP_RUNTIME_FAST_P32M5_MOD="$RUNTIME_FAST_P32M5_MOD" \
+  -DRP_RUNTIME_POLL_GLOBAL_ERROR="$RUNTIME_POLL_GLOBAL_ERROR" \
   "$SRC" -o "$OUT"
 
-echo "built $OUT (mode=$MODE arch=$ARCH runtime_cache_edges=$RUNTIME_CACHE_EDGES runtime_fast_p32m5_mod=$RUNTIME_FAST_P32M5_MOD)"
+echo "built $OUT (mode=$MODE arch=$ARCH runtime_cache_edges=$RUNTIME_CACHE_EDGES runtime_fast_p32m5_mod=$RUNTIME_FAST_P32M5_MOD runtime_poll_global_error=$RUNTIME_POLL_GLOBAL_ERROR)"
