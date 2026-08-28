@@ -10,27 +10,21 @@ RUNTIME_FAST_P32M5_MOD="${RUNTIME_FAST_P32M5_MOD:-1}"
 RUNTIME_POLL_GLOBAL_ERROR="${RUNTIME_POLL_GLOBAL_ERROR:-0}"
 RUNTIME_PACK_SHARED_KEYS="${RUNTIME_PACK_SHARED_KEYS:-1}"
 RUNTIME_FAST_DIV64="${RUNTIME_FAST_DIV64:-1}"
+RUNTIME_PRIMITIVE_RANK_SETBITS="${RUNTIME_PRIMITIVE_RANK_SETBITS:-1}"
 
-if [[ "$RUNTIME_CACHE_EDGES" != 0 && "$RUNTIME_CACHE_EDGES" != 1 ]]; then
-  echo "RUNTIME_CACHE_EDGES must be 0 or 1" >&2
-  exit 2
-fi
-if [[ "$RUNTIME_FAST_P32M5_MOD" != 0 && "$RUNTIME_FAST_P32M5_MOD" != 1 ]]; then
-  echo "RUNTIME_FAST_P32M5_MOD must be 0 or 1" >&2
-  exit 2
-fi
-if [[ "$RUNTIME_POLL_GLOBAL_ERROR" != 0 && "$RUNTIME_POLL_GLOBAL_ERROR" != 1 ]]; then
-  echo "RUNTIME_POLL_GLOBAL_ERROR must be 0 or 1" >&2
-  exit 2
-fi
-if [[ "$RUNTIME_PACK_SHARED_KEYS" != 0 && "$RUNTIME_PACK_SHARED_KEYS" != 1 ]]; then
-  echo "RUNTIME_PACK_SHARED_KEYS must be 0 or 1" >&2
-  exit 2
-fi
-if [[ "$RUNTIME_FAST_DIV64" != 0 && "$RUNTIME_FAST_DIV64" != 1 ]]; then
-  echo "RUNTIME_FAST_DIV64 must be 0 or 1" >&2
-  exit 2
-fi
+for name in \
+  RUNTIME_CACHE_EDGES \
+  RUNTIME_FAST_P32M5_MOD \
+  RUNTIME_POLL_GLOBAL_ERROR \
+  RUNTIME_PACK_SHARED_KEYS \
+  RUNTIME_FAST_DIV64 \
+  RUNTIME_PRIMITIVE_RANK_SETBITS; do
+  value="${!name}"
+  if [[ "$value" != 0 && "$value" != 1 ]]; then
+    echo "$name must be 0 or 1" >&2
+    exit 2
+  fi
+done
 
 case "$MODE" in
   forward)
@@ -113,6 +107,9 @@ fi
 if [[ "$MODE" == two-row-runtime-multigpu && "$RUNTIME_FAST_DIV64" == 0 ]]; then
   DEFAULT_OUT="${DEFAULT_OUT}_slowdiv64"
 fi
+if [[ "$MODE" == two-row-runtime-multigpu && "$RUNTIME_PRIMITIVE_RANK_SETBITS" == 0 ]]; then
+  DEFAULT_OUT="${DEFAULT_OUT}_fullscanpr"
+fi
 OUT="$(build_path "${OUT:-$DEFAULT_OUT}")"
 PTXAS_FLAGS=()
 if [[ "$PTXAS_VERBOSE" == 1 ]]; then PTXAS_FLAGS+=("-Xptxas=-v"); fi
@@ -124,6 +121,7 @@ TMPDIR="$ONEESAN_TMP_DIR" nvcc -O3 -std=c++17 -lineinfo -arch="$ARCH" \
   -DRP_RUNTIME_POLL_GLOBAL_ERROR="$RUNTIME_POLL_GLOBAL_ERROR" \
   -DRP_RUNTIME_PACK_SHARED_KEYS="$RUNTIME_PACK_SHARED_KEYS" \
   -DRP_RUNTIME_FAST_DIV64="$RUNTIME_FAST_DIV64" \
+  -DRP_RUNTIME_PRIMITIVE_RANK_SETBITS="$RUNTIME_PRIMITIVE_RANK_SETBITS" \
   "$SRC" -o "$OUT"
 
-echo "built $OUT (mode=$MODE arch=$ARCH runtime_cache_edges=$RUNTIME_CACHE_EDGES runtime_fast_p32m5_mod=$RUNTIME_FAST_P32M5_MOD runtime_poll_global_error=$RUNTIME_POLL_GLOBAL_ERROR runtime_pack_shared_keys=$RUNTIME_PACK_SHARED_KEYS runtime_fast_div64=$RUNTIME_FAST_DIV64)"
+echo "built $OUT (mode=$MODE arch=$ARCH runtime_cache_edges=$RUNTIME_CACHE_EDGES runtime_fast_p32m5_mod=$RUNTIME_FAST_P32M5_MOD runtime_poll_global_error=$RUNTIME_POLL_GLOBAL_ERROR runtime_pack_shared_keys=$RUNTIME_PACK_SHARED_KEYS runtime_fast_div64=$RUNTIME_FAST_DIV64 runtime_primitive_rank_setbits=$RUNTIME_PRIMITIVE_RANK_SETBITS)"
