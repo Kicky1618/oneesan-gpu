@@ -26,7 +26,7 @@ PTXAS_VERBOSE="${PTXAS_VERBOSE:-0}"
 if (( LOW_LUT_K <= 0 || HIGH_LUT_K <= 0 || LOW_LUT_K + HIGH_LUT_K + 1 != W )); then echo "invalid factor split" >&2; exit 2; fi
 if (( LOW_LUT_K > 14 || HIGH_LUT_K > 14 )); then echo "pattern10 depthcode requires half widths <=14" >&2; exit 2; fi
 case "$HIGH_CTX" in
-  thread|resolved|resolved_delta|warp|warpstriped|warpstriped_delta|warpstriped_delta_cross5|warpstriped_delta_direct_cross5|warpstriped_delta_direct_affine_cross5|warpstriped_delta_direct_affine_prekey_cross5|warpstriped_delta_direct_affine_prekey_rank16_cross5|warpstriped_delta_direct_affine_prekey_rankstream_cross5|warpstriped_delta_direct_affine_rankstream32_cross5|warpstriped_delta_direct_affine_rankchunk32_cross5|warpstriped_delta_direct_affine_rankchunk32_basepair64_cross5|warpstriped_delta_direct_affine_rankdelta8_cross5) ;;
+  thread|resolved|resolved_delta|warp|warpstriped|warpstriped_delta|warpstriped_delta_cross5|warpstriped_delta_direct_cross5|warpstriped_delta_direct_affine_cross5|warpstriped_delta_direct_affine_prekey_cross5|warpstriped_delta_direct_affine_prekey_rank16_cross5|warpstriped_delta_direct_affine_prekey_rankstream_cross5|warpstriped_delta_direct_affine_rankstream32_cross5|warpstriped_delta_direct_affine_rankchunk32_cross5|warpstriped_delta_direct_affine_rankchunk32_basepair64_cross5|warpstriped_delta_direct_affine_rankdelta8_cross5|warpstriped_delta_direct_affine_rankformula_cross5) ;;
   *) echo "invalid HIGH_CTX=$HIGH_CTX" >&2; exit 2;;
 esac
 case "$DEPTHCODE_DECODE_LOAD" in global|ldg) ;; *) echo "DEPTHCODE_DECODE_LOAD must be global or ldg" >&2; exit 2;; esac
@@ -35,6 +35,10 @@ if [[ "$HIGH_CTX" == warpstriped_delta_direct_affine_rankchunk32_basepair64_cros
   RANKCHUNK32_BYTEPACK=1
   RANKCHUNK32_BLOCK64=0
   [[ -z "$RANKCHUNK32_ALIGN32_EXPLICIT" ]] && RANKCHUNK32_ALIGN32=1
+fi
+if [[ "$HIGH_CTX" == warpstriped_delta_direct_affine_rankformula_cross5 ]]; then
+  RANKCHUNK32_BYTEPACK=0
+  RANKCHUNK32_BLOCK64=0
 fi
 for x in RANKCHUNK32_ONESHFL RANKCHUNK32_FUSED16 RANKCHUNK32_BYTEPACK RANKCHUNK32_ALIGN32 RANKCHUNK32_BLOCK64 RANKDELTA8_ALIGN32 RANKDELTA8_FUSED13 PM_ACCUM TERNARY_KEY4 PTXAS_VERBOSE; do
   v="${!x}"
@@ -58,6 +62,7 @@ base="oneesan_cuda_gridfp_b300_bucket_snake_onepass_pattern10_depthcode"
 [[ "$HIGH_CTX" == warpstriped_delta_direct_affine_rankchunk32_cross5 ]] && base="${base}_warpstriped_delta_direct_affine_rankchunk32_cross5"
 [[ "$HIGH_CTX" == warpstriped_delta_direct_affine_rankchunk32_basepair64_cross5 ]] && base="${base}_warpstriped_delta_direct_affine_rankchunk32_basepair64_cross5"
 [[ "$HIGH_CTX" == warpstriped_delta_direct_affine_rankdelta8_cross5 ]] && base="${base}_warpstriped_delta_direct_affine_rankdelta8_cross5"
+[[ "$HIGH_CTX" == warpstriped_delta_direct_affine_rankformula_cross5 ]] && base="${base}_warpstriped_delta_direct_affine_rankformula_cross5"
 case "$TRANSPOSE_MODE" in
   sync) SRC_NAME="${base}_graph_batch.cu" ;;
   events) SRC_NAME="${base}_graph_batch_events.cu" ;;
@@ -78,6 +83,8 @@ SUFFIX="_payload_${HIGH_CTX}_${TRANSPOSE_MODE}"
 [[ "$RANKCHUNK32_ONESHFL" == 0 ]] && SUFFIX="${SUFFIX}_rankchunk2shfl"
 if [[ "$HIGH_CTX" == warpstriped_delta_direct_affine_rankdelta8_cross5 ]]; then
   [[ "$RANKDELTA8_FUSED13" == 1 ]] && SUFFIX="${SUFFIX}_rankdeltafused13"
+elif [[ "$HIGH_CTX" == warpstriped_delta_direct_affine_rankformula_cross5 ]]; then
+  [[ "$RANKDELTA8_FUSED13" == 1 ]] && SUFFIX="${SUFFIX}_rankformulafused13"
 else
   [[ "$RANKCHUNK32_FUSED16" == 1 ]] && SUFFIX="${SUFFIX}_rankchunkfused16"
 fi
