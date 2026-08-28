@@ -14,6 +14,9 @@
 #ifndef RP_RUNTIME_TURN_DIRECT_COMPRESS_INVERSE
 #define RP_RUNTIME_TURN_DIRECT_COMPRESS_INVERSE 1
 #endif
+#ifndef RP_RUNTIME_TURN_DIRECT_HIGH_COMPRESS_STEP
+#define RP_RUNTIME_TURN_DIRECT_HIGH_COMPRESS_STEP 1
+#endif
 static_assert(RP_RUNTIME_TURN_LOCAL_SECTOR_TABLE == 0 ||
               RP_RUNTIME_TURN_LOCAL_SECTOR_TABLE == 1,
               "RP_RUNTIME_TURN_LOCAL_SECTOR_TABLE must be 0 or 1");
@@ -26,6 +29,9 @@ static_assert(RP_RUNTIME_TURN_DISCOVERY_NONN_SCAN == 0 ||
 static_assert(RP_RUNTIME_TURN_DIRECT_COMPRESS_INVERSE == 0 ||
               RP_RUNTIME_TURN_DIRECT_COMPRESS_INVERSE == 1,
               "RP_RUNTIME_TURN_DIRECT_COMPRESS_INVERSE must be 0 or 1");
+static_assert(RP_RUNTIME_TURN_DIRECT_HIGH_COMPRESS_STEP == 0 ||
+              RP_RUNTIME_TURN_DIRECT_HIGH_COMPRESS_STEP == 1,
+              "RP_RUNTIME_TURN_DIRECT_HIGH_COMPRESS_STEP must be 0 or 1");
 
 namespace oneesan::gridfp::reducedprod {
 
@@ -282,6 +288,17 @@ __device__ __forceinline__ bool runtime_turn_step(
         if (src.blocked) return false;
         return runtime_small_step(src, W, W - 1, false, z);
     }
+#if RP_RUNTIME_TURN_DIRECT_HIGH_COMPRESS_STEP
+    if (!src.blocked) {
+        if (!runtime_small_add(z, src, 1)) return false;
+        const IncludeResult x = include_horizontal_reverse(src.mate, W, W - 1);
+        if (!x.valid) return true;
+        if (x.blocked) return false;
+        return runtime_small_add(z, DeviceKey{x.mate, 0}, 1);
+    }
+    return runtime_small_add(
+        z, DeviceKey{blocked_exclude_reverse(src.mate, W, W - 1), 0}, 1);
+#else
     RuntimeSmallTerms tmp;
     if (!runtime_turn_compress_low_step(mirror_key_device(src, W), W, tmp))
         return false;
@@ -291,6 +308,7 @@ __device__ __forceinline__ bool runtime_turn_step(
             return false;
     }
     return true;
+#endif
 }
 
 template<class Sink>
