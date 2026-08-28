@@ -1,7 +1,16 @@
 #pragma once
 
+// rankstream32 supplies the sparse-rank CROSS5 executor itself.  Build the
+// shared direct/affine resolver without the ordinary CROSS5 LUT so the binary
+// does not carry two independent 6.5 KiB automata.
+#define P10DC_DIRECT_RESOLVED_NO_CROSS5 1
 #include "ramstream32_bucket_closure_pattern10_depthcode_delta_direct_affine.cuh"
+#undef P10DC_DIRECT_RESOLVED_NO_CROSS5
 #include "ramstream32_bucket_closure_cross5_rankstream32.cuh"
+
+#ifdef P10DC_CROSS5_ORDINARY_LUT_DEFINED
+#error "rankstream32 CROSS5 variant must not pull in the ordinary CROSS5 device LUT"
+#endif
 
 __device__ __forceinline__ Count p10dc_direct_resolved_high_plan_sum_cross5_rankstream32(
     const P10DCDirectHighResolvedCtx& c, const BucketPhysicalBlock& db, uint32_t lr
