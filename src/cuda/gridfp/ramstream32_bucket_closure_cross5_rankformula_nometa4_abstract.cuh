@@ -1,6 +1,7 @@
 #pragma once
 
 #include "ramstream32_bucket_closure_cross5_rankformula_nometa4.cuh"
+#include "ramstream32_bucket_low_rankformula_nometa_warpshare.cuh"
 
 static constexpr uint32_t P10DC_RANKFORMULA_ABSTRACT_MAX_K = 14u;
 static constexpr uint32_t P10DC_RANKFORMULA_ABSTRACT_DESC_N = 7060u;
@@ -121,7 +122,7 @@ p10dc_resolved_low_preimages_cross5_rankformula_nometa4_abstract_fixed(
 ) {
     if (!depth) return BkczCrossAccum(0);
     const P10DCRankFormulaNometa4Resolved z =
-        p10dc_low_rankformula_nometa4_resolve(h, rank);
+        p10dc_low_rankformula_nometa_resolve_active(h, rank);
     const uint32_t local = rank - z.start;
     const uint32_t di = uint32_t(D_P10DC_RANKFORMULA_ABSTRACT_OFF[z.n * 16u + h]) + local;
     const uint32_t d = p10dc_rankformula_abstract_desc_load(di);
