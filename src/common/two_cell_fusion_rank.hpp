@@ -46,14 +46,50 @@ ONEESAN_TC_FUSE_HD Rank fusion_block_size(
     return z;
 }
 
+// Invert stationary_c_support(canonical, active). The canonical bit zero is the
+// normalized distinguished strand; bits 1..active restore old 0..active-1 and
+// the physical active bit itself is occupied.
+ONEESAN_TC_FUSE_HD std::uint32_t stationary_c_support_from_canonical(
+    std::uint32_t canonical,
+    int active
+) {
+    const std::uint32_t hi = canonical & ~low_mask(active + 1);
+    const std::uint32_t lo = (canonical >> 1) & low_mask(active);
+    return hi | (std::uint32_t(1) << active) | lo;
+}
+
+ONEESAN_TC_FUSE_HD std::uint32_t stationary_c_rebase_support(
+    std::uint32_t support,
+    int from_active,
+    int to_active
+) {
+    if (from_active == to_active) return support;
+    const std::uint32_t canonical = stationary_c_support(support, from_active);
+    return stationary_c_support_from_canonical(canonical, to_active);
+}
+
+// Extract the outer-mask invariant of a fused segment while viewing a C state
+// at an arbitrary active position inside that segment. C is first rebased to
+// the source Q_start representation, where support[start]=1.
+ONEESAN_TC_FUSE_HD std::uint32_t fusion_outer_mask_at(
+    PackedKey key,
+    int start,
+    int steps,
+    int active
+) {
+    if (key.type == 0)
+        return remove_support_window(key.support, start, steps + 2);
+    const std::uint32_t support = stationary_c_rebase_support(
+        key.support, active, start);
+    return remove_support_window(support, start, steps + 1);
+}
+
 ONEESAN_TC_FUSE_HD std::uint32_t fusion_outer_mask(
     PackedKey key,
     int start,
     int steps
 ) {
-    return key.type == 0
-        ? remove_support_window(key.support, start, steps + 2)
-        : remove_support_window(key.support, start, steps + 1);
+    return fusion_outer_mask_at(key, start, steps, start);
 }
 
 ONEESAN_TC_FUSE_HD Rank fusion_A_prefix(
@@ -93,13 +129,11 @@ ONEESAN_TC_FUSE_HD Rank fusion_C_prefix(
     return base;
 }
 
-// Rank a state inside the union component of K_start ... K_{start+steps-1}.
-// The caller may supply an already-computed primitive rank. Source Q_start has
-// C support[start]=1, which is the fixed distinguished local C bit.
-ONEESAN_TC_FUSE_HD Rank fusion_local_rank_with_primitive(
+ONEESAN_TC_FUSE_HD Rank fusion_local_rank_at_with_primitive(
     PackedKey key,
     int start,
     int steps,
+    int active,
     int outer_ones,
     Rank primitive,
     const RankTables& t
@@ -109,9 +143,40 @@ ONEESAN_TC_FUSE_HD Rank fusion_local_rank_with_primitive(
             (key.support >> start) & low_mask(steps + 2);
         return fusion_A_prefix(steps, outer_ones, code, t) + primitive;
     }
+    const std::uint32_t support = stationary_c_rebase_support(
+        key.support, active, start);
     const std::uint32_t code =
-        (key.support >> (start + 1)) & low_mask(steps);
+        (support >> (start + 1)) & low_mask(steps);
     return fusion_C_prefix(steps, outer_ones, code, t) + primitive;
+}
+
+// Rank a state inside the union component of K_start ... K_{start+steps-1}.
+// Source Q_start is the reference representation of the stationary coordinate.
+ONEESAN_TC_FUSE_HD Rank fusion_local_rank_with_primitive(
+    PackedKey key,
+    int start,
+    int steps,
+    int outer_ones,
+    Rank primitive,
+    const RankTables& t
+) {
+    return fusion_local_rank_at_with_primitive(
+        key, start, steps, start, outer_ones, primitive, t);
+}
+
+ONEESAN_TC_FUSE_HD Rank fusion_local_rank_at(
+    PackedKey key,
+    int W,
+    int start,
+    int steps,
+    int active,
+    int outer_ones,
+    const RankTables& t
+) {
+    const int len = key.type ? W - 2 : W - 1;
+    return fusion_local_rank_at_with_primitive(
+        key, start, steps, active, outer_ones,
+        primitive_rank(key.support, key.left, len, t), t);
 }
 
 ONEESAN_TC_FUSE_HD Rank fusion_local_rank(
@@ -122,10 +187,7 @@ ONEESAN_TC_FUSE_HD Rank fusion_local_rank(
     int outer_ones,
     const RankTables& t
 ) {
-    const int len = key.type ? W - 2 : W - 1;
-    return fusion_local_rank_with_primitive(
-        key, start, steps, outer_ones,
-        primitive_rank(key.support, key.left, len, t), t);
+    return fusion_local_rank_at(key, W, start, steps, start, outer_ones, t);
 }
 
 // Construct the support mask for one block-local A sector.
