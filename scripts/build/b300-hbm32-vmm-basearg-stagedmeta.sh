@@ -3,7 +3,7 @@ set -euo pipefail
 source "$(dirname -- "${BASH_SOURCE[0]}")/../lib/common.sh"
 N="${N:-27}"
 [[ "$N" == 27 ]] || { echo "b300-hbm32-vmm-basearg-stagedmeta.sh is specialized for n=27 / W=28" >&2; exit 2; }
-W=$((N+1));NVCC="${NVCC:-nvcc}";ARCH="${ARCH:-native}";LOW_LUT_K="${LOW_LUT_K:-13}";HIGH_LUT_K="${HIGH_LUT_K:-13}"
+W=$((N+1));NVCC="${NVCC:-nvcc}";ARCH="${ARCH:-native}";LOW_LUT_K="${LOW_LUT_K:-13}";HIGH_LUT_K="${HIGH_LUT_K:-13}";B300_STAGED_META_MAX_MIB="${B300_STAGED_META_MAX_MIB:-512}"
 SRC="$(repo_path "${SRC:-src/cuda/b300/oneesan_cuda_gridfp_b300_hbm32_fullmate_dropN.cu}")"
 GEN="$ONEESAN_ROOT/scripts/build/gen-b300-vmm-production.py"
 PRUNE="$ONEESAN_ROOT/scripts/build/prune-b300-vmm-stale-shard-symbols.py"
@@ -33,3 +33,4 @@ echo "  group_meta_bytes=13936"
 echo "  staged_h2d_once=1"
 echo "  per_group_meta_copy=D2D_sync"
 echo "  host_meta_rebuild_per_group=0"
+echo "  staged_meta_max_mib=$B300_STAGED_META_MAX_MIB"
