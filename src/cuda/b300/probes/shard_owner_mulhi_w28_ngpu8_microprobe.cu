@@ -15,8 +15,8 @@
 #ifndef B300_SHARD_OWNER_MODE
 #define B300_SHARD_OWNER_MODE 0
 #endif
-static_assert(B300_SHARD_OWNER_MODE >= 0 && B300_SHARD_OWNER_MODE <= 3,
-              "B300_SHARD_OWNER_MODE must be 0..3");
+static_assert(B300_SHARD_OWNER_MODE >= 0 && B300_SHARD_OWNER_MODE <= 4,
+              "B300_SHARD_OWNER_MODE must be 0..4");
 
 namespace {
 
@@ -24,6 +24,8 @@ static constexpr Code MAIN_TOTAL = 385719506620ULL;
 static constexpr Code MAIN_CHUNK = 48214938328ULL;
 static constexpr Code MAIN_MAGIC = 195888106327ULL;
 static constexpr unsigned MAIN_HIGH_SHIFT = 9;
+static constexpr std::uint32_t MAIN_MAGIC_LO = 2614578007u;
+static constexpr std::uint32_t MAIN_MAGIC_HI = 45u;
 
 __device__ __constant__ Code MAIN_BASE[8] = {
     0ULL,
@@ -40,6 +42,31 @@ __device__ __forceinline__ int mulhi_owner(Code g) {
     return int(__umul64hi(g, MAIN_MAGIC) >> MAIN_HIGH_SHIFT);
 }
 
+__device__ __forceinline__ Code masked_base(int owner) {
+    const Code u = Code(unsigned(owner));
+    const Code b0 = (Code(0) - (u & 1ULL)) & MAIN_CHUNK;
+    const Code b1 = (Code(0) - ((u >> 1) & 1ULL)) & (MAIN_CHUNK << 1);
+    const Code b2 = (Code(0) - ((u >> 2) & 1ULL)) & (MAIN_CHUNK << 2);
+    return b0 + b1 + b2;
+}
+
+__device__ __forceinline__ int u32limb_owner(Code g) {
+    const std::uint32_t a0 = std::uint32_t(g);
+    const std::uint32_t a1 = std::uint32_t(g >> 32);
+    const std::uint32_t p00_hi = __umulhi(a0, MAIN_MAGIC_LO);
+    const std::uint32_t p01_lo = a0 * MAIN_MAGIC_HI;
+    const std::uint32_t p01_hi = __umulhi(a0, MAIN_MAGIC_HI);
+    const std::uint32_t p10_lo = a1 * MAIN_MAGIC_LO;
+    const std::uint32_t p10_hi = __umulhi(a1, MAIN_MAGIC_LO);
+    const std::uint32_t p11 = a1 * MAIN_MAGIC_HI;
+    const std::uint32_t s0 = p00_hi + p01_lo;
+    std::uint32_t carry = std::uint32_t(s0 < p00_hi);
+    const std::uint32_t s1 = s0 + p10_lo;
+    carry += std::uint32_t(s1 < s0);
+    const std::uint32_t high64 = p01_hi + p10_hi + p11 + carry;
+    return int(high64 >> MAIN_HIGH_SHIFT);
+}
+
 __device__ __forceinline__ ShardAddress8 mulhi_mul_address(Code g) {
     const int owner = mulhi_owner(g);
     return {owner, g - Code(owner) * MAIN_CHUNK};
@@ -52,11 +79,12 @@ __device__ __forceinline__ ShardAddress8 mulhi_table_address(Code g) {
 
 __device__ __forceinline__ ShardAddress8 mulhi_mask_address(Code g) {
     const int owner = mulhi_owner(g);
-    const Code u = Code(unsigned(owner));
-    const Code b0 = (Code(0) - (u & 1ULL)) & MAIN_CHUNK;
-    const Code b1 = (Code(0) - ((u >> 1) & 1ULL)) & (MAIN_CHUNK << 1);
-    const Code b2 = (Code(0) - ((u >> 2) & 1ULL)) & (MAIN_CHUNK << 2);
-    return {owner, g - (b0 + b1 + b2)};
+    return {owner, g - masked_base(owner)};
+}
+
+__device__ __forceinline__ ShardAddress8 u32limb_mask_address(Code g) {
+    const int owner = u32limb_owner(g);
+    return {owner, g - masked_base(owner)};
 }
 
 __device__ __forceinline__ ShardAddress8 candidate_address(Code g) {
@@ -66,8 +94,10 @@ __device__ __forceinline__ ShardAddress8 candidate_address(Code g) {
     return mulhi_mul_address(g);
 #elif B300_SHARD_OWNER_MODE == 2
     return mulhi_table_address(g);
-#else
+#elif B300_SHARD_OWNER_MODE == 3
     return mulhi_mask_address(g);
+#else
+    return u32limb_mask_address(g);
 #endif
 }
 
