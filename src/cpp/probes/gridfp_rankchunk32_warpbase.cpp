@@ -35,18 +35,39 @@ int main() {
                                   << " direct=" << direct_block << " shared=" << shared_block << '\n';
                         return 3;
                     }
+
+                    // Production one-shuffle helper uses source_lane=lane&16.
+                    // Every active lane must select an active source lane in the
+                    // same metadata block, otherwise __shfl_sync is undefined.
+                    const uint32_t source_lane = lane & BLOCK;
+                    if (source_lane >= active_lanes) {
+                        std::cerr << "rankchunk32 one-shuffle source inactive prior_mod=" << prior_mod
+                                  << " stripe=" << stripe << " active=" << active_lanes
+                                  << " lane=" << lane << " source_lane=" << source_lane << '\n';
+                        return 4;
+                    }
+                    const uint32_t source_block = (hoff + stripe + source_lane) >> 4;
+                    if (source_block != direct_block) {
+                        std::cerr << "rankchunk32 one-shuffle source block mismatch prior_mod="
+                                  << prior_mod << " stripe=" << stripe << " active=" << active_lanes
+                                  << " lane=" << lane << " source_lane=" << source_lane
+                                  << " source_block=" << source_block
+                                  << " direct_block=" << direct_block << '\n';
+                        return 5;
+                    }
+
                     if (lane >= BLOCK) blocks = 2;
                     ++lanes;
                 }
 
                 if (blocks > max_blocks) max_blocks = blocks;
-                if (blocks == 2u && active_lanes <= BLOCK) return 4;
+                if (blocks == 2u && active_lanes <= BLOCK) return 6;
                 ++cases;
             }
         }
     }
 
-    if (cases != 32u * 4u * 32u || max_blocks != 2u || max_padding != 31u) return 5;
+    if (cases != 32u * 4u * 32u || max_blocks != 2u || max_padding != 31u) return 7;
     std::cout << "gridfp-rankchunk32-warpbase OK"
               << " cases=" << cases
               << " active_lane_checks=" << lanes
@@ -56,6 +77,7 @@ int main() {
               << " max_block_base_loads_per_warp=2"
               << " lane0_source_always_active=1"
               << " lane16_source_active_if_needed=1"
-              << " direct_block_exact=1\n";
+              << " direct_block_exact=1"
+              << " one_shuffle_source_exact=1\n";
     return 0;
 }
