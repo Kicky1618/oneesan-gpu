@@ -17,7 +17,7 @@ __constant__ uint32_t* D_P10DC_LOW_RANKFORMULA_SLOTROW32;
 __device__ __forceinline__ uint32_t p10dc_low_rankformula_slotrow32(
     uint32_t h, uint32_t slot
 ) {
-    if (h + 2u >= P10DC_RANKFORMULA_HEIGHTS) return 0u;
+    if (h >= P10DC_RANKFORMULA_HEIGHTS) return 0u;
     return D_P10DC_LOW_RANKFORMULA_SLOTROW32[
         size_t(slot) * P10DC_RANKFORMULA_HEIGHTS + h];
 }
@@ -141,6 +141,7 @@ struct BucketFusedDirectHighRowsRankFormulaSlotRow32Tables
                   << " exact_rows=" << exact_rows
                   << " min_base_delta=" << (exact_rows ? min_delta : 0)
                   << " max_base_delta=" << (exact_rows ? max_delta : 0)
+                  << " top_support_preserved=1"
                   << " separate_slot_support_hot=0\n";
 #endif
     }
