@@ -42,9 +42,9 @@ grep -Fq 'prepare_group(W,pw.wp,g)' "$OUT"
 grep -Fq 'main_store.destroy();block_store.destroy();' "$OUT"
 grep -Fq 'backend=gridfp-b300-hbm32-fullmate-dropN-vmm n=' "$OUT"
 
-for stale in D_MAIN_PTR D_BLOCK_PTR D_MAIN_CHUNK D_BLOCK_CHUNK D_NGPU D_MAIN_W D_BLOCK_W; do
+for stale in B300_FAST_SHARD_ADDRESS8 ShardAddress8 shard_address8 D_MAIN_PTR D_BLOCK_PTR D_MAIN_CHUNK D_BLOCK_CHUNK D_NGPU D_MAIN_W D_BLOCK_W; do
   if grep -Fq "$stale" "$OUT"; then
-    echo "generated VMM source still contains stale symbol $stale" >&2
+    echo "generated VMM source still contains stale shard scaffolding/symbol $stale" >&2
     exit 3
   fi
 done
@@ -71,4 +71,4 @@ if grep -Fq 'Every shard boundary can split at most one globally ordered interva
   exit 8
 fi
 
-echo "b300-vmm-production-generate-proof OK count_bytes=4 direct_global_index=1 shard_free_interval_io=1 compact_interval_bytes=24 compact_interval_vs_old_pct=75 interval_host_owner_div=0 interval_device_ptr_index=0 stale_shard_symbols=0 stale_shard_symbol_copies=0 stale_shard_init_args=0 stale_width_symbols=0 per_group_width_symbol_copies=0 logical_shard_chunks=0 logical_shard_views=0 host_owner_div=0 direct_init_answer=1 authoritative_cudaMalloc=0 authoritative_cudaFree=0 balanced_physical_rotation=1 combined_imbalance_le_one_granularity=1 runtime_physical_balance_guard=1"
+echo "b300-vmm-production-generate-proof OK count_bytes=4 direct_global_index=1 shard_free_interval_io=1 compact_interval_bytes=24 compact_interval_vs_old_pct=75 interval_host_owner_div=0 interval_device_ptr_index=0 legacy_shard_address_scaffolding=0 stale_shard_symbols=0 stale_shard_symbol_copies=0 stale_shard_init_args=0 stale_width_symbols=0 per_group_width_symbol_copies=0 logical_shard_chunks=0 logical_shard_views=0 host_owner_div=0 direct_init_answer=1 authoritative_cudaMalloc=0 authoritative_cudaFree=0 balanced_physical_rotation=1 combined_imbalance_le_one_granularity=1 runtime_physical_balance_guard=1"
