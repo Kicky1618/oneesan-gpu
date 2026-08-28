@@ -21,10 +21,11 @@ struct PackedKey {
     std::uint8_t type = 0;     // 0=A, 1=C
 };
 
-// Small immutable tables for the W<=28 sliding recoupling rank. The complete
-// object is only about 13 KiB and is intended for CUDA constant memory or a
-// cached read-only parameter block.
+// Small immutable tables for the W<=28 sliding recoupling rank and component
+// label codec. The complete object is about 22 KiB and is intended for CUDA
+// constant memory or a cached read-only parameter block.
 struct RankTables {
+    Rank choose[kMaxWidth + 1][kMaxWidth + 1]{};
     Rank primitive[kMaxWidth + 1][kMaxWidth + 2]{};
     Rank state_block[kMaxOuterBits + 1]{};
     Rank a_block[kMaxOuterBits + 1]{};
@@ -47,6 +48,11 @@ ONEESAN_TC_HD int popcount32(std::uint32_t x) {
 
 ONEESAN_TC_HD std::uint32_t low_mask(int bits) {
     return bits <= 0 ? 0u : ((std::uint32_t(1) << bits) - 1u);
+}
+
+ONEESAN_TC_HD Rank choose_count(int n, int k, const RankTables& t) {
+    if (n < 0 || k < 0 || k > n || n > kMaxWidth) return 0;
+    return t.choose[n][k];
 }
 
 // Delete a contiguous support window while preserving the relative order of
@@ -99,6 +105,88 @@ ONEESAN_TC_HD Rank primitive_rank(
         }
     }
     return rank;
+}
+
+ONEESAN_TC_HD std::uint32_t support_unrank(
+    int len,
+    int ones,
+    Rank rank,
+    const RankTables& t
+) {
+    std::uint32_t support = 0;
+    int left = ones;
+    for (int pos = 0; pos < len; ++pos) {
+        const int rem = len - pos - 1;
+        const Rank zero_count = choose_count(rem, left, t);
+        if (rank < zero_count) continue;
+        rank -= zero_count;
+        support |= std::uint32_t(1) << pos;
+        --left;
+    }
+    return support;
+}
+
+// Materialize the R-first primitive rank on a fixed occupied support. This is
+// the inverse of primitive_rank and needs no mate table.
+ONEESAN_TC_HD std::uint32_t primitive_left_unrank(
+    std::uint32_t support,
+    int len,
+    int occupied,
+    Rank rank,
+    const RankTables& t
+) {
+    std::uint32_t left_bits = 0;
+    int h = 1;
+    int seen = 0;
+    for (int pos = 0; pos < len; ++pos) {
+        const std::uint32_t bit = std::uint32_t(1) << pos;
+        if (!(support & bit)) continue;
+        const int rem = occupied - (++seen);
+        const Rank r_count = h > 0 ? t.primitive[rem][h - 1] : 0;
+        if (rank < r_count) {
+            --h; // R
+        } else {
+            rank -= r_count;
+            left_bits |= bit;
+            ++h; // L
+        }
+    }
+    return left_bits;
+}
+
+ONEESAN_TC_HD Rank component_label_count(int W, const RankTables& t) {
+    const int len = W - 2;
+    Rank total = 0;
+    for (int occupied = 1; occupied <= len; occupied += 2)
+        total += choose_count(len, occupied, t) * t.primitive[occupied][1];
+    return total;
+}
+
+// Dense component id -> unrestricted width-(W-2) one-defect Motzkin label.
+// Sectors are ordered by occupied count, then lexicographic support rank, then
+// primitive R/L rank. W=28 has M_26=47,337,954,326 such labels.
+ONEESAN_TC_HD PackedKey component_label_unrank(
+    int W,
+    Rank rank,
+    const RankTables& t
+) {
+    const int len = W - 2;
+    int occupied = 1;
+    for (; occupied <= len; occupied += 2) {
+        const Rank pc = t.primitive[occupied][1];
+        const Rank sector = choose_count(len, occupied, t) * pc;
+        if (rank < sector) {
+            const Rank support_rank = rank / pc;
+            const Rank primitive_rank_value = rank % pc;
+            const std::uint32_t support = support_unrank(
+                len, occupied, support_rank, t);
+            const std::uint32_t left = primitive_left_unrank(
+                support, len, occupied, primitive_rank_value, t);
+            return PackedKey{support, left, 1}; // type is unused for a label
+        }
+        rank -= sector;
+    }
+    return PackedKey{};
 }
 
 ONEESAN_TC_HD Rank block_base(
@@ -193,11 +281,10 @@ ONEESAN_TC_HD ComponentBlocks component_blocks(
 #ifndef __CUDA_ARCH__
 inline RankTables make_rank_tables() {
     RankTables t{};
-    Rank choose[kMaxWidth + 1][kMaxWidth + 1]{};
     for (int n = 0; n <= kMaxWidth; ++n) {
-        choose[n][0] = choose[n][n] = 1;
+        t.choose[n][0] = t.choose[n][n] = 1;
         for (int k = 1; k < n; ++k)
-            choose[n][k] = choose[n - 1][k - 1] + choose[n - 1][k];
+            t.choose[n][k] = t.choose[n - 1][k - 1] + t.choose[n - 1][k];
     }
 
     t.primitive[0][0] = 1;
@@ -234,7 +321,7 @@ inline RankTables make_rank_tables() {
         for (int ones = 0; ones <= kMaxOuterBits; ++ones) {
             Rank z = 0;
             for (int r = 0; r <= rem && ones + r <= kMaxOuterBits; ++r)
-                z += choose[rem][r] * t.state_block[ones + r];
+                z += t.choose[rem][r] * t.state_block[ones + r];
             t.suffix[rem][ones] = z;
         }
     }
