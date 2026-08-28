@@ -3,6 +3,12 @@
 #include "ramstream32_bucket_closure_cross5_rankdelta8.cuh"
 #include "ramstream32_bucket_low_rankformula.cuh"
 
+#ifndef P10DC_RANKFORMULA_INLINE_CROSS
+#define P10DC_RANKFORMULA_INLINE_CROSS 0
+#endif
+static_assert(P10DC_RANKFORMULA_INLINE_CROSS == 0 || P10DC_RANKFORMULA_INLINE_CROSS == 1,
+              "P10DC_RANKFORMULA_INLINE_CROSS must be 0 or 1");
+
 static constexpr uint32_t P10DC_RANKFORMULA_CHUNKINFO_CODE_MASK = 0x03ffu;
 static constexpr uint32_t P10DC_RANKFORMULA_CHUNKINFO_SUPPORT_SHIFT = 10u;
 static constexpr uint32_t P10DC_RANKFORMULA_BALLOT_STRIDE = 16u;
@@ -82,7 +88,9 @@ p10dc_rankformula_ballot_table() {
 }
 
 static void p10dc_install_rankformula_lut() {
+#if !P10DC_RANKFORMULA_INLINE_CROSS
     p10dc_install_rankdelta8_lut();
+#endif
 #if !P10DC_RANKFORMULA_RAWCODE
     static const auto chunkinfo = p10dc_rankformula_chunkinfo_table();
     ck(cudaMemcpyToSymbol(D_P10DC_RANKFORMULA_CHUNKINFO, chunkinfo.data(),
@@ -116,9 +124,6 @@ __device__ __forceinline__ uint32_t p10dc_rankformula_ballot_load(
 #endif
 }
 
-// Compress one occupancy bit from each 2-bit symbol. This is the same
-// broadword packing used by the reduced-production runtime path, specialized
-// to LOW_LUT_K<=14 so the result is a single uint32 mask.
 __device__ __forceinline__ uint32_t p10dc_rankformula_support_raw(uint32_t code) {
     uint32_t x = (code | (code >> 1)) & 0x55555555u;
     x = (x | (x >> 1)) & 0x33333333u;
@@ -128,9 +133,6 @@ __device__ __forceinline__ uint32_t p10dc_rankformula_support_raw(uint32_t code)
     return x & ((1u << LOW_LUT_K) - 1u);
 }
 
-// Convert five (or fewer, with zero high digits) base-4 encoded 2-bit symbols
-// to their base-3 CROSS5 key without division/modulo. For a two-digit nibble,
-// d0+4*d1 -> d0+3*d1 is simply x-d1.
 __device__ __forceinline__ uint32_t p10dc_rankformula_code10_key(uint32_t code10) {
     const uint32_t p0 = (code10 & 0x0fu) - ((code10 >> 2) & 3u);
     const uint32_t p1 = ((code10 >> 4) & 0x0fu) - ((code10 >> 6) & 3u);
@@ -145,6 +147,32 @@ __device__ __forceinline__ uint32_t p10dc_cross5_apply_rankformula(
     int& factor_h, uint32_t& rem, int& prefix_corr, BkczCrossAccum& sum
 ) {
     static_assert(LEN >= 1 && LEN <= P10DC_CROSS5_CHUNK);
+#if P10DC_RANKFORMULA_INLINE_CROSS
+#pragma unroll
+    for (int bit = LEN - 1; bit >= 0; --bit) {
+        const uint32_t sym = (code10 >> (2 * bit)) & 3u;
+        if (sym == uint32_t(::L)) {
+            const uint32_t bp = p10dc_rankformula_ballot_load(rem, uint32_t(factor_h));
+            const uint32_t dest_contrib = bp & 0xffffu;
+            const int diff = int(int16_t(bp >> 16));
+            if (state == 1u) {
+                const int source_local = int(dest_local) + prefix_corr - int(dest_contrib);
+                sum = bkcz_cross_add(
+                    sum, source_row[source_base + uint32_t(source_local)]);
+            }
+            prefix_corr += diff;
+            ++factor_h;
+            --rem;
+            ++state;
+        } else if (sym == uint32_t(R)) {
+            if (state == 1u) return 1u;
+            --state;
+            --factor_h;
+            --rem;
+        }
+    }
+    return 0u;
+#else
     uint32_t rankmask, consume, delta_bias;
     bool halt;
 #if P10DC_RANKDELTA8_FUSED13
@@ -166,7 +194,6 @@ __device__ __forceinline__ uint32_t p10dc_cross5_apply_rankformula(
         : uint32_t(meta & P10DC_RANKSTREAM_META_LCOUNT_MASK);
     delta_bias = uint32_t(meta >> P10DC_RANKSTREAM_META_DELTA_SHIFT);
 #endif
-
     uint32_t lordinal = 0;
 #pragma unroll
     for (int bit = LEN - 1; bit >= 0; --bit) {
@@ -194,6 +221,7 @@ __device__ __forceinline__ uint32_t p10dc_cross5_apply_rankformula(
     state = uint32_t(
         int(state) + int(delta_bias) - P10DC_RANKSTREAM_META_DELTA_BIAS);
     return 0u;
+#endif
 }
 
 __device__ __forceinline__ BkczCrossAccum
@@ -211,19 +239,25 @@ p10dc_resolved_low_preimages_cross5_rankformula_fast(
 #if P10DC_RANKFORMULA_RAWCODE
     constexpr uint32_t X0_MASK = (1u << (2 * L0)) - 1u;
     x0 = (packed_meta >> (2 * S0)) & X0_MASK;
+#if !P10DC_RANKFORMULA_INLINE_CROSS
     c0 = p10dc_rankformula_code10_key(x0);
+#endif
     mask = p10dc_rankformula_support_raw(packed_meta);
     if constexpr (S0 > 0) {
         constexpr int L1 = S0 >= P10DC_CROSS5_CHUNK ? P10DC_CROSS5_CHUNK : S0;
         constexpr int S1 = S0 - L1;
         constexpr uint32_t X1_MASK = (1u << (2 * L1)) - 1u;
         x1 = (packed_meta >> (2 * S1)) & X1_MASK;
+#if !P10DC_RANKFORMULA_INLINE_CROSS
         c1 = p10dc_rankformula_code10_key(x1);
+#endif
         if constexpr (S1 > 0) {
             constexpr int L2 = S1 >= P10DC_CROSS5_CHUNK ? P10DC_CROSS5_CHUNK : S1;
             constexpr uint32_t X2_MASK = (1u << (2 * L2)) - 1u;
             x2 = packed_meta & X2_MASK;
+#if !P10DC_RANKFORMULA_INLINE_CROSS
             c2 = p10dc_rankformula_code10_key(x2);
+#endif
         }
     }
 #else
