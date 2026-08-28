@@ -31,7 +31,7 @@ require_nvcc_version_at_least() {
   local nvcc_bin="${1:-nvcc}" min_major="${2:?missing minimum CUDA major}" min_minor="${3:-0}" reason="${4:-requested CUDA target}"
   command -v "$nvcc_bin" >/dev/null || { echo "$nvcc_bin not found" >&2; return 2; }
   local line version major minor
-  line="$($nvcc_bin --version 2>&1 | grep -E 'Cuda compilation tools, release [0-9]+\.[0-9]+' | tail -n1 || true)"
+  line="$("$nvcc_bin" --version 2>&1 | grep -E 'Cuda compilation tools, release [0-9]+\.[0-9]+' | tail -n1 || true)"
   version="$(sed -nE 's/.*release ([0-9]+)\.([0-9]+).*/\1.\2/p' <<<"$line")"
   if [[ -z "$version" ]]; then
     echo "could not determine CUDA Toolkit version from $nvcc_bin --version" >&2
