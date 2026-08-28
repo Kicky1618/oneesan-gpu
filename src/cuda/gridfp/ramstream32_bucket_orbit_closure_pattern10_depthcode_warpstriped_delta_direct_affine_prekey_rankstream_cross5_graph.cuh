@@ -23,8 +23,9 @@ struct BucketPattern10DepthCodeWarpStripedDeltaDirectAffinePrekeyRankStreamCross
 
     void init(const StorageLayout& layout, int threads = 256, int gx = 16, int gy = 8) {
         p10dc_warpstriped_delta_direct_affine_prekey_rankstream_cross5_require_threads(threads);
-        p10dc_install_cross5_lut();
-        p10dc_install_rankstream_lmask();
+        // The rankstream table contains rankmask+halt plus packed L-count/delta,
+        // so this backend has no runtime dependency on the ordinary CROSS5 LUT.
+        p10dc_install_rankstream_lut();
         ck(cudaStreamCreateWithFlags(&stream, cudaStreamNonBlocking),
            "pattern10 depthcode affine-prekey-rankstream-cross5 graph stream");
         capture_one(BKOC_GRAPH_FORWARD_LOW, [&] {
