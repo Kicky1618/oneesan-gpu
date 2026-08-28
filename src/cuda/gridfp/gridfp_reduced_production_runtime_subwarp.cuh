@@ -10,8 +10,13 @@ namespace oneesan::gridfp::reducedprod {
 #ifndef RP_RUNTIME_CACHE_EDGES
 #define RP_RUNTIME_CACHE_EDGES 1
 #endif
+#ifndef RP_RUNTIME_FAST_P32M5_MOD
+#define RP_RUNTIME_FAST_P32M5_MOD 1
+#endif
 static_assert(RP_RUNTIME_CACHE_EDGES == 0 || RP_RUNTIME_CACHE_EDGES == 1,
               "RP_RUNTIME_CACHE_EDGES must be 0 or 1");
+static_assert(RP_RUNTIME_FAST_P32M5_MOD == 0 || RP_RUNTIME_FAST_P32M5_MOD == 1,
+              "RP_RUNTIME_FAST_P32M5_MOD must be 0 or 1");
 
 static constexpr int RP_RUNTIME_WARPS_PER_BLOCK = 8;
 static constexpr int RP_RUNTIME_SUBGROUPS_PER_WARP = 4;
@@ -36,6 +41,46 @@ static constexpr int RP_RUNTIME_EDGE_COEF_MIN = -1;
 static constexpr int RP_RUNTIME_EDGE_COEF_MAX = 2;
 static constexpr int RP_RUNTIME_EDGE_COEF_BIAS = 1;
 static_assert(RP_RUNTIME_MAX_PAIRS <= (1 << RP_RUNTIME_EDGE_DEST_BITS));
+
+// For p=2^32-5, 2^32 == 5 (mod p). With at most 20 source terms and merged
+// coefficient magnitude <=2, |acc| <= 40*(p-1). Its high 32-bit word is <=39,
+// so lo+5*hi is <2p and one conditional subtraction completes the reduction.
+static constexpr std::uint32_t RP_RUNTIME_P32M5_MODULUS = 4294967291u;
+static constexpr std::uint64_t RP_RUNTIME_P32M5_MAX_ACC_MAG =
+    std::uint64_t(RP_RUNTIME_MAX_PAIRS) * RP_RUNTIME_EDGE_COEF_MAX *
+    (std::uint64_t(RP_RUNTIME_P32M5_MODULUS) - 1u);
+static constexpr std::uint64_t RP_RUNTIME_P32M5_MAX_HI =
+    RP_RUNTIME_P32M5_MAX_ACC_MAG >> 32;
+static constexpr std::uint64_t RP_RUNTIME_P32M5_MAX_FOLDED =
+    0xffffffffULL + 5ULL * RP_RUNTIME_P32M5_MAX_HI;
+static_assert(RP_RUNTIME_P32M5_MAX_HI == 39u);
+static_assert(RP_RUNTIME_P32M5_MAX_FOLDED <
+              2ULL * std::uint64_t(RP_RUNTIME_P32M5_MODULUS));
+
+__device__ __forceinline__ std::uint32_t runtime_reduce_accum(
+    long long accum,
+    std::uint32_t mod
+) {
+#if RP_RUNTIME_FAST_P32M5_MOD
+    if (mod == RP_RUNTIME_P32M5_MODULUS) {
+        const bool negative = accum < 0;
+        const std::uint64_t magnitude = negative
+            ? std::uint64_t(-(accum + 1)) + 1u
+            : std::uint64_t(accum);
+        std::uint64_t folded =
+            std::uint64_t(std::uint32_t(magnitude)) + 5ULL * (magnitude >> 32);
+        if (folded >= RP_RUNTIME_P32M5_MODULUS)
+            folded -= RP_RUNTIME_P32M5_MODULUS;
+        const std::uint32_t residue = std::uint32_t(folded);
+        return negative && residue
+            ? RP_RUNTIME_P32M5_MODULUS - residue
+            : residue;
+    }
+#endif
+    long long residue = accum % static_cast<long long>(mod);
+    if (residue < 0) residue += mod;
+    return static_cast<std::uint32_t>(residue);
+}
 
 // Compact source->destination topology recorded while the component is already
 // being discovered. 20*(1 count byte + 3 packed edge bytes) = 80 bytes/subgroup,
@@ -246,9 +291,7 @@ __global__ void owner_component_runtime_subwarp_kernel(
                 runtime_set_error(error, 308);
                 continue;
             }
-            long long z = accum[accumulator_ix] % static_cast<long long>(mod);
-            if (z < 0) z += mod;
-            state[dgr.local] = static_cast<std::uint32_t>(z);
+            state[dgr.local] = runtime_reduce_accum(accum[accumulator_ix], mod);
         }
 #else
         for (int di = sublane; di < nd; di += RP_RUNTIME_SUBGROUP_WIDTH) {
@@ -272,9 +315,7 @@ __global__ void owner_component_runtime_subwarp_kernel(
                                static_cast<long long>(sh_value[warp][subgroup][si]);
                 }
             }
-            long long z = acc % static_cast<long long>(mod);
-            if (z < 0) z += mod;
-            state[dgr.local] = static_cast<std::uint32_t>(z);
+            state[dgr.local] = runtime_reduce_accum(acc, mod);
         }
 #endif
         __syncwarp(subgroup_mask);
