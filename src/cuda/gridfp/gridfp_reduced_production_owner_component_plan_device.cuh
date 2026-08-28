@@ -108,12 +108,7 @@ __device__ __forceinline__ MateID owner_component_label_unrank_planned_device(
 
     std::uint32_t full = 0;
     owner_expand_outer_support_device(outer, W, lo, hi, full);
-    int cp = 0;
-    for (int bit = lo; bit <= hi; ++bit) {
-        if (bit == missing) continue;
-        if ((local_support >> cp) & 1u) full |= std::uint32_t(1) << bit;
-        ++cp;
-    }
+    owner_expand_local_support_device(local_support, L, lo, missing, full);
     if ((full >> missing) & 1u) return 0;
 
     const int occupied = outer_ones + local_ones;
