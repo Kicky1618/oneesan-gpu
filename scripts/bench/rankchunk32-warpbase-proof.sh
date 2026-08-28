@@ -17,4 +17,5 @@ grep -Fq 'max_block_base_loads_per_warp=2' <<<"$out"
 grep -Fq 'lane0_source_always_active=1' <<<"$out"
 grep -Fq 'lane16_source_active_if_needed=1' <<<"$out"
 grep -Fq 'direct_block_exact=1' <<<"$out"
-echo 'rankchunk32-warpbase-proof OK cases=4096 max_block_base_loads_per_warp=2' >&2
+grep -Fq 'one_shuffle_source_exact=1' <<<"$out"
+echo 'rankchunk32-warpbase-proof OK cases=4096 max_block_base_loads_per_warp=2 one_shuffle_source_exact=1' >&2
