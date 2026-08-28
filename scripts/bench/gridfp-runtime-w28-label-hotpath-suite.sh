@@ -19,10 +19,11 @@ RUN_PLAN_SHARED="${RUN_PLAN_SHARED:-1}"
 RUN_MATERIALIZE_LAST_R="${RUN_MATERIALIZE_LAST_R:-1}"
 RUN_MATERIALIZE_PACKED="${RUN_MATERIALIZE_PACKED:-1}"
 RUN_SUPPORT13_TABLE="${RUN_SUPPORT13_TABLE:-1}"
+RUN_TURN_LOCAL_CARRY="${RUN_TURN_LOCAL_CARRY:-1}"
 RUN_TURN_TREE="${RUN_TURN_TREE:-1}"
 RUN_TURN_NONN="${RUN_TURN_NONN:-1}"
 
-for name in RUN_PREFIX_CARRY RUN_OWNER_LOCAL_CARRY RUN_OWNER_COMPACT RUN_OWNER_TREE RUN_ADJACENT_SUPPORT RUN_PLAN_SHARED RUN_MATERIALIZE_LAST_R RUN_MATERIALIZE_PACKED RUN_SUPPORT13_TABLE RUN_TURN_TREE RUN_TURN_NONN; do
+for name in RUN_PREFIX_CARRY RUN_OWNER_LOCAL_CARRY RUN_OWNER_COMPACT RUN_OWNER_TREE RUN_ADJACENT_SUPPORT RUN_PLAN_SHARED RUN_MATERIALIZE_LAST_R RUN_MATERIALIZE_PACKED RUN_SUPPORT13_TABLE RUN_TURN_LOCAL_CARRY RUN_TURN_TREE RUN_TURN_NONN; do
   value="${!name}"
   if [[ "$value" != 0 && "$value" != 1 ]]; then
     echo "$name must be 0 or 1" >&2
@@ -33,8 +34,8 @@ if [[ "$RUN_PREFIX_CARRY" == 0 && "$RUN_OWNER_LOCAL_CARRY" == 0 &&
       "$RUN_OWNER_COMPACT" == 0 && "$RUN_OWNER_TREE" == 0 &&
       "$RUN_ADJACENT_SUPPORT" == 0 && "$RUN_PLAN_SHARED" == 0 &&
       "$RUN_MATERIALIZE_LAST_R" == 0 && "$RUN_MATERIALIZE_PACKED" == 0 &&
-      "$RUN_SUPPORT13_TABLE" == 0 && "$RUN_TURN_TREE" == 0 &&
-      "$RUN_TURN_NONN" == 0 ]]; then
+      "$RUN_SUPPORT13_TABLE" == 0 && "$RUN_TURN_LOCAL_CARRY" == 0 &&
+      "$RUN_TURN_TREE" == 0 && "$RUN_TURN_NONN" == 0 ]]; then
   echo "nothing selected" >&2
   exit 2
 fi
@@ -104,6 +105,10 @@ fi
 if [[ "$RUN_SUPPORT13_TABLE" == 1 ]]; then
   run_case support_unrank_len13_table \
     gridfp-support-unrank-len13-table-microprobe.sh
+fi
+if [[ "$RUN_TURN_LOCAL_CARRY" == 1 ]]; then
+  run_case turn_local_sector_carry_begin \
+    gridfp-runtime-turn-local-sector-carry-begin-microprobe.sh
 fi
 if [[ "$RUN_TURN_TREE" == 1 ]]; then
   run_case turn_local_sector_w28_tree \
