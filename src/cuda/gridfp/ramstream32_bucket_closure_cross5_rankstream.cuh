@@ -1,6 +1,6 @@
 #pragma once
 
-#include "ramstream32_bucket_closure_cross5.cuh"
+#include "ramstream32_bucket_closure_cross5_common.cuh"
 #include "ramstream32_bucket_low_prekey_rankstream.cuh"
 
 // Rankstream CROSS5 uses the same 5-symbol automaton as the direct path, but
