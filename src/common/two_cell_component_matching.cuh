@@ -83,10 +83,25 @@ ONEESAN_TC_MATCH_HD void fill_deep_tail_adjacency(
         out.adjacency[s] = (std::uint32_t(1) << 3) | (std::uint32_t(1) << s);
 }
 
-// direct_component_sources() has a canonical source order.  Singleton, triple,
-// deep RN and deep LR are fully closed.  Deep LN has the same closed tail, with
-// one topology-dependent pivot k.  k is obtained from K_step(src[2]) only; no
-// other K_step calls and no leaf peeling are required.
+// For deep LN, direct_component_sources() orders the marked-face sources so
+// that the unique pivot is the first tail source whose local pair is LL.
+// Exhaustive probes through W=15 agree with the K-edge-derived pivot.
+ONEESAN_TC_MATCH_HD int find_ln_local_pivot(
+    const PackedKey* src,
+    int n,
+    int W,
+    int i
+) {
+    for (int s = 4; s < n; ++s) {
+        const PackedWord w = state_word(src[s], W);
+        if (symbol(w, i) == TC_L && symbol(w, i + 1) == TC_L) return s;
+    }
+    return -1;
+}
+
+// direct_component_sources() has a canonical source order.  In that order all
+// valid component families have closed matching/support formulas.  Matching
+// reconstruction therefore requires neither K_step() nor leaf peeling.
 ONEESAN_TC_MATCH_HD bool build_component_matching_fastpath(
     const PackedKey* src,
     int n,
@@ -174,23 +189,12 @@ ONEESAN_TC_MATCH_HD bool build_component_matching_fastpath(
 
     if (kind == TC_MATCH_DEEP_LN) {
         fill_deep_tail_adjacency(out, n);
-        const auto pivot_edges = K_step(src[2], W, i);
-        if (pivot_edges.overflow || pivot_edges.size != 3) return false;
-        std::uint32_t mask = 0;
-        for (int e = 0; e < pivot_edges.size; ++e) {
-            const int t = coordinate_index_for_destination(
-                src, n, pivot_edges.value[e], i);
-            if (t < 0) return false;
-            mask |= std::uint32_t(1) << t;
-        }
-        if ((mask & 0x6u) != 0x6u) return false;
-        const std::uint32_t extra = mask & ~0x6u;
-        if (!extra || (extra & (extra - 1))) return false;
-        const int pivot = ctz32(extra);
+        const int pivot = find_ln_local_pivot(src, n, W, i);
         if (pivot < 4 || pivot >= n) return false;
         out.pivot = pivot;
-        out.adjacency[2] = mask;
-
+        out.adjacency[2] = (std::uint32_t(1) << 1) |
+                           (std::uint32_t(1) << 2) |
+                           (std::uint32_t(1) << pivot);
         out.src_to_dst[0] = 2;
         out.src_to_dst[1] = 1;
         out.src_to_dst[2] = static_cast<std::uint8_t>(pivot);
@@ -215,8 +219,8 @@ ONEESAN_TC_MATCH_HD bool build_component_matching_fastpath(
     return false;
 }
 
-// Safety fallback.  Exhaustive probes through W=14 find that every valid
-// component is handled above, so this path should not execute in production.
+// Safety/reference fallback.  The current exhaustive probes find no valid
+// component that reaches this path.
 ONEESAN_TC_MATCH_HD ComponentMatching build_component_matching_generic(
     const PackedKey* src,
     int n,
@@ -238,6 +242,7 @@ ONEESAN_TC_MATCH_HD ComponentMatching build_component_matching_generic(
         out.adjacency[s] = mask;
         out.edges += edges.size;
     }
+
     std::uint32_t alive_s = low_mask(n);
     std::uint32_t alive_d = low_mask(n);
     int matched = 0;
@@ -325,8 +330,7 @@ ONEESAN_TC_MATCH_HD bool apply_component_matching(
     return true;
 }
 
-// Descriptor-free arithmetic for all families except LN.  LN needs one pivot
-// K_step and then uses apply_component_matching() on the closed descriptor.
+// Descriptor-free arithmetic for every currently observed valid family.
 template <class Value>
 ONEESAN_TC_MATCH_HD bool apply_component_fastpath(
     const PackedKey* src,
@@ -373,6 +377,25 @@ ONEESAN_TC_MATCH_HD bool apply_component_fastpath(
         for (int q = 4; q < n - 1; ++q)
             output[3] = component_add_mod(output[3], input[q], mod);
         output[n - 1] = component_add_mod(output[n - 1], input[n - 1], mod);
+        return true;
+    }
+    if (kind == TC_MATCH_DEEP_LN) {
+        const int pivot = find_ln_local_pivot(src, n, W, i);
+        if (pivot < 4 || pivot >= n) return false;
+        output[0] = input[3];
+        output[1] = input[1];
+        output[2] = input[0];
+        output[3] = input[pivot];
+        for (int q = 4; q < n; ++q)
+            if (q != pivot) output[q] = input[q];
+        output[pivot] = input[2];
+        output[1] = component_add_mod(output[1], input[2], mod);
+        output[2] = component_add_mod(output[2], input[2], mod);
+        output[3] = component_add_mod(output[3], input[3], mod);
+        for (int q = 4; q < n; ++q)
+            if (q != pivot)
+                output[3] = component_add_mod(output[3], input[q], mod);
+        output[pivot] = component_add_mod(output[pivot], input[pivot], mod);
         return true;
     }
     return false;
