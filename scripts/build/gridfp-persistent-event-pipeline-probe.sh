@@ -146,6 +146,9 @@ if s.count(old_tag) != 1:
 s = s.replace(old_tag, new_tag)
 
 flag = '              << " cycle_closed_batches=1"\n'
+# The Python string above uses \n as an actual newline.  Keep this assertion so
+# upstream formatting changes fail loudly instead of silently generating the
+# host-barrier executor.
 if s.count(flag) != 1:
     raise SystemExit("event pipeline generator: output flag mismatch")
 s = s.replace(
@@ -157,9 +160,18 @@ s = s.replace(
 
 old_ok = 'std::cout << "ALL_OK gridfp_p2p_host_persistent_pipeline=1\\n";'
 new_ok = 'std::cout << "ALL_OK gridfp_p2p_host_persistent_event_pipeline=1\\n";'
+# old_ok/new_ok contain one literal C++ backslash before n.
 if s.count(old_ok) != 1:
     raise SystemExit("event pipeline generator: ALL_OK marker mismatch")
 s = s.replace(old_ok, new_ok)
+
+# Generation-time audit: batch-local host synchronization must be gone, while
+# the one-time local-cycle drain and final two-stream drain remain in place.
+body = s[start:s.find(end_marker, start)]
+if 'cudaStreamSynchronize' in body:
+    raise SystemExit("event pipeline generator: host batch synchronize survived")
+if 'cudaStreamWaitEvent' not in body or 'barrier_done' not in body:
+    raise SystemExit("event pipeline generator: event barrier missing")
 
 out_path.parent.mkdir(parents=True, exist_ok=True)
 out_path.write_text(s)
