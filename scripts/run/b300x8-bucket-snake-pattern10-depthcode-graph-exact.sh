@@ -8,13 +8,12 @@ TRANSPOSE_MODE="${TRANSPOSE_MODE:-pipeline}"; HIGH_CTX="${HIGH_CTX:-thread}"; DE
 BUCKET_THREADS="${BUCKET_THREADS:-256}"; BUCKET_GRID_X="${BUCKET_GRID_X:-16}"; BUCKET_GRID_Y="${BUCKET_GRID_Y:-8}"
 BUCKET_TRANSPOSE_CHUNK_MIB="${BUCKET_TRANSPOSE_CHUNK_MIB:-1024}"; BUCKET_RESERVE_MIB="${BUCKET_RESERVE_MIB:-8192}"
 case "$TRANSPOSE_MODE" in sync|events|pipeline) ;; *) echo "TRANSPOSE_MODE must be sync, events, or pipeline" >&2; exit 2;; esac
-case "$HIGH_CTX" in thread|resolved|warp|warpstriped) ;; *) echo "HIGH_CTX must be thread, resolved, warp, or warpstriped" >&2; exit 2;; esac
+case "$HIGH_CTX" in thread|resolved|warp) ;; warpstriped) echo "HIGH_CTX=warpstriped is experimental and is disabled for exact runs until HIGH orbit read/write footprint overlap is proven absent" >&2; exit 2;; *) echo "HIGH_CTX must be thread, resolved, or warp" >&2; exit 2;; esac
 case "$DEPTHCODE_DECODE_LOAD" in global|ldg) ;; *) echo "DEPTHCODE_DECODE_LOAD must be global or ldg" >&2; exit 2;; esac
 if [[ "$PM_ACCUM" != 0 && "$PM_ACCUM" != 1 ]]; then echo "PM_ACCUM must be 0 or 1" >&2; exit 2; fi
 if [[ "$TERNARY_KEY4" != 0 && "$TERNARY_KEY4" != 1 ]]; then echo "TERNARY_KEY4 must be 0 or 1" >&2; exit 2; fi
 if (( BUCKET_THREADS < 1 || BUCKET_THREADS > 1024 )); then echo "BUCKET_THREADS must be in [1,1024]" >&2; exit 2; fi
 if (( BUCKET_GRID_X < 1 || BUCKET_GRID_Y < 1 )); then echo "BUCKET_GRID_X/Y must be >=1" >&2; exit 2; fi
-if [[ "$HIGH_CTX" == warpstriped ]] && (( BUCKET_THREADS < 32 || BUCKET_THREADS % 32 != 0 )); then echo "warpstriped requires BUCKET_THREADS multiple of 32 in [32,1024]" >&2; exit 2; fi
 if (( NGPU != 8 )); then echo "pattern10 depthcode graph backend currently requires NGPU=8" >&2; exit 2; fi
 
 SUFFIX="_payload_${HIGH_CTX}_${TRANSPOSE_MODE}"; [[ "$DEPTHCODE_DECODE_LOAD" == ldg ]] && SUFFIX="${SUFFIX}_ldg"; [[ "$PM_ACCUM" == 1 ]] && SUFFIX="${SUFFIX}_pm"; [[ "$TERNARY_KEY4" == 0 ]] && SUFFIX="${SUFFIX}_keyscalar"
