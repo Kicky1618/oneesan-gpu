@@ -33,6 +33,14 @@ FILES=(
   scripts/bench/gridfp-primitive-sym-u32-table-proof.sh
   scripts/bench/gridfp-choose-sym-u32-table-proof.sh
   scripts/bench/gridfp-codec-table-budget-proof.sh
+  scripts/build/b300-bucket-snake-pattern10-depthcode-rankformula-nometa4-abstract.sh
+  scripts/bench/pattern10-depthcode-rankformula-nometa4-abstract-block-selftest.sh
+  scripts/bench/rankformula-nometa4-abstract-preflight.sh
+  scripts/bench/rankformula-abstract-select8-proof.sh
+  scripts/bench/rankformula-abstract-srcpack10-proof.sh
+  scripts/bench/b300-depthcode-rankformula-nometa-coop-unroll-ab.sh
+  scripts/bench/b300-depthcode-rankformula-abstract-select8-ab.sh
+  scripts/bench/b300-depthcode-rankformula-abstract-srcpack10-ab.sh
 )
 
 checked=0
