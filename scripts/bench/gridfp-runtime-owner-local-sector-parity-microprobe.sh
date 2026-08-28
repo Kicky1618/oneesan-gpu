@@ -13,11 +13,11 @@ SRC="$ONEESAN_ROOT/src/cuda/gridfp/gridfp_reduced_runtime_owner_local_sector_par
 BIN0="$ONEESAN_BUILD_DIR/gridfp_runtime_owner_local_sector_parity_microprobe0"
 BIN1="$ONEESAN_BUILD_DIR/gridfp_runtime_owner_local_sector_parity_microprobe1"
 PTXAS_FLAGS=(); [[ "$PTXAS_VERBOSE" == 1 ]] && PTXAS_FLAGS+=("-Xptxas=-v")
-build_one(){ local parity="$1" bin="$2"; TMPDIR="$ONEESAN_TMP_DIR" nvcc -O3 -std=c++17 -lineinfo -arch="$ARCH" "${PTXAS_FLAGS[@]}" -DRP_RUNTIME_OWNER_LOCAL_SECTOR_TABLE=1 -DRP_RUNTIME_OWNER_LOCAL_SECTOR_PARITY="$parity" "$SRC" -o "$bin" >"$LOGDIR/parity${parity}.build.out" 2>"$LOGDIR/parity${parity}.build.err"; }
+build_one(){ local parity="$1" bin="$2"; TMPDIR="$ONEESAN_TMP_DIR" nvcc -O3 -std=c++17 -lineinfo -arch="$ARCH" "${PTXAS_FLAGS[@]}" -DRP_RUNTIME_OWNER_LOCAL_SECTOR_TABLE=1 -DRP_RUNTIME_OWNER_LOCAL_SECTOR_PARITY="$parity" -DRP_RUNTIME_OWNER_LOCAL_SECTOR_W28_TREE=0 "$SRC" -o "$bin" >"$LOGDIR/parity${parity}.build.out" 2>"$LOGDIR/parity${parity}.build.err"; }
 build_one 0 "$BIN0"; build_one 1 "$BIN1"
 
 printf 'parity\trepeat\tkernel_ms\tns_per_call\tchecksum\n' >"$RESULT"
-run_one(){ local parity="$1" bin="$2" rep="$3"; local out="$LOGDIR/parity${parity}_run${rep}.out" err="$LOGDIR/parity${parity}_run${rep}.err"; "$bin" "$BLOCKS" "$THREADS" "$ITERS" "$WARMUP" >"$out" 2>"$err"; local line; line="$(grep '^gridfp-runtime-owner-local-sector-parity-microprobe ' "$out" | tail -n1 || true)"; [[ -n "$line" ]] || { cat "$out" >&2 || true; cat "$err" >&2 || true; exit 3; }; grep -Fq " parity=$parity " <<<"$line" || { echo "unexpected parity result: $line" >&2; exit 4; }; local ms ns checksum; ms="$(sed -nE 's/.* kernel_ms=([^[:space:]]+).*/\1/p' <<<"$line")"; ns="$(sed -nE 's/.* ns_per_call=([^[:space:]]+).*/\1/p' <<<"$line")"; checksum="$(sed -nE 's/.* checksum=([^[:space:]]+).*/\1/p' <<<"$line")"; [[ -n "$ms" && -n "$ns" && -n "$checksum" ]] || exit 5; printf '%s\t%s\t%s\t%s\t%s\n' "$parity" "$rep" "$ms" "$ns" "$checksum" >>"$RESULT"; }
+run_one(){ local parity="$1" bin="$2" rep="$3"; local out="$LOGDIR/parity${parity}_run${rep}.out" err="$LOGDIR/parity${parity}_run${rep}.err"; "$bin" "$BLOCKS" "$THREADS" "$ITERS" "$WARMUP" >"$out" 2>"$err"; local line; line="$(grep '^gridfp-runtime-owner-local-sector-parity-microprobe ' "$out" | tail -n1 || true)"; [[ -n "$line" ]] || { cat "$out" >&2 || true; cat "$err" >&2 || true; exit 3; }; grep -Fq " parity=$parity " <<<"$line" || { echo "unexpected parity result: $line" >&2; exit 4; }; grep -Fq ' w28_tree=0 ' <<<"$line" || { echo "parity A/B must keep w28_tree=0: $line" >&2; exit 4; }; local ms ns checksum; ms="$(sed -nE 's/.* kernel_ms=([^[:space:]]+).*/\1/p' <<<"$line")"; ns="$(sed -nE 's/.* ns_per_call=([^[:space:]]+).*/\1/p' <<<"$line")"; checksum="$(sed -nE 's/.* checksum=([^[:space:]]+).*/\1/p' <<<"$line")"; [[ -n "$ms" && -n "$ns" && -n "$checksum" ]] || exit 5; printf '%s\t%s\t%s\t%s\t%s\n' "$parity" "$rep" "$ms" "$ns" "$checksum" >>"$RESULT"; }
 for ((r=1;r<=REPEATS;++r)); do if ((r&1)); then order=(0 1); else order=(1 0); fi; for parity in "${order[@]}"; do [[ "$parity" == 0 ]] && bin="$BIN0" || bin="$BIN1"; echo "=== W28 owner-local-sector parity=$parity run $r/$REPEATS ===" >&2; run_one "$parity" "$bin" "$r"; done; done
 cat "$RESULT"
 
@@ -59,6 +59,7 @@ print('owner_local_sector_W28_candidates_old=15')
 print('owner_local_sector_W28_candidates_new=7')
 print('owner_local_sector_W28_max_comparisons_old=4')
 print('owner_local_sector_W28_max_comparisons_new=3')
+print('owner_local_sector_W28_tree=0')
 print(f'checksum={checksums["0"]}')
 print(f'summary={dst}')
 PY
