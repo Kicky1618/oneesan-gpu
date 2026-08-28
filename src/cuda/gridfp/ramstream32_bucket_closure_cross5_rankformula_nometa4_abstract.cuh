@@ -122,21 +122,18 @@ p10dc_resolved_low_preimages_cross5_rankformula_nometa4_abstract_fixed(
     if (!depth) return BkczCrossAccum(0);
     const P10DCRankFormulaNometa4Resolved z =
         p10dc_low_rankformula_nometa4_resolve(h, rank);
-    const uint32_t n = uint32_t(__popc(z.mask));
     const uint32_t local = rank - z.start;
-    const uint32_t di = uint32_t(D_P10DC_RANKFORMULA_ABSTRACT_OFF[n * 16u + h]) + local;
+    const uint32_t di = uint32_t(D_P10DC_RANKFORMULA_ABSTRACT_OFF[z.n * 16u + h]) + local;
     const uint32_t d = p10dc_rankformula_abstract_desc_load(di);
     const uint32_t lp = d & ((1u << P10DC_RANKFORMULA_ABSTRACT_LP_BITS) - 1u);
     uint32_t rp = d >> P10DC_RANKFORMULA_ABSTRACT_LP_BITS;
-    uint32_t remaining = z.mask;
-    uint32_t ordinal = 0;
     uint32_t state = depth;
     const uint32_t source_base = uint32_t(int(z.start) + z.base_delta);
     BkczCrossAccum sum = 0;
 
-    while (remaining) {
-        const int pos = 31 - __clz(remaining);
-        remaining ^= 1u << pos;
+    // The abstract word is indexed by support ordinal, not physical position.
+    // Group64 already stores n, so no runtime popcount or clz scan remains.
+    for (uint32_t ordinal = 0; ordinal < z.n; ++ordinal) {
         if ((lp >> ordinal) & 1u) {
             if (state == 1u) {
                 const uint32_t source_local = p10dc_rankformula_abstract_src_load(rp);
@@ -148,7 +145,6 @@ p10dc_resolved_low_preimages_cross5_rankformula_nometa4_abstract_fixed(
             if (state == 1u) return sum;
             --state;
         }
-        ++ordinal;
     }
     return sum;
 }
