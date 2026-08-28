@@ -22,11 +22,12 @@ visible="$(nvidia-smi --query-gpu=index --format=csv,noheader | wc -l)"
 (( visible >= 8 )) || { echo "need 8 visible GPUs; got $visible" >&2; exit 2; }
 mkdir -p "$(dirname "$RESULT")" "$LOGDIR"
 
-bash "$ONEESAN_ROOT/scripts/bench/b300-vmm-production-generate-proof.sh"
-ARCH="$PTX_ARCH" bash "$ONEESAN_ROOT/scripts/bench/b300-vmm-production-ptx-proof.sh" \
-  >"$LOGDIR/vmm_ptx.out" 2>"$LOGDIR/vmm_ptx.err"
-GPUS=8 ARCH="$ARCH" bash "$ONEESAN_ROOT/scripts/bench/b300-vmm-storage-helper-microprobe.sh" \
-  >"$LOGDIR/vmm_helper.out" 2>"$LOGDIR/vmm_helper.err"
+GPUS=8 ARCH="$ARCH" PTX_ARCH="$PTX_ARCH" \
+  bash "$ONEESAN_ROOT/scripts/bench/b300-vmm-production-preflight.sh" \
+  >"$LOGDIR/vmm_preflight.out" 2>"$LOGDIR/vmm_preflight.err"
+grep -Fq 'b300-vmm-production-preflight OK ' "$LOGDIR/vmm_preflight.out"
+grep -Fq 'logical_shard_chunks=0 logical_shard_views=0' "$LOGDIR/vmm_preflight.out"
+grep -Fq 'device0_direct_remote_memcpy=1 cross_boundary_rw_all_gpu=1' "$LOGDIR/vmm_preflight.out"
 
 BIN_COMPARE="$ONEESAN_BUILD_DIR/oneesan_cuda_gridfp_b300_hbm32_n27_vmmab_compare"
 BIN_U32="$ONEESAN_BUILD_DIR/oneesan_cuda_gridfp_b300_hbm32_n27_vmmab_u32"
@@ -41,6 +42,10 @@ N=27 ARCH="$ARCH" OUT="$BIN_U32" \
 N=27 ARCH="$ARCH" OUT="$BIN_VMM" \
   bash "$ONEESAN_ROOT/scripts/build/b300-hbm32-vmm.sh" \
   >"$LOGDIR/vmm.build.out" 2>"$LOGDIR/vmm.build.err"
+
+grep -Fq 'logical_shard_chunks=0' "$LOGDIR/vmm.build.out"
+grep -Fq 'logical_shard_views=0' "$LOGDIR/vmm.build.out"
+grep -Fq 'interval_io=direct_global_index_shard_free_compact24' "$LOGDIR/vmm.build.out"
 
 nvidia-smi -L >&2
 nvidia-smi topo -m >&2 || true
@@ -150,9 +155,9 @@ print(f'b300_vmm_main_padding_kib={v["vmm_main_padding_kib"]}')
 print(f'b300_vmm_block_padding_kib={v["vmm_block_padding_kib"]}')
 print('compare=three_compare_subtract_shard_address')
 print('u32=hi32_seed_fully_u32_shard_address')
-print('vmm=contiguous_multi_gpu_virtual_address_direct_global_index_shard_free_compact_intervals')
+print('vmm=fully_shard_free_contiguous_multi_gpu_virtual_address_direct_global_index_compact24_intervals')
 print(f'residue={residues["compare"]}')
 print(f'summary={dst}')
 PY
 
-echo "b300-vmm-production-ab OK runs=$RUNS mod=$MOD target_mib=$TARGET_MIB max_window=$MAX_WINDOW result=$RESULT" >&2
+echo "b300-vmm-production-ab OK runs=$RUNS mod=$MOD target_mib=$TARGET_MIB max_window=$MAX_WINDOW preflight=full_vmm result=$RESULT" >&2
