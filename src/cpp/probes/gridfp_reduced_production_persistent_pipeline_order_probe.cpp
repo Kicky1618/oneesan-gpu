@@ -4,6 +4,7 @@
 #include "gridfp_reduced_production_persistent_pipeline_plan_probe.cpp"
 #pragma pop_macro("main")
 
+#include <cmath>
 #include <limits>
 #include <vector>
 
