@@ -9,6 +9,7 @@ FILES=(
   scripts/bench/gridfp-runtime-label-hotpath-proof-suite.sh
   scripts/bench/gridfp-runtime-w28-label-hotpath-suite.sh
   scripts/bench/gridfp-codec-table-layout-suite.sh
+  scripts/bench/gridfp-codec-table-exact-suite.sh
   scripts/bench/gridfp-build-nvcc-prepend-smoke.sh
   scripts/bench/gridfp-reduced-runtime-owner-label-hotpath-ab.sh
   scripts/bench/gridfp-reduced-runtime-owner-local-sector-compact-table-ab.sh
