@@ -3,10 +3,12 @@
 #include "ramstream32_bucket_low_rankchunk32.cuh"
 
 static constexpr uint32_t P10DC_RANKFORMULA_MASKS = 1u << LOW_LUT_K;
+static constexpr uint32_t P10DC_RANKFORMULA_HEIGHTS = LOW_LUT_K + 2u;
 static constexpr uint16_t P10DC_RANKFORMULA_BASE_INVALID = 0xffffu;
 static_assert(LOW_LUT_K <= 14, "rankformula assumes LOW_LUT_K<=14");
 static_assert(P10DC_RANKCHUNK32_BYTEPACK == 0,
               "rankformula stores compact 23-bit CROSS5 chunks");
+static_assert(P10DC_RANKFORMULA_HEIGHTS <= uint32_t(MAXW + 2));
 
 __constant__ uint32_t* D_P10DC_LOW_RANKFORMULA_META32;
 __constant__ uint16_t* D_P10DC_LOW_RANKFORMULA_BASE16;
@@ -52,8 +54,9 @@ struct BucketFusedDirectHighRowsRankFormulaTables
 
         std::array<uint32_t, MAXW + 2> hoff{};
         std::vector<uint32_t> meta;
-        std::vector<uint16_t> base(P * size_t(P10DC_RANKFORMULA_MASKS),
-                                   P10DC_RANKFORMULA_BASE_INVALID);
+        std::vector<uint16_t> base(
+            size_t(P10DC_RANKFORMULA_HEIGHTS) * P10DC_RANKFORMULA_MASKS,
+            P10DC_RANKFORMULA_BASE_INVALID);
         meta.reserve(low_prekey_count);
         size_t actual_codes = 0, nonempty_mask_rows = 0;
         uint32_t max_mask_base = 0;
@@ -63,6 +66,12 @@ struct BucketFusedDirectHighRowsRankFormulaTables
             const uint32_t a = f.low_code_off[owner_base + h];
             const uint32_t b = h + 1u < uint32_t(MAXW + 2)
                 ? f.low_code_off[owner_base + h + 1u] : owner_end;
+            if (h >= P10DC_RANKFORMULA_HEIGHTS && a != b) {
+                std::cerr << "p10dc rankformula unexpected LOW height owner=" << fixed
+                          << " h=" << h << " count=" << (b - a)
+                          << " height_limit=" << P10DC_RANKFORMULA_HEIGHTS << '\n';
+                std::exit(731);
+            }
             uint32_t previous_mask = 0;
             bool have_mask = false;
             for (uint32_t i = a; i < b; ++i) {
@@ -75,7 +84,7 @@ struct BucketFusedDirectHighRowsRankFormulaTables
                     std::cerr << "p10dc rankformula mask order failure owner=" << fixed
                               << " h=" << h << " prev=" << previous_mask
                               << " mask=" << mask << '\n';
-                    std::exit(731);
+                    std::exit(732);
                 }
                 if (!have_mask || mask != previous_mask) {
                     const uint32_t local_base = i - a;
@@ -83,7 +92,7 @@ struct BucketFusedDirectHighRowsRankFormulaTables
                         std::cerr << "p10dc rankformula base16 overflow owner=" << fixed
                                   << " h=" << h << " mask=" << mask
                                   << " base=" << local_base << '\n';
-                        std::exit(732);
+                        std::exit(733);
                     }
                     base[size_t(h) * P10DC_RANKFORMULA_MASKS + mask] =
                         uint16_t(local_base);
@@ -99,7 +108,7 @@ struct BucketFusedDirectHighRowsRankFormulaTables
                     std::cerr << "p10dc rankformula chunk packing failure owner=" << fixed
                               << " h=" << h << " key=" << key
                               << " chunks=" << chunks << '\n';
-                    std::exit(733);
+                    std::exit(734);
                 }
                 meta.push_back(chunks);
                 ++actual_codes;
@@ -109,7 +118,7 @@ struct BucketFusedDirectHighRowsRankFormulaTables
             std::cerr << "p10dc rankformula size mismatch owner=" << fixed
                       << " actual=" << actual_codes << '/' << low_prekey_count
                       << " meta=" << meta.size() << '\n';
-            std::exit(734);
+            std::exit(735);
         }
 
         low_rankformula_meta32_count = meta.size();
@@ -166,6 +175,7 @@ struct BucketFusedDirectHighRowsRankFormulaTables
                   << " meta_bytes=" << meta_bytes
                   << " base_entries=" << base.size()
                   << " base_bytes=" << base_bytes
+                  << " base_heights=" << P10DC_RANKFORMULA_HEIGHTS
                   << " nonempty_mask_rows=" << nonempty_mask_rows
                   << " max_mask_base=" << max_mask_base
                   << " rankstream_bytes=0"
