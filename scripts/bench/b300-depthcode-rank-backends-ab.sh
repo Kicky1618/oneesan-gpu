@@ -41,6 +41,7 @@ contexts=(
   warpstriped_delta_direct_affine_prekey_cross5
   warpstriped_delta_direct_affine_prekey_rank16_cross5
   warpstriped_delta_direct_affine_prekey_rankstream_cross5
+  warpstriped_delta_direct_affine_rankstream32_cross5
 )
 for ctx in "${contexts[@]}"; do
   bin="$ONEESAN_BUILD_DIR/ab_depthcode_${ctx}_${DEPTHCODE_DECODE_LOAD}_${TRANSPOSE_MODE}_n${N}"
@@ -56,7 +57,8 @@ metrics=('wall_s','forward_high_s','reverse_high_s','forward_low_s','reverse_low
 base='warpstriped_delta_direct_affine_prekey_cross5'
 r16='warpstriped_delta_direct_affine_prekey_rank16_cross5'
 rstream='warpstriped_delta_direct_affine_prekey_rankstream_cross5'
-order=(base,r16,rstream); out=[]
+r32='warpstriped_delta_direct_affine_rankstream32_cross5'
+order=(base,r16,rstream,r32); out=[]
 for ctx in order:
     g=[r for r in rows if r['high_ctx']==ctx]
     z={'high_ctx':ctx,'repeats':str(len(g))}
@@ -71,22 +73,31 @@ def ratio(a,b,m,label):
 for m in ('wall_s','forward_high_s','reverse_high_s'):
     ratio(base,r16,m,'rank16')
     ratio(base,rstream,m,'rankstream')
-    ratio(r16,rstream,m,'rankstream_vs_rank16')
-for ctx,label in ((r16,'rank16'),(rstream,'rankstream')):
+    ratio(base,r32,m,'rankstream32')
+    ratio(r16,r32,m,'rankstream32_vs_rank16')
+    ratio(rstream,r32,m,'rankstream32_vs_rankstream')
+for ctx,label in ((r16,'rank16'),(rstream,'rankstream'),(r32,'rankstream32')):
     if all(q[x][m]!='NA' for x in (base,ctx) for m in ('forward_high_s','reverse_high_s')):
         b=float(q[base]['forward_high_s'])+float(q[base]['reverse_high_s'])
         o=float(q[ctx]['forward_high_s'])+float(q[ctx]['reverse_high_s'])
         print(f'{label}_total_high_speedup={b/o:.6f}x')
-text='\n'.join(pathlib.Path(logdir).glob('*rankstream_cross5_r1.err').__iter__().__next__().read_text(errors='replace').splitlines()) if list(pathlib.Path(logdir).glob('*rankstream_cross5_r1.err')) else ''
-vals=[tuple(map(int,m)) for m in re.findall(r'p10dc_low_rankstream fixed_owner=\d+ codes=(\d+) l_ranks=(\d+)',text)]
-if vals:
-    codes=sum(x for x,_ in vals); ranks=sum(y for _,y in vals)
-    print(f'rankstream_codes_total={codes}')
-    print(f'rankstream_l_ranks_total={ranks}')
-    print(f'rankstream_metadata_mib_total={(codes*4+ranks*2)/(1<<20):.6f}')
+ld=pathlib.Path(logdir)
+rs=list(ld.glob('*prekey_rankstream_cross5_r1.err'))
+if rs:
+    vals=[tuple(map(int,m)) for m in re.findall(r'p10dc_low_rankstream fixed_owner=\d+ codes=(\d+) l_ranks=(\d+)',rs[0].read_text(errors='replace'))]
+    if vals:
+        codes=sum(x for x,_ in vals); ranks=sum(y for _,y in vals)
+        print(f'rankstream_metadata_mib_total={(codes*4+ranks*2)/(1<<20):.6f}')
+r32logs=list(ld.glob('*affine_rankstream32_cross5_r1.err'))
+if r32logs:
+    vals=[tuple(map(int,m)) for m in re.findall(r'p10dc_low_rankstream32 fixed_owner=\d+ codes=(\d+) blocks=(\d+) l_ranks=(\d+) bytes=(\d+)',r32logs[0].read_text(errors='replace'))]
+    if vals:
+        print(f'rankstream32_metadata_mib_total={sum(v[3] for v in vals)/(1<<20):.6f}')
+        print(f'rankstream32_codes_total={sum(v[0] for v in vals)}')
+        print(f'rankstream32_blocks_total={sum(v[1] for v in vals)}')
 print('rankstream_model=offset32+rank16_per_L')
-print('rankstream_cross_runtime_direct_lookup=0')
-print('rank16_cross_runtime_direct_lookup=0')
+print('rankstream32_model=key23+prefix9_per_code+blockbase32+rank16_per_L')
+print('rankstream32_cross_runtime_direct_lookup=0')
 print('fallback_structurally_unreachable=1')
 print(f'summary={dst}')
 PY
