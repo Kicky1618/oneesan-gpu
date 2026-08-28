@@ -13,10 +13,15 @@ namespace {
 constexpr uint32_t kChunk = 5;
 constexpr uint32_t kKeys = 243;
 constexpr uint32_t kStates = 26;
-constexpr uint32_t kMask = 0x1fu;
 constexpr uint32_t kSourceN = 1u << 15;
 constexpr int kBlock = 256;
 constexpr int kMaxBlocks = 4096;
+
+enum DecodeMode : int {
+    kDecodeFfs = 0,
+    kDecodeUnrolled5 = 1,
+    kDecodeDirect3 = 2,
+};
 
 static void ck(cudaError_t e, const char* what) {
     if (e != cudaSuccess) {
@@ -97,19 +102,40 @@ __device__ __forceinline__ uint64_t decode_unrolled5(
     return sum;
 }
 
-template<bool UNROLLED>
+__device__ __forceinline__ uint64_t decode_direct3(
+    uint8_t rankmask, const uint16_t* rank_row, const uint32_t* source
+) {
+    uint64_t sum = 0;
+    if (rankmask & 0x01u) {
+        const uint16_t rank = rank_row[0];
+        sum += uint64_t(source[uint32_t(rank)]);
+    }
+    if (rankmask & 0x02u) {
+        const uint16_t rank = rank_row[1];
+        sum += uint64_t(source[uint32_t(rank)]);
+    }
+    if (rankmask & 0x04u) {
+        const uint16_t rank = rank_row[2];
+        sum += uint64_t(source[uint32_t(rank)]);
+    }
+    return sum;
+}
+
+template<int MODE>
 __global__ void rankmask5_kernel(
     const uint8_t* masks, const uint16_t* ranks, const uint32_t* source,
     size_t n, uint64_t* partial
 ) {
+    static_assert(MODE >= kDecodeFfs && MODE <= kDecodeDirect3);
     const size_t tid = size_t(blockIdx.x) * blockDim.x + threadIdx.x;
     const size_t stride = size_t(gridDim.x) * blockDim.x;
     uint64_t sum = 0;
     for (size_t i = tid; i < n; i += stride) {
         const uint8_t m = masks[i];
         const uint16_t* row = ranks + i * kChunk;
-        if constexpr (UNROLLED) sum += decode_unrolled5(m, row, source);
-        else sum += decode_ffs(m, row, source);
+        if constexpr (MODE == kDecodeFfs) sum += decode_ffs(m, row, source);
+        else if constexpr (MODE == kDecodeUnrolled5) sum += decode_unrolled5(m, row, source);
+        else sum += decode_direct3(m, row, source);
     }
     partial[tid] = sum;
 }
@@ -118,7 +144,7 @@ struct Timing {
     float best_ms = std::numeric_limits<float>::infinity();
 };
 
-template<bool UNROLLED>
+template<int MODE>
 Timing bench(
     const uint8_t* masks, const uint16_t* ranks, const uint32_t* source,
     size_t n, uint64_t* partial, int blocks, int repeats, int trials
@@ -130,7 +156,7 @@ Timing bench(
     for (int trial = 0; trial < trials; ++trial) {
         ck(cudaEventRecord(start), "event record start");
         for (int r = 0; r < repeats; ++r) {
-            rankmask5_kernel<UNROLLED><<<blocks, kBlock>>>(masks, ranks, source, n, partial);
+            rankmask5_kernel<MODE><<<blocks, kBlock>>>(masks, ranks, source, n, partial);
         }
         ck(cudaEventRecord(stop), "event record stop");
         ck(cudaEventSynchronize(stop), "event sync stop");
@@ -144,10 +170,19 @@ Timing bench(
     return t;
 }
 
-uint64_t checksum(const std::vector<uint64_t>& v) {
-    uint64_t s = 0;
-    for (uint64_t x : v) s += x;
-    return s;
+template<int MODE>
+uint64_t run_checksum(
+    const uint8_t* masks, const uint16_t* ranks, const uint32_t* source,
+    size_t n, uint64_t* partial, int blocks, size_t threads
+) {
+    rankmask5_kernel<MODE><<<blocks, kBlock>>>(masks, ranks, source, n, partial);
+    ck(cudaDeviceSynchronize(), "checksum kernel");
+    std::vector<uint64_t> host(threads);
+    ck(cudaMemcpy(host.data(), partial, threads * sizeof(uint64_t), cudaMemcpyDeviceToHost),
+       "checksum D2H");
+    uint64_t sum = 0;
+    for (uint64_t x : host) sum += x;
+    return sum;
 }
 
 }  // namespace
@@ -171,12 +206,18 @@ int main(int argc, char** argv) {
     std::vector<uint8_t> table_masks;
     table_masks.reserve((kStates - 1u) * kKeys);
     std::array<uint64_t, 6> hist{};
+    uint8_t rankmask_or = 0;
     for (uint32_t state = 1; state < kStates; ++state) {
         for (uint32_t key = 0; key < kKeys; ++key) {
             const uint8_t m = rankmask_host(key, state);
             table_masks.push_back(m);
             ++hist[popcount5_host(m)];
+            rankmask_or = uint8_t(rankmask_or | m);
         }
+    }
+    if ((rankmask_or & 0x18u) != 0u) {
+        std::fprintf(stderr, "direct3 invariant failure rankmask_or=0x%02x\n", unsigned(rankmask_or));
+        return 4;
     }
 
     std::vector<uint8_t> h_masks(n);
@@ -211,48 +252,57 @@ int main(int argc, char** argv) {
     ck(cudaMemcpy(d_ranks, h_ranks.data(), n * kChunk * sizeof(uint16_t), cudaMemcpyHostToDevice), "ranks H2D");
     ck(cudaMemcpy(d_source, h_source.data(), kSourceN * sizeof(uint32_t), cudaMemcpyHostToDevice), "source H2D");
 
-    rankmask5_kernel<false><<<blocks, kBlock>>>(d_masks, d_ranks, d_source, n, d_partial);
-    rankmask5_kernel<true><<<blocks, kBlock>>>(d_masks, d_ranks, d_source, n, d_partial);
+    rankmask5_kernel<kDecodeFfs><<<blocks, kBlock>>>(d_masks, d_ranks, d_source, n, d_partial);
+    rankmask5_kernel<kDecodeUnrolled5><<<blocks, kBlock>>>(d_masks, d_ranks, d_source, n, d_partial);
+    rankmask5_kernel<kDecodeDirect3><<<blocks, kBlock>>>(d_masks, d_ranks, d_source, n, d_partial);
     ck(cudaDeviceSynchronize(), "warmup");
 
-    rankmask5_kernel<false><<<blocks, kBlock>>>(d_masks, d_ranks, d_source, n, d_partial);
-    ck(cudaDeviceSynchronize(), "ffs checksum kernel");
-    std::vector<uint64_t> h_ffs(threads);
-    ck(cudaMemcpy(h_ffs.data(), d_partial, threads * sizeof(uint64_t), cudaMemcpyDeviceToHost), "ffs checksum D2H");
-    rankmask5_kernel<true><<<blocks, kBlock>>>(d_masks, d_ranks, d_source, n, d_partial);
-    ck(cudaDeviceSynchronize(), "unrolled checksum kernel");
-    std::vector<uint64_t> h_unrolled(threads);
-    ck(cudaMemcpy(h_unrolled.data(), d_partial, threads * sizeof(uint64_t), cudaMemcpyDeviceToHost), "unrolled checksum D2H");
-    const uint64_t sum_ffs = checksum(h_ffs);
-    const uint64_t sum_unrolled = checksum(h_unrolled);
-    if (sum_ffs != sum_unrolled) {
-        std::fprintf(stderr, "checksum mismatch ffs=%llu unrolled=%llu\n",
-                     (unsigned long long)sum_ffs, (unsigned long long)sum_unrolled);
+    const uint64_t sum_ffs = run_checksum<kDecodeFfs>(
+        d_masks, d_ranks, d_source, n, d_partial, blocks, threads);
+    const uint64_t sum_unrolled = run_checksum<kDecodeUnrolled5>(
+        d_masks, d_ranks, d_source, n, d_partial, blocks, threads);
+    const uint64_t sum_direct3 = run_checksum<kDecodeDirect3>(
+        d_masks, d_ranks, d_source, n, d_partial, blocks, threads);
+    if (sum_ffs != sum_unrolled || sum_ffs != sum_direct3) {
+        std::fprintf(stderr, "checksum mismatch ffs=%llu unrolled=%llu direct3=%llu\n",
+                     (unsigned long long)sum_ffs, (unsigned long long)sum_unrolled,
+                     (unsigned long long)sum_direct3);
         return 3;
     }
 
-    // Alternate benchmark order to reduce first-mode bias; report best launch time.
-    Timing ffs_a = bench<false>(d_masks, d_ranks, d_source, n, d_partial, blocks, repeats, trials);
-    Timing unr_a = bench<true>(d_masks, d_ranks, d_source, n, d_partial, blocks, repeats, trials);
-    Timing unr_b = bench<true>(d_masks, d_ranks, d_source, n, d_partial, blocks, repeats, trials);
-    Timing ffs_b = bench<false>(d_masks, d_ranks, d_source, n, d_partial, blocks, repeats, trials);
+    // Mirror the order around direct3 to reduce first/last-mode bias; report best launch time.
+    const Timing ffs_a = bench<kDecodeFfs>(d_masks, d_ranks, d_source, n, d_partial,
+                                           blocks, repeats, trials);
+    const Timing unr_a = bench<kDecodeUnrolled5>(d_masks, d_ranks, d_source, n, d_partial,
+                                                 blocks, repeats, trials);
+    const Timing dir_a = bench<kDecodeDirect3>(d_masks, d_ranks, d_source, n, d_partial,
+                                               blocks, repeats, trials);
+    const Timing dir_b = bench<kDecodeDirect3>(d_masks, d_ranks, d_source, n, d_partial,
+                                               blocks, repeats, trials);
+    const Timing unr_b = bench<kDecodeUnrolled5>(d_masks, d_ranks, d_source, n, d_partial,
+                                                 blocks, repeats, trials);
+    const Timing ffs_b = bench<kDecodeFfs>(d_masks, d_ranks, d_source, n, d_partial,
+                                           blocks, repeats, trials);
     const float ffs_ms = std::min(ffs_a.best_ms, ffs_b.best_ms);
     const float unrolled_ms = std::min(unr_a.best_ms, unr_b.best_ms);
-    const double speedup = double(ffs_ms) / double(unrolled_ms);
+    const float direct3_ms = std::min(dir_a.best_ms, dir_b.best_ms);
 
     cudaDeviceProp prop{};
     ck(cudaGetDeviceProperties(&prop, 0), "device props");
     std::printf("rankmask5-decode-microbench OK device=%s n=%zu blocks=%d threads=%zu repeats=%d trials=%d\n",
                 prop.name, n, blocks, threads, repeats, trials);
-    std::printf("table_cases=%zu popcount_hist=%llu,%llu,%llu,%llu,%llu,%llu checksum_exact=1 checksum=%llu\n",
+    std::printf("table_cases=%zu popcount_hist=%llu,%llu,%llu,%llu,%llu,%llu rankmask_or=0x%02x upper_bits_zero=1 checksum_exact=1 checksum=%llu\n",
                 table_masks.size(),
                 (unsigned long long)hist[0], (unsigned long long)hist[1],
                 (unsigned long long)hist[2], (unsigned long long)hist[3],
                 (unsigned long long)hist[4], (unsigned long long)hist[5],
-                (unsigned long long)sum_ffs);
-    std::printf("ffs_loop_ms=%.6f unrolled5_ms=%.6f ffs_to_unrolled_speedup=%.6f\n",
-                ffs_ms, unrolled_ms, speedup);
-    std::printf("decode_model=rank16_then_source32 mask_source=all_state1_25_x_key0_242_repeated\n");
+                unsigned(rankmask_or), (unsigned long long)sum_ffs);
+    std::printf("ffs_loop_ms=%.6f unrolled5_ms=%.6f direct3_ms=%.6f ffs_to_unrolled5_speedup=%.6f ffs_to_direct3_speedup=%.6f unrolled5_to_direct3_speedup=%.6f\n",
+                ffs_ms, unrolled_ms, direct3_ms,
+                double(ffs_ms) / double(unrolled_ms),
+                double(ffs_ms) / double(direct3_ms),
+                double(unrolled_ms) / double(direct3_ms));
+    std::printf("decode_model=rank16_then_source32 mask_source=all_state1_25_x_key0_242_repeated direct3_ordinals=0,1,2\n");
 
     cudaFree(d_partial);
     cudaFree(d_source);
