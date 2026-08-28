@@ -205,7 +205,7 @@ int main() {
     ck(cudaMemcpyToSymbol(D_MOD,&mod,sizeof(mod)),"p10dc rankdelta8 modulus");
     BucketFusedDirectHighRowsRankDelta8Tables dt; dt.install_metadata(layout,bo,bf);
     BucketForwardPattern10DepthCodeDeviceTables fdt; fdt.install(fh); BucketReversePattern10DepthCodeDeviceTables rdt; rdt.install(rh);
-    p10dc_install_rankchunk32_lut();
+    p10dc_install_rankdelta8_lut();
 
     auto g0=bkft_make_grid(ms,bs,im,ib,storage,layout,owner,phy); p10dc_rankdelta8_run_high(g0,layout,phy,bf,dt,false,false); if(!bkft_compare("rankdelta8-forward-control",g0,ms,bs,fhm,fhb,storage,layout,owner,phy))return 90;
     auto g1=bkft_make_grid(ms,bs,im,ib,storage,layout,owner,phy); p10dc_rankdelta8_run_high(g1,layout,phy,bf,dt,false,true); if(!bkft_compare("rankdelta8-forward",g1,ms,bs,fhm,fhb,storage,layout,owner,phy))return 91;
@@ -217,7 +217,7 @@ int main() {
               << " forward_exact=1 reverse_exact=1 table_exact=1 stream_exact=1"
               << " chunk_bits=23 prefix_bits=9 block=32"
               << " height_align=" << (P10DC_RANKDELTA8_ALIGN32 ? 32 : 1)
-              << " delta_fast8_escape16=1 fused16=" << P10DC_RANKCHUNK32_FUSED16
+              << " delta_fast8_escape16=1 fused13=" << P10DC_RANKDELTA8_FUSED13
               << " cross_runtime_div=0 cross_runtime_mod=0\n";
     return 0;
 }
