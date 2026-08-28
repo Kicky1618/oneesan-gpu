@@ -28,6 +28,51 @@ __device__ __forceinline__ void p10dc_low_rankstream32_row(
     row = D_P10DC_LOW_RANKSTREAM + block_base + prefix;
 }
 
+// Warp-striped HIGH kernels visit LOW ranks as
+//   blockIdx.x*32 + lane + q*gridDim.x*32.
+// Hence rank%32==lane and compact=height_offset+rank is a contiguous 32-entry
+// interval across the active warp.  An arbitrary height_offset can make that
+// interval straddle one 32-code metadata block boundary, but never more than
+// one.  Load the first block base in lane 0 and, only when required by active
+// lanes, the second in the lane where that block begins.  This reduces block-
+// base traffic from one global load per lane to at most two per warp stripe.
+__device__ __forceinline__ void p10dc_low_rankstream32_row_warpstripe(
+    uint32_t h, uint32_t rank, uint32_t& key, const uint16_t*& row
+) {
+    const uint32_t lane = uint32_t(threadIdx.x) & 31u;
+    const unsigned active = __activemask();
+    const uint32_t compact = D_P10DC_LOW_PREKEY_HOFF[h] + rank;
+    const uint32_t meta = D_P10DC_LOW_RANKMETA32[compact];
+    key = meta & P10DC_RANKSTREAM32_KEY_MASK;
+    const uint32_t prefix = meta >> P10DC_RANKSTREAM32_KEY_BITS;
+
+    // rank%32==lane in the only caller, so this is the compact index belonging
+    // to lane 0 of the current stripe.  It cannot underflow because rank>=lane.
+    const uint32_t first_compact = compact - lane;
+    const uint32_t first_block = first_compact >> P10DC_RANKSTREAM32_BLOCK_LOG2;
+    const uint32_t first_off = first_compact & (P10DC_RANKSTREAM32_BLOCK - 1u);
+    const uint32_t split_lane = P10DC_RANKSTREAM32_BLOCK - first_off; // [1,32]
+
+    uint32_t b0_local = 0;
+    if (lane == 0u) b0_local = D_P10DC_LOW_RANKBLOCK32[first_block];
+    const uint32_t b0 = __shfl_sync(active, b0_local, 0);
+    uint32_t block_base = b0;
+
+    if (split_lane < 32u) {
+        const unsigned split_bit = 1u << split_lane;
+        // Active lanes are a low contiguous prefix on the final partial stripe.
+        // If split_lane is inactive, no active lane belongs to the second block.
+        if (active & split_bit) {
+            uint32_t b1_local = 0;
+            if (lane == split_lane)
+                b1_local = D_P10DC_LOW_RANKBLOCK32[first_block + 1u];
+            const uint32_t b1 = __shfl_sync(active, b1_local, int(split_lane));
+            if (lane >= split_lane) block_base = b1;
+        }
+    }
+    row = D_P10DC_LOW_RANKSTREAM + block_base + prefix;
+}
+
 // Sparse rankstream with warp-sized offset compression.  The parent builder is
 // used as a correctness reference and to construct the uint16 rank stream; once
 // packed metadata is installed, the separate prekey and uint32-per-code offset
@@ -127,6 +172,7 @@ struct BucketFusedDirectHighRowsRankStream32Tables
                   << " l_ranks=" << low_rankstream_count
                   << " bytes=" << bytes
                   << " key_bits=23 prefix_bits=9 block=32"
+                  << " block_base_loads_per_warp_max=2"
                   << " old_prekey_offset_arrays_freed=1 direct_lookup_runtime=0\n";
     }
 
