@@ -18,6 +18,7 @@ RANKCHUNK32_ALIGN32_EXPLICIT="${RANKCHUNK32_ALIGN32+x}"
 RANKCHUNK32_ALIGN32="${RANKCHUNK32_ALIGN32:-0}"
 RANKCHUNK32_BLOCK64="${RANKCHUNK32_BLOCK64:-0}"
 RANKDELTA8_ALIGN32="${RANKDELTA8_ALIGN32:-1}"
+RANKDELTA8_FUSED13="${RANKDELTA8_FUSED13:-$RANKCHUNK32_FUSED16}"
 PM_ACCUM="${PM_ACCUM:-0}"
 TERNARY_KEY4="${TERNARY_KEY4:-1}"
 PTXAS_VERBOSE="${PTXAS_VERBOSE:-0}"
@@ -35,7 +36,7 @@ if [[ "$HIGH_CTX" == warpstriped_delta_direct_affine_rankchunk32_basepair64_cros
   RANKCHUNK32_BLOCK64=0
   [[ -z "$RANKCHUNK32_ALIGN32_EXPLICIT" ]] && RANKCHUNK32_ALIGN32=1
 fi
-for x in RANKCHUNK32_ONESHFL RANKCHUNK32_FUSED16 RANKCHUNK32_BYTEPACK RANKCHUNK32_ALIGN32 RANKCHUNK32_BLOCK64 RANKDELTA8_ALIGN32 PM_ACCUM TERNARY_KEY4 PTXAS_VERBOSE; do
+for x in RANKCHUNK32_ONESHFL RANKCHUNK32_FUSED16 RANKCHUNK32_BYTEPACK RANKCHUNK32_ALIGN32 RANKCHUNK32_BLOCK64 RANKDELTA8_ALIGN32 RANKDELTA8_FUSED13 PM_ACCUM TERNARY_KEY4 PTXAS_VERBOSE; do
   v="${!x}"
   if [[ "$v" != 0 && "$v" != 1 ]]; then echo "$x must be 0 or 1" >&2; exit 2; fi
 done
@@ -75,7 +76,11 @@ SUFFIX="_payload_${HIGH_CTX}_${TRANSPOSE_MODE}"
 [[ "$RANKSTREAM_LUT_LOAD" == ldg ]] && SUFFIX="${SUFFIX}_ranklutldg"
 [[ "$RANKSTREAM_LUT_LOAD" == ldg256 ]] && SUFFIX="${SUFFIX}_ranklutldg256"
 [[ "$RANKCHUNK32_ONESHFL" == 0 ]] && SUFFIX="${SUFFIX}_rankchunk2shfl"
-[[ "$RANKCHUNK32_FUSED16" == 1 ]] && SUFFIX="${SUFFIX}_rankchunkfused16"
+if [[ "$HIGH_CTX" == warpstriped_delta_direct_affine_rankdelta8_cross5 ]]; then
+  [[ "$RANKDELTA8_FUSED13" == 1 ]] && SUFFIX="${SUFFIX}_rankdeltafused13"
+else
+  [[ "$RANKCHUNK32_FUSED16" == 1 ]] && SUFFIX="${SUFFIX}_rankchunkfused16"
+fi
 [[ "$RANKCHUNK32_BYTEPACK" == 1 ]] && SUFFIX="${SUFFIX}_rankchunkbytepack"
 [[ "$RANKCHUNK32_ALIGN32" == 1 ]] && SUFFIX="${SUFFIX}_rankchunkalign32"
 [[ "$RANKCHUNK32_BLOCK64" == 1 ]] && SUFFIX="${SUFFIX}_rankchunkblock64"
@@ -103,6 +108,7 @@ TMPDIR="$ONEESAN_TMP_DIR" nvcc -O3 -std=c++17 -lineinfo -arch="$ARCH" \
   -DP10DC_RANKCHUNK32_ALIGN32="$RANKCHUNK32_ALIGN32" \
   -DP10DC_RANKCHUNK32_BLOCK64="$RANKCHUNK32_BLOCK64" \
   -DP10DC_RANKDELTA8_ALIGN32="$RANKDELTA8_ALIGN32" \
+  -DP10DC_RANKDELTA8_FUSED13="$RANKDELTA8_FUSED13" \
   "$SRC" -o "$OUT"
 
-echo "built $OUT (closure=pattern10-depthcode sidecar_bytes_per_orbit=0 temporary_depth_bytes=0 decode=payload-masks runtime_unrank=0 high_ctx=$HIGH_CTX decode_load=$DEPTHCODE_DECODE_LOAD rankstream_lut_load=$RANKSTREAM_LUT_LOAD rankchunk32_oneshfl=$RANKCHUNK32_ONESHFL rankchunk32_fused16=$RANKCHUNK32_FUSED16 rankchunk32_bytepack=$RANKCHUNK32_BYTEPACK rankchunk32_align32=$RANKCHUNK32_ALIGN32 rankchunk32_block64=$RANKCHUNK32_BLOCK64 rankdelta8_align32=$RANKDELTA8_ALIGN32 window=graph transpose=$TRANSPOSE_MODE pm_accum=$PM_ACCUM ternary_key4=$TERNARY_KEY4 ptxas_verbose=$PTXAS_VERBOSE)"
+echo "built $OUT (closure=pattern10-depthcode sidecar_bytes_per_orbit=0 temporary_depth_bytes=0 decode=payload-masks runtime_unrank=0 high_ctx=$HIGH_CTX decode_load=$DEPTHCODE_DECODE_LOAD rankstream_lut_load=$RANKSTREAM_LUT_LOAD rankchunk32_oneshfl=$RANKCHUNK32_ONESHFL rankchunk32_fused16=$RANKCHUNK32_FUSED16 rankchunk32_bytepack=$RANKCHUNK32_BYTEPACK rankchunk32_align32=$RANKCHUNK32_ALIGN32 rankchunk32_block64=$RANKCHUNK32_BLOCK64 rankdelta8_align32=$RANKDELTA8_ALIGN32 rankdelta8_fused13=$RANKDELTA8_FUSED13 window=graph transpose=$TRANSPOSE_MODE pm_accum=$PM_ACCUM ternary_key4=$TERNARY_KEY4 ptxas_verbose=$PTXAS_VERBOSE)"
