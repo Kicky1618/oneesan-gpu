@@ -37,7 +37,7 @@ __global__ void interval_io_kernel(Count*buf,const PeerInterval*iv,size_t niv){
         }
     }
 }'''
-INTERVAL_NEW='''template<bool BLOCK,bool SCATTER>
+INTERVAL_NEW='''template<bool SCATTER>
 __global__ void interval_io_kernel(Count*buf,const PeerInterval*iv,size_t niv,Count*auth){
     for(size_t k=blockIdx.x;k<niv;k+=gridDim.x){
         PeerInterval x=iv[k];
@@ -59,13 +59,13 @@ CTX_BUILD_OLD='''std::vector<DeviceCtx>ctx(ng);for(int d=0;d<ng;++d){ck(cudaSetD
 CTX_BUILD_NEW='''std::vector<DeviceCtx>ctx(ng);for(int d=0;d<ng;++d)ctx[d].init(d,mod,main_base,block_base);'''
 
 MAIN_GATHER_OLD='''if(ms.size){if(pg.use_mi)interval_io_kernel<false,false><<<interval_blocks(pg.mi.size(),threads),threads>>>(c.dA,c.dIM,pg.mi.size());else gather_main_kernel<<<bm,threads>>>(c.dA,useMate?c.dMate:nullptr,ms.size);}'''
-MAIN_GATHER_NEW='''if(ms.size){if(pg.use_mi)interval_io_kernel<false,false><<<interval_blocks(pg.mi.size(),threads),threads>>>(c.dA,c.dIM,pg.mi.size(),c.authMain);else gather_main_kernel<<<bm,threads>>>(c.dA,useMate?c.dMate:nullptr,ms.size,c.authMain);}'''
+MAIN_GATHER_NEW='''if(ms.size){if(pg.use_mi)interval_io_kernel<false><<<interval_blocks(pg.mi.size(),threads),threads>>>(c.dA,c.dIM,pg.mi.size(),c.authMain);else gather_main_kernel<<<bm,threads>>>(c.dA,useMate?c.dMate:nullptr,ms.size,c.authMain);}'''
 BLOCK_GATHER_OLD='''if(ds.size){if(pg.use_di)interval_io_kernel<true,false><<<interval_blocks(pg.di.size(),threads),threads>>>(c.dD,c.dID,pg.di.size());else gather_block_kernel<<<bd,threads>>>(c.dD,ds.size);}'''
-BLOCK_GATHER_NEW='''if(ds.size){if(pg.use_di)interval_io_kernel<true,false><<<interval_blocks(pg.di.size(),threads),threads>>>(c.dD,c.dID,pg.di.size(),c.authBlock);else gather_block_kernel<<<bd,threads>>>(c.dD,ds.size,c.authBlock);}'''
+BLOCK_GATHER_NEW='''if(ds.size){if(pg.use_di)interval_io_kernel<false><<<interval_blocks(pg.di.size(),threads),threads>>>(c.dD,c.dID,pg.di.size(),c.authBlock);else gather_block_kernel<<<bd,threads>>>(c.dD,ds.size,c.authBlock);}'''
 MAIN_SCATTER_OLD='''if(ms.size){if(pg.use_mi)interval_io_kernel<false,true><<<interval_blocks(pg.mi.size(),threads),threads>>>(cur,c.dIM,pg.mi.size());else scatter_main_kernel<<<bm,threads>>>(cur,ms.size);}'''
-MAIN_SCATTER_NEW='''if(ms.size){if(pg.use_mi)interval_io_kernel<false,true><<<interval_blocks(pg.mi.size(),threads),threads>>>(cur,c.dIM,pg.mi.size(),c.authMain);else scatter_main_kernel<<<bm,threads>>>(cur,ms.size,c.authMain);}'''
+MAIN_SCATTER_NEW='''if(ms.size){if(pg.use_mi)interval_io_kernel<true><<<interval_blocks(pg.mi.size(),threads),threads>>>(cur,c.dIM,pg.mi.size(),c.authMain);else scatter_main_kernel<<<bm,threads>>>(cur,ms.size,c.authMain);}'''
 BLOCK_SCATTER_OLD='''if(ds.size){if(pg.use_di)interval_io_kernel<true,true><<<interval_blocks(pg.di.size(),threads),threads>>>(dcur,c.dID,pg.di.size());else scatter_block_kernel<<<bd,threads>>>(dcur,ds.size);}'''
-BLOCK_SCATTER_NEW='''if(ds.size){if(pg.use_di)interval_io_kernel<true,true><<<interval_blocks(pg.di.size(),threads),threads>>>(dcur,c.dID,pg.di.size(),c.authBlock);else scatter_block_kernel<<<bd,threads>>>(dcur,ds.size,c.authBlock);}'''
+BLOCK_SCATTER_NEW='''if(ds.size){if(pg.use_di)interval_io_kernel<true><<<interval_blocks(pg.di.size(),threads),threads>>>(dcur,c.dID,pg.di.size(),c.authBlock);else scatter_block_kernel<<<bd,threads>>>(dcur,ds.size,c.authBlock);}'''
 
 
 def once(text:str,old:str,new:str,label:str)->str:
@@ -88,11 +88,11 @@ def main()->None:
     text=once(text,BLOCK_GATHER_OLD,BLOCK_GATHER_NEW,'block gather base arg')
     text=once(text,MAIN_SCATTER_OLD,MAIN_SCATTER_NEW,'main scatter base arg')
     text=once(text,BLOCK_SCATTER_OLD,BLOCK_SCATTER_NEW,'block scatter base arg')
-    for token in ('D_MAIN_VBASE','D_BLOCK_VBASE','cudaMemcpyToSymbol(D_MAIN_VBASE','cudaMemcpyToSymbol(D_BLOCK_VBASE'):
-        if token in text: raise SystemExit(f'base-symbol artifact remains after kernel-arg lowering: {token}')
-    for required in ('global_load_main(const Count* base,Code g)','global_store_main(Count* base,Code g,Count v)','Count*authMain=nullptr,*authBlock=nullptr','ctx[d].init(d,mod,main_base,block_base)','c.authMain','c.authBlock'):
+    for token in ('D_MAIN_VBASE','D_BLOCK_VBASE','cudaMemcpyToSymbol(D_MAIN_VBASE','cudaMemcpyToSymbol(D_BLOCK_VBASE','template<bool BLOCK,bool SCATTER>'):
+        if token in text: raise SystemExit(f'base-symbol/unused-template artifact remains after kernel-arg lowering: {token}')
+    for required in ('template<bool SCATTER>','global_load_main(const Count* base,Code g)','global_store_main(Count* base,Code g,Count v)','Count*authMain=nullptr,*authBlock=nullptr','ctx[d].init(d,mod,main_base,block_base)','c.authMain','c.authBlock'):
         if required not in text: raise SystemExit(f'missing base-arg production artifact: {required}')
     a.out.parent.mkdir(parents=True,exist_ok=True);a.out.write_text(text)
-    print(f'lowered {a.out} vmm_base_source=kernel_param vmm_base_symbols=0 vmm_base_symbol_copies=0 direct_global_index=1 shard_free=1 compact_interval_bytes=24')
+    print(f'lowered {a.out} vmm_base_source=kernel_param vmm_base_symbols=0 vmm_base_symbol_copies=0 interval_template_axes=1 direct_global_index=1 shard_free=1 compact_interval_bytes=24')
 
 if __name__=='__main__':main()
