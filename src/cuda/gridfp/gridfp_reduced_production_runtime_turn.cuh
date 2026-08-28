@@ -390,6 +390,37 @@ __global__ void owner_turn_runtime_subwarp_kernel(
         }
         __syncwarp(subgroup_mask);
 
+#if RP_RUNTIME_CACHE_EDGES
+        long long accum[RP_RUNTIME_MAX_DESTINATIONS_PER_LANE] = {0, 0, 0};
+        for (int si = 0; si < ns; ++si) {
+            const long long value = static_cast<long long>(sh_value[warp][subgroup][si]);
+            const std::uint8_t nedge = sh_edge[warp][subgroup].count[si];
+            for (std::uint8_t ei = 0; ei < nedge; ++ei) {
+                const std::uint8_t destination_ix =
+                    sh_edge[warp][subgroup].destination[si][ei];
+                if ((destination_ix & (RP_RUNTIME_SUBGROUP_WIDTH - 1)) == sublane) {
+                    const int slot = destination_ix >> 3;
+                    accum[slot] += static_cast<long long>(
+                                       sh_edge[warp][subgroup].coefficient[si][ei]) *
+                                   value;
+                }
+            }
+        }
+        int accumulator_ix = 0;
+        for (int di = sublane; di < nd;
+             di += RP_RUNTIME_SUBGROUP_WIDTH, ++accumulator_ix) {
+            const DeviceKey mine = sh_dst[warp][subgroup][di];
+            const GroupedDeviceRank dgr = grouped_rank_in_component_device(
+                mine, W, destination_q, source_reverse, ctx);
+            if (dgr.owner != gpu_id) {
+                runtime_set_error(error, 326);
+                continue;
+            }
+            long long z = accum[accumulator_ix] % static_cast<long long>(mod);
+            if (z < 0) z += mod;
+            state[dgr.local] = static_cast<std::uint32_t>(z);
+        }
+#else
         for (int di = sublane; di < nd; di += RP_RUNTIME_SUBGROUP_WIDTH) {
             const DeviceKey mine = sh_dst[warp][subgroup][di];
             const GroupedDeviceRank dgr = grouped_rank_in_component_device(
@@ -399,17 +430,6 @@ __global__ void owner_turn_runtime_subwarp_kernel(
                 continue;
             }
             long long acc = 0;
-#if RP_RUNTIME_CACHE_EDGES
-            for (int si = 0; si < ns; ++si) {
-                const std::uint8_t nedge = sh_edge[warp][subgroup].count[si];
-                for (std::uint8_t ei = 0; ei < nedge; ++ei) {
-                    if (sh_edge[warp][subgroup].destination[si][ei] == di)
-                        acc += static_cast<long long>(
-                                   sh_edge[warp][subgroup].coefficient[si][ei]) *
-                               static_cast<long long>(sh_value[warp][subgroup][si]);
-                }
-            }
-#else
             for (int si = 0; si < ns; ++si) {
                 RuntimeSmallTerms edge;
                 if (!runtime_turn_step(
@@ -423,11 +443,11 @@ __global__ void owner_turn_runtime_subwarp_kernel(
                                static_cast<long long>(sh_value[warp][subgroup][si]);
                 }
             }
-#endif
             long long z = acc % static_cast<long long>(mod);
             if (z < 0) z += mod;
             state[dgr.local] = static_cast<std::uint32_t>(z);
         }
+#endif
         __syncwarp(subgroup_mask);
     }
 }
