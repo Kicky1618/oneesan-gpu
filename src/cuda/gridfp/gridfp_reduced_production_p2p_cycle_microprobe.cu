@@ -4,16 +4,18 @@
 #include "gridfp_reduced_production_shift_cycle_microprobe.cu"
 #pragma pop_macro("main")
 
+#include "gridfp_reduced_production_grouped_support_device.cuh"
+
 namespace {
 
 static constexpr int P2P_MAX_GPU = 8;
 
 // Each GPU scans the compact support space, but only the leader owner's GPU
-// executes a cycle.  One CTA handles one support at a time.  Thread 0 derives
-// the owner/local route once, then the full CTA streams the contiguous
-// primitive slab through that route.  This avoids recomputing grouped_rank in
-// every lane for every primitive value and gives large slabs 256-way memory
-// parallelism instead of one warp.
+// executes a cycle. One CTA handles one support at a time. Thread 0 derives
+// the owner/local route once from support combinadics only, then the full CTA
+// streams the contiguous primitive slab through that route. The cycle always
+// starts at primitive rank zero, so MateID materialization and primitive-rank
+// reconstruction are redundant in route generation.
 __global__ void shifted_tile_p2p_cycle_kernel(
     std::uint32_t** __restrict__ peer_state,
     Rank64 base_supports,
@@ -62,10 +64,9 @@ __global__ void shifted_tile_p2p_cycle_kernel(
                 } else if (cycle_len > RP_MAX_W) {
                     set_error(error, 182);
                 } else if (cycle_len > 1) {
-                    const DeviceKey leader = equal_run_key0_device(
-                        run.support, blocked, W, q, reverse);
-                    const GroupedDeviceRank lr = grouped_rank_device(
-                        leader, W, q, reverse, old_start, Kwin, ngpu, owner_begin);
+                    const GroupedDeviceRank lr = grouped_support_slab_rank_device(
+                        run.support, blocked, W, q, reverse, old_start,
+                        Kwin, ngpu, owner_begin);
                     if (lr.owner < 0 || lr.owner >= ngpu) {
                         set_error(error, 183);
                     } else if (lr.owner == gpu_id) {
@@ -76,10 +77,9 @@ __global__ void shifted_tile_p2p_cycle_kernel(
                         std::uint32_t cur_support = shift_next_support_device(
                             run.support, blocked, W, q, Kwin, S, reverse);
                         while (cur_support != run.support && hops < cycle_len) {
-                            const DeviceKey cur = equal_run_key0_device(
-                                cur_support, blocked, W, q, reverse);
-                            const GroupedDeviceRank cr = grouped_rank_device(
-                                cur, W, q, reverse, old_start, Kwin, ngpu, owner_begin);
+                            const GroupedDeviceRank cr = grouped_support_slab_rank_device(
+                                cur_support, blocked, W, q, reverse, old_start,
+                                Kwin, ngpu, owner_begin);
                             if (cr.owner < 0 || cr.owner >= ngpu) {
                                 set_error(error, 184);
                                 break;
@@ -302,6 +302,8 @@ void run_p2p_shift_probe(
               << " wall_ms=" << ms
               << " direct_peer_load_store=1"
               << " cta_route=1 route_rank_once_per_cycle=1"
+              << " route_rank_support_only=1"
+              << " route_mate_materializations=0 route_primitive_rank_calls=0"
               << " support_scan_replicas=" << ngpu
               << " staging_bytes=0 run_table_bytes=0 visited_bytes=0 exact=OK\n";
 
@@ -350,6 +352,7 @@ int main(int argc, char** argv) {
                   << ngpu * sizeof(std::uint32_t*)
                   << " cycle_worker=leader_owner"
                   << " cta_route=1 route_rank_once_per_cycle=1"
+                  << " route_rank_support_only=1"
                   << " support_scan_replicas=" << ngpu
                   << " staging_bytes=0 run_table_bytes=0 visited_bytes=0\n";
         return 0;
