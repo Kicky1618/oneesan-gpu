@@ -49,7 +49,8 @@ static std::vector<PeerInterval> make_peer_intervals(const GroupSpec&s,Code chun
     }
     return tiled;
 }'''
-INTERVAL_NEW = '''struct PeerInterval{Code remote,local,len;uint32_t owner,pad;};
+INTERVAL_NEW = '''struct PeerInterval{Code remote,local,len;};
+static_assert(sizeof(PeerInterval)==24,"VMM PeerInterval must stay three 64-bit words");
 static std::vector<PeerInterval> make_peer_intervals(const GroupSpec&s,Code chunk,int ng,bool& use_interval){
     (void)chunk;(void)ng;
     constexpr Code MIN_AVG_INTERVAL_ELEMS = 65536;
@@ -70,7 +71,7 @@ static std::vector<PeerInterval> make_peer_intervals(const GroupSpec&s,Code chun
         Code off=0;
         while(off<x.len){
             Code take=std::min<Code>(x.len-off,Code(IO_TILE_ELEMS));
-            tiled.push_back({x.global+off,x.local+off,take,0,0});
+            tiled.push_back({x.global+off,x.local+off,take});
             off+=take;
         }
     }
@@ -168,7 +169,7 @@ def main() -> None:
     text = once(text, BACKEND_OLD, BACKEND_NEW, 'backend label')
     args.out.parent.mkdir(parents=True, exist_ok=True)
     args.out.write_text(text)
-    print(f'generated {args.out} from {args.src} vmm_contiguous_authoritative=1 direct_global_index=1 logical_shard_views=1 shard_free_interval_io=1 count_bytes=4 runtime_physical_balance_guard=1')
+    print(f'generated {args.out} from {args.src} vmm_contiguous_authoritative=1 direct_global_index=1 logical_shard_views=1 shard_free_interval_io=1 compact_interval_bytes=24 count_bytes=4 runtime_physical_balance_guard=1')
 
 
 if __name__ == '__main__':
