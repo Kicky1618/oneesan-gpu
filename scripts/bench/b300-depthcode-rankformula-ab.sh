@@ -92,12 +92,16 @@ ld=pathlib.Path(logdir)
 p=ld/'rankdelta8_r1.err'
 if p.exists():
  vals=[tuple(map(int,x)) for x in re.findall(r'p10dc_low_rankdelta8 fixed_owner=\d+ codes=(\d+) meta_entries=(\d+) blocks=(\d+) stream_bytes=(\d+) total_bytes=(\d+) padding=(\d+) max_prefix=(\d+) max_delta=(\d+)',p.read_text(errors='replace'))]
- if vals: print(f'rankdelta8_total_table_bytes={sum(v[4] for v in vals)}')
+ if vals: print(f'rankdelta8_total_table_bytes_all_gpus={sum(v[4] for v in vals)}')
 p=ld/'rankformula_r1.err'
 if p.exists():
- vals=[tuple(map(int,x)) for x in re.findall(r'p10dc_low_rankformula fixed_owner=\d+ codes=(\d+) meta_bytes=(\d+) base_entries=(\d+) base_bytes=(\d+) nonempty_mask_rows=(\d+) max_mask_base=(\d+)',p.read_text(errors='replace'))]
+ vals=[tuple(map(int,x)) for x in re.findall(r'p10dc_low_rankformula fixed_owner=\d+ codes=(\d+) meta_bytes=(\d+) base_entries=(\d+) base_bytes=(\d+) base_heights=(\d+) nonempty_mask_rows=(\d+) max_mask_base=(\d+)',p.read_text(errors='replace'))]
  if vals:
-  print(f'rankformula_meta_bytes_total={sum(v[1] for v in vals)}'); print(f'rankformula_base_bytes_total={sum(v[3] for v in vals)}'); print(f'rankformula_total_table_bytes={sum(v[1]+v[3] for v in vals)}')
+  print(f'rankformula_meta_bytes_all_gpus={sum(v[1] for v in vals)}')
+  print(f'rankformula_base_bytes_all_gpus={sum(v[3] for v in vals)}')
+  print(f'rankformula_total_table_bytes_all_gpus={sum(v[1]+v[3] for v in vals)}')
+  print(f'rankformula_base_bytes_per_gpu={max(v[3] for v in vals)}')
+  print(f'rankformula_base_heights={max(v[4] for v in vals)}')
 if run_ptxas=='1':
  rr=list(csv.DictReader(open(resource),delimiter='\t'))
  for mode in ('rankdelta8','rankformula'):
@@ -107,7 +111,7 @@ if run_ptxas=='1':
   print(f'{mode}_high_max_registers={max(regs) if regs else "NA"}'); print(f'{mode}_high_spill_store_bytes={sum(ss) if ss else "NA"}'); print(f'{mode}_high_spill_load_bytes={sum(sl) if sl else "NA"}')
 print('rankformula_rankstream_bytes=0')
 print('rankformula_meta_bytes_per_code=4')
-print('rankformula_dense_base_bytes_per_owner_w28=983040')
+print('rankformula_dense_base_bytes_per_gpu_w28=524288')
 print('rankformula_source_height_delta=2')
 print(f'summary={dst}')
 PY
