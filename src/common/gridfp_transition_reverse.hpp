@@ -106,14 +106,8 @@ ONEESAN_REV_HD IncludeResult include_horizontal_reverse(MateID m, int width, int
         return z;
     case LL: {
         t = msetpair(m, p, NN);
-        int q = p - 1, s = 1;
-        while (s) {
-            --q;
-            if (q < 0) return z;
-            const MateValue v = mget(t, q);
-            if (v == L) ++s;
-            else if (v == R) --s;
-        }
+        const int q = closure_match_left(t, p);
+        if (q < 0) return z;
         t = mset(t, q, L);
         if (p == width - 1) {
             z.mate = t;
@@ -127,14 +121,8 @@ ONEESAN_REV_HD IncludeResult include_horizontal_reverse(MateID m, int width, int
     }
     case RR: {
         t = msetpair(m, p, NN);
-        int q = p, s = 1;
-        while (s) {
-            ++q;
-            if (q >= width) return z;
-            const MateValue v = mget(t, q);
-            if (v == L) --s;
-            else if (v == R) ++s;
-        }
+        const int q = closure_match_right(t, width, p);
+        if (q < 0) return z;
         t = mset(t, q, R);
         if (p == width - 1) {
             z.mate = t;
