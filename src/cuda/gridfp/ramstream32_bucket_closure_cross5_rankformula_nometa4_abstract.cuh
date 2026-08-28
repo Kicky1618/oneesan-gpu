@@ -138,9 +138,11 @@ p10dc_resolved_low_preimages_cross5_rankformula_nometa4_abstract_fixed(
         const int pos = 31 - __clz(remaining);
         remaining ^= 1u << pos;
         if ((lp >> ordinal) & 1u) {
-            const uint32_t source_local = p10dc_rankformula_abstract_src_load(rp++);
-            if (state == 1u)
+            if (state == 1u) {
+                const uint32_t source_local = p10dc_rankformula_abstract_src_load(rp);
                 sum = bkcz_cross_add(sum, source_row[source_base + source_local]);
+            }
+            ++rp;
             ++state;
         } else {
             if (state == 1u) return sum;
