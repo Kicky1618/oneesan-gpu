@@ -19,6 +19,9 @@ oneesan::twocell::PackedKey reverse_stationary_pack(const Key& k) {
     return z;
 }
 
+// Coordinate-set bijection only.  As on forward rows, this stationary
+// recoupling identifies the destination address with a source address; it is
+// not asserted to be an actual matrix matching edge.
 Key reverse_recouple_coordinate(Key src, int pair) {
     if (src.type == 'A') return src;
     if (src.type != 'C') fail("reverse stationary coordinate type");
@@ -29,11 +32,6 @@ Key reverse_recouple_coordinate(Key src, int pair) {
         std::swap(src.w[next_active], src.w[active]);
     }
     return src;
-}
-
-bool vec_has_unit_edge(const CVec& v, const Key& dst) {
-    const auto it = v.find(dst);
-    return it != v.end() && it->second == 1;
 }
 
 } // namespace
@@ -50,7 +48,7 @@ int main(int argc, char** argv) {
     for (int W = 5; W <= maxW; ++W) {
         Rank source_checks = 0;
         Rank same_address_checks = 0;
-        Rank diagonal_edge_checks = 0;
+        Rank coordinate_bijection_checks = 0;
         Rank c_swaps = 0;
 
         for (int i = 0; i <= W - 4; ++i) {
@@ -63,11 +61,14 @@ int main(int argc, char** argv) {
             std::set<Key> rsrc_set(rsrc.begin(), rsrc.end());
             const auto rdst = reverse_q_basis(W, pair - 1, words);
             std::set<Key> rdst_set(rdst.begin(), rdst.end());
+            std::set<Key> recoupled_set;
 
             for (const Key& src : rsrc) {
                 const Key dst = reverse_recouple_coordinate(src, pair);
                 if (!rdst_set.count(dst))
                     fail("reverse stationary recoupled destination W=" + std::to_string(W));
+                if (!recoupled_set.insert(dst).second)
+                    fail("reverse stationary coordinate collision W=" + std::to_string(W));
 
                 const auto ps = reverse_stationary_pack(src);
                 const auto pd = reverse_stationary_pack(dst);
@@ -82,11 +83,6 @@ int main(int argc, char** argv) {
                     fail("reverse stationary same address W=" + std::to_string(W) +
                          " pair=" + std::to_string(pair));
 
-                const CVec edges = K_reverse_basis(src, W, pair);
-                if (!vec_has_unit_edge(edges, dst))
-                    fail("reverse stationary diagonal edge W=" + std::to_string(W) +
-                         " pair=" + std::to_string(pair));
-
                 if (src.type == 'C' && !(src == dst)) {
                     if (src.w[src_active] == N || src.w[dst_active] != N)
                         fail("reverse stationary bad C swap source");
@@ -96,13 +92,17 @@ int main(int argc, char** argv) {
                 }
                 ++source_checks;
                 ++same_address_checks;
-                ++diagonal_edge_checks;
             }
+            if (recoupled_set != rdst_set)
+                fail("reverse stationary coordinate bijection coverage W=" +
+                     std::to_string(W));
+            coordinate_bijection_checks += rsrc.size();
 
             // Reflection of every forward component must give one reverse
             // component whose stationary source and destination coordinate sets
-            // are identical. This also checks that component boundaries survive
-            // the fixed-basis normalization rather than merely individual edges.
+            // are identical.  This proves the fixed-address normalization only;
+            // matrix matching remains the reflected unique tree matching and is
+            // reconstructed separately by the component-matching executor.
             for (const Word& u : words[W - 2]) {
                 const Key fseed = project_key(Key{'C', u}, i, W);
                 std::set<Key> fsources{fseed};
@@ -141,8 +141,9 @@ int main(int argc, char** argv) {
         std::cout << "W=" << W
                   << " reverse_sources=" << source_checks
                   << " same_address=" << same_address_checks
-                  << " unit_matching_edges=" << diagonal_edge_checks
+                  << " coordinate_bijection=" << coordinate_bijection_checks
                   << " C_left_swaps=" << c_swaps
+                  << " recouple_is_matching_edge=0"
                   << " stationary_component_sets=OK"
                   << " reverse_single_buffer=OK\n";
     }
@@ -150,7 +151,8 @@ int main(int argc, char** argv) {
     std::cout << "W=28_theory reverse_stationary_vector_GiB="
               << double(st.total[28] * 4ULL) / double(1ULL << 30)
               << " reverse_destination_vector_required=0"
-              << " reverse_destination_rank_required=0\n";
+              << " reverse_destination_rank_required=0"
+              << " reverse_matching_table_bytes=0\n";
     std::cout << "ALL_OK reverse_stationary_two_cell=1\n";
     return 0;
 }
