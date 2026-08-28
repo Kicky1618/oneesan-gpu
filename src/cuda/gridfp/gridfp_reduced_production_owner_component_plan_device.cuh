@@ -89,23 +89,25 @@ __device__ __forceinline__ bool runtime_owner_local_sector_device(
     if (base >= 0 && L == W / 2 + 1 && outer_ones >= 0 && outer_ones <= O) {
         const int row = base + outer_ones * L;
 #if RP_RUNTIME_OWNER_LOCAL_SECTOR_PARITY
-        // A local sector has positive size iff outer_ones + local_ones is odd.
-        // `within` is already reduced modulo component_group, so it is strictly
-        // below the final positive endpoint. Search only parity-valid endpoints:
-        // W=28 shrinks 15 candidates to at most 8 and 4 comparisons to at most 3.
-        const int parity = 1 - (outer_ones & 1);
-        const int count = (L + 1 - parity) >> 1;
+        // Positive local sectors require odd occupied count. local_ones=0 is
+        // additionally impossible because both marked local positions must be
+        // occupied, so the first positive endpoint is l=1 for even outer_ones
+        // and l=2 for odd outer_ones. `within` is modulo component_group and is
+        // therefore below the last positive endpoint. For W=28 this searches
+        // only 7 endpoints instead of 15, with at most 3 comparisons vs 4.
+        const int first = (outer_ones & 1) ? 2 : 1;
+        const int count = (L - first + 1) >> 1;
         int lo = 0;
         int hi = count - 1;
         while (lo < hi) {
             const int mid = lo + ((hi - lo) >> 1);
-            const int l = parity + (mid << 1);
+            const int l = first + (mid << 1);
             if (within < RP_RUNTIME_OWNER_LOCAL_SECTOR_END[row + l]) hi = mid;
             else lo = mid + 1;
         }
-        const int l = parity + (lo << 1);
+        const int l = first + (lo << 1);
         const Rank64 begin = lo
-            ? RP_RUNTIME_OWNER_LOCAL_SECTOR_END[row + parity + ((lo - 1) << 1)]
+            ? RP_RUNTIME_OWNER_LOCAL_SECTOR_END[row + first + ((lo - 1) << 1)]
             : 0;
         local_ones = l;
         local_within = within - begin;
