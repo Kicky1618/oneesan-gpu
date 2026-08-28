@@ -11,12 +11,12 @@ NGPU="${NGPU:-8}"
 GRIDFP_VRAM_RESERVE_MIB="${GRIDFP_VRAM_RESERVE_MIB:-8192}"
 BIN="${BIN:-$ONEESAN_BUILD_DIR/oneesan_cuda_gridfp_b300_hbm32_n${N}_shardmode${MODE}}"
 
-if [[ "$MODE" != 0 && "$MODE" != 1 && "$MODE" != 2 ]]; then
-  echo "SHARD_ADDRESS_MODE must be 0, 1, or 2" >&2
+if [[ "$MODE" != 0 && "$MODE" != 1 && "$MODE" != 2 && "$MODE" != 3 ]]; then
+  echo "SHARD_ADDRESS_MODE must be 0, 1, 2, or 3" >&2
   exit 2
 fi
-if [[ "$MODE" == 2 && ( "$N" != 27 || "$NGPU" != 8 ) ]]; then
-  echo "SHARD_ADDRESS_MODE=2 requires n=27 and NGPU=8" >&2
+if (( MODE >= 2 )) && [[ "$N" != 27 || "$NGPU" != 8 ]]; then
+  echo "SHARD_ADDRESS_MODE>=2 requires n=27 and NGPU=8" >&2
   exit 2
 fi
 if (( MOD < 2 || MOD > 4294967295 )); then
