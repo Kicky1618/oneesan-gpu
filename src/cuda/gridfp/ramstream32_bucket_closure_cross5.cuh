@@ -10,6 +10,7 @@ static constexpr uint8_t P10DC_CROSS5_MASK_MASK = 0x1fu;
 static constexpr int P10DC_CROSS5_HALT_SHIFT = 5;
 static constexpr int P10DC_CROSS5_MAX_RUNTIME_DEPTH = 15;
 static constexpr int P10DC_CROSS5_MAX_TABLE_INPUT_STATE = P10DC_CROSS5_MAX_RUNTIME_DEPTH + 2 * P10DC_CROSS5_CHUNK;
+static_assert(LOW_LUT_K <= 14, "CROSS5 fast path assumes at most three chunks");
 static_assert(P10DC_CROSS5_MAX_TABLE_INPUT_STATE == 25);
 static_assert(P10DC_CROSS5_STATES == P10DC_CROSS5_MAX_TABLE_INPUT_STATE + 1);
 static_assert(P10DC_CROSS5_STATES * P10DC_CROSS5_KEYS * sizeof(uint8_t) + P10DC_CROSS5_KEYS * sizeof(int8_t) == 6561,"compact cross5 table size regression");
@@ -29,8 +30,8 @@ __device__ __forceinline__ BkczCrossAccum p10dc_resolved_low_preimages_cross5_fa
 for(int pos=LOW_LUT_K-1;pos>=0;--pos){uint32_t v=(dest_code>>(2*pos))&3u;if(v==uint32_t(R)){if(s==1)break;--s;}else if(v==uint32_t(::L)){if(s==1){uint32_t x=D_BKF_LOW_DIRECT[key-weight];if(x!=BKF_DIRECT_INVALID)sum=bkcz_cross_add(sum,source_row[bkf_loc_rank(x)]);}++s;}if(pos)weight/=3u;}return sum;}
 __device__ __forceinline__ BkczCrossAccum p10dc_resolved_low_preimages_cross5_fallback(uint32_t dest_code,uint32_t depth,const Count*source_row){return p10dc_resolved_low_preimages_cross5_fallback_prekey(dest_code,bkcz_ternary_key<LOW_LUT_K>(dest_code),depth,source_row);}
 
-template<int START,int LEN>
-__device__ __forceinline__ uint32_t p10dc_cross5_apply_chunk(uint32_t full_key,uint32_t&state,const Count*source_row,BkczCrossAccum&sum){static_assert(START>=0&&LEN>=1&&LEN<=P10DC_CROSS5_CHUNK,"invalid cross5 chunk");constexpr uint32_t DIV=bkcz_pow3_const(START),MOD=bkcz_pow3_const(LEN);uint32_t chunk=(full_key/DIV)%MOD;if(state>=P10DC_CROSS5_STATES)return 2u;uint8_t e=D_P10DC_CROSS5[size_t(state)*P10DC_CROSS5_KEYS+chunk],mask=uint8_t(e&P10DC_CROSS5_MASK_MASK);while(mask){int i=__ffs(int(mask))-1;mask=uint8_t(mask&uint8_t(mask-1));uint32_t pos=uint32_t(START+i),x=D_BKF_LOW_DIRECT[full_key-p10dc_pow3(pos)];if(x!=BKF_DIRECT_INVALID)sum=bkcz_cross_add(sum,source_row[bkf_loc_rank(x)]);}if(((e>>P10DC_CROSS5_HALT_SHIFT)&1u)!=0)return 1u;state=uint32_t(int(state)+int(D_P10DC_CROSS5_DELTA[chunk]));return 0u;}
+template<int START,int LEN,bool CHECK_STATE=true>
+__device__ __forceinline__ uint32_t p10dc_cross5_apply_chunk(uint32_t full_key,uint32_t&state,const Count*source_row,BkczCrossAccum&sum){static_assert(START>=0&&LEN>=1&&LEN<=P10DC_CROSS5_CHUNK,"invalid cross5 chunk");constexpr uint32_t DIV=bkcz_pow3_const(START),MOD=bkcz_pow3_const(LEN);uint32_t chunk=(full_key/DIV)%MOD;if constexpr(CHECK_STATE){if(state>=P10DC_CROSS5_STATES)return 2u;}uint8_t e=D_P10DC_CROSS5[size_t(state)*P10DC_CROSS5_KEYS+chunk],mask=uint8_t(e&P10DC_CROSS5_MASK_MASK);while(mask){int i=__ffs(int(mask))-1;mask=uint8_t(mask&uint8_t(mask-1));uint32_t pos=uint32_t(START+i),x=D_BKF_LOW_DIRECT[full_key-p10dc_pow3(pos)];if(x!=BKF_DIRECT_INVALID)sum=bkcz_cross_add(sum,source_row[bkf_loc_rank(x)]);}if(((e>>P10DC_CROSS5_HALT_SHIFT)&1u)!=0)return 1u;state=uint32_t(int(state)+int(D_P10DC_CROSS5_DELTA[chunk]));return 0u;}
 
 // Execute the compact automaton without a fallback. overflow=true means the
 // caller must discard the partial sum and recompute with the scalar walker.
@@ -38,10 +39,16 @@ __device__ __forceinline__ uint32_t p10dc_cross5_apply_chunk(uint32_t full_key,u
 // bounded by 15,20,25 and state zero cannot be reached because down at one halts.
 __device__ __forceinline__ BkczCrossAccum p10dc_resolved_low_preimages_cross5_key_nofallback(uint32_t key,uint32_t depth,const Count*source_row,bool&overflow){overflow=false;if(!depth)return BkczCrossAccum(0);uint32_t state=depth;if(state>=P10DC_CROSS5_STATES){overflow=true;return 0;}BkczCrossAccum sum=0;constexpr int L0=LOW_LUT_K>=5?5:LOW_LUT_K,S0=LOW_LUT_K-L0;uint32_t st=p10dc_cross5_apply_chunk<S0,L0>(key,state,source_row,sum);if(st==1u)return sum;if(st==2u){overflow=true;return 0;}if constexpr(S0>0){constexpr int L1=S0>=5?5:S0,S1=S0-L1;st=p10dc_cross5_apply_chunk<S1,L1>(key,state,source_row,sum);if(st==1u)return sum;if(st==2u){overflow=true;return 0;}if constexpr(S1>0){constexpr int L2=S1>=5?5:S1,S2=S1-L2;static_assert(S2==0,"K<=14 must fit in three cross5 chunks");st=p10dc_cross5_apply_chunk<S2,L2>(key,state,source_row,sum);if(st==2u){overflow=true;return 0;}}}return sum;}
 
+// Production depthcode path. depth is decoded from four bits (1..15), and
+// LOW_LUT_K<=14 means chunk-start states are bounded by 15,20,25. Therefore all
+// three table accesses are in [0,25] and the overflow checks above are dead.
+__device__ __forceinline__ BkczCrossAccum p10dc_resolved_low_preimages_cross5_key_fast(uint32_t key,uint32_t depth,const Count*source_row){if(!depth)return BkczCrossAccum(0);uint32_t state=depth;BkczCrossAccum sum=0;constexpr int L0=LOW_LUT_K>=5?5:LOW_LUT_K,S0=LOW_LUT_K-L0;uint32_t st=p10dc_cross5_apply_chunk<S0,L0,false>(key,state,source_row,sum);if(st==1u)return sum;if constexpr(S0>0){constexpr int L1=S0>=5?5:S0,S1=S0-L1;st=p10dc_cross5_apply_chunk<S1,L1,false>(key,state,source_row,sum);if(st==1u)return sum;if constexpr(S1>0){constexpr int L2=S1>=5?5:S1,S2=S1-L2;static_assert(S2==0,"K<=14 must fit in three cross5 chunks");p10dc_cross5_apply_chunk<S2,L2,false>(key,state,source_row,sum);}}return sum;}
+
 __device__ __forceinline__ BkczCrossAccum p10dc_resolved_low_preimages_cross5_prekey(uint32_t dest_code,uint32_t key,uint32_t depth,const Count*source_row){bool overflow=false;BkczCrossAccum sum=p10dc_resolved_low_preimages_cross5_key_nofallback(key,depth,source_row,overflow);return overflow?p10dc_resolved_low_preimages_cross5_fallback_prekey(dest_code,key,depth,source_row):sum;}
 
-// Production prekey path: the normal path never reads D_BKF_LOW_CODES. The
-// packed code is fetched only if the structural state bound is violated.
-__device__ __forceinline__ BkczCrossAccum p10dc_resolved_low_preimages_cross5_prekey_indexed(size_t code_ix,uint32_t key,uint32_t depth,const Count*source_row){bool overflow=false;BkczCrossAccum sum=p10dc_resolved_low_preimages_cross5_key_nofallback(key,depth,source_row,overflow);if(!overflow)return sum;uint32_t dc=D_BKF_LOW_CODES[code_ix];return p10dc_resolved_low_preimages_cross5_fallback_prekey(dc,key,depth,source_row);}
+// Production prekey path: the packed LOW code and the overflow/fallback branch
+// are both unnecessary under the depth4 + K<=14 invariant. Keep code_ix in the
+// signature so callers do not need a separate source-level variant.
+__device__ __forceinline__ BkczCrossAccum p10dc_resolved_low_preimages_cross5_prekey_indexed(size_t code_ix,uint32_t key,uint32_t depth,const Count*source_row){(void)code_ix;return p10dc_resolved_low_preimages_cross5_key_fast(key,depth,source_row);}
 
 __device__ __forceinline__ BkczCrossAccum p10dc_resolved_low_preimages_cross5(uint32_t dest_code,uint32_t depth,const Count*source_row){return p10dc_resolved_low_preimages_cross5_prekey(dest_code,bkcz_ternary_key<LOW_LUT_K>(dest_code),depth,source_row);}
