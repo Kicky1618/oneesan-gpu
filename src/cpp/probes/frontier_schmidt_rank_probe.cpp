@@ -45,7 +45,7 @@ struct Entry {
     U64 value = 0;
 };
 struct Block {
-    int he = 0, center = 0;
+    int h = 0;
     std::vector<Entry> entries;
 };
 
@@ -55,9 +55,13 @@ static U32 segment_code(Mate m, int first, int len) {
     return z;
 }
 
-static int high_end_height(Mate m, int W, int center_pos) {
+// Balanced W/2 | W/2 cut.  This is the natural Schmidt cut: only one
+// horizontal cell update per row crosses it.  The shared block label is the
+// intermediate Motzkin height after the HIGH half has been consumed.
+static int cut_height(Mate m, int W) {
+    const int k = W / 2;
     int h = 1;
-    for (int p = W - 1; p > center_pos; --p) {
+    for (int p = W - 1; p >= k; --p) {
         auto v = m.get(p);
         if (v == R) --h;
         else if (v == L) ++h;
@@ -104,27 +108,20 @@ static RankStats measure(PathCounter<Modnum<U64>>& pc,
                          std::vector<Mate> const& states,
                          int row) {
     const int W = pc.cols;
-    const int low_n = W / 2;
-    const int center_pos = low_n;
-    const int high_n = W - low_n - 1;
-    std::vector<Block> blocks((high_n + 3) * 3);
-    for (int he = 0; he < high_n + 3; ++he)
-        for (int c = 0; c < 3; ++c) {
-            blocks[3 * he + c].he = he;
-            blocks[3 * he + c].center = c;
-        }
+    const int k = W / 2;
+    std::vector<Block> blocks(k + 2);
+    for (int h = 0; h < int(blocks.size()); ++h) blocks[h].h = h;
 
     U64 active = 0;
     for (Code i = 0; i < pc.mc.codeSize(); ++i) {
         U64 v = U64(pc.value[i]);
         if (!v) continue;
         Mate m = states[i];
-        int he = high_end_height(m, W, center_pos);
-        int c = int(m.get(center_pos));
-        if (he < 0 || he >= high_n + 3 || c < 0 || c >= 3) continue;
-        U32 hi = segment_code(m, center_pos + 1, high_n);
-        U32 lo = segment_code(m, 0, low_n);
-        blocks[3 * he + c].entries.push_back({hi, lo, v % P});
+        int h = cut_height(m, W);
+        if (h < 0 || h >= int(blocks.size())) continue;
+        U32 lo = segment_code(m, 0, k);
+        U32 hi = segment_code(m, k, k);
+        blocks[h].entries.push_back({hi, lo, v % P});
         ++active;
     }
 
@@ -158,8 +155,7 @@ static RankStats measure(PathCounter<Modnum<U64>>& pc,
         U64 fac = U64(rank) * (R0 + C0);
         double be = (R0 + C0) ? double(env) / double(R0 + C0) : 0.0;
         double ratio = env ? double(fac) / double(env) : 0.0;
-        std::cout << "  he=" << b.he
-                  << " c=" << b.center
+        std::cout << "  h=" << b.h
                   << " rows=" << R0
                   << " cols=" << C0
                   << " nnz=" << b.entries.size()
