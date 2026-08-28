@@ -76,7 +76,8 @@ for backend in (
     if cmem and max(cmem) >= 60*1024:
         print(f'{backend}_cmem0_headroom_warning=1')
 print('warp_dynamic_smem_note=warp, warpstriped, warpstriped_delta and warpstriped_delta_cross5 allocate one P10DCHighResolvedCtx per runtime warp; ptxas smem above is static only')
-print('cross5_constant_table_bytes=15552')
+print('cross5_constant_table_bytes=6561')
+print('cross5_old_constant_table_bytes=15552')
 PY
 
-echo "depthcode-highctx-ptxas OK n=$N arch=$ARCH transpose=$TRANSPOSE_MODE result=$OUT logs=$LOGDIR ternary_delta=1 cross5=1" >&2
+echo "depthcode-highctx-ptxas OK n=$N arch=$ARCH transpose=$TRANSPOSE_MODE result=$OUT logs=$LOGDIR ternary_delta=1 cross5=1 cross5_table_bytes=6561" >&2
