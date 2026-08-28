@@ -100,11 +100,73 @@ bool check64(
     return true;
 }
 
+constexpr std::array<std::uint64_t, 29> EMBEDDED_MAGIC = {
+    0ULL,
+    0ULL,
+    0ULL,
+    9223372036854775808ULL,
+    0ULL,
+    3689348814741910324ULL,
+    0ULL,
+    1317624576693539402ULL,
+    0ULL,
+    439208192231179801ULL,
+    0ULL,
+    139748061164466301ULL,
+    0ULL,
+    42999403435220401ULL,
+    0ULL,
+    12899821030566121ULL,
+    0ULL,
+    3794065008990036ULL,
+    0ULL,
+    1098281976286590ULL,
+    0ULL,
+    313794850367597ULL,
+    0ULL,
+    88681153364756ULL,
+    0ULL,
+    24830722942132ULL,
+    0ULL,
+    6897423039481ULL,
+    0ULL
+};
+
+bool verify_primitive_magic(std::uint64_t& nonzero) {
+    constexpr int W = 28;
+    std::array<std::array<std::uint64_t, W + 2>, W + 1> primitive{};
+    primitive[0][0] = 1;
+    for (int rem = 1; rem <= W; ++rem) {
+        for (int h = 0; h <= W; ++h) {
+            std::uint64_t z = primitive[rem - 1][h + 1];
+            if (h > 0) z += primitive[rem - 1][h - 1];
+            primitive[rem][h] = z;
+        }
+    }
+    for (int occupied = 0; occupied <= W; ++occupied) {
+        const std::uint64_t d = primitive[occupied][1];
+        const std::uint64_t expected = d <= 1 ? 0 :
+            std::numeric_limits<std::uint64_t>::max() / d + 1;
+        if (EMBEDDED_MAGIC[occupied] != expected) {
+            std::cerr << "primitive magic mismatch occupied=" << occupied
+                      << " divisor=" << d
+                      << " got=" << EMBEDDED_MAGIC[occupied]
+                      << " expected=" << expected << '\n';
+            return false;
+        }
+        if (d) ++nonzero;
+    }
+    return true;
+}
+
 } // namespace
 
 int main() {
+    std::uint64_t primitive_nonzero = 0;
+    if (!verify_primitive_magic(primitive_nonzero)) return 2;
+
     std::uint64_t small_cases = 0, small_corrections = 0;
-    if (!exhaustive_small<12>(small_cases, small_corrections)) return 2;
+    if (!exhaustive_small<12>(small_cases, small_corrections)) return 3;
 
     std::uint64_t cases64 = 0, corrections64 = 0;
     constexpr std::uint64_t U = std::numeric_limits<std::uint64_t>::max();
@@ -119,7 +181,7 @@ int main() {
         (1ULL << 63) - 1ULL, (1ULL << 63), U};
     for (const auto d : divisors)
         for (const auto x : numerators)
-            if (!check64(x, d, cases64, corrections64)) return 3;
+            if (!check64(x, d, cases64, corrections64)) return 4;
 
     std::uint64_t s0 = 0x243f6a8885a308d3ULL;
     std::uint64_t s1 = 0x13198a2e03707344ULL;
@@ -128,11 +190,9 @@ int main() {
         s1 ^= s1 << 13; s1 ^= s1 >> 7; s1 ^= s1 << 17;
         const std::uint64_t x = s0;
         const std::uint64_t d = s1 ? s1 : 1ULL;
-        if (!check64(x, d, cases64, corrections64)) return 4;
+        if (!check64(x, d, cases64, corrections64)) return 5;
     }
 
-    // Production-scale numerators are below the W=28 state count. Exercise
-    // divisors densely around small values and pseudo-randomly up to that bound.
     constexpr std::uint64_t PROD_MAX = 473397057701ULL;
     for (std::uint64_t d = 1; d <= 65536; ++d) {
         const std::array<std::uint64_t, 6> xs = {
@@ -140,11 +200,14 @@ int main() {
             PROD_MAX / 2ULL, PROD_MAX};
         for (auto x : xs) {
             if (x > PROD_MAX) x = PROD_MAX;
-            if (!check64(x, d, cases64, corrections64)) return 5;
+            if (!check64(x, d, cases64, corrections64)) return 6;
         }
     }
 
     std::cout << "gridfp-runtime-fastdiv64-proof OK"
+              << " primitive_magic_entries=29"
+              << " primitive_nonzero_divisors=" << primitive_nonzero
+              << " primitive_magic_exact=1"
               << " small_bits=12"
               << " small_cases=" << small_cases
               << " small_corrections=" << small_corrections
