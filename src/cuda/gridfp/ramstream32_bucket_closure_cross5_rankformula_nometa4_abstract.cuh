@@ -18,7 +18,6 @@ static_assert(P10DC_RANKFORMULA_ABSTRACT_SRCPACK10 == 0 ||
 static_assert(!P10DC_RANKFORMULA_ABSTRACT_SRCPACK10 ||
               P10DC_RANKFORMULA_ABSTRACT_SELECT8,
               "abstract source pack10 requires select8");
-static_assert(sizeof(unsigned long long) == sizeof(uint64_t));
 
 static constexpr uint32_t P10DC_RANKFORMULA_ABSTRACT_MAX_K = 14u;
 static constexpr uint32_t P10DC_RANKFORMULA_ABSTRACT_DESC_N = 7060u;
@@ -33,8 +32,12 @@ static_assert(LOW_LUT_K <= int(P10DC_RANKFORMULA_ABSTRACT_MAX_K));
 
 #if P10DC_RANKFORMULA_ABSTRACT_SELECT8
 #if P10DC_RANKFORMULA_ABSTRACT_SRCPACK10
-__device__ __align__(128) unsigned long long
-    D_P10DC_RANKFORMULA_ABSTRACT_SRC6[P10DC_RANKFORMULA_ABSTRACT_DESC_N];
+// Three 10-bit source-local ranks per word. Load each word only when the
+// select8 mask actually references one of its three source ordinals.
+__device__ __align__(128) uint32_t
+    D_P10DC_RANKFORMULA_ABSTRACT_SRC03[P10DC_RANKFORMULA_ABSTRACT_DESC_N];
+__device__ __align__(128) uint32_t
+    D_P10DC_RANKFORMULA_ABSTRACT_SRC36[P10DC_RANKFORMULA_ABSTRACT_DESC_N];
 __device__ __align__(128) uint16_t
     D_P10DC_RANKFORMULA_ABSTRACT_SRC7[P10DC_RANKFORMULA_ABSTRACT_SRC7_N];
 #else
@@ -119,7 +122,8 @@ struct P10DCRankFormulaAbstractHost {
     std::array<uint16_t, P10DC_RANKFORMULA_ABSTRACT_OFF_N> off{};
 #if P10DC_RANKFORMULA_ABSTRACT_SELECT8
 #if P10DC_RANKFORMULA_ABSTRACT_SRCPACK10
-    std::array<uint64_t, P10DC_RANKFORMULA_ABSTRACT_DESC_N> src6{};
+    std::array<uint32_t, P10DC_RANKFORMULA_ABSTRACT_DESC_N> src03{};
+    std::array<uint32_t, P10DC_RANKFORMULA_ABSTRACT_DESC_N> src36{};
     std::array<uint16_t, P10DC_RANKFORMULA_ABSTRACT_SRC7_N> src7{};
 #else
     std::array<uint16_t, P10DC_RANKFORMULA_ABSTRACT_DESC_N> roff{};
@@ -161,16 +165,17 @@ static P10DCRankFormulaAbstractHost p10dc_rankformula_abstract_build_host() {
                 out.desc[di] = lp | (roff << P10DC_RANKFORMULA_ABSTRACT_LP_BITS);
 #endif
 #if P10DC_RANKFORMULA_ABSTRACT_SELECT8 && P10DC_RANKFORMULA_ABSTRACT_SRCPACK10
-                uint64_t src6 = 0;
-                uint32_t li = 0;
+                uint32_t src03 = 0, src36 = 0, li = 0;
 #endif
                 for (int ord = 0; ord < n; ++ord) {
                     if (((lp >> ord) & 1u) == 0u) continue;
                     const uint32_t sr = p10dc_rankformula_abstract_rank_host(n, h + 2, lp & ~(1u << ord));
                     if (sr == 0xffffffffu || sr > 1000u) std::exit(772);
 #if P10DC_RANKFORMULA_ABSTRACT_SELECT8 && P10DC_RANKFORMULA_ABSTRACT_SRCPACK10
-                    if (li < 6u) {
-                        src6 |= uint64_t(sr) << (10u * li);
+                    if (li < 3u) {
+                        src03 |= sr << (10u * li);
+                    } else if (li < 6u) {
+                        src36 |= sr << (10u * (li - 3u));
                     } else {
                         if (li != 6u || n != 14 || h != 0 || j >= P10DC_RANKFORMULA_ABSTRACT_SRC7_N)
                             std::exit(776);
@@ -184,7 +189,8 @@ static P10DCRankFormulaAbstractHost p10dc_rankformula_abstract_build_host() {
 #endif
                 }
 #if P10DC_RANKFORMULA_ABSTRACT_SELECT8 && P10DC_RANKFORMULA_ABSTRACT_SRCPACK10
-                out.src6[di] = src6;
+                out.src03[di] = src03;
+                out.src36[di] = src36;
 #endif
             }
         }
@@ -203,9 +209,12 @@ static void p10dc_install_rankformula_abstract_lut() {
        "p10dc abstract off LUT");
 #if P10DC_RANKFORMULA_ABSTRACT_SELECT8
 #if P10DC_RANKFORMULA_ABSTRACT_SRCPACK10
-    ck(cudaMemcpyToSymbol(D_P10DC_RANKFORMULA_ABSTRACT_SRC6,
-                          t.src6.data(), t.src6.size() * sizeof(uint64_t)),
-       "p10dc abstract src6 pack10 LUT");
+    ck(cudaMemcpyToSymbol(D_P10DC_RANKFORMULA_ABSTRACT_SRC03,
+                          t.src03.data(), t.src03.size() * sizeof(uint32_t)),
+       "p10dc abstract src03 pack10 LUT");
+    ck(cudaMemcpyToSymbol(D_P10DC_RANKFORMULA_ABSTRACT_SRC36,
+                          t.src36.data(), t.src36.size() * sizeof(uint32_t)),
+       "p10dc abstract src36 pack10 LUT");
     ck(cudaMemcpyToSymbol(D_P10DC_RANKFORMULA_ABSTRACT_SRC7,
                           t.src7.data(), t.src7.size() * sizeof(uint16_t)),
        "p10dc abstract src7 overflow LUT");
@@ -234,8 +243,11 @@ static void p10dc_install_rankformula_abstract_lut() {
 
 #if P10DC_RANKFORMULA_ABSTRACT_SELECT8
 #if P10DC_RANKFORMULA_ABSTRACT_SRCPACK10
-__device__ __forceinline__ unsigned long long p10dc_rankformula_abstract_src6_load(uint32_t ix) {
-    return __ldg(D_P10DC_RANKFORMULA_ABSTRACT_SRC6 + ix);
+__device__ __forceinline__ uint32_t p10dc_rankformula_abstract_src03_load(uint32_t ix) {
+    return __ldg(D_P10DC_RANKFORMULA_ABSTRACT_SRC03 + ix);
+}
+__device__ __forceinline__ uint32_t p10dc_rankformula_abstract_src36_load(uint32_t ix) {
+    return __ldg(D_P10DC_RANKFORMULA_ABSTRACT_SRC36 + ix);
 }
 __device__ __forceinline__ uint32_t p10dc_rankformula_abstract_src7_load(uint32_t ix) {
     return uint32_t(__ldg(D_P10DC_RANKFORMULA_ABSTRACT_SRC7 + ix));
@@ -279,13 +291,17 @@ p10dc_resolved_low_preimages_cross5_rankformula_nometa4_abstract_fixed(
     const uint32_t source_base = uint32_t(int(z.start) + z.base_delta);
     BkczCrossAccum sum = 0;
 #if P10DC_RANKFORMULA_ABSTRACT_SRCPACK10
-    const unsigned long long src6 = p10dc_rankformula_abstract_src6_load(di);
+    uint32_t src03 = 0, src36 = 0;
+    if (select & 0x07u) src03 = p10dc_rankformula_abstract_src03_load(di);
+    if (select & 0x38u) src36 = p10dc_rankformula_abstract_src36_load(di);
     while (select) {
         const uint32_t li = uint32_t(__ffs(int(select)) - 1);
         select &= select - 1u;
-        const uint32_t source_local = li < 6u
-            ? uint32_t((src6 >> (10u * li)) & 1023u)
-            : p10dc_rankformula_abstract_src7_load(local);
+        const uint32_t source_local = li < 3u
+            ? ((src03 >> (10u * li)) & 1023u)
+            : li < 6u
+                ? ((src36 >> (10u * (li - 3u))) & 1023u)
+                : p10dc_rankformula_abstract_src7_load(local);
         sum = bkcz_cross_add(sum, source_row[source_base + source_local]);
     }
 #else
