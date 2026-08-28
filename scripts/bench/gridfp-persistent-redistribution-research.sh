@@ -9,15 +9,19 @@ K="${K:-13}"
 NGPU="${NGPU:-8}"
 MIN_B300_HEADROOM_GIB="${MIN_B300_HEADROOM_GIB:-40}"
 MIN_EXACT_B300_HEADROOM_GIB="${MIN_EXACT_B300_HEADROOM_GIB:-20}"
+NODE_HBM_TBPS="${NODE_HBM_TBPS:-64}"
+NODE_NVLINK_TBPS="${NODE_NVLINK_TBPS:-14.4}"
 
 SEG_SRC="$(repo_path src/cpp/probes/gridfp_p2p_owner_local_segment_probe.cpp)"
 HASH_SRC="$(repo_path src/cpp/probes/gridfp_p2p_cycle_batch_hash_probe.cpp)"
 MEM_SRC="$(repo_path src/cpp/probes/gridfp_reduced_production_persistent_memory_probe.cpp)"
 EXACT_SRC="$(repo_path src/cpp/probes/gridfp_reduced_production_persistent_exact_plan_probe.cpp)"
+BW_SRC="$(repo_path src/cpp/probes/gridfp_reduced_production_persistent_bandwidth_probe.cpp)"
 SEG_BIN="$(build_path gridfp_p2p_owner_local_segment_probe)"
 HASH_BIN="$(build_path gridfp_p2p_cycle_batch_hash_probe)"
 MEM_BIN="$(build_path gridfp_reduced_production_persistent_memory_probe)"
 EXACT_BIN="$(build_path gridfp_reduced_production_persistent_exact_plan_probe)"
+BW_BIN="$(build_path gridfp_reduced_production_persistent_bandwidth_probe)"
 
 # shellcheck disable=SC2086
 "$CXX" $CXXFLAGS "$SEG_SRC" -o "$SEG_BIN"
@@ -27,6 +31,8 @@ EXACT_BIN="$(build_path gridfp_reduced_production_persistent_exact_plan_probe)"
 "$CXX" $CXXFLAGS "$MEM_SRC" -o "$MEM_BIN"
 # shellcheck disable=SC2086
 "$CXX" $CXXFLAGS "$EXACT_SRC" -o "$EXACT_BIN"
+# shellcheck disable=SC2086
+"$CXX" $CXXFLAGS "$BW_SRC" -o "$BW_BIN"
 
 echo "== owner-local maximal-segment proof =="
 "$SEG_BIN"
@@ -79,4 +85,7 @@ if ! awk -v got="$EXACT_HEADROOM" -v want="$MIN_EXACT_B300_HEADROOM_GIB" \
   exit 7
 fi
 
-echo "persistent-redistribution-research exact=OK W=$W K=$K ngpu=$NGPU B300_headroom_before_scratch_GiB=$HEADROOM exact_peak_headroom_GiB=$EXACT_HEADROOM"
+echo "== optimistic HGX B300 redistribution bandwidth floor =="
+"$BW_BIN" "$NODE_HBM_TBPS" "$NODE_NVLINK_TBPS"
+
+echo "persistent-redistribution-research exact=OK W=$W K=$K ngpu=$NGPU B300_headroom_before_scratch_GiB=$HEADROOM exact_peak_headroom_GiB=$EXACT_HEADROOM node_HBM_TBps=$NODE_HBM_TBPS node_NVLink_TBps=$NODE_NVLINK_TBPS"
