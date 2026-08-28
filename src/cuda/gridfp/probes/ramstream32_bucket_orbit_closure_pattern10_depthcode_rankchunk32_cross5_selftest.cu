@@ -20,43 +20,68 @@ static void p10dc_verify_rankchunk32_tables(
         ? bf.low_code_off[size_t(fixed + 1u) * P]
         : uint32_t(bf.low_codes.size());
     const size_t code_count = size_t(owner_end - owner_begin);
+    const size_t meta_count = dt.low_rankchunkmeta32_count;
     const size_t block_count =
-        (code_count + P10DC_RANKCHUNK32_BLOCK - 1u) / P10DC_RANKCHUNK32_BLOCK;
-    if (dt.low_rankchunkmeta32_count != code_count ||
+        (meta_count + P10DC_RANKCHUNK32_BLOCK - 1u) / P10DC_RANKCHUNK32_BLOCK;
+    if (meta_count < code_count ||
         dt.low_rankchunkblock16_count != block_count ||
+        dt.low_rankchunk_padding_count != meta_count - code_count ||
         dt.low_prekey != nullptr || dt.low_rankstream_off != nullptr) {
         std::cerr << "p10dc rankchunk32 count/lifetime mismatch owner=" << fixed
-                  << " meta=" << dt.low_rankchunkmeta32_count << '/' << code_count
+                  << " meta=" << meta_count << " codes=" << code_count
+                  << " padding=" << dt.low_rankchunk_padding_count
                   << " blocks=" << dt.low_rankchunkblock16_count << '/' << block_count << '\n';
         std::exit(670);
     }
 
-    std::vector<uint32_t> got_meta(code_count), got_blocks(block_count);
+    std::vector<uint32_t> got_meta(meta_count), got_blocks(block_count);
     if (!got_meta.empty()) ck(cudaMemcpy(got_meta.data(), dt.low_rankchunkmeta32,
         got_meta.size()*sizeof(uint32_t), cudaMemcpyDeviceToHost), "p10dc rankchunk32 meta verify D2H");
     if (!got_blocks.empty()) ck(cudaMemcpy(got_blocks.data(), dt.low_rankchunkblock16,
         got_blocks.size()*sizeof(uint32_t), cudaMemcpyDeviceToHost), "p10dc rankchunk32 blocks verify D2H");
     std::array<uint32_t, MAXW + 2> got_hoff{};
-    ck(cudaMemcpyFromSymbol(got_hoff.data(), D_P10DC_LOW_PREKEY_HOFF,
-        got_hoff.size()*sizeof(uint32_t)), "p10dc rankchunk32 height offsets verify");
+    ck(cudaMemcpyFromSymbol(got_hoff.data(), D_P10DC_LOW_RANKCHUNK_HOFF,
+        got_hoff.size()*sizeof(uint32_t)), "p10dc rankchunk32 aligned height offsets verify");
 
-    size_t compact = 0, stream_ix = 0;
+    size_t compact = 0, stream_ix = 0, actual_codes = 0, padding = 0;
     uint32_t current_block_base = 0;
+    auto verify_block_start = [&](size_t c) {
+        if ((c & (P10DC_RANKCHUNK32_BLOCK - 1u)) != 0u) return;
+        const size_t bi = c >> P10DC_RANKCHUNK32_BLOCK_LOG2;
+        current_block_base = uint32_t(stream_ix);
+        if (bi >= got_blocks.size() || got_blocks[bi] != current_block_base) {
+            std::cerr << "p10dc rankchunk32 block base mismatch owner=" << fixed
+                      << " compact=" << c << " block=" << bi
+                      << " got=" << (bi < got_blocks.size() ? got_blocks[bi] : 0xffffffffu)
+                      << " expected=" << current_block_base << '\n';
+            std::exit(671);
+        }
+    };
+
     for (uint32_t h = 0; h < uint32_t(MAXW + 2); ++h) {
-        if (got_hoff[h] != compact) { std::cerr << "p10dc rankchunk32 height offset mismatch\n"; std::exit(671); }
+        while ((compact & (P10DC_RANKCHUNK32_HEIGHT_ALIGN - 1u)) != 0u) {
+            verify_block_start(compact);
+            if (compact >= got_meta.size() || got_meta[compact] != 0u) {
+                std::cerr << "p10dc rankchunk32 padding mismatch owner=" << fixed
+                          << " h=" << h << " compact=" << compact << '\n';
+                std::exit(672);
+            }
+            ++compact;
+            ++padding;
+        }
+        if (got_hoff[h] != compact ||
+            (got_hoff[h] & (P10DC_RANKCHUNK32_HEIGHT_ALIGN - 1u)) != 0u) {
+            std::cerr << "p10dc rankchunk32 height offset mismatch owner=" << fixed
+                      << " h=" << h << " got=" << got_hoff[h]
+                      << " expected=" << compact << '\n';
+            std::exit(673);
+        }
+
         const uint32_t a = bf.low_code_off[owner_base + h];
         const uint32_t b = h + 1u < uint32_t(MAXW + 2)
             ? bf.low_code_off[owner_base + h + 1u] : owner_end;
-        for (uint32_t i = a; i < b; ++i, ++compact) {
-            if ((compact & (P10DC_RANKCHUNK32_BLOCK - 1u)) == 0u) {
-                current_block_base = uint32_t(stream_ix);
-                const size_t bi = compact >> P10DC_RANKCHUNK32_BLOCK_LOG2;
-                if (bi >= got_blocks.size() || got_blocks[bi] != current_block_base) {
-                    std::cerr << "p10dc rankchunk32 block base mismatch owner=" << fixed
-                              << " compact=" << compact << '\n';
-                    std::exit(672);
-                }
-            }
+        for (uint32_t i = a; i < b; ++i, ++compact, ++actual_codes) {
+            verify_block_start(compact);
             const uint32_t code = bf.low_codes[i];
             const uint32_t key = gpu_direct_ternary_key_host(code, LOW_LUT_K);
             const uint32_t chunks = p10dc_rankchunk32_pack_host(key);
@@ -65,16 +90,23 @@ static void p10dc_verify_rankchunk32_tables(
             if (p10dc_rankchunk32_unpack_host(chunks) != key ||
                 compact >= got_meta.size() || got_meta[compact] != expected) {
                 std::cerr << "p10dc rankchunk32 meta mismatch owner=" << fixed
-                          << " h=" << h << " compact=" << compact << '\n';
-                std::exit(673);
+                          << " h=" << h << " compact=" << compact
+                          << " prefix=" << prefix << '\n';
+                std::exit(674);
             }
             for (int pos = 0; pos < LOW_LUT_K; ++pos)
                 if (((code >> (2 * pos)) & 3u) == uint32_t(::L)) ++stream_ix;
         }
     }
-    if (compact != code_count || stream_ix != dt.low_rankstream_count) {
-        std::cerr << "p10dc rankchunk32 walk mismatch owner=" << fixed << '\n';
-        std::exit(674);
+    if (actual_codes != code_count || compact != meta_count ||
+        padding != dt.low_rankchunk_padding_count ||
+        stream_ix != dt.low_rankstream_count) {
+        std::cerr << "p10dc rankchunk32 padded walk mismatch owner=" << fixed
+                  << " actual=" << actual_codes << '/' << code_count
+                  << " meta=" << compact << '/' << meta_count
+                  << " padding=" << padding << '/' << dt.low_rankchunk_padding_count
+                  << " stream=" << stream_ix << '/' << dt.low_rankstream_count << '\n';
+        std::exit(675);
     }
     P10DC_RANKCHUNK32_TABLE_VERIFIED[fixed] = 1;
 }
@@ -164,8 +196,9 @@ int main() {
     rdt.release(); fdt.release(); dt.release();
     std::cout << "bucket-closure-pattern10-depthcode-rankchunk32-cross5-selftest OK W=" << W
               << " control=resolved experiment=warpstriped_delta_direct_affine_rankchunk32_cross5"
-              << " forward_exact=1 reverse_exact=1 rankchunk32_table_exact=1"
-              << " chunk_bits=24 prefix_bits=8 block=16"
+              << " forward_exact=1 reverse_exact=1 rankchunk32_table_exact=1 padding_exact=1"
+              << " chunk_bits=24 prefix_bits=8 block=16 height_align=32"
+              << " block_base_loads_per_warp_max=2"
               << " cross_runtime_div=0 cross_runtime_mod=0 cross_runtime_direct_lookup=0"
               << " old_prekey_offset_arrays_freed=1 fallback_structurally_unreachable=1\n";
     return 0;
