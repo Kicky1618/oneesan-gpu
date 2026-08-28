@@ -21,6 +21,7 @@ command -v nvidia-smi >/dev/null || { echo "nvidia-smi not found" >&2; exit 2; }
 
 bash "$ONEESAN_ROOT/scripts/bench/gridfp-runtime-owner-u32limb-ngpu8-proof.sh"
 if [[ "$W" == 28 ]]; then
+  bash "$ONEESAN_ROOT/scripts/bench/gridfp-runtime-owner-w28-ngpu8-direct-proof.sh"
   ARCH="$PTX_ARCH" bash "$ONEESAN_ROOT/scripts/bench/gridfp-runtime-owner-u32limb-ngpu8-w28-ptx-proof.sh"
 fi
 
@@ -45,4 +46,4 @@ if [[ "$PTXAS_VERBOSE" == 1 ]]; then
   grep -E 'Used .* registers|bytes smem|bytes cmem' "$BUILD_LOG" >&2 || true
 fi
 
-echo "gridfp-runtime-owner-u32limb-ngpu8-microprobe runner OK W=$W blocks=$BLOCKS threads=$THREADS iters=$ITERS repeats=$REPEATS ptx_gate=$([[ "$W" == 28 ]] && echo 1 || echo 0)" >&2
+echo "gridfp-runtime-owner-u32limb-ngpu8-microprobe runner OK W=$W blocks=$BLOCKS threads=$THREADS iters=$ITERS repeats=$REPEATS direct_w28=$([[ "$W" == 28 ]] && echo 1 || echo 0) ptx_gate=$([[ "$W" == 28 ]] && echo 1 || echo 0)" >&2
