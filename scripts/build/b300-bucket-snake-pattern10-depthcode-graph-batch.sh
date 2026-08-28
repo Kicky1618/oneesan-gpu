@@ -11,6 +11,7 @@ TRANSPOSE_MODE="${TRANSPOSE_MODE:-pipeline}"
 HIGH_CTX="${HIGH_CTX:-thread}"
 DEPTHCODE_DECODE_LOAD="${DEPTHCODE_DECODE_LOAD:-global}"
 RANKSTREAM_LUT_LOAD="${RANKSTREAM_LUT_LOAD:-constant}"
+RANKCHUNK32_ONESHFL="${RANKCHUNK32_ONESHFL:-1}"
 PM_ACCUM="${PM_ACCUM:-0}"
 TERNARY_KEY4="${TERNARY_KEY4:-1}"
 PTXAS_VERBOSE="${PTXAS_VERBOSE:-0}"
@@ -23,6 +24,7 @@ case "$HIGH_CTX" in
 esac
 case "$DEPTHCODE_DECODE_LOAD" in global|ldg) ;; *) echo "DEPTHCODE_DECODE_LOAD must be global or ldg" >&2; exit 2;; esac
 case "$RANKSTREAM_LUT_LOAD" in constant|ldg|ldg256) ;; *) echo "RANKSTREAM_LUT_LOAD must be constant, ldg, or ldg256" >&2; exit 2;; esac
+if [[ "$RANKCHUNK32_ONESHFL" != 0 && "$RANKCHUNK32_ONESHFL" != 1 ]]; then echo "RANKCHUNK32_ONESHFL must be 0 or 1" >&2; exit 2; fi
 if [[ "$PM_ACCUM" != 0 && "$PM_ACCUM" != 1 ]]; then echo "PM_ACCUM must be 0 or 1" >&2; exit 2; fi
 if [[ "$TERNARY_KEY4" != 0 && "$TERNARY_KEY4" != 1 ]]; then echo "TERNARY_KEY4 must be 0 or 1" >&2; exit 2; fi
 if [[ "$PTXAS_VERBOSE" != 0 && "$PTXAS_VERBOSE" != 1 ]]; then echo "PTXAS_VERBOSE must be 0 or 1" >&2; exit 2; fi
@@ -58,6 +60,7 @@ SUFFIX="_payload_${HIGH_CTX}_${TRANSPOSE_MODE}"
 [[ "$DEPTHCODE_DECODE_LOAD" == ldg ]] && SUFFIX="${SUFFIX}_ldg"
 [[ "$RANKSTREAM_LUT_LOAD" == ldg ]] && SUFFIX="${SUFFIX}_ranklutldg"
 [[ "$RANKSTREAM_LUT_LOAD" == ldg256 ]] && SUFFIX="${SUFFIX}_ranklutldg256"
+[[ "$RANKCHUNK32_ONESHFL" == 0 ]] && SUFFIX="${SUFFIX}_rankchunk2shfl"
 [[ "$PM_ACCUM" == 1 ]] && SUFFIX="${SUFFIX}_pm"
 [[ "$TERNARY_KEY4" == 0 ]] && SUFFIX="${SUFFIX}_keyscalar"
 SRC="$(repo_path "src/cuda/b300/$SRC_NAME")"
@@ -75,6 +78,7 @@ TMPDIR="$ONEESAN_TMP_DIR" nvcc -O3 -std=c++17 -lineinfo -arch="$ARCH" \
   -DP10DC_DECODE_LDG="$P10DC_DECODE_LDG" \
   -DP10DC_RANKSTREAM_LUT_LDG="$P10DC_RANKSTREAM_LUT_LDG" \
   -DP10DC_RANKSTREAM_LUT_PAD256="$P10DC_RANKSTREAM_LUT_PAD256" \
+  -DP10DC_RANKCHUNK32_ONESHFL="$RANKCHUNK32_ONESHFL" \
   "$SRC" -o "$OUT"
 
-echo "built $OUT (closure=pattern10-depthcode sidecar_bytes_per_orbit=0 temporary_depth_bytes=0 decode=payload-masks runtime_unrank=0 high_ctx=$HIGH_CTX decode_load=$DEPTHCODE_DECODE_LOAD rankstream_lut_load=$RANKSTREAM_LUT_LOAD window=graph transpose=$TRANSPOSE_MODE pm_accum=$PM_ACCUM ternary_key4=$TERNARY_KEY4 ptxas_verbose=$PTXAS_VERBOSE)"
+echo "built $OUT (closure=pattern10-depthcode sidecar_bytes_per_orbit=0 temporary_depth_bytes=0 decode=payload-masks runtime_unrank=0 high_ctx=$HIGH_CTX decode_load=$DEPTHCODE_DECODE_LOAD rankstream_lut_load=$RANKSTREAM_LUT_LOAD rankchunk32_oneshfl=$RANKCHUNK32_ONESHFL window=graph transpose=$TRANSPOSE_MODE pm_accum=$PM_ACCUM ternary_key4=$TERNARY_KEY4 ptxas_verbose=$PTXAS_VERBOSE)"
