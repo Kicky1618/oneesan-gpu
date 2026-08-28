@@ -11,6 +11,8 @@ echo '=== metadata-free exact host unrank ===' >&2
 bash "$ONEESAN_ROOT/scripts/bench/rankformula-nometa-proof.sh"
 echo '=== metadata-free locator block bounds ===' >&2
 bash "$ONEESAN_ROOT/scripts/bench/rankformula-nometa-blocks-proof.sh"
+echo '=== packed nometa4 group64 locator ===' >&2
+bash "$ONEESAN_ROOT/scripts/bench/rankformula-nometa4-group64-proof.sh"
 echo '=== rankformula formula/base structural proofs ===' >&2
 bash "$ONEESAN_ROOT/scripts/bench/rankformula-plan.sh"
 bash "$ONEESAN_ROOT/scripts/bench/rankformula-base-delta-proof.sh"
@@ -26,4 +28,4 @@ if [[ "$RUN_BUILD_SMOKE" == 1 ]]; then
     bash "$ONEESAN_ROOT/scripts/build/b300-bucket-snake-pattern10-depthcode-rankformula-nometa4.sh"
 fi
 
-echo "rankformula-nometa4-preflight OK w=$W n=$N block=4 metadata_bytes_per_code=0 max_locator_steps=3 ballot_unrank_exact=1 build_smoke=$RUN_BUILD_SMOKE" >&2
+echo "rankformula-nometa4-preflight OK w=$W n=$N block=4 metadata_bytes_per_code=0 packed_group64=1 group_table_bytes_all=1158104 max_locator_steps=3 ballot_unrank_exact=1 build_smoke=$RUN_BUILD_SMOKE" >&2
