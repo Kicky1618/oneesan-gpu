@@ -8,6 +8,7 @@ command -v "$NVCC" >/dev/null || { echo "$NVCC not found" >&2; exit 2; }
 
 bash "$ONEESAN_ROOT/scripts/bench/b300-shard-owner-mulhi-w28-ngpu8-proof.sh"
 bash "$ONEESAN_ROOT/scripts/bench/b300-shard-owner-u32limb-w28-ngpu8-proof.sh"
+bash "$ONEESAN_ROOT/scripts/bench/b300-shard-owner-u32shift-w28-ngpu8-proof.sh"
 SRC="$ONEESAN_ROOT/src/cuda/b300/oneesan_cuda_gridfp_b300_hbm32_fullmate_dropN.cu"
 OUTDIR="${OUTDIR:-$ONEESAN_BUILD_DIR/b300_shard_address_production_w28_ngpu8_ptx}"
 GENSRC="$OUTDIR/generated.cu"
@@ -48,7 +49,7 @@ extract(){
 }
 metric(){ local re="$1" file="$2"; grep -Ec "$re" "$file" || true; }
 
-for mode in 2 3; do
+for mode in 2 3 4; do
   ptx="$OUTDIR/mode_${mode}.ptx"
   "$NVCC" -O3 -std=c++17 -ptx -arch="$ARCH" \
     -DTARGET_W=28 -DLOW_LUT_K=13 -DHIGH_LUT_K=13 \
@@ -64,6 +65,7 @@ for mode in 2 3; do
     mulwide64="$(metric '\bmul\.wide\.u64\b' "$body")"
     mulhi32="$(metric '\bmul\.hi\.u32\b' "$body")"
     mullo32="$(metric '\bmul\.lo\.u32\b|\bmad\.lo\.u32\b' "$body")"
+    mulwide32="$(metric '\bmul\.wide\.u32\b|\bmad\.wide\.u32\b' "$body")"
     bra="$(metric '\bbra\b' "$body")"
     selp="$(metric '\bselp\.' "$body")"
     if (( div != 0 )); then
@@ -74,20 +76,30 @@ for mode in 2 3; do
       echo "mode=2 $kind missing expected mul.hi.u64" >&2
       exit 5
     fi
-    if [[ "$mode" == 3 ]]; then
-      if (( mulhi64 != 0 )); then
-        echo "mode=3 $kind still contains mul.hi.u64" >&2
+    if [[ "$mode" == 3 || "$mode" == 4 ]]; then
+      if (( mulhi64 != 0 || mullo64 != 0 || mulwide64 != 0 )); then
+        echo "mode=$mode $kind still contains u64 multiply" >&2
         exit 6
       fi
-      if (( mulhi32 < 3 )); then
-        echo "mode=3 $kind missing expected mul.hi.u32 limbs" >&2
-        exit 7
+    fi
+    if [[ "$mode" == 3 ]] && (( mulhi32 < 3 )); then
+      echo "mode=3 $kind missing expected mul.hi.u32 limbs" >&2
+      exit 7
+    fi
+    if [[ "$mode" == 4 ]]; then
+      if (( mulhi32 > 2 )); then
+        echo "mode=4 $kind failed to reduce mul.hi.u32 count to <=2" >&2
+        exit 8
+      fi
+      if (( mullo32 > 1 )); then
+        echo "mode=4 $kind failed to reduce explicit low-u32 multiply count to <=1" >&2
+        exit 9
       fi
     fi
-    printf 'mode%s_%s_divrem_u64=%s\nmode%s_%s_mulhi_u64=%s\nmode%s_%s_mullo_u64=%s\nmode%s_%s_mulwide_u64=%s\nmode%s_%s_mulhi_u32=%s\nmode%s_%s_mullo_u32=%s\nmode%s_%s_bra=%s\nmode%s_%s_selp=%s\n' \
+    printf 'mode%s_%s_divrem_u64=%s\nmode%s_%s_mulhi_u64=%s\nmode%s_%s_mullo_u64=%s\nmode%s_%s_mulwide_u64=%s\nmode%s_%s_mulhi_u32=%s\nmode%s_%s_mullo_u32=%s\nmode%s_%s_mulwide_u32_total=%s\nmode%s_%s_bra=%s\nmode%s_%s_selp=%s\n' \
       "$mode" "$kind" "$div" "$mode" "$kind" "$mulhi64" "$mode" "$kind" "$mullo64" \
       "$mode" "$kind" "$mulwide64" "$mode" "$kind" "$mulhi32" "$mode" "$kind" "$mullo32" \
-      "$mode" "$kind" "$bra" "$mode" "$kind" "$selp"
+      "$mode" "$kind" "$mulwide32" "$mode" "$kind" "$bra" "$mode" "$kind" "$selp"
   done
 done
 
@@ -97,5 +109,7 @@ grep -Fq '__umul64hi(g,magic)>>9' "$GENSRC"
 grep -Fq '__umul64hi(g,magic)>>7' "$GENSRC"
 grep -Fq 'shard_owner8_u32limb<2614578007u,45u,9>' "$GENSRC"
 grep -Fq 'shard_owner8_u32limb<2466947517u,32u,7>' "$GENSRC"
+grep -Fq 'shard_owner8_u32shift_main' "$GENSRC"
+grep -Fq 'shard_owner8_u32shift_block' "$GENSRC"
 
-echo "b300-shard-address-production-w28-ngpu8-ptx-proof OK arch=$ARCH generated_source_guard=1 runtime_ngpu_guard=8 chunk_guard=1 mode2_mulhi64=1 mode3_mulhi64=0 mode3_umulhi32=3 exact_proof=1"
+echo "b300-shard-address-production-w28-ngpu8-ptx-proof OK arch=$ARCH generated_source_guard=1 runtime_ngpu_guard=8 chunk_guard=1 mode2_mulhi64=1 mode3_mulhi64=0 mode3_umulhi32=3 mode4_mulhi64=0 mode4_umulhi32_max=2 mode4_mullo32_max=1 exact_proof=1"
