@@ -31,6 +31,7 @@ __device__ __forceinline__ std::uint64_t rank_probe_mix64(std::uint64_t x) {
 __global__ void codec_table_rank_sample_kernel(
     std::uint64_t* __restrict__ output,
     Rank64 local_components,
+    Rank64 owner_states,
     int W,
     int q,
     bool reverse,
@@ -67,8 +68,7 @@ __global__ void codec_table_rank_sample_kernel(
             seed, W, q, reverse, tile_start, K, ngpu, owner_begin);
         const GroupedDeviceRank gr = grouped_rank_in_component_device(
             seed, W, q, reverse, ctx);
-        if (ctx.owner != gpu_id || gr.owner != gpu_id ||
-            gr.local >= local_components * Rank64(64)) {
+        if (ctx.owner != gpu_id || gr.owner != gpu_id || gr.local >= owner_states) {
             atomicCAS(error, 0, 2);
         }
         acc ^= rank_probe_mix64(
@@ -112,7 +112,9 @@ int main(int argc, char** argv) {
     const HostOwnerComponentPlan hp =
         make_host_owner_component_plan(tables, K, owner, logical_ngpu);
     const Rank64 local_components = hp.prefix.back();
-    if (!local_components || tile.owner_begin.size() != std::size_t(logical_ngpu))
+    const Rank64 owner_states = tile.owner_size[static_cast<std::size_t>(owner)];
+    if (!local_components || !owner_states ||
+        tile.owner_begin.size() != std::size_t(logical_ngpu))
         return 4;
 
     Rank64 *d_owner_begin = nullptr, *d_prefix = nullptr;
@@ -147,7 +149,7 @@ int main(int argc, char** argv) {
     auto launch = [&] {
         ck(cudaMemset(d_error, 0, sizeof(int)), "codec rank zero error");
         codec_table_rank_sample_kernel<<<blocks, threads>>>(
-            d_output, local_components, W, q, reverse, tile_start, K,
+            d_output, local_components, owner_states, W, q, reverse, tile_start, K,
             owner, logical_ngpu, d_owner_begin, d_prefix, d_sr_begin,
             d_component_group, iterations, d_error);
         ck(cudaGetLastError(), "codec rank launch");
@@ -189,6 +191,7 @@ int main(int argc, char** argv) {
               << " W=" << W << " K=" << K
               << " logical_ngpu=" << logical_ngpu
               << " owner=" << owner
+              << " owner_states=" << owner_states
               << " direction=" << (reverse ? "reverse" : "forward")
               << " choose_mode=" << RP_RUNTIME_CODEC_CHOOSE_U32_MODE
               << " primitive_mode=" << RP_RUNTIME_CODEC_PRIMITIVE_U32_MODE
