@@ -20,9 +20,11 @@ grep -Eq "bucket-closure-pattern10-depthcode-prekey-cross5-selftest (OK W=$W|SKI
 if grep -Fq "OK W=$W" <<<"$out"; then
   grep -Fq 'forward_exact=1 reverse_exact=1' <<<"$out"
   grep -Fq 'prekey_bytes_per_low_code=4' <<<"$out"
-  grep -Fq 'cross_runtime_ternary_fold=0' <<<"$out"
+  grep -Fq 'prekey_scope=fixed_owner prekey_table_exact=1' <<<"$out"
+  grep -Fq 'cross_runtime_ternary_fold=0 hot_code_load=0 hot_code_off_load=0' <<<"$out"
+  grep -Fq 'fallback_structurally_unreachable=1' <<<"$out"
   grep -Fq 'affine_base_storage=constant' <<<"$out"
   grep -Fq 'cross5_table_bytes=6561' <<<"$out"
   grep -Fq "pm_accum=$PM_ACCUM" <<<"$out"
 fi
-echo "pattern10-depthcode-prekey-cross5-selftest OK W=$W pm_accum=$PM_ACCUM decode_load=$DECODE_LOAD prekey=1" >&2
+echo "pattern10-depthcode-prekey-cross5-selftest OK W=$W pm_accum=$PM_ACCUM decode_load=$DECODE_LOAD prekey=fixed-owner" >&2
