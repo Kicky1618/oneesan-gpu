@@ -11,6 +11,9 @@
 #ifndef RP_RUNTIME_TURN_DISCOVERY_NONN_SCAN
 #define RP_RUNTIME_TURN_DISCOVERY_NONN_SCAN 0
 #endif
+#ifndef RP_RUNTIME_TURN_DIRECT_COMPRESS_INVERSE
+#define RP_RUNTIME_TURN_DIRECT_COMPRESS_INVERSE 1
+#endif
 static_assert(RP_RUNTIME_TURN_LOCAL_SECTOR_TABLE == 0 ||
               RP_RUNTIME_TURN_LOCAL_SECTOR_TABLE == 1,
               "RP_RUNTIME_TURN_LOCAL_SECTOR_TABLE must be 0 or 1");
@@ -20,6 +23,9 @@ static_assert(RP_RUNTIME_TURN_LOCAL_SECTOR_W28_TREE == 0 ||
 static_assert(RP_RUNTIME_TURN_DISCOVERY_NONN_SCAN == 0 ||
               RP_RUNTIME_TURN_DISCOVERY_NONN_SCAN == 1,
               "RP_RUNTIME_TURN_DISCOVERY_NONN_SCAN must be 0 or 1");
+static_assert(RP_RUNTIME_TURN_DIRECT_COMPRESS_INVERSE == 0 ||
+              RP_RUNTIME_TURN_DIRECT_COMPRESS_INVERSE == 1,
+              "RP_RUNTIME_TURN_DIRECT_COMPRESS_INVERSE must be 0 or 1");
 
 namespace oneesan::gridfp::reducedprod {
 
@@ -307,6 +313,45 @@ __device__ __forceinline__ bool runtime_turn_discover_compress_low(
     if (!sink.emit(DeviceKey{d, 0})) return false;
 
     const MateValuePair pair = mpair(d, 1);
+#if RP_RUNTIME_TURN_DIRECT_COMPRESS_INVERSE
+    if (pair == LR && !sink.emit(DeviceKey{msetpair(d, 1, NN), 0})) return false;
+    if (pair == RN && !sink.emit(DeviceKey{msetpair(d, 1, NR), 0})) return false;
+    if (pair == NR && !sink.emit(DeviceKey{msetpair(d, 1, RN), 0})) return false;
+
+    if (pair == NN) {
+        int bal = 0;
+#if RP_RUNTIME_TURN_DISCOVERY_NONN_SCAN
+        std::uint32_t mask = mate_non_n_mask(d, W) & ~std::uint32_t(3u);
+        while (mask) {
+            const int q = mate_lsb_index32(mask);
+            const MateValue v = mget(d, q);
+            if (bal == 0 && v == R) {
+                MateID x = msetpair(d, 1, RR);
+                x = mset(x, q, L);
+                if (!sink.emit(DeviceKey{x, 0})) return false;
+            }
+            if (v == R) ++bal;
+            else if (v == L) --bal;
+            if (bal < 0) break;
+            mask &= mask - 1u;
+        }
+#else
+        for (int q = 2; q < W; ++q) {
+            const MateValue v = mget(d, q);
+            if (bal == 0 && v == R) {
+                MateID x = msetpair(d, 1, RR);
+                x = mset(x, q, L);
+                if (!sink.emit(DeviceKey{x, 0})) return false;
+            }
+            if (v == R) ++bal;
+            else if (v == L) --bal;
+            if (bal < 0) break;
+        }
+#endif
+    }
+    if (pair == NR && !sink.emit(DeviceKey{mshrink(d, 1), 1})) return false;
+    return true;
+#else
     if (pair == LR && !runtime_turn_try_compress_main(msetpair(d, 1, NN), d, W, sink)) return false;
     if (pair == RN && !runtime_turn_try_compress_main(msetpair(d, 1, NR), d, W, sink)) return false;
     if (pair == LN && !runtime_turn_try_compress_main(msetpair(d, 1, NL), d, W, sink)) return false;
@@ -325,8 +370,7 @@ __device__ __forceinline__ bool runtime_turn_discover_compress_low(
             if (bal == 0 && v == R) {
                 MateID x = msetpair(d, 1, RR);
                 x = mset(x, q, L);
-                if (!runtime_turn_try_compress_main(x, d, W, sink))
-                    return false;
+                if (!runtime_turn_try_compress_main(x, d, W, sink)) return false;
             }
             if (v == R) ++bal;
             else if (v == L) --bal;
@@ -339,8 +383,7 @@ __device__ __forceinline__ bool runtime_turn_discover_compress_low(
             if (bal == 0 && v == R) {
                 MateID x = msetpair(d, 1, RR);
                 x = mset(x, q, L);
-                if (!runtime_turn_try_compress_main(x, d, W, sink))
-                    return false;
+                if (!runtime_turn_try_compress_main(x, d, W, sink)) return false;
             }
             if (v == R) ++bal;
             else if (v == L) --bal;
@@ -357,6 +400,7 @@ __device__ __forceinline__ bool runtime_turn_discover_compress_low(
         }
     }
     return true;
+#endif
 }
 
 template<class Sink>
