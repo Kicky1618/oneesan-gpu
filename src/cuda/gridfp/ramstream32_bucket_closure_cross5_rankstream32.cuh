@@ -9,7 +9,7 @@ p10dc_resolved_low_preimages_cross5_rankstream32_fixed(
 ) {
     uint32_t key = 0;
     const uint16_t* rank_row = nullptr;
-    p10dc_low_rankstream32_row(h, rank, key, rank_row);
+    p10dc_low_rankstream32_row_warpstripe(h, rank, key, rank_row);
     bool overflow = false;
     BkczCrossAccum sum = p10dc_resolved_low_preimages_cross5_rankstream_nofallback(
         key, depth, source_row, rank_row, overflow);
