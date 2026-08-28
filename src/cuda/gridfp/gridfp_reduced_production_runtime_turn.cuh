@@ -2,7 +2,66 @@
 
 #include "gridfp_reduced_production_runtime_subwarp.cuh"
 
+#ifndef RP_RUNTIME_TURN_LOCAL_SECTOR_TABLE
+#define RP_RUNTIME_TURN_LOCAL_SECTOR_TABLE 1
+#endif
+static_assert(RP_RUNTIME_TURN_LOCAL_SECTOR_TABLE == 0 ||
+              RP_RUNTIME_TURN_LOCAL_SECTOR_TABLE == 1,
+              "RP_RUNTIME_TURN_LOCAL_SECTOR_TABLE must be 0 or 1");
+
 namespace oneesan::gridfp::reducedprod {
+
+static constexpr int RP_RUNTIME_TURN_LOCAL_SECTOR_END_ENTRIES = 550;
+__device__ __constant__ std::uint32_t
+RP_RUNTIME_TURN_LOCAL_SECTOR_END[RP_RUNTIME_TURN_LOCAL_SECTOR_END_ENTRIES] = {
+#include "gridfp_reduced_production_runtime_turn_local_sector_end_values.inc"
+};
+static_assert(sizeof(RP_RUNTIME_TURN_LOCAL_SECTOR_END) == 2200);
+
+__device__ __forceinline__ int runtime_turn_local_sector_width_base_device(int W) {
+    switch (W) {
+    case 8: return 0; case 10: return 10; case 12: return 25;
+    case 14: return 46; case 16: return 74; case 18: return 110;
+    case 20: return 155; case 22: return 210; case 24: return 276;
+    case 26: return 354; case 28: return 445; default: return -1;
+    }
+}
+
+__device__ __forceinline__ bool runtime_turn_local_sector_device(
+    int W,
+    int L,
+    int outer_ones,
+    Rank64 within,
+    int& local_ones,
+    Rank64& local_within
+) {
+#if RP_RUNTIME_TURN_LOCAL_SECTOR_TABLE
+    const int base = runtime_turn_local_sector_width_base_device(W);
+    const int O = W - L;
+    if (base >= 0 && L == W / 2 + 1 && outer_ones >= 0 && outer_ones <= O) {
+        const int odd_l = L >> 1;
+        const int even_l = (L + 1) >> 1;
+        const int prior_even_r = (outer_ones + 1) >> 1;
+        const int prior_odd_r = outer_ones >> 1;
+        const int row = base + prior_even_r * odd_l + prior_odd_r * even_l;
+        const int first = (outer_ones & 1) ? 0 : 1;
+        const int count = (outer_ones & 1) ? even_l : odd_l;
+        int lo = 0;
+        int hi = count;
+        while (lo < hi) {
+            const int mid = lo + ((hi - lo) >> 1);
+            if (within < RP_RUNTIME_TURN_LOCAL_SECTOR_END[row + mid]) hi = mid;
+            else lo = mid + 1;
+        }
+        if (lo >= count) return false;
+        const Rank64 begin = lo ? RP_RUNTIME_TURN_LOCAL_SECTOR_END[row + lo - 1] : 0;
+        local_ones = first + (lo << 1);
+        local_within = within - begin;
+        return true;
+    }
+#endif
+    return false;
+}
 
 __device__ __forceinline__ Rank64 runtime_turn_compress_group_size_device(
     int L, int outer_ones
@@ -45,19 +104,30 @@ __device__ __forceinline__ MateID runtime_turn_compress_label_unrank_device(
     int local_ones = -1;
     Rank64 local_sr = 0;
     Rank64 primitive_rank = 0;
-    for (int l = 0; l <= L - 1; ++l) {
-        const int occupied = outer_ones + l;
-        if (!(occupied & 1)) continue;
+    Rank64 local_within = 0;
+    if (runtime_turn_local_sector_device(
+            W, L, outer_ones, within, local_ones, local_within)) {
+        const int occupied = outer_ones + local_ones;
         const Rank64 pc = RP_PRIMITIVE[occupied][1];
-        const Rank64 n = choose_device(L - 1, l) * pc;
-        if (within < n) {
-            local_ones = l;
-            runtime_fastdivmod64_magic(
-                within, pc, RP_RUNTIME_PRIMITIVE1_MAGIC[occupied],
-                local_sr, primitive_rank);
-            break;
+        runtime_fastdivmod64_magic(
+            local_within, pc, RP_RUNTIME_PRIMITIVE1_MAGIC[occupied],
+            local_sr, primitive_rank);
+    } else {
+        Rank64 scan_within = within;
+        for (int l = 0; l <= L - 1; ++l) {
+            const int occupied = outer_ones + l;
+            if (!(occupied & 1)) continue;
+            const Rank64 pc = RP_PRIMITIVE[occupied][1];
+            const Rank64 n = choose_device(L - 1, l) * pc;
+            if (scan_within < n) {
+                local_ones = l;
+                runtime_fastdivmod64_magic(
+                    scan_within, pc, RP_RUNTIME_PRIMITIVE1_MAGIC[occupied],
+                    local_sr, primitive_rank);
+                break;
+            }
+            scan_within -= n;
         }
-        within -= n;
     }
     if (local_ones < 0) return 0;
 
