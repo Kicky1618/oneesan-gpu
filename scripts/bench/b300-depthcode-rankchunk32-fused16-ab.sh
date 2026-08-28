@@ -52,6 +52,7 @@ visible="$(nvidia-smi --query-gpu=index --format=csv,noheader | wc -l)"
 (( visible >= NGPU )) || { echo "need $NGPU GPUs, visible=$visible" >&2; exit 2; }
 mkdir -p "$(dirname "$RESULT")" "$LOGDIR"
 
+bash "$ONEESAN_ROOT/scripts/bench/cross5-rankstream-projection-proof.sh"
 bash "$ONEESAN_ROOT/scripts/bench/rankchunk32-warpbase-proof.sh"
 if [[ "$RUN_SELFTEST" == 1 ]]; then
   for fused in 0 1; do
