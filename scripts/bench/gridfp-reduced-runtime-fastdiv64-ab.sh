@@ -34,6 +34,8 @@ mkdir -p "$(dirname "$RESULT")" "$LOGDIR"
 
 bash "$ONEESAN_ROOT/scripts/bench/gridfp-runtime-fastdiv64-proof.sh" \
   >"$LOGDIR/fastdiv64-proof.out" 2>"$LOGDIR/fastdiv64-proof.err"
+bash "$ONEESAN_ROOT/scripts/bench/gridfp-runtime-owner-group-magic-proof.sh" \
+  >"$LOGDIR/owner-group-magic-proof.out" 2>"$LOGDIR/owner-group-magic-proof.err"
 
 build_one() {
   local fastdiv="$1" bin="$2"
@@ -128,11 +130,12 @@ old = float(q['0']['wall_ms_median'])
 new = float(q['1']['wall_ms_median'])
 print(f'runtime_fastdiv64_wall_speedup={old / new:.6f}x')
 print(f'runtime_fastdiv64_wall_delta_pct={(new / old - 1.0) * 100.0:.4f}%')
-print('runtime_fastdiv64_scope=owner_label_primitive_divmod')
-print('runtime_fastdiv64_removed_dynamic_divmods_per_owner_label=1')
-print('runtime_fastdiv64_component_group_divmod_remaining=1')
-print('runtime_fastdiv64_turn_compress_primitive_divmod_remaining=1')
-print('runtime_fastdiv64_magic_entries=29')
+print('runtime_fastdiv64_scope=owner_label_component_group_and_primitive_divmods')
+print('runtime_fastdiv64_removed_dynamic_divmod_pairs_per_owner_label=2')
+print('runtime_fastdiv64_turn_compress_divmod_pairs_remaining=2')
+print('runtime_fastdiv64_primitive_magic_entries=29')
+print('runtime_fastdiv64_owner_group_magic_entries=154')
+print('runtime_fastdiv64_owner_group_magic_bytes=1232')
 print('runtime_fastdiv64_edge_cache=1')
 print('runtime_fastdiv64_fast_p32m5_mod=1')
 print('runtime_fastdiv64_poll_global_error=0')
