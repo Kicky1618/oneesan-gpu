@@ -12,7 +12,7 @@ Rank ceil_div_rank(Rank a, Rank b) {
     return (a + b - 1) / b;
 }
 
-void print_w28_segment_batch_plan(double scratch_cap_gib) {
+void print_w28_segment_batch_plan(double scratch_cap_gib, int candidate_batches) {
     constexpr int W = 28, K = 13, ngpu = 8;
     const RunTraffic t = equal_run_traffic_model(W, K, ngpu);
     if (t.total_states != 473397057701ULL)
@@ -32,10 +32,12 @@ void print_w28_segment_batch_plan(double scratch_cap_gib) {
     if (moved != 409769189454ULL)
         fail("segment batch W28 moved states");
 
-    // One boundary item is one complete primitive run.  W=28 has at most 27
-    // occupied sites, hence primitive multiplicity Catalan(14).
-    const Rank max_item_states = catalan(14);
-    if (max_item_states != 2674440ULL)
+    // One individual owner-boundary run is at most Catalan(14) values.  This
+    // bound is useful for an independent-boundary lower bound, but production
+    // batching must keep every boundary of a cycle in the SAME batch; otherwise
+    // an earlier phase-2 rotation can destroy old values required later.
+    const Rank max_boundary_run_states = catalan(14);
+    if (max_boundary_run_states != 2674440ULL)
         fail("segment batch max primitive multiplicity");
 
     Rank max_inbound = 0;
@@ -54,32 +56,26 @@ void print_w28_segment_batch_plan(double scratch_cap_gib) {
                   << "\n";
     }
 
-    // List scheduling independently for each destination GPU: assigning the
-    // next boundary run to that GPU's least-loaded batch has makespan at most
-    // average + largest item.  Destinations are independent, so the same global
-    // batch index set can be used on all GPUs.
-    int chosen_batches = -1;
-    double chosen_bound_gib = 0.0;
+    int independent_min_batches = -1;
     for (int batches = 2; batches <= 16; ++batches) {
         Rank worst_states = 0;
         for (int g = 0; g < ngpu; ++g) {
             const Rank avg_ceil = ceil_div_rank(
                 inbound[static_cast<std::size_t>(g)], Rank(batches));
-            const Rank bound = avg_ceil + max_item_states;
+            const Rank bound = avg_ceil + max_boundary_run_states;
             worst_states = std::max(worst_states, bound);
         }
         const double bound_gib = double(worst_states) * 4.0 / double(1ULL << 30);
-        std::cout << "W=28 scratch_batches=" << batches
-                  << " greedy_guaranteed_max_GiB_per_gpu=" << bound_gib
-                  << " max_boundary_item_MiB="
-                  << double(max_item_states) * 4.0 / double(1ULL << 20)
-                  << "\n";
-        if (chosen_batches < 0 && bound_gib <= scratch_cap_gib) {
-            chosen_batches = batches;
-            chosen_bound_gib = bound_gib;
-        }
+        std::cout << "W=28 independent_boundary_batches=" << batches
+                  << " independent_list_bound_GiB_per_gpu=" << bound_gib
+                  << " max_boundary_run_MiB="
+                  << double(max_boundary_run_states) * 4.0 / double(1ULL << 20)
+                  << " cycle_atomicity_not_proven=1\n";
+        if (independent_min_batches < 0 && bound_gib <= scratch_cap_gib)
+            independent_min_batches = batches;
     }
-    if (chosen_batches < 0) fail("segment batch scratch cap too small");
+    if (independent_min_batches < 0)
+        fail("segment batch scratch cap below independent lower plan");
 
     const LoadReport owner_load = exact_w28_owner_load(K, ngpu);
     const Rank max_state = *std::max_element(owner_load.states.begin(), owner_load.states.end());
@@ -88,8 +84,6 @@ void print_w28_segment_batch_plan(double scratch_cap_gib) {
     const Rank packed_one_direction_bytes = 1011352736ULL;
     const double both_schedule_gib =
         2.0 * double(packed_one_direction_bytes) / double(1ULL << 30);
-    // Deliberately pessimistic: charge both complete cluster-wide schedules to
-    // the single GPU that also owns the largest state shard.
     const double pessimistic_used_gib =
         max_state_gib + scratch_cap_gib + both_schedule_gib;
 
@@ -99,10 +93,11 @@ void print_w28_segment_batch_plan(double scratch_cap_gib) {
               << " max_inbound_GiB="
               << double(max_inbound) * 4.0 / double(1ULL << 30)
               << " scratch_cap_GiB=" << scratch_cap_gib
-              << " chosen_batches=" << chosen_batches
-              << " greedy_bound_GiB=" << chosen_bound_gib
-              << " kernels_per_redistribution=" << (2 * chosen_batches)
-              << " global_phase_barriers=" << chosen_batches
+              << " independent_boundary_min_batches=" << independent_min_batches
+              << " cycle_atomic_candidate_batches=" << candidate_batches
+              << " candidate_kernels_per_redistribution=" << (2 * candidate_batches)
+              << " candidate_global_phase_barriers=" << candidate_batches
+              << " cycle_atomic_assignment_requires_builder_validation=1"
               << " max_state_GiB=" << max_state_gib
               << " B300_288GB_decimal_GiB=" << b300_288gb_decimal_gib
               << " both_packed_schedules_cluster_GiB=" << both_schedule_gib
@@ -112,18 +107,18 @@ void print_w28_segment_batch_plan(double scratch_cap_gib) {
               << (b300_288gb_decimal_gib - pessimistic_used_gib)
               << " boundary_minimal_network_candidate=1\n";
 
-    if (scratch_cap_gib == 39.0) {
-        if (chosen_batches != 5 || chosen_bound_gib >= 39.0)
-            fail("W28 39GiB five-batch guarantee");
-    }
+    if (candidate_batches < independent_min_batches)
+        fail("cycle-atomic candidate below independent lower batch count");
 }
 
 } // namespace
 
 int main(int argc, char** argv) {
-    const double scratch_cap_gib = argc > 1 ? std::atof(argv[1]) : 39.0;
-    if (!(scratch_cap_gib > 0.0)) return 2;
-    print_w28_segment_batch_plan(scratch_cap_gib);
+    const double scratch_cap_gib = argc > 1 ? std::atof(argv[1]) : 32.0;
+    const int candidate_batches = argc > 2 ? std::atoi(argv[2]) : 8;
+    if (!(scratch_cap_gib > 0.0) || candidate_batches < 1 || candidate_batches > 64)
+        return 2;
+    print_w28_segment_batch_plan(scratch_cap_gib, candidate_batches);
     std::cout << "ALL_OK production_p2p_segment_batch_plan=1\n";
     return 0;
 }
