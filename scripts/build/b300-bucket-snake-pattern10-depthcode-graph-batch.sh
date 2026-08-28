@@ -51,7 +51,7 @@ SUFFIX="_payload_${HIGH_CTX}_${TRANSPOSE_MODE}"
 [[ "$PM_ACCUM" == 1 ]] && SUFFIX="${SUFFIX}_pm"
 [[ "$TERNARY_KEY4" == 0 ]] && SUFFIX="${SUFFIX}_keyscalar"
 SRC="$(repo_path "src/cuda/b300/$SRC_NAME")"
-OUT="$(build_path "${OUT:-oneesan_cuda_gridfp_b300_bucket_snake_onepass_pattern10-depthcode_graph_batch${SUFFIX}_n${N}}")"
+OUT="$(build_path "${OUT:-oneesan_cuda_gridfp_b300_bucket_snake_onepass_pattern10_depthcode_graph_batch${SUFFIX}_n${N}}")"
 NVCC_EXTRA=()
 [[ "$PTXAS_VERBOSE" == 1 ]] && NVCC_EXTRA+=("-Xptxas=-v")
 
