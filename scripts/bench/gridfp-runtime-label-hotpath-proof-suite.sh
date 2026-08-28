@@ -10,6 +10,7 @@ PROOFS=(
   gridfp-component-support-adjacent-marks-proof.sh
   gridfp-materialize-primitive-last-r-proof.sh
   gridfp-materialize-primitive-packed-proof.sh
+  gridfp-runtime-primitive-rank-packed-proof.sh
   gridfp-support-unrank-len13-table-proof.sh
   gridfp-runtime-turn-local-sector-carry-begin-proof.sh
   gridfp-runtime-turn-local-sector-w28-tree-proof.sh
