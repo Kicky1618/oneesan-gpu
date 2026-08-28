@@ -108,9 +108,9 @@ static void p10dc_verify_rankdelta8_tables(
                 for (uint32_t j = 1; j < nr; ++j) {
                     if (ranks[j] <= ranks[j-1]) std::exit(717);
                     const uint32_t d = uint32_t(ranks[j] - ranks[j-1]);
-                    if (d >= (1u << 14)) std::exit(718);
-                    if (d < 128u) expected.push_back(uint8_t(d));
-                    else { expected.push_back(uint8_t(0x80u | (d & 0x7fu))); expected.push_back(uint8_t(d >> 7)); }
+                    if (d > 0xffffu) std::exit(718);
+                    if (d <= 255u) expected.push_back(uint8_t(d));
+                    else { expected.push_back(0u); expected.push_back(uint8_t(d)); expected.push_back(uint8_t(d >> 8)); }
                 }
             }
             if (stream_ix + expected.size() > got_stream.size() ||
@@ -217,7 +217,7 @@ int main() {
               << " forward_exact=1 reverse_exact=1 table_exact=1 stream_exact=1"
               << " chunk_bits=23 prefix_bits=9 block=32"
               << " height_align=" << (P10DC_RANKDELTA8_ALIGN32 ? 32 : 1)
-              << " delta_varint=7_or_14_bits fused16=" << P10DC_RANKCHUNK32_FUSED16
+              << " delta_fast8_escape16=1 fused16=" << P10DC_RANKCHUNK32_FUSED16
               << " cross_runtime_div=0 cross_runtime_mod=0\n";
     return 0;
 }
