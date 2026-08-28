@@ -42,21 +42,21 @@ int parity_binary(
     Rank64& begin,
     int* comparisons = nullptr
 ) {
-    const int parity = 1 - (outer_ones & 1);
-    const int count = (L + 1 - parity) >> 1;
+    const int first = (outer_ones & 1) ? 2 : 1;
+    const int count = (L - first + 1) >> 1;
     int lo = 0;
     int hi = count - 1;
     int c = 0;
     while (lo < hi) {
         ++c;
         const int mid = lo + ((hi - lo) >> 1);
-        const int l = parity + (mid << 1);
+        const int l = first + (mid << 1);
         if (within < EMBEDDED[row + l]) hi = mid;
         else lo = mid + 1;
     }
     if (comparisons) *comparisons = c;
-    const int l = parity + (lo << 1);
-    begin = lo ? EMBEDDED[row + parity + ((lo - 1) << 1)] : 0;
+    const int l = first + (lo << 1);
+    begin = lo ? EMBEDDED[row + first + ((lo - 1) << 1)] : 0;
     return l;
 }
 } // namespace
@@ -73,12 +73,13 @@ int main() {
         if (base < 0) return 2;
         for (int r = 0; r <= O; ++r) {
             const int row = base + r * L;
-            const int parity = 1 - (r & 1);
+            const int first = (r & 1) ? 2 : 1;
             Rank64 previous = 0;
             for (int l = 0; l < L; ++l) {
                 const Rank64 end = EMBEDDED[row + l];
                 const bool rises = end > previous;
-                if (rises != ((l & 1) == parity)) return 3;
+                const bool positive_sector = l >= first && ((l - first) & 1) == 0;
+                if (rises != positive_sector) return 3;
                 if (rises) {
                     const Rank64 probes[] = {
                         previous,
@@ -130,7 +131,8 @@ int main() {
     std::cout << "gridfp-runtime-owner-local-sector-parity-proof OK"
               << " boundary_cases=" << boundary_cases
               << " random_cases=" << RANDOM_CASES
-              << " production_W_max=28 parity_exact=1"
+              << " production_W_max=28 positive_sector_exact=1"
+              << " W28_candidates=7"
               << " max_full_comparisons=" << max_full_comparisons
               << " max_parity_comparisons=" << max_parity_comparisons << '\n';
     return 0;
