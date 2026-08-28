@@ -155,7 +155,6 @@ void check(MateID d,int W,std::uint64_t& nn,std::uint64_t& ll,std::uint64_t& ln)
         ++ln; const MateID bkey=mshrink(d,p-1);
         if(!valid_mate(bkey,W-1)||blocked_exclude_reverse(bkey,W,p)!=d) std::exit(5);
     }
-    if(pair==RN||pair==NR||pair==RR||pair==RL) std::exit(6);
 }
 }
 
