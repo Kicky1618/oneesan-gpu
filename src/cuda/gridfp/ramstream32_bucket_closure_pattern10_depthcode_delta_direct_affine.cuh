@@ -15,7 +15,7 @@ __device__ __forceinline__ bool p10dc_affine_add_high_base(
     uint32_t owner = bkf_loc_owner(loc);
     uint32_t bid = uint32_t(3 * he + int(center));
     Count* row = nullptr;
-    if (!p10dc_high_row_affine_resolve(owner, bid, bkf_loc_rank(loc), row)) return false;
+    if (!p10dc_high_row_affine_resolve(owner, bid, bkf_loc_rank(loc), uint32_t(fixed_hs), row)) return false;
     uint32_t n = uint32_t(c.local_n);
     if (n >= BKCZ_MAX_LOCAL) return false;
     c.local_base[n] = row;
@@ -35,7 +35,7 @@ __device__ __forceinline__ void p10dc_affine_set_high_cross_base(
     uint32_t owner = bkf_loc_owner(loc);
     uint32_t bid = uint32_t(3 * he + int(center));
     Count* row = nullptr;
-    if (!p10dc_high_row_affine_resolve(owner, bid, bkf_loc_rank(loc), row)) return;
+    if (!p10dc_high_row_affine_resolve(owner, bid, bkf_loc_rank(loc), uint32_t(fixed_hs), row)) return;
     c.cross_base = row;
     c.cross_depth = depth;
 }
