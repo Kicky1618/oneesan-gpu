@@ -12,8 +12,10 @@ int main() {
                   << " warpshare=" << P10DC_RANKFORMULA_NOMETA_WARPSHARE
                   << " coopgroup=" << P10DC_RANKFORMULA_NOMETA_COOPGROUP
                   << " coop_unroll=" << P10DC_RANKFORMULA_NOMETA_COOP_UNROLL
+                  << " select8=" << P10DC_RANKFORMULA_ABSTRACT_SELECT8
                   << " max_locator_steps_bound="
                   << (P10DC_RANKFORMULA_NOMETA4_BLOCK - 1u)
+                  << " depth14_15_fast_zero=1"
                   << " wrapper_ok=1\n";
     }
     return rc;
