@@ -6,15 +6,24 @@
 #ifndef P10DC_RANKFORMULA_ABSTRACT_SELECT8
 #define P10DC_RANKFORMULA_ABSTRACT_SELECT8 0
 #endif
+#ifndef P10DC_RANKFORMULA_ABSTRACT_DEPTH4
+#define P10DC_RANKFORMULA_ABSTRACT_DEPTH4 0
+#endif
 #ifndef P10DC_RANKFORMULA_ABSTRACT_SRCPACK10
 #define P10DC_RANKFORMULA_ABSTRACT_SRCPACK10 0
 #endif
 static_assert(P10DC_RANKFORMULA_ABSTRACT_SELECT8 == 0 ||
               P10DC_RANKFORMULA_ABSTRACT_SELECT8 == 1,
               "P10DC_RANKFORMULA_ABSTRACT_SELECT8 must be 0 or 1");
+static_assert(P10DC_RANKFORMULA_ABSTRACT_DEPTH4 == 0 ||
+              P10DC_RANKFORMULA_ABSTRACT_DEPTH4 == 1,
+              "P10DC_RANKFORMULA_ABSTRACT_DEPTH4 must be 0 or 1");
 static_assert(P10DC_RANKFORMULA_ABSTRACT_SRCPACK10 == 0 ||
               P10DC_RANKFORMULA_ABSTRACT_SRCPACK10 == 1,
               "P10DC_RANKFORMULA_ABSTRACT_SRCPACK10 must be 0 or 1");
+static_assert(!P10DC_RANKFORMULA_ABSTRACT_DEPTH4 ||
+              P10DC_RANKFORMULA_ABSTRACT_SELECT8,
+              "abstract depth4 requires precomputed selection mode");
 static_assert(!P10DC_RANKFORMULA_ABSTRACT_SRCPACK10 ||
               P10DC_RANKFORMULA_ABSTRACT_SELECT8,
               "abstract source pack10 requires select8");
@@ -32,8 +41,6 @@ static_assert(LOW_LUT_K <= int(P10DC_RANKFORMULA_ABSTRACT_MAX_K));
 
 #if P10DC_RANKFORMULA_ABSTRACT_SELECT8
 #if P10DC_RANKFORMULA_ABSTRACT_SRCPACK10
-// Three 10-bit source-local ranks per word. Load each word only when the
-// select8 mask actually references one of its three source ordinals.
 __device__ __align__(128) uint32_t
     D_P10DC_RANKFORMULA_ABSTRACT_SRC03[P10DC_RANKFORMULA_ABSTRACT_DESC_N];
 __device__ __align__(128) uint32_t
@@ -46,17 +53,20 @@ __device__ __align__(128) uint16_t
 __device__ __align__(128) uint16_t
     D_P10DC_RANKFORMULA_ABSTRACT_SRC[P10DC_RANKFORMULA_ABSTRACT_RANK_N];
 #endif
+#if P10DC_RANKFORMULA_ABSTRACT_DEPTH4
+__device__ __align__(128) uint32_t
+    D_P10DC_RANKFORMULA_ABSTRACT_DEPTH4[P10DC_RANKFORMULA_ABSTRACT_DESC_N];
+#else
+// Depth-major: all lanes in a HIGH warp share cross_depth, so nearby abstract
+// descriptor indices touch adjacent bytes instead of a 13-byte lane stride.
+__device__ __align__(128) uint8_t
+    D_P10DC_RANKFORMULA_ABSTRACT_SELECT[P10DC_RANKFORMULA_ABSTRACT_SELECT_N];
+#endif
 #else
 __device__ __align__(128) uint32_t
     D_P10DC_RANKFORMULA_ABSTRACT_DESC[P10DC_RANKFORMULA_ABSTRACT_DESC_N];
 __device__ __align__(128) uint16_t
     D_P10DC_RANKFORMULA_ABSTRACT_SRC[P10DC_RANKFORMULA_ABSTRACT_RANK_N];
-#endif
-#if P10DC_RANKFORMULA_ABSTRACT_SELECT8
-// Depth-major: all lanes in a HIGH warp share cross_depth, so nearby abstract
-// descriptor indices touch adjacent bytes instead of a 13-byte lane stride.
-__device__ __align__(128) uint8_t
-    D_P10DC_RANKFORMULA_ABSTRACT_SELECT[P10DC_RANKFORMULA_ABSTRACT_SELECT_N];
 #endif
 __constant__ uint16_t
     D_P10DC_RANKFORMULA_ABSTRACT_OFF[P10DC_RANKFORMULA_ABSTRACT_OFF_N];
@@ -118,6 +128,20 @@ static uint8_t p10dc_rankformula_abstract_select_host(uint32_t lp, int n, uint32
     return select;
 }
 
+static uint32_t p10dc_rankformula_abstract_depth4_host(uint32_t lp, int n) {
+    uint32_t dpack = 0;
+    for (uint32_t depth = 1; depth <= P10DC_RANKFORMULA_ABSTRACT_SELECT_DEPTHS; ++depth) {
+        const uint32_t sm = uint32_t(p10dc_rankformula_abstract_select_host(lp, n, depth));
+        for (uint32_t li = 0; li < 7u; ++li) {
+            if (((sm >> li) & 1u) == 0u) continue;
+            const uint32_t old = (dpack >> (4u * li)) & 15u;
+            if (old != 0u && old != depth) std::exit(777);
+            dpack |= depth << (4u * li);
+        }
+    }
+    return dpack;
+}
+
 struct P10DCRankFormulaAbstractHost {
     std::array<uint16_t, P10DC_RANKFORMULA_ABSTRACT_OFF_N> off{};
 #if P10DC_RANKFORMULA_ABSTRACT_SELECT8
@@ -129,7 +153,11 @@ struct P10DCRankFormulaAbstractHost {
     std::array<uint16_t, P10DC_RANKFORMULA_ABSTRACT_DESC_N> roff{};
     std::array<uint16_t, P10DC_RANKFORMULA_ABSTRACT_RANK_N> src{};
 #endif
+#if P10DC_RANKFORMULA_ABSTRACT_DEPTH4
+    std::array<uint32_t, P10DC_RANKFORMULA_ABSTRACT_DESC_N> depth4{};
+#else
     std::array<uint8_t, P10DC_RANKFORMULA_ABSTRACT_SELECT_N> select{};
+#endif
 #else
     std::array<uint32_t, P10DC_RANKFORMULA_ABSTRACT_DESC_N> desc{};
     std::array<uint16_t, P10DC_RANKFORMULA_ABSTRACT_RANK_N> src{};
@@ -154,10 +182,14 @@ static P10DCRankFormulaAbstractHost p10dc_rankformula_abstract_build_host() {
 #if !P10DC_RANKFORMULA_ABSTRACT_SRCPACK10
                 out.roff[di] = uint16_t(roff);
 #endif
+#if P10DC_RANKFORMULA_ABSTRACT_DEPTH4
+                out.depth4[di] = p10dc_rankformula_abstract_depth4_host(lp, n);
+#else
                 for (uint32_t depth = 1; depth <= P10DC_RANKFORMULA_ABSTRACT_SELECT_DEPTHS; ++depth) {
                     out.select[size_t(depth - 1u) * P10DC_RANKFORMULA_ABSTRACT_DESC_N + size_t(di)] =
                         p10dc_rankformula_abstract_select_host(lp, n, depth);
                 }
+#endif
                 if (p10dc_rankformula_abstract_select_host(lp, n, 14u) != 0u ||
                     p10dc_rankformula_abstract_select_host(lp, n, 15u) != 0u)
                     std::exit(775);
@@ -226,6 +258,15 @@ static void p10dc_install_rankformula_abstract_lut() {
                           t.src.data(), t.src.size() * sizeof(uint16_t)),
        "p10dc abstract source-rank LUT");
 #endif
+#if P10DC_RANKFORMULA_ABSTRACT_DEPTH4
+    ck(cudaMemcpyToSymbol(D_P10DC_RANKFORMULA_ABSTRACT_DEPTH4,
+                          t.depth4.data(), t.depth4.size() * sizeof(uint32_t)),
+       "p10dc abstract depth4 LUT");
+#else
+    ck(cudaMemcpyToSymbol(D_P10DC_RANKFORMULA_ABSTRACT_SELECT,
+                          t.select.data(), t.select.size() * sizeof(uint8_t)),
+       "p10dc abstract select8 LUT");
+#endif
 #else
     ck(cudaMemcpyToSymbol(D_P10DC_RANKFORMULA_ABSTRACT_DESC,
                           t.desc.data(), t.desc.size() * sizeof(uint32_t)),
@@ -233,11 +274,6 @@ static void p10dc_install_rankformula_abstract_lut() {
     ck(cudaMemcpyToSymbol(D_P10DC_RANKFORMULA_ABSTRACT_SRC,
                           t.src.data(), t.src.size() * sizeof(uint16_t)),
        "p10dc abstract source-rank LUT");
-#endif
-#if P10DC_RANKFORMULA_ABSTRACT_SELECT8
-    ck(cudaMemcpyToSymbol(D_P10DC_RANKFORMULA_ABSTRACT_SELECT,
-                          t.select.data(), t.select.size() * sizeof(uint8_t)),
-       "p10dc abstract select8 LUT");
 #endif
 }
 
@@ -260,17 +296,30 @@ __device__ __forceinline__ uint32_t p10dc_rankformula_abstract_src_load(uint32_t
     return uint32_t(__ldg(D_P10DC_RANKFORMULA_ABSTRACT_SRC + ix));
 }
 #endif
+#if P10DC_RANKFORMULA_ABSTRACT_DEPTH4
+__device__ __forceinline__ uint32_t p10dc_rankformula_abstract_depth4_load(uint32_t ix) {
+    return __ldg(D_P10DC_RANKFORMULA_ABSTRACT_DEPTH4 + ix);
+}
+__device__ __forceinline__ uint32_t p10dc_rankformula_abstract_depth4_select(uint32_t dpack, uint32_t depth) {
+    uint32_t x = dpack ^ (depth * 0x01111111u);
+    uint32_t y = x | (x >> 1) | (x >> 2) | (x >> 3);
+    uint32_t z = (~y) & 0x01111111u;
+    z = (z | (z >> 3)) & 0x03030303u;
+    z = (z | (z >> 6)) & 0x000f000fu;
+    z = (z | (z >> 12)) & 0x000000ffu;
+    return z & 0x7fu;
+}
+#else
+__device__ __forceinline__ uint32_t p10dc_rankformula_abstract_select_load(uint32_t ix) {
+    return uint32_t(__ldg(D_P10DC_RANKFORMULA_ABSTRACT_SELECT + ix));
+}
+#endif
 #else
 __device__ __forceinline__ uint32_t p10dc_rankformula_abstract_desc_load(uint32_t ix) {
     return __ldg(D_P10DC_RANKFORMULA_ABSTRACT_DESC + ix);
 }
 __device__ __forceinline__ uint32_t p10dc_rankformula_abstract_src_load(uint32_t ix) {
     return uint32_t(__ldg(D_P10DC_RANKFORMULA_ABSTRACT_SRC + ix));
-}
-#endif
-#if P10DC_RANKFORMULA_ABSTRACT_SELECT8
-__device__ __forceinline__ uint32_t p10dc_rankformula_abstract_select_load(uint32_t ix) {
-    return uint32_t(__ldg(D_P10DC_RANKFORMULA_ABSTRACT_SELECT + ix));
 }
 #endif
 
@@ -285,8 +334,13 @@ p10dc_resolved_low_preimages_cross5_rankformula_nometa4_abstract_fixed(
     const uint32_t di = uint32_t(D_P10DC_RANKFORMULA_ABSTRACT_OFF[z.n * 16u + h]) + local;
 
 #if P10DC_RANKFORMULA_ABSTRACT_SELECT8
+#if P10DC_RANKFORMULA_ABSTRACT_DEPTH4
+    uint32_t select = p10dc_rankformula_abstract_depth4_select(
+        p10dc_rankformula_abstract_depth4_load(di), depth);
+#else
     uint32_t select = p10dc_rankformula_abstract_select_load(
         (depth - 1u) * P10DC_RANKFORMULA_ABSTRACT_DESC_N + di);
+#endif
     if (!select) return BkczCrossAccum(0);
     const uint32_t source_base = uint32_t(int(z.start) + z.base_delta);
     BkczCrossAccum sum = 0;
