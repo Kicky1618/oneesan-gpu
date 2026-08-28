@@ -27,31 +27,39 @@ bool valid_reverse_mate(MateID m, int W) {
     return h == 0;
 }
 
-void emit_if_reverse_blocked_preimage(
-    KeySet& out, MateID x, MateID blocked_dest, int W
-) {
-    if (!valid_reverse_mate(x, W)) return;
+void assert_reverse_preimage(MateID x, MateID blocked_dest, int W) {
+    if (!valid_reverse_mate(x, W)) std::exit(10);
     const IncludeResult z = include_horizontal_reverse(x, W, 1);
-    if (z.valid && z.blocked && z.mate == blocked_dest)
-        out.insert(Key{false, x});
+    if (!z.valid || !z.blocked || z.mate != blocked_dest) std::exit(11);
 }
 
-KeySet direct_blocked_preimages_reverse_low(MateID b, int W) {
+KeySet direct_blocked_preimages_reverse_low(MateID b, int W,
+                                            std::uint64_t& structural_candidates) {
     KeySet out;
-    if (is_endpoint(mget(b, 0)))
-        emit_if_reverse_blocked_preimage(out, minsert(b, 0, N), b, W);
+    if (is_endpoint(mget(b, 0))) {
+        const MateID x = minsert(b, 0, N);
+        assert_reverse_preimage(x, b, W);
+        out.insert(Key{false, x});
+        ++structural_candidates;
+    }
 
     const MateID d = minsert(b, 1, N);
     if (mpair(d, 1) != NN) return out;
 
-    emit_if_reverse_blocked_preimage(out, msetpair(d, 1, RL), b, W);
+    const MateID rl = msetpair(d, 1, RL);
+    assert_reverse_preimage(rl, b, W);
+    out.insert(Key{false, rl});
+    ++structural_candidates;
+
     int bal = 0;
     for (int q = 2; q < W; ++q) {
         const MateValue v = mget(d, q);
         if (bal == 0 && v == R) {
             MateID x = msetpair(d, 1, RR);
             x = mset(x, q, L);
-            emit_if_reverse_blocked_preimage(out, x, b, W);
+            assert_reverse_preimage(x, b, W);
+            out.insert(Key{false, x});
+            ++structural_candidates;
         }
         if (v == R) ++bal;
         else if (v == L) --bal;
@@ -60,32 +68,56 @@ KeySet direct_blocked_preimages_reverse_low(MateID b, int W) {
     return out;
 }
 
-void try_main_reverse_low(KeySet& out, MateID x, MateID dest, int W) {
-    if (!valid_reverse_mate(x, W)) return;
+void assert_main_reverse_preimage(MateID x, MateID dest, int W) {
+    if (!valid_reverse_mate(x, W)) std::exit(12);
     const Vec got = reduced_step_basis(Key{false, x}, W, 1, true);
-    if (got.find(Key{false, dest}) != got.end()) out.insert(Key{false, x});
+    if (got.find(Key{false, dest}) == got.end()) std::exit(13);
 }
 
-KeySet direct_main_only_inverse_reverse_low(Key dest, int W) {
+KeySet direct_main_only_inverse_reverse_low(Key dest, int W,
+                                            std::uint64_t& structural_candidates,
+                                            std::uint64_t& projected_reconstructions) {
     if (dest.blocked)
-        return direct_blocked_preimages_reverse_low(dest.mate, W);
+        return direct_blocked_preimages_reverse_low(
+            dest.mate, W, structural_candidates);
 
     KeySet out;
     const MateID d = dest.mate;
     out.insert(Key{false, d});
 
     const MateValuePair pair = mpair(d, 1);
-    if (pair == LR) try_main_reverse_low(out, msetpair(d, 1, NN), d, W);
-    if (pair == LN) try_main_reverse_low(out, msetpair(d, 1, NL), d, W);
-    if (pair == RN) try_main_reverse_low(out, msetpair(d, 1, NR), d, W);
+    if (pair == LR) {
+        const MateID x = msetpair(d, 1, NN);
+        assert_main_reverse_preimage(x, d, W);
+        out.insert(Key{false, x});
+        ++structural_candidates;
+    }
+    if (pair == LN) {
+        const MateID x = msetpair(d, 1, NL);
+        assert_main_reverse_preimage(x, d, W);
+        out.insert(Key{false, x});
+        ++structural_candidates;
+    }
+    if (pair == RN) {
+        const MateID x = msetpair(d, 1, NR);
+        assert_main_reverse_preimage(x, d, W);
+        out.insert(Key{false, x});
+        ++structural_candidates;
+    }
 
     if (W > 2) {
         const MateValuePair qp = mpair(d, 2);
         if (qp == NN || qp == LR) {
             const MateID nn = qp == NN ? d : msetpair(d, 2, NN);
             const MateID b = mshrink(nn, 1);
-            if (valid_reverse_mate(b, W - 1) && mget(b, 1) == N) {
-                const KeySet extra = direct_blocked_preimages_reverse_low(b, W);
+            // For a reachable mirrored Q_{W-2} destination the reconstructed
+            // blocked word is reverse-valid by construction; only the
+            // canonical lookahead condition remains dynamic.
+            if (!valid_reverse_mate(b, W - 1)) std::exit(14);
+            if (mget(b, 1) == N) {
+                ++projected_reconstructions;
+                const KeySet extra = direct_blocked_preimages_reverse_low(
+                    b, W, structural_candidates);
                 out.insert(extra.begin(), extra.end());
             }
         }
@@ -104,9 +136,12 @@ KeySet old_main_only_inverse_reverse_low(Key dest, int W) {
 void check_dest(Key d, int W,
                 std::uint64_t& main_cases,
                 std::uint64_t& blocked_cases,
-                std::uint64_t& projected_cases) {
+                std::uint64_t& projected_cases,
+                std::uint64_t& structural_candidates,
+                std::uint64_t& projected_reconstructions) {
     const KeySet want = old_main_only_inverse_reverse_low(d, W);
-    const KeySet got = direct_main_only_inverse_reverse_low(d, W);
+    const KeySet got = direct_main_only_inverse_reverse_low(
+        d, W, structural_candidates, projected_reconstructions);
     if (want != got) {
         std::cerr << "mismatch W=" << W << " blocked=" << d.blocked
                   << " mate=" << d.mate << " want=" << want.size()
@@ -168,6 +203,8 @@ int main() {
     std::uint64_t main_cases = 0;
     std::uint64_t blocked_cases = 0;
     std::uint64_t projected_cases = 0;
+    std::uint64_t structural_candidates = 0;
+    std::uint64_t projected_reconstructions = 0;
 
     for (int W = 4; W <= 12; ++W) {
         const auto main = gen_words(W);
@@ -175,7 +212,8 @@ int main() {
         const auto forward_dst = layout(main, block, W - 2);
         for (Key d : forward_dst) {
             check_dest(mirror_key(d, W), W,
-                       main_cases, blocked_cases, projected_cases);
+                       main_cases, blocked_cases, projected_cases,
+                       structural_candidates, projected_reconstructions);
             ++exhaustive_cases;
         }
     }
@@ -187,7 +225,8 @@ int main() {
     for (std::uint64_t i = 0; i < RANDOM; ++i) {
         const MateID fm = unrank_valid(28, rng() % f[28][1], f);
         check_dest(mirror_key(Key{false, fm}, 28), 28,
-                   main_cases, blocked_cases, projected_cases);
+                   main_cases, blocked_cases, projected_cases,
+                   structural_candidates, projected_reconstructions);
         ++random_cases;
 
         MateID fb;
@@ -195,23 +234,27 @@ int main() {
             fb = unrank_valid(27, rng() % f[27][1], f);
         } while (mget(fb, 25) == N);
         check_dest(mirror_key(Key{true, fb}, 28), 28,
-                   main_cases, blocked_cases, projected_cases);
+                   main_cases, blocked_cases, projected_cases,
+                   structural_candidates, projected_reconstructions);
         ++random_cases;
     }
 
-    if (!main_cases || !blocked_cases || !projected_cases) return 4;
+    if (!main_cases || !blocked_cases || !projected_cases ||
+        !structural_candidates || !projected_reconstructions) return 4;
     std::cout << "gridfp-runtime-turn-direct-low-expand-inverse-proof OK"
               << " exhaustive_width_max=12 exhaustive_cases=" << exhaustive_cases
               << " random_width=28 random_cases=" << random_cases
               << " main_cases=" << main_cases
               << " blocked_cases=" << blocked_cases
               << " projected_cases=" << projected_cases
+              << " structural_candidates=" << structural_candidates
+              << " projected_reconstructions=" << projected_reconstructions
               << " source_scope=main_only"
               << " reverse_basis=mirrored_Q_Wm2"
-              << " direct_reverse_validity=low_to_high"
               << " direct_reverse_p=1"
               << " destination_mirror_passes=0 source_mirror_passes=0"
-              << " candidate_validation=direct_reverse_step"
+              << " full_validity_scans_per_candidate=0"
+              << " reverse_step_rechecks_per_candidate=0"
               << " inverse_set_exact=1\n";
     return 0;
 }
