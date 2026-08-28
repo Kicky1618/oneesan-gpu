@@ -9,6 +9,7 @@ PACK="$ONEESAN_ROOT/scripts/build/lower-b300-packed-group-meta.py"
 STAGE="$ONEESAN_ROOT/scripts/build/lower-b300-staged-group-meta.py"
 OUT="${OUT:-$ONEESAN_BUILD_DIR/generated_b300_vmm_basearg_stagedmeta_proof.cu}"
 
+bash "$ONEESAN_ROOT/scripts/bench/b300-staged-group-meta-plan-proof.sh"
 bash "$ONEESAN_ROOT/scripts/bench/b300-vmm-basearg-packedmeta-production-generate-proof.sh"
 python3 "$GEN" "$SRC" "$OUT"
 python3 "$PRUNE" "$OUT" "$OUT"
@@ -29,4 +30,4 @@ for stale in 'DeviceGroupMeta hmeta{}' 'cudaMemcpyToSymbol(D_GROUP_META,&hmeta';
   if grep -Fq "$stale" "$OUT"; then echo "stagedmeta source still rebuilds/copies host metadata per group: $stale" >&2; exit 3; fi
 done
 
-echo "b300-vmm-basearg-stagedmeta-production-generate-proof OK group_meta_bytes=13936 staged_h2d_once=1 per_group_meta_copy=D2D_sync host_meta_rebuild_per_group=0 staged_device_copy=1 expected_default_groups=16384 expected_default_mib_per_gpu=217.75"
+echo "b300-vmm-basearg-stagedmeta-production-generate-proof OK group_meta_bytes=13936 staged_h2d_once=1 per_group_meta_copy=D2D_sync host_meta_rebuild_per_group=0 staged_device_copy=1 expected_default_groups=16384 expected_default_mib_per_gpu=217.75 expected_old_meta_h2d_gib=5.9541015625 expected_staged_total_h2d_gib=1.701171875 h2d_reduction=3.5x"
