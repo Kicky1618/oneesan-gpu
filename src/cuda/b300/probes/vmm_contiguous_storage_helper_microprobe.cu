@@ -41,6 +41,36 @@ static Code find_logical_physical_mismatch(const b300_vmm::ContiguousStorage& s,
     return ~Code(0);
 }
 
+static Code find_remote_from_device0(const b300_vmm::ContiguousStorage& s,Code logical){
+    for(int p=1;p<s.ngpu;++p){
+        const Code begin=Code(s.offsets[size_t(p)]/sizeof(Count));
+        const Code end=Code(s.offsets[size_t(p+1)]/sizeof(Count));
+        if(begin>=logical)break;
+        const Code hi=std::min<Code>(logical,end);
+        if(begin<hi&&physical_owner(s,begin)==p)return begin;
+    }
+    return ~Code(0);
+}
+
+static void verify_device0_direct_memcpy(const char* tag,b300_vmm::ContiguousStorage& s,Count* base,Code logical){
+    if(s.ngpu<2)return;
+    const Code g=find_remote_from_device0(s,logical);
+    if(g==~Code(0)){std::fprintf(stderr,"%s could not find a remote physical page for device0 direct memcpy\n",tag);std::exit(8);}
+    const int phys=physical_owner(s,g);
+    if(phys<=0){std::fprintf(stderr,"%s remote selection failed g=%llu physical=%d\n",tag,(unsigned long long)g,phys);std::exit(8);}
+    ck(cudaSetDevice(0),"device0 direct memcpy set device");
+    Count* p=base+g;
+    const Count marker=0xbb67ae85u^Count(g);Count got=0;
+    ck(cudaMemcpy(p,&marker,sizeof(marker),cudaMemcpyHostToDevice),"device0 direct H2D to remote physical VMM page");
+    ck(cudaMemcpy(&got,p,sizeof(got),cudaMemcpyDeviceToHost),"device0 direct D2H from remote physical VMM page");
+    if(got!=marker){std::fprintf(stderr,"%s device0 direct memcpy mismatch got=%u expected=%u\n",tag,got,marker);std::exit(8);}
+    const Count restore=Count((g*2654435761ULL+0x9e3779b9ULL)&0xffffffffu);
+    ck(cudaMemcpy(p,&restore,sizeof(restore),cudaMemcpyHostToDevice),"device0 direct VMM restore");
+    Count check=0;ck(cudaMemcpy(&check,p,sizeof(check),cudaMemcpyDeviceToHost),"device0 direct VMM restore verify");
+    if(check!=restore){std::fprintf(stderr,"%s device0 direct restore mismatch\n",tag);std::exit(8);}
+    std::fprintf(stderr,"%s device0-direct memcpy: g=%llu physical_owner=%d remote_physical=1 H2D_D2H=OK\n",tag,(unsigned long long)g,phys);
+}
+
 static void verify_runtime_memcpy_view(const char* tag,b300_vmm::ContiguousStorage& s,Count* base,Count* const* ptrs,Code logical,Code chunk){
     const Code g=find_logical_physical_mismatch(s,logical,chunk);
     if(g==~Code(0)){std::fprintf(stderr,"%s could not find logical/physical shard mismatch for memcpy preflight\n",tag);std::exit(7);}
@@ -95,6 +125,8 @@ int main(int argc,char**argv){
         ck(cudaMemcpyToSymbol(D_HELPER_NGPU,&ng,sizeof(ng)),"copy logical ngpu");
     }
 
+    verify_device0_direct_memcpy("helper-a",a,abase,elems);
+    verify_device0_direct_memcpy("helper-b",b,bbase,elems_b);
     verify_runtime_memcpy_view("helper-a",a,abase,ap,elems,mc);
     verify_runtime_memcpy_view("helper-b",b,bbase,bp,elems_b,bc);
 
@@ -110,6 +142,6 @@ int main(int argc,char**argv){
     if(max_combined-min_combined>a.granularity){std::fprintf(stderr,"combined physical imbalance too large\n");return 5;}
     if(total_errors){std::fprintf(stderr,"VMM helper verification errors=%llu\n",total_errors);return 6;}
 
-    std::printf("gridfp-b300-vmm-storage-helper-microprobe OK gpus=%d elems_a=%llu elems_b=%llu granularity=%zu padding_a=%zu padding_b=%zu combined_imbalance=%zu direct_base_index=1 logical_shard_views=1 logical_shard_gpu_access=OK runtime_memcpy_logical_view=OK logical_physical_mismatch_tested=1 physical_boundary_independent=1 all_gpu_read=OK exact=OK\n",ng,(unsigned long long)elems,(unsigned long long)elems_b,a.granularity,a.mapped_bytes-a.logical_bytes,b.mapped_bytes-b.logical_bytes,max_combined-min_combined);
+    std::printf("gridfp-b300-vmm-storage-helper-microprobe OK gpus=%d elems_a=%llu elems_b=%llu granularity=%zu padding_a=%zu padding_b=%zu combined_imbalance=%zu direct_base_index=1 device0_direct_memcpy_remote_physical=OK device0_direct_H2D_D2H=OK logical_shard_views=1 logical_shard_gpu_access=OK runtime_memcpy_logical_view=OK logical_physical_mismatch_tested=1 physical_boundary_independent=1 all_gpu_read=OK exact=OK\n",ng,(unsigned long long)elems,(unsigned long long)elems_b,a.granularity,a.mapped_bytes-a.logical_bytes,b.mapped_bytes-b.logical_bytes,max_combined-min_combined);
     a.destroy();b.destroy();return 0;
 }
