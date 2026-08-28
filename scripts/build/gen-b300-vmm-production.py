@@ -10,7 +10,8 @@ INCLUDE_NEW = '#include <vector>\n#include "b300_vmm_contiguous_storage.cuh"\n'
 SYMBOL_OLD = '''__constant__ Count* D_MAIN_PTR[MAXGPU];
 __constant__ Count* D_BLOCK_PTR[MAXGPU];
 __constant__ Code D_MAIN_CHUNK,D_BLOCK_CHUNK;'''
-SYMBOL_NEW = '''__constant__ Count* D_MAIN_PTR[MAXGPU];
+SYMBOL_NEW = '''static_assert(sizeof(Count)==4,"B300 VMM authoritative storage requires 32-bit Count");
+__constant__ Count* D_MAIN_PTR[MAXGPU];
 __constant__ Count* D_BLOCK_PTR[MAXGPU];
 __constant__ Count* D_MAIN_VBASE;
 __constant__ Count* D_BLOCK_VBASE;
@@ -77,7 +78,7 @@ def main() -> None:
     text = once(text, BACKEND_OLD, BACKEND_NEW, 'backend label')
     args.out.parent.mkdir(parents=True, exist_ok=True)
     args.out.write_text(text)
-    print(f'generated {args.out} from {args.src} vmm_contiguous_authoritative=1 direct_global_index=1 logical_shard_views=1')
+    print(f'generated {args.out} from {args.src} vmm_contiguous_authoritative=1 direct_global_index=1 logical_shard_views=1 count_bytes=4')
 
 
 if __name__ == '__main__':
