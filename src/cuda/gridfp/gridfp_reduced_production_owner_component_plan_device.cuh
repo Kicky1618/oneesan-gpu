@@ -9,11 +9,17 @@
 #ifndef RP_RUNTIME_OWNER_LOCAL_SECTOR_TABLE
 #define RP_RUNTIME_OWNER_LOCAL_SECTOR_TABLE 1
 #endif
+#ifndef RP_RUNTIME_OWNER_LOCAL_SECTOR_PARITY
+#define RP_RUNTIME_OWNER_LOCAL_SECTOR_PARITY 1
+#endif
 static_assert(RP_RUNTIME_OWNER_PREFIX_BINARY == 0 || RP_RUNTIME_OWNER_PREFIX_BINARY == 1,
               "RP_RUNTIME_OWNER_PREFIX_BINARY must be 0 or 1");
 static_assert(RP_RUNTIME_OWNER_LOCAL_SECTOR_TABLE == 0 ||
               RP_RUNTIME_OWNER_LOCAL_SECTOR_TABLE == 1,
               "RP_RUNTIME_OWNER_LOCAL_SECTOR_TABLE must be 0 or 1");
+static_assert(RP_RUNTIME_OWNER_LOCAL_SECTOR_PARITY == 0 ||
+              RP_RUNTIME_OWNER_LOCAL_SECTOR_PARITY == 1,
+              "RP_RUNTIME_OWNER_LOCAL_SECTOR_PARITY must be 0 or 1");
 
 namespace oneesan::gridfp::reducedprod {
 
@@ -82,11 +88,11 @@ __device__ __forceinline__ bool runtime_owner_local_sector_device(
     const int O = W - L;
     if (base >= 0 && L == W / 2 + 1 && outer_ones >= 0 && outer_ones <= O) {
         const int row = base + outer_ones * L;
+#if RP_RUNTIME_OWNER_LOCAL_SECTOR_PARITY
         // A local sector has positive size iff outer_ones + local_ones is odd.
         // `within` is already reduced modulo component_group, so it is strictly
-        // below the final positive endpoint. Search only those parity-valid
-        // endpoints: W=28 shrinks 15 candidates to at most 8 and 4 comparisons
-        // to at most 3 without adding a sentinel comparison to the hot path.
+        // below the final positive endpoint. Search only parity-valid endpoints:
+        // W=28 shrinks 15 candidates to at most 8 and 4 comparisons to at most 3.
         const int parity = 1 - (outer_ones & 1);
         const int count = (L + 1 - parity) >> 1;
         int lo = 0;
@@ -103,6 +109,19 @@ __device__ __forceinline__ bool runtime_owner_local_sector_device(
             : 0;
         local_ones = l;
         local_within = within - begin;
+#else
+        int lo = 0;
+        int hi = L;
+        while (lo < hi) {
+            const int mid = lo + ((hi - lo) >> 1);
+            if (within < RP_RUNTIME_OWNER_LOCAL_SECTOR_END[row + mid]) hi = mid;
+            else lo = mid + 1;
+        }
+        if (lo >= L) return false;
+        const Rank64 begin = lo ? RP_RUNTIME_OWNER_LOCAL_SECTOR_END[row + lo - 1] : 0;
+        local_ones = lo;
+        local_within = within - begin;
+#endif
         return true;
     }
 #endif
