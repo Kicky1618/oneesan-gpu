@@ -25,6 +25,8 @@ mkdir -p "$(dirname "$RESULT")" "$LOGDIR"
 bash "$ONEESAN_ROOT/scripts/bench/b300-vmm-production-generate-proof.sh"
 ARCH="$PTX_ARCH" bash "$ONEESAN_ROOT/scripts/bench/b300-vmm-production-ptx-proof.sh" \
   >"$LOGDIR/vmm_ptx.out" 2>"$LOGDIR/vmm_ptx.err"
+GPUS=8 ARCH="$ARCH" bash "$ONEESAN_ROOT/scripts/bench/b300-vmm-storage-helper-microprobe.sh" \
+  >"$LOGDIR/vmm_helper.out" 2>"$LOGDIR/vmm_helper.err"
 
 BIN_COMPARE="$ONEESAN_BUILD_DIR/oneesan_cuda_gridfp_b300_hbm32_n27_vmmab_compare"
 BIN_U32="$ONEESAN_BUILD_DIR/oneesan_cuda_gridfp_b300_hbm32_n27_vmmab_u32"
