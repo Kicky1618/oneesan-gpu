@@ -29,6 +29,12 @@ SUMMARY="${SUMMARY:-${PREFIX}_summary.tsv}"
 LOGDIR="${LOGDIR:-${PREFIX}_logs}"
 mkdir -p "$(dirname "$RESULT")" "$LOGDIR"
 
+ARCH="$ARCH" \
+LOG="$LOGDIR/nvcc-prepend-smoke.log" \
+OUT="$ONEESAN_BUILD_DIR/gridfp_label_hotpath_nvcc_prepend_smoke_should_not_exist" \
+bash "$ONEESAN_ROOT/scripts/bench/gridfp-build-nvcc-prepend-smoke.sh" \
+  >"$LOGDIR/nvcc-prepend-smoke.out" 2>"$LOGDIR/nvcc-prepend-smoke.err"
+
 for proof in \
   gridfp-runtime-owner-prefix-carry-begin-proof.sh \
   gridfp-runtime-owner-local-sector-carry-begin-proof.sh \
@@ -85,12 +91,17 @@ build_one() {
   RUNTIME_FAST_ERASE_TWO_BITS=1 RUNTIME_FAST_DISCOVERY_VALIDITY=1 \
   RUNTIME_DISCOVERY_ENDPOINT_SCAN=1 RUNTIME_FAST_CLOSURE_NONN_SCAN=1 \
   RUNTIME_FIND_RECENT_FIRST=0 RUNTIME_FIND_SIGNATURE_FILTER=0 \
-  RUNTIME_FIND_INDEX_CACHE=0 \
+  RUNTIME_FIND_INDEX_CACHE=0 RUNTIME_FIND_INDEX_BUCKETS=64 RUNTIME_FIND_INDEX_WAYS=1 \
   RUNTIME_FAST_MIRROR_MATE=1 RUNTIME_FAST_INCLUDE_HORIZONTAL_REVERSE=1 \
   RUNTIME_FAST_BLOCKED_EXCLUDE_REVERSE=1 RUNTIME_DIRECT_REVERSE_SMALL_STEP=1 \
   ARCH="$ARCH" PTXAS_VERBOSE="$PTXAS_VERBOSE" OUT="$bin" \
   bash "$ONEESAN_ROOT/scripts/build/gridfp-reduced-component-probe.sh" \
     >"$LOGDIR/mode${mode}.build.out" 2>"$LOGDIR/mode${mode}.build.err"
+  grep -Fq "nvcc_prepend=$inject)" "$LOGDIR/mode${mode}.build.out" || {
+    echo "mode=$mode build did not report the expected NVCC_PREPEND_FLAGS" >&2
+    cat "$LOGDIR/mode${mode}.build.out" >&2 || true
+    exit 6
+  }
   printf 'mode=%s prefix_carry=%s local_carry=%s adjacent=%s compact=%s last_r=%s packed=%s\n' \
     "$mode" "$prefix_carry" "$local_carry" "$adjacent" "$compact" "$last_r" "$packed" \
     >"$LOGDIR/mode${mode}.flags"
@@ -144,8 +155,11 @@ for mode in ('1','2','3','4','5'):
  print(f'runtime_label_hotpath_{name}_wall_speedup={base/cur:.6f}x')
  print(f'runtime_label_hotpath_{name}_wall_delta_pct={(cur/base-1)*100:.4f}%')
 print('runtime_label_hotpath_exact=1')
+print('runtime_label_hotpath_nvcc_prepend_smoke=1')
 print('runtime_label_hotpath_signature_filter=0')
 print('runtime_label_hotpath_index_cache=0')
+print('runtime_label_hotpath_index_buckets=64')
+print('runtime_label_hotpath_index_ways=1')
 print('runtime_label_hotpath_w28_trees=0')
 print(f'summary={dst}')
 PY
