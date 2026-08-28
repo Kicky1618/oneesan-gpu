@@ -28,8 +28,17 @@ case "$MODE" in
   grouped)
     SRC_REL="src/cuda/gridfp/gridfp_reduced_production_grouped_tile_microprobe.cu"
     ;;
+  inplace)
+    SRC_REL="src/cuda/gridfp/gridfp_reduced_production_grouped_inplace_microprobe.cu"
+    ;;
+  cycle)
+    SRC_REL="src/cuda/gridfp/gridfp_reduced_production_equal_tile_cycle_microprobe.cu"
+    ;;
+  shift-cycle)
+    SRC_REL="src/cuda/gridfp/gridfp_reduced_production_shift_cycle_microprobe.cu"
+    ;;
   *)
-    echo "invalid MODE=$MODE (forward|reverse|register|persistent|dense|edge|grouped)" >&2
+    echo "invalid MODE=$MODE (forward|reverse|register|persistent|dense|edge|grouped|inplace|cycle|shift-cycle)" >&2
     exit 2
     ;;
 esac
