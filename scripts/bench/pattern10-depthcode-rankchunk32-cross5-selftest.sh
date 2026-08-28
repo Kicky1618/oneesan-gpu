@@ -9,7 +9,6 @@ for x in PM_ACCUM RANKCHUNK32_ONESHFL RANKCHUNK32_FUSED16 RANKCHUNK32_BYTEPACK R
   v="${!x}"; if [[ "$v" != 0 && "$v" != 1 ]]; then echo "$x must be 0 or 1" >&2; exit 2; fi
 done
 if [[ "$RANKCHUNK32_BLOCK64" == 1 && "$RANKCHUNK32_BYTEPACK" == 1 ]]; then echo "BLOCK64 requires BYTEPACK=0" >&2; exit 2; fi
-if [[ "$RANKCHUNK32_BLOCK64" == 1 && "$RANKCHUNK32_ALIGN32" == 1 ]]; then echo "BLOCK64 currently requires ALIGN32=0" >&2; exit 2; fi
 case "$DECODE_LOAD" in global) P10DC_DECODE_LDG=0 ;; ldg) P10DC_DECODE_LDG=1 ;; *) echo "DECODE_LOAD must be global or ldg" >&2; exit 2;; esac
 P10DC_RANKSTREAM_LUT_LDG=0; P10DC_RANKSTREAM_LUT_PAD256=0
 case "$RANKSTREAM_LUT_LOAD" in
@@ -23,15 +22,16 @@ if [[ "$RANKCHUNK32_BYTEPACK" == 1 ]]; then EXPECT_CHUNK_BITS=24; EXPECT_PREFIX_
 else EXPECT_CHUNK_BITS=23; EXPECT_PREFIX_BITS=9; PACK_NAME=23bit_chunks_9bit_prefix; fi
 if [[ "$RANKCHUNK32_BLOCK64" == 1 ]]; then EXPECT_BLOCK=64; BLOCK_NAME=block64
 else EXPECT_BLOCK=32; BLOCK_NAME=block32; fi
-if [[ "$RANKCHUNK32_ALIGN32" == 1 ]]; then EXPECT_ALIGN=32; EXPECT_LOADS=1; ALIGN_NAME=align32
+if [[ "$RANKCHUNK32_ALIGN32" == 1 ]]; then EXPECT_ALIGN="$EXPECT_BLOCK"; EXPECT_LOADS=1; ALIGN_NAME="align${EXPECT_BLOCK}"
 else EXPECT_ALIGN=1; EXPECT_LOADS=2; ALIGN_NAME=packed_heights; fi
 LAYOUT_NAME="${PACK_NAME}_${BLOCK_NAME}_${ALIGN_NAME}"
 
 if [[ "$RUN_LAYOUT_PROOF" == 1 ]]; then
   bash "$ONEESAN_ROOT/scripts/bench/rankchunk32-warpbase-proof.sh"
   if [[ "$RANKCHUNK32_BYTEPACK" == 1 ]]; then bash "$ONEESAN_ROOT/scripts/bench/rankchunk32-bytepack-proof.sh"; fi
-  if [[ "$RANKCHUNK32_ALIGN32" == 1 ]]; then bash "$ONEESAN_ROOT/scripts/bench/rankchunk32-align32-proof.sh"; fi
   if [[ "$RANKCHUNK32_BLOCK64" == 1 ]]; then bash "$ONEESAN_ROOT/scripts/bench/rankchunk32-block64-proof.sh"; fi
+  if [[ "$RANKCHUNK32_ALIGN32" == 1 && "$RANKCHUNK32_BLOCK64" == 0 ]]; then bash "$ONEESAN_ROOT/scripts/bench/rankchunk32-align32-proof.sh"; fi
+  if [[ "$RANKCHUNK32_ALIGN32" == 1 && "$RANKCHUNK32_BLOCK64" == 1 ]]; then bash "$ONEESAN_ROOT/scripts/bench/rankchunk32-block64-align-proof.sh"; fi
 fi
 
 SRC="$ONEESAN_ROOT/src/cuda/gridfp/probes/ramstream32_bucket_orbit_closure_pattern10_depthcode_rankchunk32_cross5_selftest.cu"
