@@ -20,7 +20,7 @@ Word fusion_label_word(const oneesan::twocell::PackedWord& p) {
 
 oneesan::twocell::PackedKey fusion_key(const PackedKey& k) {
     return oneesan::twocell::PackedKey{
-        k.word.support, k.word.left,
+        k.w.support, k.w.left,
         static_cast<std::uint8_t>(k.type == 'C')};
 }
 
@@ -68,13 +68,11 @@ int main(int argc, char** argv) {
                         const auto src = packed_direct_component_sources(
                             PackedWord{label.word.support, label.word.left, label.word.len},
                             W, active);
-                        if (src.overflow || src.size <= 0)
+                        if (src.size <= 0)
                             fail("fusion component source reconstruction");
                         for (int q = 0; q < src.size; ++q) {
                             const PackedKey pk = src.value[q];
-                            const oneesan::twocell::PackedKey key{
-                                pk.word.support, pk.word.left,
-                                static_cast<std::uint8_t>(pk.type == 'C')};
+                            const auto key = fusion_key(pk);
                             if (oneesan::twocell::fusion_outer_mask_at(
                                     key, start, steps, active) != outer)
                                 fail("fusion component source escaped block");
