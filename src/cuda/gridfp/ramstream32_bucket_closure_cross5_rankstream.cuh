@@ -9,8 +9,8 @@
 static_assert(P10DC_RANKSTREAM_LUT_LDG == 0 || P10DC_RANKSTREAM_LUT_LDG == 1,
               "P10DC_RANKSTREAM_LUT_LDG must be 0 or 1");
 
-// Warp-striped execution gives every lane a different LOW rank/key.  Constant
-// memory is therefore not always a broadcast.  Keep both storage modes behind
+// Warp-striped execution gives every lane a different LOW rank/key. Constant
+// memory is therefore not always a broadcast. Keep both storage modes behind
 // one compile-time switch so B300 can A/B constant-cache serialization against
 // ordinary read-only/L1 loads without changing the automaton representation.
 #if P10DC_RANKSTREAM_LUT_LDG
@@ -126,7 +126,7 @@ __device__ __forceinline__ uint8_t p10dc_rankstream_meta_load(uint32_t chunk) {
 #endif
 }
 
-template<int START, int LEN>
+template<int START, int LEN, bool CHECK_STATE = true>
 __device__ __forceinline__ uint32_t p10dc_cross5_apply_chunk_rankstream(
     uint32_t full_key, uint32_t& state, const Count* source_row,
     const uint16_t* rank_row, uint32_t& lbase, BkczCrossAccum& sum
@@ -136,7 +136,9 @@ __device__ __forceinline__ uint32_t p10dc_cross5_apply_chunk_rankstream(
     constexpr uint32_t DIV = bkcz_pow3_const(START);
     constexpr uint32_t MOD = bkcz_pow3_const(LEN);
     const uint32_t chunk = (full_key / DIV) % MOD;
-    if (state >= P10DC_CROSS5_STATES) return 2u;
+    if constexpr (CHECK_STATE) {
+        if (state >= P10DC_CROSS5_STATES) return 2u;
+    }
 
     const uint8_t e = p10dc_rankstream_entry_load(
         size_t(state) * P10DC_CROSS5_KEYS + chunk);
@@ -157,6 +159,7 @@ __device__ __forceinline__ uint32_t p10dc_cross5_apply_chunk_rankstream(
     return 0u;
 }
 
+// Checked form retained for reference tests and non-depth4 callers.
 __device__ __forceinline__ BkczCrossAccum
 p10dc_resolved_low_preimages_cross5_rankstream_nofallback(
     uint32_t key, uint32_t depth, const Count* source_row,
@@ -196,18 +199,44 @@ p10dc_resolved_low_preimages_cross5_rankstream_nofallback(
     return sum;
 }
 
+// Production depthcode form. depth is four bits (1..15) and LOW_LUT_K<=14,
+// hence chunk-start states are bounded by 15,20,25 exactly as in ordinary
+// CROSS5. Bounds checks and the scalar fallback are dead and are omitted here.
+__device__ __forceinline__ BkczCrossAccum
+p10dc_resolved_low_preimages_cross5_rankstream_key_fast(
+    uint32_t key, uint32_t depth, const Count* source_row, const uint16_t* rank_row
+) {
+    if (!depth) return BkczCrossAccum(0);
+    uint32_t state = depth, lbase = 0;
+    BkczCrossAccum sum = 0;
+    constexpr int L0 = LOW_LUT_K >= 5 ? 5 : LOW_LUT_K;
+    constexpr int S0 = LOW_LUT_K - L0;
+    uint32_t st = p10dc_cross5_apply_chunk_rankstream<S0, L0, false>(
+        key, state, source_row, rank_row, lbase, sum);
+    if (st == 1u) return sum;
+
+    if constexpr (S0 > 0) {
+        constexpr int L1 = S0 >= 5 ? 5 : S0;
+        constexpr int S1 = S0 - L1;
+        st = p10dc_cross5_apply_chunk_rankstream<S1, L1, false>(
+            key, state, source_row, rank_row, lbase, sum);
+        if (st == 1u) return sum;
+        if constexpr (S1 > 0) {
+            constexpr int L2 = S1 >= 5 ? 5 : S1;
+            constexpr int S2 = S1 - L2;
+            static_assert(S2 == 0, "K<=14 must fit in three rankstream CROSS5 chunks");
+            p10dc_cross5_apply_chunk_rankstream<S2, L2, false>(
+                key, state, source_row, rank_row, lbase, sum);
+        }
+    }
+    return sum;
+}
+
 __device__ __forceinline__ BkczCrossAccum
 p10dc_resolved_low_preimages_cross5_rankstream_fixed(
     uint32_t h, uint32_t rank, uint32_t key, uint32_t depth, const Count* source_row
 ) {
     const uint16_t* rank_row = p10dc_low_rankstream_row(h, rank);
-    bool overflow = false;
-    BkczCrossAccum sum = p10dc_resolved_low_preimages_cross5_rankstream_nofallback(
-        key, depth, source_row, rank_row, overflow);
-    if (!overflow) return sum;
-    size_t ix = D_BKF_LOW_CODE_OFF[
-        size_t(D_BKF_FIXED_OWNER) * D_BKF_CODE_PITCH + h] + rank;
-    uint32_t dc = D_BKF_LOW_CODES[ix];
-    return p10dc_resolved_low_preimages_cross5_fallback_prekey(
-        dc, key, depth, source_row);
+    return p10dc_resolved_low_preimages_cross5_rankstream_key_fast(
+        key, depth, source_row, rank_row);
 }
