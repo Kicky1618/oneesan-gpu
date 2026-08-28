@@ -2,7 +2,15 @@
 
 #include "ramstream32_bucket_low_prekey.cuh"
 
-static constexpr uint32_t P10DC_RANKFORMULA_NOMETA4_BLOCK = 4u;
+#ifndef P10DC_RANKFORMULA_NOMETA_BLOCK
+#define P10DC_RANKFORMULA_NOMETA_BLOCK 4
+#endif
+static_assert(P10DC_RANKFORMULA_NOMETA_BLOCK == 4 ||
+              P10DC_RANKFORMULA_NOMETA_BLOCK == 8 ||
+              P10DC_RANKFORMULA_NOMETA_BLOCK == 16,
+              "rankformula nometa block must be 4, 8, or 16");
+static constexpr uint32_t P10DC_RANKFORMULA_NOMETA4_BLOCK =
+    uint32_t(P10DC_RANKFORMULA_NOMETA_BLOCK);
 static constexpr uint32_t P10DC_RANKFORMULA_NOMETA4_MASKS = 1u << LOW_LUT_K;
 static constexpr uint32_t P10DC_RANKFORMULA_NOMETA4_HEIGHTS = LOW_LUT_K + 2u;
 static_assert(LOW_LUT_K <= 14, "rankformula nometa4 assumes LOW_LUT_K<=14");
