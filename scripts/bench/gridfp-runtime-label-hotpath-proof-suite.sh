@@ -7,6 +7,7 @@ PROOFS=(
   gridfp-runtime-ab-env-proof.sh
   gridfp-runtime-experimental-ab-isolation-proof.sh
   gridfp-codec-table-proxy-coverage-proof.sh
+  gridfp-codec-table-layout-selection-gate-proof.sh
   gridfp-runtime-owner-prefix-carry-begin-proof.sh
   gridfp-runtime-owner-local-sector-carry-begin-proof.sh
   gridfp-runtime-owner-local-sector-compact-table-proof.sh
