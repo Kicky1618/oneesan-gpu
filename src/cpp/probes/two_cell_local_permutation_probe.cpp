@@ -120,7 +120,7 @@ LocalPermutationStats verify_local_permutation_step(
     const Rank m1 = static_cast<Rank>(words[W - 1].size());
     const Rank m2 = static_cast<Rank>(words[W - 2].size());
     const Rank m3 = static_cast<Rank>(words[W - 3].size());
-    const Rank m4 = W >= 5 ? static_cast<Rank>(words[W - 4].size()) : 1;
+    const Rank m4 = W >= 5 ? static_cast<Rank>(words[W - 4].size()) : 0;
     const Rank c = m2 - m3;
     const Rank cup = m3 - m4;
     const Rank identity = m1 - m2 - m3 + 2 * m4;
