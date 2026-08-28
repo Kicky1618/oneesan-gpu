@@ -19,7 +19,6 @@ static_assert(P10DC_RANKFORMULA_HEIGHTS <= uint32_t(MAXW + 2));
 __constant__ uint32_t* D_P10DC_LOW_RANKFORMULA_META32;
 __constant__ uint16_t* D_P10DC_LOW_RANKFORMULA_BASE16;
 __constant__ uint16_t* D_P10DC_LOW_RANKFORMULA_MASK_SLOT16;
-__constant__ uint32_t D_P10DC_LOW_RANKFORMULA_OWNED_MASKS;
 __constant__ uint32_t D_P10DC_LOW_RANKFORMULA_HOFF[MAXW + 2];
 
 __device__ __forceinline__ uint32_t p10dc_low_rankformula_chunks(
@@ -35,7 +34,7 @@ __device__ __forceinline__ uint32_t p10dc_low_rankformula_base(
 #if P10DC_RANKFORMULA_SPARSE_BASE
     const uint32_t slot = uint32_t(D_P10DC_LOW_RANKFORMULA_MASK_SLOT16[mask]);
     return uint32_t(D_P10DC_LOW_RANKFORMULA_BASE16[
-        size_t(h) * D_P10DC_LOW_RANKFORMULA_OWNED_MASKS + slot]);
+        size_t(slot) * P10DC_RANKFORMULA_HEIGHTS + h]);
 #else
     return uint32_t(D_P10DC_LOW_RANKFORMULA_BASE16[
         size_t(h) * P10DC_RANKFORMULA_MASKS + mask]);
@@ -100,10 +99,10 @@ struct BucketFusedDirectHighRowsRankFormulaTables
 
         std::array<uint32_t, MAXW + 2> hoff{};
         std::vector<uint32_t> meta;
-        const size_t base_stride = P10DC_RANKFORMULA_SPARSE_BASE
+        const size_t base_cols = P10DC_RANKFORMULA_SPARSE_BASE
             ? size_t(owned_masks) : size_t(P10DC_RANKFORMULA_MASKS);
         std::vector<uint16_t> base(
-            size_t(P10DC_RANKFORMULA_HEIGHTS) * base_stride,
+            size_t(P10DC_RANKFORMULA_HEIGHTS) * base_cols,
             P10DC_RANKFORMULA_BASE_INVALID);
         meta.reserve(low_prekey_count);
         size_t actual_codes = 0, nonempty_mask_rows = 0;
@@ -141,8 +140,14 @@ struct BucketFusedDirectHighRowsRankFormulaTables
                     }
                     const uint32_t base_col = P10DC_RANKFORMULA_SPARSE_BASE
                         ? uint32_t(mask_slot[mask]) : mask;
-                    if (base_col >= base_stride) std::exit(736);
-                    base[size_t(h) * base_stride + base_col] = uint16_t(local_base);
+                    if (base_col >= base_cols) std::exit(736);
+#if P10DC_RANKFORMULA_SPARSE_BASE
+                    base[size_t(base_col) * P10DC_RANKFORMULA_HEIGHTS + h] =
+                        uint16_t(local_base);
+#else
+                    base[size_t(h) * P10DC_RANKFORMULA_MASKS + base_col] =
+                        uint16_t(local_base);
+#endif
                     max_mask_base = std::max(max_mask_base, local_base);
                     ++nonempty_mask_rows;
                     previous_mask = mask;
@@ -222,9 +227,6 @@ struct BucketFusedDirectHighRowsRankFormulaTables
         ck(cudaMemcpyToSymbol(D_P10DC_LOW_RANKFORMULA_MASK_SLOT16,
                               &low_rankformula_mask_slot16, sizeof(low_rankformula_mask_slot16)),
            "p10dc rankformula mask-slot ptr");
-        ck(cudaMemcpyToSymbol(D_P10DC_LOW_RANKFORMULA_OWNED_MASKS,
-                              &low_rankformula_owned_masks, sizeof(low_rankformula_owned_masks)),
-           "p10dc rankformula owned-mask count");
         ck(cudaMemcpyToSymbol(D_P10DC_LOW_RANKFORMULA_HOFF,
                               hoff.data(), hoff.size() * sizeof(uint32_t)),
            "p10dc rankformula hoff");
@@ -252,6 +254,7 @@ struct BucketFusedDirectHighRowsRankFormulaTables
                   << " max_mask_base=" << max_mask_base
                   << " rankstream_bytes=0"
                   << " sparse_base=" << P10DC_RANKFORMULA_SPARSE_BASE
+                  << " base_layout=" << (P10DC_RANKFORMULA_SPARSE_BASE ? "slot-major" : "height-major")
                   << " bytes_per_code_meta=4 old_prekey_freed=1\n";
     }
 
