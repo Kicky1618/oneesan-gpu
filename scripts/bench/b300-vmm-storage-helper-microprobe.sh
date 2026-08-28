@@ -16,7 +16,11 @@ SRC="$ONEESAN_ROOT/src/cuda/b300/probes/vmm_contiguous_storage_helper_microprobe
 text="$($BIN "$GPUS" "$ELEMS")"
 printf '%s\n' "$text"
 grep -Fq 'all_gpu_read=OK exact=OK' <<<"$text"
-grep -Fq 'direct_base_index=1 logical_shard_views=1' <<<"$text"
+grep -Fq 'direct_base_index=1' <<<"$text"
+if (( GPUS > 1 )); then
+  grep -Fq 'device0_direct_memcpy_remote_physical=OK device0_direct_H2D_D2H=OK' <<<"$text"
+fi
+grep -Fq 'logical_shard_views=1' <<<"$text"
 grep -Fq 'logical_shard_gpu_access=OK' <<<"$text"
 grep -Fq 'runtime_memcpy_logical_view=OK logical_physical_mismatch_tested=1' <<<"$text"
 grep -Fq 'physical_boundary_independent=1' <<<"$text"
