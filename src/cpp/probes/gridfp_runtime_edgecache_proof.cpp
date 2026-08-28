@@ -8,13 +8,31 @@ namespace {
 constexpr int SUBGROUP = 8;
 constexpr int MAX_PAIRS = 20;
 constexpr int MAX_EDGE_TERMS = 3;
+constexpr int DEST_BITS = 5;
+constexpr std::uint8_t DEST_MASK = (std::uint8_t(1u) << DEST_BITS) - 1u;
+constexpr int COEF_BIAS = 1;
+constexpr int COEF_MIN = -1;
+constexpr int COEF_MAX = 2;
 constexpr int MAX_DESTINATIONS_PER_LANE =
     (MAX_PAIRS + SUBGROUP - 1) / SUBGROUP;
 
+constexpr std::uint8_t pack_edge(int destination, int coefficient) {
+    return std::uint8_t(
+        std::uint8_t(destination) |
+        (std::uint8_t(coefficient + COEF_BIAS) << DEST_BITS));
+}
+
+constexpr int unpack_destination(std::uint8_t packed) {
+    return int(packed & DEST_MASK);
+}
+
+constexpr int unpack_coefficient(std::uint8_t packed) {
+    return int(packed >> DEST_BITS) - COEF_BIAS;
+}
+
 struct EdgeRow {
     std::uint8_t count = 0;
-    std::uint8_t destination[MAX_EDGE_TERMS]{};
-    std::int8_t coefficient[MAX_EDGE_TERMS]{};
+    std::uint8_t packed[MAX_EDGE_TERMS]{};
 };
 
 struct RuntimeEdgeCacheModel {
@@ -22,12 +40,27 @@ struct RuntimeEdgeCacheModel {
 };
 
 static_assert(MAX_DESTINATIONS_PER_LANE == 3);
-static_assert(sizeof(EdgeRow) == 7);
-static_assert(sizeof(RuntimeEdgeCacheModel) == 140);
+static_assert(sizeof(EdgeRow) == 4);
+static_assert(sizeof(RuntimeEdgeCacheModel) == 80);
 
 } // namespace
 
 int main() {
+    std::uint64_t packing_cases = 0;
+    for (int destination = 0; destination < MAX_PAIRS; ++destination) {
+        for (int coefficient = COEF_MIN; coefficient <= COEF_MAX; ++coefficient) {
+            const std::uint8_t packed = pack_edge(destination, coefficient);
+            if (unpack_destination(packed) != destination ||
+                unpack_coefficient(packed) != coefficient || (packed & 0x80u)) {
+                std::cerr << "edge-cache packing mismatch destination=" << destination
+                          << " coefficient=" << coefficient
+                          << " packed=" << unsigned(packed) << '\n';
+                return 2;
+            }
+            ++packing_cases;
+        }
+    }
+
     std::uint64_t routing_cases = 0;
     int max_slot = 0;
     for (int nd = 1; nd <= MAX_PAIRS; ++nd) {
@@ -41,7 +74,7 @@ int main() {
                           << " di=" << di << " lane=" << lane
                           << " slot=" << slot
                           << " reconstructed=" << reconstructed << '\n';
-                return 2;
+                return 3;
             }
             max_slot = std::max(max_slot, slot);
             ++routing_cases;
@@ -64,11 +97,9 @@ int main() {
                 cache.source[si].count = static_cast<std::uint8_t>(nedge);
                 for (int ei = 0; ei < nedge; ++ei) {
                     const int di = (si + ei) % nd;
-                    static constexpr std::int8_t COEF[4] = {-2, -1, 1, 2};
-                    const std::int8_t coef = COEF[(si + 2 * ei + nd) & 3];
-                    cache.source[si].destination[ei] =
-                        static_cast<std::uint8_t>(di);
-                    cache.source[si].coefficient[ei] = coef;
+                    static constexpr std::int8_t COEF[3] = {-1, 1, 2};
+                    const int coef = COEF[(si + 2 * ei + nd) % 3];
+                    cache.source[si].packed[ei] = pack_edge(di, coef);
                     reference[di] += static_cast<long long>(coef) *
                                      static_cast<long long>(value[si]);
                     ++edge_terms;
@@ -82,10 +113,11 @@ int main() {
                     const long long v = static_cast<long long>(value[si]);
                     const auto& row = cache.source[si];
                     for (std::uint8_t ei = 0; ei < row.count; ++ei) {
-                        const std::uint8_t di = row.destination[ei];
+                        const std::uint8_t packed = row.packed[ei];
+                        const int di = unpack_destination(packed);
                         if ((di & (SUBGROUP - 1)) != lane) continue;
                         routed[lane][di >> 3] +=
-                            static_cast<long long>(row.coefficient[ei]) * v;
+                            static_cast<long long>(unpack_coefficient(packed)) * v;
                     }
                 }
             }
@@ -97,24 +129,27 @@ int main() {
                               << " nd=" << nd << " di=" << di
                               << " got=" << got
                               << " expected=" << reference[di] << '\n';
-                    return 3;
+                    return 4;
                 }
             }
             ++accumulation_cases;
         }
     }
 
-    if (routing_cases != 210 || accumulation_cases != 400 || max_slot != 2)
-        return 4;
+    if (packing_cases != 80 || routing_cases != 210 ||
+        accumulation_cases != 400 || max_slot != 2)
+        return 5;
 
     std::cout << "gridfp-runtime-edgecache-proof OK"
+              << " packing_cases=" << packing_cases
               << " routing_cases=" << routing_cases
               << " accumulation_cases=" << accumulation_cases
               << " edge_terms=" << edge_terms
               << " subgroup_width=8 max_pairs=20 max_edge_terms=3"
+              << " coefficient_range=-1..2"
               << " max_destination_slot=" << max_slot
-              << " cache_bytes_per_subgroup=140"
-              << " cache_bytes_per_block=4480"
-              << " routing_exact=1 accumulation_exact=1\n";
+              << " cache_bytes_per_subgroup=80"
+              << " cache_bytes_per_block=2560"
+              << " packing_exact=1 routing_exact=1 accumulation_exact=1\n";
     return 0;
 }
