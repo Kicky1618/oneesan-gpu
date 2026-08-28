@@ -2,12 +2,13 @@
 set -euo pipefail
 source "$(dirname -- "${BASH_SOURCE[0]}")/../lib/common.sh"
 
-W="${W:-10}"; ARCH="${ARCH:-sm_80}"; PM_ACCUM="${PM_ACCUM:-0}"; DECODE_LOAD="${DECODE_LOAD:-ldg}"; RANKSTREAM_LUT_LOAD="${RANKSTREAM_LUT_LOAD:-constant}"; RANKCHUNK32_ONESHFL="${RANKCHUNK32_ONESHFL:-1}"; RANKCHUNK32_FUSED16="${RANKCHUNK32_FUSED16:-0}"
+W="${W:-10}"; ARCH="${ARCH:-sm_80}"; PM_ACCUM="${PM_ACCUM:-0}"; DECODE_LOAD="${DECODE_LOAD:-ldg}"; RANKSTREAM_LUT_LOAD="${RANKSTREAM_LUT_LOAD:-constant}"; RANKCHUNK32_ONESHFL="${RANKCHUNK32_ONESHFL:-1}"; RANKCHUNK32_FUSED16="${RANKCHUNK32_FUSED16:-0}"; RUN_LAYOUT_PROOF="${RUN_LAYOUT_PROOF:-1}"
 LOW_LUT_K="${LOW_LUT_K:-$((W / 2))}"; HIGH_LUT_K="${HIGH_LUT_K:-$((W - LOW_LUT_K - 1))}"
 if (( W > 12 || LOW_LUT_K <= 0 || HIGH_LUT_K <= 0 || LOW_LUT_K + HIGH_LUT_K + 1 != W )); then echo "rankchunk32 CROSS5 selftest requires valid W<=12 split" >&2; exit 2; fi
 if [[ "$PM_ACCUM" != 0 && "$PM_ACCUM" != 1 ]]; then echo "PM_ACCUM must be 0 or 1" >&2; exit 2; fi
 if [[ "$RANKCHUNK32_ONESHFL" != 0 && "$RANKCHUNK32_ONESHFL" != 1 ]]; then echo "RANKCHUNK32_ONESHFL must be 0 or 1" >&2; exit 2; fi
 if [[ "$RANKCHUNK32_FUSED16" != 0 && "$RANKCHUNK32_FUSED16" != 1 ]]; then echo "RANKCHUNK32_FUSED16 must be 0 or 1" >&2; exit 2; fi
+if [[ "$RUN_LAYOUT_PROOF" != 0 && "$RUN_LAYOUT_PROOF" != 1 ]]; then echo "RUN_LAYOUT_PROOF must be 0 or 1" >&2; exit 2; fi
 case "$DECODE_LOAD" in global) P10DC_DECODE_LDG=0 ;; ldg) P10DC_DECODE_LDG=1 ;; *) echo "DECODE_LOAD must be global or ldg" >&2; exit 2;; esac
 P10DC_RANKSTREAM_LUT_LDG=0
 P10DC_RANKSTREAM_LUT_PAD256=0
@@ -18,10 +19,11 @@ case "$RANKSTREAM_LUT_LOAD" in
   *) echo "RANKSTREAM_LUT_LOAD must be constant, ldg, or ldg256" >&2; exit 2;;
 esac
 
-# Keep layout/packing validation independent from CUDA execution. This proves
-# the current 23-bit chunks + 9-bit prefix, 32-code block, zero-padding layout,
-# prefix/chunk bit isolation, and variable-source one-shuffle mapping.
-bash "$ONEESAN_ROOT/scripts/bench/rankchunk32-warpbase-proof.sh"
+# Keep layout/packing validation independent from CUDA execution. A/B drivers
+# run it once up front and disable this duplicate pass for their selftests.
+if [[ "$RUN_LAYOUT_PROOF" == 1 ]]; then
+  bash "$ONEESAN_ROOT/scripts/bench/rankchunk32-warpbase-proof.sh"
+fi
 
 SRC="$ONEESAN_ROOT/src/cuda/gridfp/probes/ramstream32_bucket_orbit_closure_pattern10_depthcode_rankchunk32_cross5_selftest.cu"
 BIN="${BIN:-$ONEESAN_BUILD_DIR/pattern10_depthcode_rankchunk32_cross5_selftest_w${W}_pm${PM_ACCUM}_${DECODE_LOAD}_ranklut${RANKSTREAM_LUT_LOAD}_oneshfl${RANKCHUNK32_ONESHFL}_fused16${RANKCHUNK32_FUSED16}}"
@@ -44,4 +46,4 @@ if grep -Fq "OK W=$W" <<<"$out"; then
   grep -Fq 'cross_runtime_div=0 cross_runtime_mod=0 cross_runtime_direct_lookup=0' <<<"$out"
   grep -Fq 'old_prekey_offset_arrays_freed=1 fallback_structurally_unreachable=1' <<<"$out"
 fi
-echo "pattern10-depthcode-rankchunk32-cross5-selftest OK W=$W pm_accum=$PM_ACCUM decode_load=$DECODE_LOAD rankstream_lut_load=$RANKSTREAM_LUT_LOAD layout=23bit_chunks_9bit_prefix_block32_padding0 prefix_isolation=1 rankchunk32_oneshfl=$RANKCHUNK32_ONESHFL rankchunk32_fused16=$RANKCHUNK32_FUSED16" >&2
+echo "pattern10-depthcode-rankchunk32-cross5-selftest OK W=$W pm_accum=$PM_ACCUM decode_load=$DECODE_LOAD rankstream_lut_load=$RANKSTREAM_LUT_LOAD layout=23bit_chunks_9bit_prefix_block32_padding0 prefix_isolation=1 rankchunk32_oneshfl=$RANKCHUNK32_ONESHFL rankchunk32_fused16=$RANKCHUNK32_FUSED16 layout_proof=$RUN_LAYOUT_PROOF" >&2
