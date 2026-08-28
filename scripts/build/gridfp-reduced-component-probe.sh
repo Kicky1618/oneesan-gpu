@@ -61,8 +61,11 @@ case "$MODE" in
   two-row-multigpu)
     SRC_REL="src/cuda/gridfp/gridfp_reduced_production_two_row_multigpu_microprobe.cu"
     ;;
+  two-row-runtime-multigpu)
+    SRC_REL="src/cuda/gridfp/gridfp_reduced_production_two_row_runtime_multigpu_microprobe.cu"
+    ;;
   *)
-    echo "invalid MODE=$MODE (forward|reverse|register|persistent|dense|edge|grouped|inplace|cycle|shift-cycle|turn|owner-component|owner-lean|owner-subwarp|turn-owner-subwarp|turn-high-owner-subwarp|p2p-cycle|two-row-multigpu)" >&2
+    echo "invalid MODE=$MODE (forward|reverse|register|persistent|dense|edge|grouped|inplace|cycle|shift-cycle|turn|owner-component|owner-lean|owner-subwarp|turn-owner-subwarp|turn-high-owner-subwarp|p2p-cycle|two-row-multigpu|two-row-runtime-multigpu)" >&2
     exit 2
     ;;
 esac
