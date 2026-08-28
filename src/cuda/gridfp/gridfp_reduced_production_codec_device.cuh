@@ -8,6 +8,9 @@
 #ifndef RP_FAST_MATERIALIZE_PRIMITIVE_LAST_R
 #define RP_FAST_MATERIALIZE_PRIMITIVE_LAST_R 0
 #endif
+#ifndef RP_FAST_MATERIALIZE_PRIMITIVE_PACKED
+#define RP_FAST_MATERIALIZE_PRIMITIVE_PACKED 0
+#endif
 #ifndef RP_FAST_SUPPORT_UNRANK_EARLY_EXIT
 #define RP_FAST_SUPPORT_UNRANK_EARLY_EXIT 1
 #endif
@@ -17,11 +20,29 @@ static_assert(RP_FAST_MATERIALIZE_PRIMITIVE_SETBITS == 0 ||
 static_assert(RP_FAST_MATERIALIZE_PRIMITIVE_LAST_R == 0 ||
               RP_FAST_MATERIALIZE_PRIMITIVE_LAST_R == 1,
               "RP_FAST_MATERIALIZE_PRIMITIVE_LAST_R must be 0 or 1");
+static_assert(RP_FAST_MATERIALIZE_PRIMITIVE_PACKED == 0 ||
+              RP_FAST_MATERIALIZE_PRIMITIVE_PACKED == 1,
+              "RP_FAST_MATERIALIZE_PRIMITIVE_PACKED must be 0 or 1");
+static_assert(!RP_FAST_MATERIALIZE_PRIMITIVE_PACKED ||
+              RP_FAST_MATERIALIZE_PRIMITIVE_SETBITS,
+              "packed primitive materialize requires set-bit traversal");
+static_assert(!RP_FAST_MATERIALIZE_PRIMITIVE_PACKED ||
+              RP_FAST_MATERIALIZE_PRIMITIVE_LAST_R,
+              "packed primitive materialize requires forced final R");
 static_assert(RP_FAST_SUPPORT_UNRANK_EARLY_EXIT == 0 ||
               RP_FAST_SUPPORT_UNRANK_EARLY_EXIT == 1,
               "RP_FAST_SUPPORT_UNRANK_EARLY_EXIT must be 0 or 1");
 
 namespace oneesan::gridfp::reducedprod {
+
+#if RP_FAST_MATERIALIZE_PRIMITIVE_PACKED
+static constexpr int RP_MATERIALIZE_PRIMITIVE_PACKED_ENTRIES = 104;
+__device__ __constant__ std::uint32_t
+RP_MATERIALIZE_PRIMITIVE_PACKED[RP_MATERIALIZE_PRIMITIVE_PACKED_ENTRIES] = {
+#include "gridfp_reduced_production_materialize_primitive_packed_values.inc"
+};
+static_assert(sizeof(RP_MATERIALIZE_PRIMITIVE_PACKED) == 416);
+#endif
 
 __device__ __forceinline__ int sector_of_rank_device(Rank64 rank) {
     for (int p = 0; p < RP_MAX_SECTORS; ++p) {
@@ -62,6 +83,33 @@ __device__ __forceinline__ std::uint32_t support_unrank_mask_device(int len, int
     return mask;
 }
 
+__device__ __forceinline__ Rank64 materialize_primitive_r_count_device(
+    int rem, int h
+) {
+    if (h <= 0) return 0;
+#if RP_FAST_MATERIALIZE_PRIMITIVE_PACKED
+    // Under W<=28 plus forced-final-R, the only reachable threshold cells are
+    // rem=1..26 with j=h-1 of matching parity and
+    // j<=min(rem,26-rem): 104 cells total. Store them densely as uint32.
+    const int j = h - 1;
+    int base = 0;
+    if (rem <= 13) {
+        const int m = rem >> 1;
+        base = (rem & 1) ? m * (m + 2) : m * m + m - 1;
+    } else {
+        const int s = 26 - rem;
+        const int m = s >> 1;
+        const int tail = (s & 1)
+            ? (m + 1) * (m + 2)
+            : (m + 1) * (m + 1);
+        base = RP_MATERIALIZE_PRIMITIVE_PACKED_ENTRIES - tail;
+    }
+    return RP_MATERIALIZE_PRIMITIVE_PACKED[base + (j >> 1)];
+#else
+    return RP_PRIMITIVE[rem][h - 1];
+#endif
+}
+
 __device__ __forceinline__ MateID materialize_primitive_device(
     std::uint32_t support, int len, int occupied, Rank64 rank
 ) {
@@ -84,7 +132,7 @@ __device__ __forceinline__ MateID materialize_primitive_device(
         }
 #endif
         const int rem = occupied - (++seen);
-        const Rank64 r_count = h > 0 ? RP_PRIMITIVE[rem][h - 1] : 0;
+        const Rank64 r_count = materialize_primitive_r_count_device(rem, h);
         MateValue v = R;
         if (rank < r_count) {
             --h;
