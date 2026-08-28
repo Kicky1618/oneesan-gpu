@@ -8,6 +8,77 @@
 
 namespace {
 
+Rank64 traffic_support_rank_host(
+    std::uint32_t mask,
+    int len,
+    int ones,
+    const ProductionFactorTables& tables
+) {
+    Rank64 rank = 0;
+    int left = ones;
+    for (int pos = 0; pos < len; ++pos) {
+        if (((mask >> pos) & 1u) == 0) continue;
+        const int rem = len - pos - 1;
+        rank += tables.binom(rem, left);
+        --left;
+    }
+    if (left != 0) fail("traffic support rank");
+    return rank;
+}
+
+std::vector<std::uint8_t> build_traffic_owner_lut(
+    const ProductionFactorTables& tables,
+    int Kwin,
+    int ngpu
+) {
+    const int L = Kwin + 2;
+    const int O = tables.W - L;
+    if (O < 0 || O > 20) fail("traffic owner LUT outer width");
+
+    std::vector<Rank64> group(static_cast<std::size_t>(O + 1));
+    std::vector<Rank64> prefix(static_cast<std::size_t>(O + 2));
+    for (int r = 0; r <= O; ++r) {
+        group[static_cast<std::size_t>(r)] = host_group_size(tables, L, r);
+        prefix[static_cast<std::size_t>(r + 1)] =
+            prefix[static_cast<std::size_t>(r)] +
+            tables.binom(O, r) * group[static_cast<std::size_t>(r)];
+    }
+    const Rank64 total = prefix.back();
+    if (total != tables.size()) fail("traffic owner LUT total");
+
+    const std::size_t count = std::size_t(1) << O;
+    std::vector<std::uint8_t> lut(count);
+    for (std::size_t outer = 0; outer < count; ++outer) {
+        const int r = __builtin_popcount(static_cast<unsigned>(outer));
+        const Rank64 sr = traffic_support_rank_host(
+            static_cast<std::uint32_t>(outer), O, r, tables);
+        const Rank64 g = group[static_cast<std::size_t>(r)];
+        const Rank64 group_base = prefix[static_cast<std::size_t>(r)] + sr * g;
+        const Rank64 midpoint = group_base + g / 2;
+        int owner = static_cast<int>((midpoint * Rank64(ngpu)) / total);
+        if (owner >= ngpu) owner = ngpu - 1;
+        if (owner < 0 || owner > 255) fail("traffic owner LUT owner");
+        lut[outer] = static_cast<std::uint8_t>(owner);
+    }
+    return lut;
+}
+
+__device__ __forceinline__ int traffic_owner_from_lut_device(
+    std::uint32_t support,
+    int W,
+    int Kwin,
+    bool reverse,
+    const std::uint8_t* __restrict__ owner_lut
+) {
+    const int L = Kwin + 2;
+    const int old_start = reverse ? 1 : W - 1;
+    const int lo = reverse ? old_start - 1 : old_start - Kwin - 1;
+    const int hi = lo + L - 1;
+    const std::uint32_t outer = compact_outside_window_device(
+        support, W, lo, hi);
+    return owner_lut[outer];
+}
+
 __global__ void p2p_cycle_traffic_kernel(
     Rank64 base_supports,
     int W,
@@ -15,6 +86,7 @@ __global__ void p2p_cycle_traffic_kernel(
     int S,
     bool reverse,
     int ngpu,
+    const std::uint8_t* __restrict__ owner_lut,
     unsigned long long* __restrict__ cycles,
     unsigned long long* __restrict__ rotated_values,
     unsigned long long* __restrict__ cross_values,
@@ -45,11 +117,8 @@ __global__ void p2p_cycle_traffic_kernel(
             }
             if (cycle_len <= 1) continue;
 
-            // Traffic depends only on the physical support mask.  In
-            // particular, no MateID materialization, primitive rank, or local
-            // grouped offset is needed here.
-            const int leader_owner = grouped_support_owner_device(
-                run.support, W, reverse, old_start, Kwin, ngpu);
+            const int leader_owner = traffic_owner_from_lut_device(
+                run.support, W, Kwin, reverse, owner_lut);
             if (leader_owner < 0 || leader_owner >= ngpu) {
                 set_error(error, 192);
                 continue;
@@ -62,8 +131,8 @@ __global__ void p2p_cycle_traffic_kernel(
                 run.support, blocked, W, q, Kwin, S, reverse);
             int hops = 1;
             while (cur_support != run.support && hops < cycle_len) {
-                const int owner = grouped_support_owner_device(
-                    cur_support, W, reverse, old_start, Kwin, ngpu);
+                const int owner = traffic_owner_from_lut_device(
+                    cur_support, W, Kwin, reverse, owner_lut);
                 if (owner < 0 || owner >= ngpu) {
                     set_error(error, 193);
                     break;
@@ -105,15 +174,23 @@ void run_p2p_traffic_probe(
     unsigned requested_blocks
 ) {
     ProductionFactorTables tables(W);
+    const std::vector<std::uint8_t> owner_lut =
+        build_traffic_owner_lut(tables, Kwin, ngpu);
 
     ck(cudaSetDevice(0), "traffic set device");
     install_tables(tables);
 
+    std::uint8_t* d_owner_lut = nullptr;
     unsigned long long* d_cycles = nullptr;
     unsigned long long* d_rotated = nullptr;
     unsigned long long* d_cross = nullptr;
     unsigned long long* d_remote = nullptr;
     int* d_error = nullptr;
+    ck(cudaMalloc(&d_owner_lut, owner_lut.size() * sizeof(std::uint8_t)),
+       "traffic alloc owner LUT");
+    ck(cudaMemcpy(d_owner_lut, owner_lut.data(),
+                  owner_lut.size() * sizeof(std::uint8_t), cudaMemcpyHostToDevice),
+       "traffic copy owner LUT");
     ck(cudaMalloc(&d_cycles, sizeof(unsigned long long)), "traffic alloc cycles");
     ck(cudaMalloc(&d_rotated, sizeof(unsigned long long)), "traffic alloc rotated");
     ck(cudaMalloc(&d_cross, sizeof(unsigned long long)), "traffic alloc cross");
@@ -133,7 +210,7 @@ void run_p2p_traffic_probe(
 
     const auto t0 = std::chrono::steady_clock::now();
     p2p_cycle_traffic_kernel<<<blocks, THREADS>>>(
-        base_supports, W, Kwin, S, reverse, ngpu,
+        base_supports, W, Kwin, S, reverse, ngpu, d_owner_lut,
         d_cycles, d_rotated, d_cross, d_remote, d_error);
     ck(cudaGetLastError(), "traffic launch");
     ck(cudaDeviceSynchronize(), "traffic sync");
@@ -181,7 +258,9 @@ void run_p2p_traffic_probe(
               << " blocks=" << blocks
               << " wall_ms=" << ms
               << " support_Gscan_s=" << support_gs
-              << " owner_from_support_only=1"
+              << " owner_lut_bytes=" << owner_lut.size()
+              << " owner_lut_outer_bits=" << (W - Kwin - 2)
+              << " owner_from_support_only=1 owner_lookup_lut=1"
               << " mate_materializations=0 primitive_rank_calls=0"
               << " state_allocation_bytes=0"
               << " support_scan_once=1 exact_traffic=OK\n";
@@ -191,6 +270,7 @@ void run_p2p_traffic_probe(
     cudaFree(d_cross);
     cudaFree(d_rotated);
     cudaFree(d_cycles);
+    cudaFree(d_owner_lut);
 }
 
 } // namespace
