@@ -36,6 +36,9 @@ visible="$(nvidia-smi --query-gpu=index --format=csv,noheader | wc -l)"
 (( visible >= NGPU )) || { echo "need $NGPU GPUs, visible=$visible" >&2; exit 2; }
 mkdir -p "$(dirname "$RESULT")" "$LOGDIR"
 
+bash "$ONEESAN_ROOT/scripts/bench/gridfp-runtime-edgecache-proof.sh" \
+  >"$LOGDIR/edgecache-proof.out" 2>"$LOGDIR/edgecache-proof.err"
+
 build_one() {
   local cache="$1" bin="$2"
   MODE=two-row-runtime-multigpu \
@@ -129,6 +132,8 @@ print('runtime_edgecache_extra_shared_bytes_per_block=4480')
 print('runtime_edgecache_destination_index_bytes=1')
 print('runtime_edgecache_coefficient_bytes=1')
 print('runtime_edgecache_recomputed_small_steps_in_accumulation=0')
+print('runtime_edgecache_edge_stream_scans_per_lane=1')
+print('runtime_edgecache_max_destination_accumulators_per_lane=3')
 print(f'summary={dst}')
 PY
 
