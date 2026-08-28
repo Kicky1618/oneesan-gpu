@@ -10,8 +10,7 @@ p10dc_resolved_low_preimages_cross5_rankformula_nometa4_fixed(
     if (!depth) return BkczCrossAccum(0);
     const P10DCRankFormulaNometa4Resolved z =
         p10dc_low_rankformula_nometa4_resolve(h, rank);
-    uint32_t remaining = z.mask;
-    uint32_t rem = uint32_t(__popc(z.mask));
+    uint32_t rem = z.n;
     uint32_t local = rank - z.start;
     uint32_t state = depth;
     int factor_h = int(h);
@@ -19,12 +18,9 @@ p10dc_resolved_low_preimages_cross5_rankformula_nometa4_fixed(
     const int source_rank_origin = int(rank) + z.base_delta;
     BkczCrossAccum sum = 0;
 
-    // The group-local rank is the ballot-lexicographic rank.  At each occupied
-    // position dest_contrib is exactly the size of the R-first subtree, so the
-    // same LUT load both unranks the symbol and supplies the L->R rank formula.
-    while (remaining) {
-        const int pos = 31 - __clz(remaining);
-        remaining ^= 1u << pos;
+    // Physical support positions do not affect the ballot word inside a mask
+    // group.  Iterate the n occupied symbols directly: no popcount/clz scan.
+    for (uint32_t ordinal = 0; ordinal < z.n; ++ordinal) {
         const uint32_t bp = p10dc_rankformula_ballot_load(rem, uint32_t(factor_h));
         const uint32_t dest_contrib = bp & 0xffffu;
         const int diff = int(int16_t(bp >> 16));
