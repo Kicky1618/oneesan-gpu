@@ -120,36 +120,36 @@ int main(int argc, char** argv) {
     const int n = blocks * threads;
     const Code stride = std::max<Code>(1, MAIN_TOTAL / Code(n));
     const Code step = MAIN_CHUNK / 7 + 1;
-    std::vector<Code> h_index(size_t(n));
-    for (int i = 0; i < n; ++i) h_index[size_t(i)] = Code(i) * stride;
+    auto h_index = std::vector<Code>(static_cast<size_t>(n));
+    for (int i = 0; i < n; ++i) h_index[static_cast<size_t>(i)] = Code(i) * stride;
 
     Code *d_index = nullptr, *d_local = nullptr, *d_out = nullptr;
     int* d_owner = nullptr;
-    ck(cudaMalloc(&d_index, size_t(n) * sizeof(Code)), "alloc index");
-    ck(cudaMalloc(&d_owner, size_t(n) * sizeof(int)), "alloc owner");
-    ck(cudaMalloc(&d_local, size_t(n) * sizeof(Code)), "alloc local");
-    ck(cudaMalloc(&d_out, size_t(n) * sizeof(Code)), "alloc out");
-    ck(cudaMemcpy(d_index, h_index.data(), size_t(n) * sizeof(Code),
+    ck(cudaMalloc(&d_index, static_cast<size_t>(n) * sizeof(Code)), "alloc index");
+    ck(cudaMalloc(&d_owner, static_cast<size_t>(n) * sizeof(int)), "alloc owner");
+    ck(cudaMalloc(&d_local, static_cast<size_t>(n) * sizeof(Code)), "alloc local");
+    ck(cudaMalloc(&d_out, static_cast<size_t>(n) * sizeof(Code)), "alloc out");
+    ck(cudaMemcpy(d_index, h_index.data(), static_cast<size_t>(n) * sizeof(Code),
                   cudaMemcpyHostToDevice), "copy index");
 
     exact_kernel<<<blocks, threads>>>(d_index, d_owner, d_local, n);
     ck(cudaGetLastError(), "exact launch");
     ck(cudaDeviceSynchronize(), "exact sync");
-    std::vector<int> h_owner(size_t(n));
-    std::vector<Code> h_local(size_t(n));
-    ck(cudaMemcpy(h_owner.data(), d_owner, size_t(n) * sizeof(int),
+    auto h_owner = std::vector<int>(static_cast<size_t>(n));
+    auto h_local = std::vector<Code>(static_cast<size_t>(n));
+    ck(cudaMemcpy(h_owner.data(), d_owner, static_cast<size_t>(n) * sizeof(int),
                   cudaMemcpyDeviceToHost), "copy owner");
-    ck(cudaMemcpy(h_local.data(), d_local, size_t(n) * sizeof(Code),
+    ck(cudaMemcpy(h_local.data(), d_local, static_cast<size_t>(n) * sizeof(Code),
                   cudaMemcpyDeviceToHost), "copy local");
     for (int i = 0; i < n; ++i) {
-        const Code g = h_index[size_t(i)];
+        const Code g = h_index[static_cast<size_t>(i)];
         const int owner = int(g / MAIN_CHUNK);
         const Code local = g - Code(owner) * MAIN_CHUNK;
-        if (h_owner[size_t(i)] != owner || h_local[size_t(i)] != local) {
+        if (h_owner[static_cast<size_t>(i)] != owner || h_local[static_cast<size_t>(i)] != local) {
             std::fprintf(stderr,
                 "mismatch i=%d g=%llu got=(%d,%llu) exact=(%d,%llu)\n",
-                i, (unsigned long long)g, h_owner[size_t(i)],
-                (unsigned long long)h_local[size_t(i)], owner,
+                i, (unsigned long long)g, h_owner[static_cast<size_t>(i)],
+                (unsigned long long)h_local[static_cast<size_t>(i)], owner,
                 (unsigned long long)local);
             return 3;
         }
@@ -157,11 +157,11 @@ int main(int argc, char** argv) {
 
     run_once(d_out, n, blocks, threads, iters, stride, step);
     std::vector<float> times;
-    times.reserve(size_t(repeats));
+    times.reserve(static_cast<size_t>(repeats));
     for (int r = 0; r < repeats; ++r)
         times.push_back(run_once(d_out, n, blocks, threads, iters, stride, step));
-    std::vector<Code> h_out(size_t(n));
-    ck(cudaMemcpy(h_out.data(), d_out, size_t(n) * sizeof(Code),
+    auto h_out = std::vector<Code>(static_cast<size_t>(n));
+    ck(cudaMemcpy(h_out.data(), d_out, static_cast<size_t>(n) * sizeof(Code),
                   cudaMemcpyDeviceToHost), "copy out");
     std::uint64_t checksum = 0;
     for (Code x : h_out)
