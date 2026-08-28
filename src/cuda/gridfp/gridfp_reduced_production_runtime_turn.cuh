@@ -437,7 +437,11 @@ __device__ __forceinline__ bool runtime_turn_discover_inverse(
 #endif
     }
     RuntimeMainOnlySink<RuntimeSharedKeySetSink> sink{base};
+#if RP_RUNTIME_FAST_DISCOVERY_VALIDITY
+    return runtime_discover_inverse_reduced_forward(dest, W, W - 1, sink);
+#else
     return discover_inverse_reduced_forward(dest, W, W - 1, sink);
+#endif
 }
 
 __device__ __forceinline__ bool runtime_turn_discover_inverse_indexed(
@@ -464,7 +468,11 @@ __device__ __forceinline__ bool runtime_turn_discover_inverse_indexed(
 #endif
     }
     RuntimeMainOnlySink<RuntimeIndexedSharedKeySetSink> sink{base};
+#if RP_RUNTIME_FAST_DISCOVERY_VALIDITY
+    return runtime_discover_inverse_reduced_forward(dest, W, W - 1, sink);
+#else
     return discover_inverse_reduced_forward(dest, W, W - 1, sink);
+#endif
 }
 
 __global__ void owner_turn_runtime_subwarp_kernel(
