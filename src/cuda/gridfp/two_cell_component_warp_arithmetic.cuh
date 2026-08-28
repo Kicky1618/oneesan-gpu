@@ -27,7 +27,7 @@ __device__ __forceinline__ std::uint32_t warp_tail_sum_mod(
     std::uint32_t z = (lane >= 4 && lane < n) ? x : 0u;
     for (int offset = 16; offset; offset >>= 1) {
         const std::uint32_t other = __shfl_down_sync(kFullWarp, z, offset);
-        z = add_mod(z, other, mod);
+        if (lane + offset < 32) z = add_mod(z, other, mod);
     }
     return __shfl_sync(kFullWarp, z, 0);
 }
@@ -63,7 +63,6 @@ __device__ __forceinline__ std::uint32_t apply_closed_component_warp(
     const Symbol a = symbol(label, i);
     const Symbol b = symbol(label, i + 1);
 
-    // Common destinations for all deep families.
     if (lane == 1) return add_mod(x1, x2, mod);
     if (lane == 2) return add_mod(x0, x2, mod);
 
