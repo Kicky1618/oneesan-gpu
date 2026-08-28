@@ -17,10 +17,11 @@ RUN_OWNER_TREE="${RUN_OWNER_TREE:-1}"
 RUN_ADJACENT_SUPPORT="${RUN_ADJACENT_SUPPORT:-1}"
 RUN_PLAN_SHARED="${RUN_PLAN_SHARED:-1}"
 RUN_MATERIALIZE_LAST_R="${RUN_MATERIALIZE_LAST_R:-1}"
+RUN_MATERIALIZE_PACKED="${RUN_MATERIALIZE_PACKED:-1}"
 RUN_TURN_TREE="${RUN_TURN_TREE:-1}"
 RUN_TURN_NONN="${RUN_TURN_NONN:-1}"
 
-for name in RUN_PREFIX_CARRY RUN_OWNER_LOCAL_CARRY RUN_OWNER_COMPACT RUN_OWNER_TREE RUN_ADJACENT_SUPPORT RUN_PLAN_SHARED RUN_MATERIALIZE_LAST_R RUN_TURN_TREE RUN_TURN_NONN; do
+for name in RUN_PREFIX_CARRY RUN_OWNER_LOCAL_CARRY RUN_OWNER_COMPACT RUN_OWNER_TREE RUN_ADJACENT_SUPPORT RUN_PLAN_SHARED RUN_MATERIALIZE_LAST_R RUN_MATERIALIZE_PACKED RUN_TURN_TREE RUN_TURN_NONN; do
   value="${!name}"
   if [[ "$value" != 0 && "$value" != 1 ]]; then
     echo "$name must be 0 or 1" >&2
@@ -30,8 +31,8 @@ done
 if [[ "$RUN_PREFIX_CARRY" == 0 && "$RUN_OWNER_LOCAL_CARRY" == 0 &&
       "$RUN_OWNER_COMPACT" == 0 && "$RUN_OWNER_TREE" == 0 &&
       "$RUN_ADJACENT_SUPPORT" == 0 && "$RUN_PLAN_SHARED" == 0 &&
-      "$RUN_MATERIALIZE_LAST_R" == 0 && "$RUN_TURN_TREE" == 0 &&
-      "$RUN_TURN_NONN" == 0 ]]; then
+      "$RUN_MATERIALIZE_LAST_R" == 0 && "$RUN_MATERIALIZE_PACKED" == 0 &&
+      "$RUN_TURN_TREE" == 0 && "$RUN_TURN_NONN" == 0 ]]; then
   echo "nothing selected" >&2
   exit 2
 fi
@@ -93,6 +94,10 @@ fi
 if [[ "$RUN_MATERIALIZE_LAST_R" == 1 ]]; then
   run_case materialize_primitive_last_r \
     gridfp-materialize-primitive-last-r-microprobe.sh
+fi
+if [[ "$RUN_MATERIALIZE_PACKED" == 1 ]]; then
+  run_case materialize_primitive_packed \
+    gridfp-materialize-primitive-packed-microprobe.sh
 fi
 if [[ "$RUN_TURN_TREE" == 1 ]]; then
   run_case turn_local_sector_w28_tree \
