@@ -54,14 +54,15 @@ static void p10dc_install_rankchunk32_lut() {
 }
 #endif
 
-// Centralized production decoder. The third CROSS5 chunk occupies only bits
-// 16..22; bit 23 is already the low bit of the 9-bit rankstream prefix.
+// Centralized production decoder. Compact mode uses 7 physical bits for the
+// third chunk because bit 23 belongs to the 9-bit prefix. Bytepack mode starts
+// the prefix at bit 24, so all three chunk extracts are ordinary byte masks.
 __device__ __forceinline__ uint32_t p10dc_rankchunk32_chunk_device(
     uint32_t packed_chunks, uint32_t slot
 ) {
     if (slot == 0u) return packed_chunks & 0xffu;
     if (slot == 1u) return (packed_chunks >> 8) & 0xffu;
-    return (packed_chunks >> 16) & 0x7fu;
+    return (packed_chunks >> 16) & (P10DC_RANKCHUNK32_BYTEPACK ? 0xffu : 0x7fu);
 }
 
 __device__ __forceinline__ uint32_t p10dc_cross5_apply_rankchunk32(
