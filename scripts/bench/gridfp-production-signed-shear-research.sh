@@ -18,3 +18,4 @@ build_and_run() {
 
 build_and_run gridfp_reduced_production_signed_shear_probe
 build_and_run gridfp_reduced_production_nilpotent_probe
+build_and_run gridfp_reduced_production_component_alignment_probe
