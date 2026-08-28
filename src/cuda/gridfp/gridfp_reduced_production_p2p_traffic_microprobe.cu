@@ -4,6 +4,8 @@
 #include "gridfp_reduced_production_p2p_cycle_microprobe.cu"
 #pragma pop_macro("main")
 
+#include "gridfp_reduced_production_grouped_support_device.cuh"
+
 namespace {
 
 __global__ void p2p_cycle_traffic_kernel(
@@ -13,7 +15,6 @@ __global__ void p2p_cycle_traffic_kernel(
     int S,
     bool reverse,
     int ngpu,
-    const Rank64* __restrict__ owner_begin,
     unsigned long long* __restrict__ cycles,
     unsigned long long* __restrict__ rotated_values,
     unsigned long long* __restrict__ cross_values,
@@ -44,16 +45,16 @@ __global__ void p2p_cycle_traffic_kernel(
             }
             if (cycle_len <= 1) continue;
 
-            const DeviceKey leader = equal_run_key0_device(
-                run.support, blocked, W, q, reverse);
-            const GroupedDeviceRank lr = grouped_rank_device(
-                leader, W, q, reverse, old_start, Kwin, ngpu, owner_begin);
-            if (lr.owner < 0 || lr.owner >= ngpu) {
+            // Traffic depends only on the physical support mask.  In
+            // particular, no MateID materialization, primitive rank, or local
+            // grouped offset is needed here.
+            const int leader_owner = grouped_support_owner_device(
+                run.support, W, reverse, old_start, Kwin, ngpu);
+            if (leader_owner < 0 || leader_owner >= ngpu) {
                 set_error(error, 192);
                 continue;
             }
 
-            const int leader_owner = lr.owner;
             int prev_owner = leader_owner;
             unsigned cross_edges = 0;
             unsigned remote_positions = 0;
@@ -61,17 +62,15 @@ __global__ void p2p_cycle_traffic_kernel(
                 run.support, blocked, W, q, Kwin, S, reverse);
             int hops = 1;
             while (cur_support != run.support && hops < cycle_len) {
-                const DeviceKey cur = equal_run_key0_device(
-                    cur_support, blocked, W, q, reverse);
-                const GroupedDeviceRank cr = grouped_rank_device(
-                    cur, W, q, reverse, old_start, Kwin, ngpu, owner_begin);
-                if (cr.owner < 0 || cr.owner >= ngpu) {
+                const int owner = grouped_support_owner_device(
+                    cur_support, W, reverse, old_start, Kwin, ngpu);
+                if (owner < 0 || owner >= ngpu) {
                     set_error(error, 193);
                     break;
                 }
-                cross_edges += cr.owner != prev_owner;
-                remote_positions += cr.owner != leader_owner;
-                prev_owner = cr.owner;
+                cross_edges += owner != prev_owner;
+                remote_positions += owner != leader_owner;
+                prev_owner = owner;
                 cur_support = shift_next_support_device(
                     cur_support, blocked, W, q, Kwin, S, reverse);
                 ++hops;
@@ -106,20 +105,15 @@ void run_p2p_traffic_probe(
     unsigned requested_blocks
 ) {
     ProductionFactorTables tables(W);
-    const HostTilePlan plan = make_host_tile_plan(tables, Kwin, ngpu);
 
     ck(cudaSetDevice(0), "traffic set device");
     install_tables(tables);
 
-    Rank64* d_owner_begin = nullptr;
     unsigned long long* d_cycles = nullptr;
     unsigned long long* d_rotated = nullptr;
     unsigned long long* d_cross = nullptr;
     unsigned long long* d_remote = nullptr;
     int* d_error = nullptr;
-    ck(cudaMalloc(&d_owner_begin, ngpu * sizeof(Rank64)), "traffic alloc owner begin");
-    ck(cudaMemcpy(d_owner_begin, plan.owner_begin.data(), ngpu * sizeof(Rank64),
-                  cudaMemcpyHostToDevice), "traffic copy owner begin");
     ck(cudaMalloc(&d_cycles, sizeof(unsigned long long)), "traffic alloc cycles");
     ck(cudaMalloc(&d_rotated, sizeof(unsigned long long)), "traffic alloc rotated");
     ck(cudaMalloc(&d_cross, sizeof(unsigned long long)), "traffic alloc cross");
@@ -139,7 +133,7 @@ void run_p2p_traffic_probe(
 
     const auto t0 = std::chrono::steady_clock::now();
     p2p_cycle_traffic_kernel<<<blocks, THREADS>>>(
-        base_supports, W, Kwin, S, reverse, ngpu, d_owner_begin,
+        base_supports, W, Kwin, S, reverse, ngpu,
         d_cycles, d_rotated, d_cross, d_remote, d_error);
     ck(cudaGetLastError(), "traffic launch");
     ck(cudaDeviceSynchronize(), "traffic sync");
@@ -167,6 +161,8 @@ void run_p2p_traffic_probe(
     const double logical_gib = double(cross) * 4.0 / double(1ULL << 30);
     const double direct_gib = double(direct_remote_ops) * 4.0 / double(1ULL << 30);
     const double overhead = cross ? double(direct_remote_ops) / double(cross) : 0.0;
+    const double support_gs = ms > 0.0
+        ? double(base_supports) / (ms * 1.0e6) : 0.0;
 
     std::cout << "gridfp-reduced-production-p2p-traffic"
               << " W=" << W << " Kwin=" << Kwin << " shift=" << S
@@ -184,6 +180,9 @@ void run_p2p_traffic_probe(
               << " direct_over_logical=" << overhead
               << " blocks=" << blocks
               << " wall_ms=" << ms
+              << " support_Gscan_s=" << support_gs
+              << " owner_from_support_only=1"
+              << " mate_materializations=0 primitive_rank_calls=0"
               << " state_allocation_bytes=0"
               << " support_scan_once=1 exact_traffic=OK\n";
 
@@ -192,7 +191,6 @@ void run_p2p_traffic_probe(
     cudaFree(d_cross);
     cudaFree(d_rotated);
     cudaFree(d_cycles);
-    cudaFree(d_owner_begin);
 }
 
 } // namespace
