@@ -1,7 +1,6 @@
 #pragma once
 
 #include "gridfp_reduced_production_grouped_device.cuh"
-#include "gridfp_reduced_production_component_register_microprobe.cu"
 
 namespace oneesan::gridfp::reducedprod {
 
