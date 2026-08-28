@@ -56,7 +56,6 @@ __global__ void owner_probe_kernel(
 ) {
     const int tid = blockIdx.x * blockDim.x + threadIdx.x;
     if (tid >= n) return;
-    // Keep midpoint in the legal [0,total) domain without integer division.
     Rank64 midpoint = static_cast<Rank64>(tid) << 20;
     while (midpoint >= total) midpoint -= total;
     std::uint32_t acc = 0;
@@ -111,7 +110,7 @@ int main(int argc, char** argv) {
     const int blocks = argc > 2 ? std::atoi(argv[2]) : 256;
     const int threads = argc > 3 ? std::atoi(argv[3]) : 256;
     const int iters = argc > 4 ? std::atoi(argv[4]) : 4096;
-    const int repeats = argc > 5 ? std::atoi(argv[5]) :  nine;
+    const int repeats = argc > 5 ? std::atoi(argv[5]) : 9;
     if (W < 8 || W > 28 || (W & 1) || blocks < 1 || threads < 1 ||
         threads > 1024 || iters < 1 || repeats < 1) {
         std::fprintf(stderr, "invalid W/blocks/threads/iters/repeats\n");
