@@ -16,9 +16,6 @@ static_assert(RP_RUNTIME_FAST_DISCOVERY_VALIDITY == 0 ||
               RP_RUNTIME_FAST_DISCOVERY_VALIDITY == 1,
               "RP_RUNTIME_FAST_DISCOVERY_VALIDITY must be 0 or 1");
 
-// MateID uses two bits per frontier position. Production is capped at W=28,
-// therefore bits 56..63 are unused by every valid mate. Keep blocked in bit 63
-// while keys live in shared memory, halving the usual 16-byte DeviceKey storage.
 static constexpr std::uint64_t RP_RUNTIME_SHARED_BLOCKED_BIT = 1ULL << 63;
 static constexpr std::uint64_t RP_RUNTIME_SHARED_MATE_MASK =
     RP_RUNTIME_SHARED_BLOCKED_BIT - 1ULL;
@@ -51,9 +48,7 @@ __device__ __forceinline__ DeviceKey runtime_shared_key_decode(RuntimeSharedKey 
 }
 
 __device__ __forceinline__ int runtime_find_shared_key(
-    const RuntimeSharedKey* a,
-    int n,
-    DeviceKey k
+    const RuntimeSharedKey* a, int n, DeviceKey k
 ) {
 #if RP_RUNTIME_PACK_SHARED_KEYS
     const RuntimeSharedKey needle = runtime_shared_key_encode(k);
@@ -70,7 +65,6 @@ struct RuntimeSharedKeySetSink {
     RuntimeSharedKey* out = nullptr;
     int* n = nullptr;
     int cap = 0;
-
     __device__ __forceinline__ bool emit(DeviceKey k) {
         if (runtime_find_shared_key(out, *n, k) >= 0) return true;
         if (*n >= cap) return false;
@@ -82,7 +76,6 @@ struct RuntimeSharedKeySetSink {
 struct RuntimeSharedMirroredKeySetSink {
     RuntimeSharedKeySetSink sink{};
     int W = 0;
-
     __device__ __forceinline__ bool emit(DeviceKey k) {
         return sink.emit(mirror_key_device(k, W));
     }
@@ -94,10 +87,6 @@ enum RuntimeDiscoveryValidityHint : std::uint8_t {
     RP_RUNTIME_DISCOVERY_RL_FROM_VALID_NN = 2,
 };
 
-// Replacing NN by RL changes total height by zero. Starting from a valid base,
-// the only possible new violation is the leading R itself. The height before
-// position p is 1 + #L - #R in the higher packed symbols, which two popcounts
-// recover without scanning W positions.
 __device__ __forceinline__ bool runtime_discovery_rl_candidate_valid(
     MateID x, int W, int p
 ) {
@@ -126,12 +115,8 @@ __device__ __forceinline__ bool runtime_discovery_candidate_valid(
 
 template<class Sink>
 __device__ __forceinline__ bool runtime_discover_blocked_include_candidate_forward(
-    MateID x,
-    MateID blocked_dest,
-    int W,
-    int p,
-    RuntimeDiscoveryValidityHint hint,
-    Sink& sink
+    MateID x, MateID blocked_dest, int W, int p,
+    RuntimeDiscoveryValidityHint hint, Sink& sink
 ) {
     if (!runtime_discovery_candidate_valid(x, W, p, hint)) return true;
     const IncludeResult z = include_horizontal(x, W, p);
@@ -224,10 +209,14 @@ __device__ __forceinline__ bool runtime_discover_inverse_reduced_forward(
 
     if (mget(d, p) == N && is_endpoint(mget(d, p - 1))) {
         const MateID b = mshrink(d, p);
+#if RP_RUNTIME_FAST_DISCOVERY_VALIDITY
+        if (!sink.emit(DeviceKey{b, 1})) return false;
+#else
         if (valid_mate_device(b, W - 1) && mget(b, p - 1) != N &&
             blocked_exclude(b, p) == d) {
             if (!sink.emit(DeviceKey{b, 1})) return false;
         }
+#endif
     }
 
     const int q = p - 1;
@@ -235,22 +224,22 @@ __device__ __forceinline__ bool runtime_discover_inverse_reduced_forward(
     if (qp == NN || qp == LR) {
         const MateID nn = qp == NN ? d : msetpair(d, q, NN);
         const MateID b = mshrink(nn, q);
+#if RP_RUNTIME_FAST_DISCOVERY_VALIDITY
+        if (!runtime_discover_blocked_include_preimages_forward(
+                b, W, p, sink)) return false;
+#else
         if (valid_mate_device(b, W - 1) && mget(b, q - 1) == N) {
             if (!runtime_discover_blocked_include_preimages_forward(
                     b, W, p, sink)) return false;
         }
+#endif
     }
     return true;
 }
 
 __device__ __forceinline__ bool runtime_discover_inverse_direction_to_shared(
-    DeviceKey dest,
-    int W,
-    int p,
-    bool reverse,
-    RuntimeSharedKey* source_set,
-    int& source_count,
-    int capacity
+    DeviceKey dest, int W, int p, bool reverse,
+    RuntimeSharedKey* source_set, int& source_count, int capacity
 ) {
     RuntimeSharedKeySetSink base{source_set, &source_count, capacity};
     if (!reverse)
