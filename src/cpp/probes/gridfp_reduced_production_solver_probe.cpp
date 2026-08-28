@@ -4,6 +4,8 @@
 #include "gridfp_reduced_production_channel_probe.cpp"
 #pragma pop_macro("main")
 
+#include <functional>
+
 namespace {
 
 static constexpr std::uint64_t MOD = 4294967291ULL;
