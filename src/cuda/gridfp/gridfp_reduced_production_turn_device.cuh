@@ -112,4 +112,79 @@ __device__ __forceinline__ DeviceKey turn_expand_seed(MateID label, int W) {
     return DeviceKey{blocked_exclude_reverse(label, W, 1), 0};
 }
 
+// The high-edge turn is exactly the horizontal-reflection conjugate of the
+// low-edge turn.  These wrappers keep one authoritative implementation of the
+// rectangular edge maps and avoid a second set of closure rules.
+__device__ __forceinline__ int turn_compress_step_edge(
+    DeviceKey src, int W, bool high, DeviceTerm* out
+) {
+    if (!high) return turn_compress_step(src, W, out);
+    DeviceTerm tmp[RP_MAX_TERMS]{};
+    const int n = turn_compress_step(mirror_key_device(src, W), W, tmp);
+    if (n < 0) return n;
+    for (int i = 0; i < n; ++i) {
+        out[i].key = mirror_key_device(tmp[i].key, W);
+        out[i].coef = tmp[i].coef;
+    }
+    return n;
+}
+
+__device__ __forceinline__ int turn_compress_inverse_edge(
+    DeviceKey dest, int W, bool high, DeviceTerm* out
+) {
+    if (!high) return turn_compress_inverse(dest, W, out);
+    DeviceTerm tmp[RP_MAX_TERMS]{};
+    const int n = turn_compress_inverse(mirror_key_device(dest, W), W, tmp);
+    if (n < 0) return n;
+    for (int i = 0; i < n; ++i) {
+        out[i].key = mirror_key_device(tmp[i].key, W);
+        out[i].coef = tmp[i].coef;
+    }
+    return n;
+}
+
+__device__ __forceinline__ DeviceKey turn_compress_seed_edge(
+    MateID label, int W, bool high
+) {
+    if (!high) return turn_compress_seed(label, W);
+    const MateID low_label = mirror_mate(label, W - 1);
+    return mirror_key_device(turn_compress_seed(low_label, W), W);
+}
+
+__device__ __forceinline__ int turn_expand_step_edge(
+    DeviceKey src, int W, bool high, DeviceTerm* out
+) {
+    if (!high) return turn_expand_step(src, W, out);
+    DeviceTerm tmp[RP_MAX_TERMS]{};
+    const int n = turn_expand_step(mirror_key_device(src, W), W, tmp);
+    if (n < 0) return n;
+    for (int i = 0; i < n; ++i) {
+        out[i].key = mirror_key_device(tmp[i].key, W);
+        out[i].coef = tmp[i].coef;
+    }
+    return n;
+}
+
+__device__ __forceinline__ int turn_expand_inverse_edge(
+    DeviceKey dest, int W, bool high, DeviceTerm* out
+) {
+    if (!high) return turn_expand_inverse(dest, W, out);
+    DeviceTerm tmp[RP_MAX_TERMS]{};
+    const int n = turn_expand_inverse(mirror_key_device(dest, W), W, tmp);
+    if (n < 0) return n;
+    for (int i = 0; i < n; ++i) {
+        out[i].key = mirror_key_device(tmp[i].key, W);
+        out[i].coef = tmp[i].coef;
+    }
+    return n;
+}
+
+__device__ __forceinline__ DeviceKey turn_expand_seed_edge(
+    MateID label, int W, bool high
+) {
+    if (!high) return turn_expand_seed(label, W);
+    const MateID low_label = mirror_mate(label, W - 1);
+    return mirror_key_device(turn_expand_seed(low_label, W), W);
+}
+
 } // namespace oneesan::gridfp::reducedprod
