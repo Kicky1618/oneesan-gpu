@@ -1,7 +1,9 @@
 #pragma once
 
 #include "ramstream32_bucket_orbit_closure_pattern10_depthcode_resolved.cuh"
+#ifndef P10DC_DIRECT_RESOLVED_NO_CROSS5
 #include "ramstream32_bucket_closure_cross5.cuh"
+#endif
 
 // Experimental HIGH-only direct resolver. The canonical delta builder first
 // packs every closure source into BkczPlan.local[], then p10dc_resolve_high_rows
@@ -145,6 +147,7 @@ __device__ __forceinline__ void p10dc_prepare_reverse_high_delta_direct(
     p10dc_build_high_resolved_delta_direct(c, d, plan_db.hs, rel, payload);
 }
 
+#ifndef P10DC_DIRECT_RESOLVED_NO_CROSS5
 __device__ __forceinline__ Count p10dc_direct_resolved_high_plan_sum_cross5(
     const P10DCDirectHighResolvedCtx& c, const BucketPhysicalBlock& db, uint32_t lr
 ) {
@@ -180,3 +183,4 @@ __device__ __forceinline__ Count p10dc_direct_resolved_high_plan_sum_cross5(
     return sum;
 #endif
 }
+#endif
