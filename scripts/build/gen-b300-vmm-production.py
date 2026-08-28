@@ -44,6 +44,11 @@ ALLOC_NEW = '''Code mainN=H_DP[W][1],blockN=H_DP[W-1][1];Code mc=(mainN+ng-1)/ng
     b300_vmm::ContiguousStorage main_store,block_store;
     main_store.create(mainN,ng,0,"auth main");
     block_store.create(blockN,ng,int(main_store.mapped_units%size_t(ng)),"auth block");
+    if(main_store.granularity!=block_store.granularity){std::cerr<<"VMM main/block granularity mismatch "<<main_store.granularity<<" != "<<block_store.granularity<<"\n";return 10;}
+    size_t vmm_phys_min=~size_t(0),vmm_phys_max=0;
+    for(int d=0;d<ng;++d){size_t bytes=main_store.segment_bytes[size_t(d)]+block_store.segment_bytes[size_t(d)];vmm_phys_min=std::min(vmm_phys_min,bytes);vmm_phys_max=std::max(vmm_phys_max,bytes);}
+    if(vmm_phys_max-vmm_phys_min>main_store.granularity){std::cerr<<"VMM combined physical imbalance exceeds one granularity: "<<(vmm_phys_max-vmm_phys_min)<<" > "<<main_store.granularity<<"\n";return 10;}
+    std::cerr<<"VMM32 combined: granularity_kib="<<double(main_store.granularity)/1024.0<<" physical_min_gib="<<double(vmm_phys_min)/(1ull<<30)<<" physical_max_gib="<<double(vmm_phys_max)/(1ull<<30)<<" imbalance_kib="<<double(vmm_phys_max-vmm_phys_min)/1024.0<<" main_padding_kib="<<double(main_store.mapped_bytes-main_store.logical_bytes)/1024.0<<" block_padding_kib="<<double(block_store.mapped_bytes-block_store.logical_bytes)/1024.0<<"\n";
     main_store.zero_local_segments();block_store.zero_local_segments();
     Count*main_base=main_store.base_as<Count>();Count*block_base=block_store.base_as<Count>();
     Count*mp[MAXGPU]{},*bp[MAXGPU]{};std::vector<Code>ml(ng),bl(ng);
@@ -78,7 +83,7 @@ def main() -> None:
     text = once(text, BACKEND_OLD, BACKEND_NEW, 'backend label')
     args.out.parent.mkdir(parents=True, exist_ok=True)
     args.out.write_text(text)
-    print(f'generated {args.out} from {args.src} vmm_contiguous_authoritative=1 direct_global_index=1 logical_shard_views=1 count_bytes=4')
+    print(f'generated {args.out} from {args.src} vmm_contiguous_authoritative=1 direct_global_index=1 logical_shard_views=1 count_bytes=4 runtime_physical_balance_guard=1')
 
 
 if __name__ == '__main__':
