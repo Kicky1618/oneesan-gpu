@@ -44,7 +44,12 @@ int main(int argc,char**argv){
             if(row>1){eq(main,filter(am,W,row,0),"row-start",W,row,0);if(!block.empty())return 3;}
             for(int t=1;t<=W-1;++t){int p=W-t;step(main,block,W,p);
                 eq(main,filter(am,W,row,t+1),"main",W,row,t);
-                Set wb=t==W-1?Set{}:filter(ab,W-1,row,std::max(0,t-1));eq(block,wb,"blocked",W,row,t);}
+                Set wb;
+                // The source boundary on row 1 cannot create a deferred state.
+                // From row 2 onward the blocked set obeys the same moving height
+                // ceiling, shifted by one slot because blocked states have width W-1.
+                if(row>1&&t<W-1)wb=filter(ab,W-1,row,std::max(0,t-1));
+                eq(block,wb,"blocked",W,row,t);}
             if(main.size()!=bounded(W,row)||!block.empty())return 4;
         }
         std::cout<<"height-cap-reachability W="<<W<<" states="<<am.size()<<" OK\n";
