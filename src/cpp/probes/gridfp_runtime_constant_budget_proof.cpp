@@ -28,18 +28,19 @@ constexpr std::uint64_t RANK_OUTER_GROUP_SIZE = 99u * 4u;
 constexpr std::uint64_t RANK_OUTER_GROUP_PREFIX = 99u * 8u;
 constexpr std::uint64_t OWNER_FIXED52_MAGIC = 11u * 8u;
 constexpr std::uint64_t OWNER_LOCAL_SECTOR_END = 1100u * 4u;
+constexpr std::uint64_t TURN_LOCAL_SECTOR_END = 550u * 4u;
 constexpr std::uint64_t STACK_TABLE_TOTAL = RANK_SECTOR_OFFSET +
     RANK_OUTER_GROUP_SIZE + RANK_OUTER_GROUP_PREFIX + OWNER_FIXED52_MAGIC +
-    OWNER_LOCAL_SECTOR_END;
+    OWNER_LOCAL_SECTOR_END + TURN_LOCAL_SECTOR_END;
 
 constexpr std::uint64_t KNOWN_TOTAL = CORE_TOTAL + FASTDIV_TOTAL + STACK_TABLE_TOTAL;
 constexpr std::uint64_t HEADROOM = CUDA_CONSTANT_BUDGET - KNOWN_TOTAL;
 static_assert(CORE_TOTAL == 21040u);
 static_assert(FASTDIV_TOTAL == 2696u);
-static_assert(STACK_TABLE_TOTAL == 10472u);
-static_assert(KNOWN_TOTAL == 34208u);
+static_assert(STACK_TABLE_TOTAL == 12672u);
+static_assert(KNOWN_TOTAL == 36408u);
 static_assert(KNOWN_TOTAL < CUDA_CONSTANT_BUDGET);
-static_assert(HEADROOM == 31328u);
+static_assert(HEADROOM == 29128u);
 }
 
 int main() {
