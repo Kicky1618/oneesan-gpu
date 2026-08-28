@@ -11,6 +11,7 @@ bash "$ONEESAN_ROOT/scripts/bench/b300-vmm-balanced-physical-layout-proof.sh"
 python3 "$GEN" "$SRC" "$OUT"
 
 grep -Fq '#include "b300_vmm_contiguous_storage.cuh"' "$OUT"
+grep -Fq 'static_assert(sizeof(Count)==4,"B300 VMM authoritative storage requires 32-bit Count");' "$OUT"
 grep -Fq '__constant__ Count* D_MAIN_VBASE;' "$OUT"
 grep -Fq '__constant__ Count* D_BLOCK_VBASE;' "$OUT"
 grep -Fq 'Count global_load_main(Code g){return D_MAIN_VBASE[g];}' "$OUT"
@@ -34,4 +35,4 @@ if grep -Fq 'cudaFree(mp[d])' "$OUT" || grep -Fq 'cudaFree(bp[d])' "$OUT"; then
   exit 4
 fi
 
-echo "b300-vmm-production-generate-proof OK direct_global_index=1 logical_shard_views=1 authoritative_cudaMalloc=0 authoritative_cudaFree=0 balanced_physical_rotation=1 combined_imbalance_le_one_granularity=1"
+echo "b300-vmm-production-generate-proof OK count_bytes=4 direct_global_index=1 logical_shard_views=1 authoritative_cudaMalloc=0 authoritative_cudaFree=0 balanced_physical_rotation=1 combined_imbalance_le_one_granularity=1"
