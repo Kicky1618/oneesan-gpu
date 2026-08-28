@@ -15,7 +15,6 @@ run_proof() {
   "$CXX" -O3 -std=c++17 "$src" -o "$bin"
   local out
   out="$($bin)"
-  printf '%s\n' "$out"
   grep -Fq "$marker" <<<"$out"
   printf '%s\n' "$out"
 }
