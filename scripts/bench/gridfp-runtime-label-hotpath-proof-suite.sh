@@ -14,6 +14,7 @@ PROOFS=(
   gridfp-primitive1-u32-table-proof.sh
   gridfp-primitive-sym-u32-table-proof.sh
   gridfp-choose-sym-u32-table-proof.sh
+  gridfp-codec-table-budget-proof.sh
   gridfp-support-unrank-len13-table-proof.sh
   gridfp-runtime-turn-local-sector-carry-begin-proof.sh
   gridfp-runtime-turn-local-sector-w28-tree-proof.sh
