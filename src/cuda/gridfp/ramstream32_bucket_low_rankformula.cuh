@@ -23,6 +23,7 @@ __device__ __forceinline__ uint32_t p10dc_low_rankformula_chunks(
 __device__ __forceinline__ uint32_t p10dc_low_rankformula_base(
     uint32_t h, uint32_t mask
 ) {
+    if (h >= P10DC_RANKFORMULA_HEIGHTS) return 0u;
     return uint32_t(D_P10DC_LOW_RANKFORMULA_BASE16[
         size_t(h) * P10DC_RANKFORMULA_MASKS + mask]);
 }
@@ -159,7 +160,6 @@ struct BucketFusedDirectHighRowsRankFormulaTables
                               hoff.data(), hoff.size() * sizeof(uint32_t)),
            "p10dc rankformula hoff");
 
-        // The packed ternary chunks replace the transient fixed-owner prekey.
         if (low_prekey) cudaFree(low_prekey);
         low_prekey = nullptr;
         low_prekey_capacity = 0;
