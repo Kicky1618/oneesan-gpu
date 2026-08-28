@@ -16,22 +16,50 @@ ARCH="${ARCH:-native}"
 PTXAS_VERBOSE="${PTXAS_VERBOSE:-1}"
 MIN_EXACT_SPEEDUP="${MIN_EXACT_SPEEDUP:-1.002}"
 MIN_W28_SPEEDUP="${MIN_W28_SPEEDUP:-1.002}"
+REQUIRE_CLEAN_TREE="${REQUIRE_CLEAN_TREE:-1}"
 if (( NGPU < 2 || NGPU > 8 || EXACT_BLOCKS < 1 || W28_BLOCKS < 1 ||
       W28_THREADS < 1 || W28_THREADS > 1024 || W28_ITERS < 1 || REPEATS < 1 ||
       EXACT_WARMUP < 0 || W28_WARMUP < 0 )); then
   echo "invalid codec table decision suite dimensions" >&2; exit 2
 fi
-if ! command -v nvcc >/dev/null || ! command -v nvidia-smi >/dev/null; then
-  echo "nvcc and nvidia-smi are required" >&2; exit 2
+[[ "$REQUIRE_CLEAN_TREE" == 0 || "$REQUIRE_CLEAN_TREE" == 1 ]] || { echo "REQUIRE_CLEAN_TREE must be 0 or 1" >&2; exit 2; }
+if ! command -v nvcc >/dev/null || ! command -v nvidia-smi >/dev/null || ! command -v git >/dev/null; then
+  echo "nvcc, nvidia-smi, and git are required" >&2; exit 2
 fi
 visible="$(nvidia-smi --query-gpu=index --format=csv,noheader | wc -l)"
 (( visible >= NGPU )) || { echo "need $NGPU GPUs for exact phase, visible=$visible" >&2; exit 2; }
+REPO_HEAD="$(git -C "$ONEESAN_ROOT" rev-parse HEAD 2>/dev/null || true)"
+[[ -n "$REPO_HEAD" ]] || { echo "ONEESAN_ROOT is not a git checkout" >&2; exit 2; }
+if [[ "$REQUIRE_CLEAN_TREE" == 1 ]]; then
+  git -C "$ONEESAN_ROOT" diff --quiet --ignore-submodules -- || { echo "tracked worktree changes present; commit/stash or set REQUIRE_CLEAN_TREE=0" >&2; exit 2; }
+  git -C "$ONEESAN_ROOT" diff --cached --quiet --ignore-submodules -- || { echo "staged changes present; commit/stash or set REQUIRE_CLEAN_TREE=0" >&2; exit 2; }
+fi
 
 PREFIX="${PREFIX:-$ONEESAN_ROOT/work/gridfp_codec_table_decision}"
 LOGDIR="${LOGDIR:-${PREFIX}_logs}"
 SUMMARY="${SUMMARY:-${PREFIX}_summary.txt}"
-mkdir -p "$LOGDIR" "$(dirname "$SUMMARY")"
+MANIFEST="${MANIFEST:-${PREFIX}_manifest.txt}"
+mkdir -p "$LOGDIR" "$(dirname "$SUMMARY")" "$(dirname "$MANIFEST")"
 : >"$SUMMARY"
+{
+  echo "repo_head=$REPO_HEAD"
+  echo "tracked_tree_clean=$(git -C "$ONEESAN_ROOT" diff --quiet --ignore-submodules -- && git -C "$ONEESAN_ROOT" diff --cached --quiet --ignore-submodules -- && echo 1 || echo 0)"
+  echo "arch=$ARCH"
+  echo "logical_exact_ngpu=$NGPU"
+  echo "exact_blocks=$EXACT_BLOCKS"
+  echo "w28_blocks=$W28_BLOCKS"
+  echo "w28_threads=$W28_THREADS"
+  echo "w28_iters=$W28_ITERS"
+  echo "w28_owners=$W28_OWNERS"
+  echo "w28_directions=$W28_DIRECTIONS"
+  echo "repeats=$REPEATS"
+  echo "min_exact_speedup=$MIN_EXACT_SPEEDUP"
+  echo "min_w28_speedup=$MIN_W28_SPEEDUP"
+  echo '--- gpu ---'
+  nvidia-smi --query-gpu=index,name,driver_version,pci.bus_id --format=csv,noheader
+  echo '--- nvcc ---'
+  nvcc --version
+} >"$MANIFEST"
 
 # Cheap CPU-only invariants first. Fail before compiling six CUDA variants if
 # the baseline or proxy coverage drifted.
@@ -71,6 +99,9 @@ MIN_EXACT_SPEEDUP="$MIN_EXACT_SPEEDUP" MIN_W28_SPEEDUP="$MIN_W28_SPEEDUP" \
     "$EXACT_SUMMARY" "$W28_SUMMARY" >"$GATE_OUT" 2>"$GATE_ERR"
 
 {
+  echo '[manifest]'
+  cat "$MANIFEST"
+  echo
   echo '[w28_rank]'
   grep -E '(paired_speedup|winner_|checksum_exact|summary=)' "$W28_OUT" || true
   echo
@@ -83,4 +114,4 @@ MIN_EXACT_SPEEDUP="$MIN_EXACT_SPEEDUP" MIN_W28_SPEEDUP="$MIN_W28_SPEEDUP" \
 } >"$SUMMARY"
 
 cat "$SUMMARY"
-echo "gridfp-codec-table-decision-suite OK exact_summary=$EXACT_SUMMARY w28_summary=$W28_SUMMARY summary=$SUMMARY" >&2
+echo "gridfp-codec-table-decision-suite OK repo_head=$REPO_HEAD exact_summary=$EXACT_SUMMARY w28_summary=$W28_SUMMARY manifest=$MANIFEST summary=$SUMMARY" >&2
