@@ -36,7 +36,8 @@ Key oracle_key(oneesan::twocell::PackedKey k, int W) {
     return Key{k.type ? 'C' : 'A', w};
 }
 
-std::set<Key> device_set(const auto& xs, int W) {
+template <class List>
+std::set<Key> device_set(const List& xs, int W) {
     std::set<Key> out;
     for (int q = 0; q < xs.size; ++q) out.insert(oracle_key(xs.value[q], W));
     return out;
