@@ -8,10 +8,15 @@
 #ifndef P10DC_RANKFORMULA_RAWCODE
 #define P10DC_RANKFORMULA_RAWCODE 0
 #endif
+#ifndef P10DC_RANKFORMULA_BASE_DELTA
+#define P10DC_RANKFORMULA_BASE_DELTA 0
+#endif
 static_assert(P10DC_RANKFORMULA_SPARSE_BASE == 0 || P10DC_RANKFORMULA_SPARSE_BASE == 1,
               "P10DC_RANKFORMULA_SPARSE_BASE must be 0 or 1");
 static_assert(P10DC_RANKFORMULA_RAWCODE == 0 || P10DC_RANKFORMULA_RAWCODE == 1,
               "P10DC_RANKFORMULA_RAWCODE must be 0 or 1");
+static_assert(P10DC_RANKFORMULA_BASE_DELTA == 0 || P10DC_RANKFORMULA_BASE_DELTA == 1,
+              "P10DC_RANKFORMULA_BASE_DELTA must be 0 or 1");
 
 static constexpr uint32_t P10DC_RANKFORMULA_MASKS = 1u << LOW_LUT_K;
 static constexpr uint32_t P10DC_RANKFORMULA_HEIGHTS = LOW_LUT_K + 2u;
@@ -27,6 +32,8 @@ static_assert(P10DC_RANKCHUNK32_BYTEPACK == 0,
 static_assert(P10DC_RANKFORMULA_HEIGHTS <= uint32_t(MAXW + 2));
 
 __constant__ uint32_t* D_P10DC_LOW_RANKFORMULA_META32;
+// In ordinary mode entries are uint16 owner-local group bases. In base-delta
+// mode the same storage holds int16(source_base-dest_base), bit-cast to uint16.
 __constant__ uint16_t* D_P10DC_LOW_RANKFORMULA_BASE16;
 __constant__ uint16_t* D_P10DC_LOW_RANKFORMULA_MASK_SLOT16;
 __constant__ uint32_t D_P10DC_LOW_RANKFORMULA_HOFF[MAXW + 2];
@@ -37,7 +44,6 @@ __device__ __forceinline__ uint32_t p10dc_low_rankformula_meta(
     return D_P10DC_LOW_RANKFORMULA_META32[D_P10DC_LOW_RANKFORMULA_HOFF[h] + rank];
 }
 
-// Compatibility name for the original ternary-chunk metadata path.
 __device__ __forceinline__ uint32_t p10dc_low_rankformula_chunks(
     uint32_t h, uint32_t rank
 ) {
@@ -58,10 +64,6 @@ __device__ __forceinline__ uint32_t p10dc_low_rankformula_base(
 #endif
 }
 
-// HIGH closure always needs the destination mask-group base at h and the
-// corresponding L->R source base at h+2. Resolve sparse mask->slot once rather
-// than issuing two identical mask-slot loads and let both base loads share the
-// same compile-time stride.
 __device__ __forceinline__ void p10dc_low_rankformula_base_pair(
     uint32_t h, uint32_t mask, uint32_t& dest_base, uint32_t& source_base
 ) {
@@ -83,6 +85,21 @@ __device__ __forceinline__ void p10dc_low_rankformula_base_pair(
               size_t(sh) * P10DC_RANKFORMULA_MASKS + mask])
         : 0u;
 #endif
+}
+
+__device__ __forceinline__ int p10dc_low_rankformula_base_delta(
+    uint32_t h, uint32_t mask
+) {
+    if (h + 2u >= P10DC_RANKFORMULA_HEIGHTS) return 0;
+#if P10DC_RANKFORMULA_SPARSE_BASE
+    const uint32_t slot = uint32_t(D_P10DC_LOW_RANKFORMULA_MASK_SLOT16[mask]);
+    const uint16_t raw = D_P10DC_LOW_RANKFORMULA_BASE16[
+        size_t(slot) * P10DC_RANKFORMULA_HEIGHTS + h];
+#else
+    const uint16_t raw = D_P10DC_LOW_RANKFORMULA_BASE16[
+        size_t(h) * P10DC_RANKFORMULA_MASKS + mask];
+#endif
+    return int(int16_t(raw));
 }
 
 struct BucketFusedDirectHighRowsRankFormulaTables
@@ -148,6 +165,13 @@ struct BucketFusedDirectHighRowsRankFormulaTables
         std::vector<uint16_t> base(
             size_t(P10DC_RANKFORMULA_HEIGHTS) * base_cols,
             P10DC_RANKFORMULA_BASE_INVALID);
+        auto base_index = [&](uint32_t h, uint32_t col) -> size_t {
+#if P10DC_RANKFORMULA_SPARSE_BASE
+            return size_t(col) * P10DC_RANKFORMULA_HEIGHTS + h;
+#else
+            return size_t(h) * P10DC_RANKFORMULA_MASKS + col;
+#endif
+        };
         meta.reserve(low_prekey_count);
         size_t actual_codes = 0, nonempty_mask_rows = 0;
         uint32_t max_mask_base = 0;
@@ -185,13 +209,7 @@ struct BucketFusedDirectHighRowsRankFormulaTables
                     const uint32_t base_col = P10DC_RANKFORMULA_SPARSE_BASE
                         ? uint32_t(mask_slot[mask]) : mask;
                     if (base_col >= base_cols) std::exit(736);
-#if P10DC_RANKFORMULA_SPARSE_BASE
-                    base[size_t(base_col) * P10DC_RANKFORMULA_HEIGHTS + h] =
-                        uint16_t(local_base);
-#else
-                    base[size_t(h) * P10DC_RANKFORMULA_MASKS + base_col] =
-                        uint16_t(local_base);
-#endif
+                    base[base_index(h, base_col)] = uint16_t(local_base);
                     max_mask_base = std::max(max_mask_base, local_base);
                     ++nonempty_mask_rows;
                     previous_mask = mask;
@@ -226,6 +244,36 @@ struct BucketFusedDirectHighRowsRankFormulaTables
                       << " meta=" << meta.size() << '\n';
             std::exit(738);
         }
+
+        int min_base_delta = 32767, max_base_delta = -32768;
+        size_t base_delta_rows = 0;
+#if P10DC_RANKFORMULA_BASE_DELTA
+        for (uint32_t col = 0; col < uint32_t(base_cols); ++col) {
+            for (uint32_t h = 0; h < P10DC_RANKFORMULA_HEIGHTS; ++h) {
+                const size_t ix = base_index(h, col);
+                uint16_t packed_delta = 0u;
+                if (h + 2u < P10DC_RANKFORMULA_HEIGHTS) {
+                    const uint16_t a = base[ix];
+                    const uint16_t b = base[base_index(h + 2u, col)];
+                    if (a != P10DC_RANKFORMULA_BASE_INVALID &&
+                        b != P10DC_RANKFORMULA_BASE_INVALID) {
+                        const int delta = int(b) - int(a);
+                        if (delta < -32768 || delta > 32767) {
+                            std::cerr << "p10dc rankformula base-delta overflow owner=" << fixed
+                                      << " h=" << h << " col=" << col
+                                      << " delta=" << delta << '\n';
+                            std::exit(739);
+                        }
+                        min_base_delta = std::min(min_base_delta, delta);
+                        max_base_delta = std::max(max_base_delta, delta);
+                        ++base_delta_rows;
+                        packed_delta = uint16_t(int16_t(delta));
+                    }
+                }
+                base[ix] = packed_delta;
+            }
+        }
+#endif
 
         low_rankformula_meta32_count = meta.size();
         low_rankformula_base16_count = base.size();
@@ -309,7 +357,11 @@ struct BucketFusedDirectHighRowsRankFormulaTables
                   << " rankstream_bytes=0"
                   << " sparse_base=" << P10DC_RANKFORMULA_SPARSE_BASE
                   << " base_layout=" << (P10DC_RANKFORMULA_SPARSE_BASE ? "slot-major" : "height-major")
-                  << " base_pair_slot_loads=" << (P10DC_RANKFORMULA_SPARSE_BASE ? 1 : 0)
+                  << " base_delta=" << P10DC_RANKFORMULA_BASE_DELTA
+                  << " base_delta_rows=" << base_delta_rows
+                  << " min_base_delta=" << (base_delta_rows ? min_base_delta : 0)
+                  << " max_base_delta=" << (base_delta_rows ? max_base_delta : 0)
+                  << " base_values_per_lookup=" << (P10DC_RANKFORMULA_BASE_DELTA ? 1 : 2)
                   << " meta_mode=" << (P10DC_RANKFORMULA_RAWCODE ? "raw2bit" : "ternary23")
                   << " meta_bits=" << (P10DC_RANKFORMULA_RAWCODE ? P10DC_RANKFORMULA_RAWCODE_BITS : 23u)
                   << " bytes_per_code_meta=4 old_prekey_freed=1\n";
