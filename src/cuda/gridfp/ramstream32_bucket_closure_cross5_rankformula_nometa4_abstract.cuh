@@ -18,6 +18,7 @@ static_assert(P10DC_RANKFORMULA_ABSTRACT_SRCPACK10 == 0 ||
 static_assert(!P10DC_RANKFORMULA_ABSTRACT_SRCPACK10 ||
               P10DC_RANKFORMULA_ABSTRACT_SELECT8,
               "abstract source pack10 requires select8");
+static_assert(sizeof(unsigned long long) == sizeof(uint64_t));
 
 static constexpr uint32_t P10DC_RANKFORMULA_ABSTRACT_MAX_K = 14u;
 static constexpr uint32_t P10DC_RANKFORMULA_ABSTRACT_DESC_N = 7060u;
@@ -32,7 +33,7 @@ static_assert(LOW_LUT_K <= int(P10DC_RANKFORMULA_ABSTRACT_MAX_K));
 
 #if P10DC_RANKFORMULA_ABSTRACT_SELECT8
 #if P10DC_RANKFORMULA_ABSTRACT_SRCPACK10
-__device__ __align__(128) uint64_t
+__device__ __align__(128) unsigned long long
     D_P10DC_RANKFORMULA_ABSTRACT_SRC6[P10DC_RANKFORMULA_ABSTRACT_DESC_N];
 __device__ __align__(128) uint16_t
     D_P10DC_RANKFORMULA_ABSTRACT_SRC7[P10DC_RANKFORMULA_ABSTRACT_SRC7_N];
@@ -233,7 +234,7 @@ static void p10dc_install_rankformula_abstract_lut() {
 
 #if P10DC_RANKFORMULA_ABSTRACT_SELECT8
 #if P10DC_RANKFORMULA_ABSTRACT_SRCPACK10
-__device__ __forceinline__ uint64_t p10dc_rankformula_abstract_src6_load(uint32_t ix) {
+__device__ __forceinline__ unsigned long long p10dc_rankformula_abstract_src6_load(uint32_t ix) {
     return __ldg(D_P10DC_RANKFORMULA_ABSTRACT_SRC6 + ix);
 }
 __device__ __forceinline__ uint32_t p10dc_rankformula_abstract_src7_load(uint32_t ix) {
@@ -278,7 +279,7 @@ p10dc_resolved_low_preimages_cross5_rankformula_nometa4_abstract_fixed(
     const uint32_t source_base = uint32_t(int(z.start) + z.base_delta);
     BkczCrossAccum sum = 0;
 #if P10DC_RANKFORMULA_ABSTRACT_SRCPACK10
-    const uint64_t src6 = p10dc_rankformula_abstract_src6_load(di);
+    const unsigned long long src6 = p10dc_rankformula_abstract_src6_load(di);
     while (select) {
         const uint32_t li = uint32_t(__ffs(int(select)) - 1);
         select &= select - 1u;
