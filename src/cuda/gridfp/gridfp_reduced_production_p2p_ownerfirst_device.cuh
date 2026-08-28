@@ -9,6 +9,22 @@ static constexpr int RP_P2P_WORK_DESC_BASE_BITS = 26;
 static constexpr std::uint32_t RP_P2P_WORK_DESC_BASE_MASK =
     (std::uint32_t(1) << RP_P2P_WORK_DESC_BASE_BITS) - 1u;
 
+__device__ __forceinline__ std::uint32_t p2p_tie_hash_device(
+    std::uint32_t support,
+    bool blocked,
+    bool reverse
+) {
+    std::uint32_t x = support;
+    x ^= blocked ? 0x85ebca6bu : 0u;
+    x ^= reverse ? 0xc2b2ae35u : 0u;
+    x ^= x >> 16;
+    x *= 0x7feb352du;
+    x ^= x >> 15;
+    x *= 0x846ca68bu;
+    x ^= x >> 16;
+    return x;
+}
+
 // Owner selection needs only the physical support.  Avoid materializing a
 // MateID and avoid primitive/local rank work until the current GPU is selected
 // to execute the cycle.
@@ -30,6 +46,33 @@ __device__ __forceinline__ int p2p_support_owner_device(
 }
 
 template<int MAX_GPU>
+__device__ __forceinline__ int p2p_pick_modal_owner_device(
+    const int (&count)[MAX_GPU],
+    int ngpu,
+    std::uint32_t canonical_support,
+    bool blocked,
+    bool reverse,
+    bool hash_ties
+) {
+    int max_count = count[0];
+    for (int g = 1; g < ngpu; ++g)
+        if (count[g] > max_count) max_count = count[g];
+    if (!hash_ties) {
+        for (int g = 0; g < ngpu; ++g)
+            if (count[g] == max_count) return g;
+        return -1;
+    }
+    int ties[MAX_GPU]{};
+    int nties = 0;
+    for (int g = 0; g < ngpu; ++g)
+        if (count[g] == max_count) ties[nties++] = g;
+    if (!nties) return -1;
+    const std::uint32_t h = p2p_tie_hash_device(
+        canonical_support, blocked, reverse);
+    return ties[h % std::uint32_t(nties)];
+}
+
+template<int MAX_GPU>
 __device__ __forceinline__ int p2p_modal_owner_only_device(
     std::uint32_t first_support,
     bool blocked,
@@ -40,7 +83,8 @@ __device__ __forceinline__ int p2p_modal_owner_only_device(
     int S,
     bool reverse,
     int old_start,
-    int ngpu
+    int ngpu,
+    bool hash_ties = false
 ) {
     if (ngpu > MAX_GPU) return -1;
     int count[MAX_GPU]{};
@@ -53,10 +97,8 @@ __device__ __forceinline__ int p2p_modal_owner_only_device(
         cur = shift_next_support_device(
             cur, blocked, W, q, Kwin, S, reverse);
     }
-    int best = 0;
-    for (int g = 1; g < ngpu; ++g)
-        if (count[g] > count[best]) best = g;
-    return best;
+    return p2p_pick_modal_owner_device(
+        count, ngpu, first_support, blocked, reverse, hash_ties);
 }
 
 template<int MAX_GPU, int MAX_RUNS>
@@ -72,7 +114,8 @@ __device__ __forceinline__ int p2p_modal_owner_from_support_cycle_device(
     int old_start,
     int ngpu,
     std::uint32_t (&supports)[MAX_RUNS],
-    int (&owners)[MAX_RUNS]
+    int (&owners)[MAX_RUNS],
+    bool hash_ties = false
 ) {
     if (ngpu > MAX_GPU || cycle_len > MAX_RUNS) return -1;
     int count[MAX_GPU]{};
@@ -87,10 +130,8 @@ __device__ __forceinline__ int p2p_modal_owner_from_support_cycle_device(
         cur = shift_next_support_device(
             cur, blocked, W, q, Kwin, S, reverse);
     }
-    int best = 0;
-    for (int g = 1; g < ngpu; ++g)
-        if (count[g] > count[best]) best = g;
-    return best;
+    return p2p_pick_modal_owner_device(
+        count, ngpu, first_support, blocked, reverse, hash_ties);
 }
 
 __device__ __forceinline__ std::uint32_t p2p_pack_work_descriptor_device(
