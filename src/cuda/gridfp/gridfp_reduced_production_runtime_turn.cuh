@@ -8,12 +8,18 @@
 #ifndef RP_RUNTIME_TURN_LOCAL_SECTOR_W28_TREE
 #define RP_RUNTIME_TURN_LOCAL_SECTOR_W28_TREE 0
 #endif
+#ifndef RP_RUNTIME_TURN_DISCOVERY_NONN_SCAN
+#define RP_RUNTIME_TURN_DISCOVERY_NONN_SCAN 0
+#endif
 static_assert(RP_RUNTIME_TURN_LOCAL_SECTOR_TABLE == 0 ||
               RP_RUNTIME_TURN_LOCAL_SECTOR_TABLE == 1,
               "RP_RUNTIME_TURN_LOCAL_SECTOR_TABLE must be 0 or 1");
 static_assert(RP_RUNTIME_TURN_LOCAL_SECTOR_W28_TREE == 0 ||
               RP_RUNTIME_TURN_LOCAL_SECTOR_W28_TREE == 1,
               "RP_RUNTIME_TURN_LOCAL_SECTOR_W28_TREE must be 0 or 1");
+static_assert(RP_RUNTIME_TURN_DISCOVERY_NONN_SCAN == 0 ||
+              RP_RUNTIME_TURN_DISCOVERY_NONN_SCAN == 1,
+              "RP_RUNTIME_TURN_DISCOVERY_NONN_SCAN must be 0 or 1");
 
 namespace oneesan::gridfp::reducedprod {
 
@@ -311,6 +317,23 @@ __device__ __forceinline__ bool runtime_turn_discover_compress_low(
         if (!runtime_turn_try_compress_main(msetpair(d, 1, RL), d, W, sink))
             return false;
         int bal = 0;
+#if RP_RUNTIME_TURN_DISCOVERY_NONN_SCAN
+        std::uint32_t mask = mate_non_n_mask(d, W) & ~std::uint32_t(3u);
+        while (mask) {
+            const int q = mate_lsb_index32(mask);
+            const MateValue v = mget(d, q);
+            if (bal == 0 && v == R) {
+                MateID x = msetpair(d, 1, RR);
+                x = mset(x, q, L);
+                if (!runtime_turn_try_compress_main(x, d, W, sink))
+                    return false;
+            }
+            if (v == R) ++bal;
+            else if (v == L) --bal;
+            if (bal < 0) break;
+            mask &= mask - 1u;
+        }
+#else
         for (int q = 2; q < W; ++q) {
             const MateValue v = mget(d, q);
             if (bal == 0 && v == R) {
@@ -323,6 +346,7 @@ __device__ __forceinline__ bool runtime_turn_discover_compress_low(
             else if (v == L) --bal;
             if (bal < 0) break;
         }
+#endif
     }
 
     if (mget(d, 1) == N && is_endpoint(mget(d, 0))) {
