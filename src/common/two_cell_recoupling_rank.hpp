@@ -248,6 +248,46 @@ ONEESAN_TC_HD Rank block_base(
     return base;
 }
 
+ONEESAN_TC_HD Rank rank_A_with_block_primitive(
+    std::uint32_t support,
+    int window,
+    int outer_ones,
+    Rank base,
+    Rank primitive,
+    const RankTables& t
+) {
+    const int code = int((support >> window) & 0x0fu);
+    return base + t.a_prefix[outer_ones][code] + primitive;
+}
+
+ONEESAN_TC_HD Rank rank_C_with_block_primitive(
+    std::uint32_t support,
+    int window,
+    int outer_ones,
+    Rank base,
+    Rank primitive,
+    const RankTables& t
+) {
+    const int code = int(((support >> window) & 1u) |
+                         (((support >> (window + 2)) & 1u) << 1));
+    return base + t.a_block[outer_ones] + t.c_prefix[outer_ones][code] + primitive;
+}
+
+ONEESAN_TC_HD Rank rank_with_block_primitive(
+    PackedKey key,
+    int window,
+    int outer_ones,
+    Rank base,
+    Rank primitive,
+    const RankTables& t
+) {
+    return key.type == 0
+        ? rank_A_with_block_primitive(
+              key.support, window, outer_ones, base, primitive, t)
+        : rank_C_with_block_primitive(
+              key.support, window, outer_ones, base, primitive, t);
+}
+
 ONEESAN_TC_HD Rank rank_A_with_block(
     std::uint32_t support,
     std::uint32_t left,
@@ -257,9 +297,9 @@ ONEESAN_TC_HD Rank rank_A_with_block(
     Rank base,
     const RankTables& t
 ) {
-    const int code = int((support >> window) & 0x0fu);
-    return base + t.a_prefix[outer_ones][code] +
-           primitive_rank(support, left, W - 1, t);
+    return rank_A_with_block_primitive(
+        support, window, outer_ones, base,
+        primitive_rank(support, left, W - 1, t), t);
 }
 
 ONEESAN_TC_HD Rank rank_C_with_block(
@@ -271,10 +311,9 @@ ONEESAN_TC_HD Rank rank_C_with_block(
     Rank base,
     const RankTables& t
 ) {
-    const int code = int(((support >> window) & 1u) |
-                         (((support >> (window + 2)) & 1u) << 1));
-    return base + t.a_block[outer_ones] + t.c_prefix[outer_ones][code] +
-           primitive_rank(support, left, W - 2, t);
+    return rank_C_with_block_primitive(
+        support, window, outer_ones, base,
+        primitive_rank(support, left, W - 2, t), t);
 }
 
 ONEESAN_TC_HD Rank rank_state(
@@ -291,6 +330,23 @@ ONEESAN_TC_HD Rank rank_state(
     return key.type == 0
         ? rank_A_with_block(key.support, key.left, W, window, k, base, t)
         : rank_C_with_block(key.support, key.left, W, window, k, base, t);
+}
+
+// Coordinate bijection between the source component in Q_i and the same
+// bipartite component on the Q_{i+1} side. Every A coordinate is unchanged.
+// A retained C(...xN...) coordinate, x in {L,R}, is the only possible mismatch
+// between the two reduced layouts and becomes C(...Nx...). Moving a vacancy
+// past one occupied symbol preserves the compact primitive L/R sequence, so the
+// primitive rank is reusable without recomputation on the destination side.
+ONEESAN_TC_HD PackedKey recouple_coordinate(PackedKey key, int i) {
+    if (key.type == 0) return key;
+    const std::uint32_t a = std::uint32_t(1) << i;
+    const std::uint32_t b = std::uint32_t(1) << (i + 1);
+    if ((key.support & a) && !(key.support & b)) {
+        key.support ^= a | b;
+        if (key.left & a) key.left ^= a | b;
+    }
+    return key;
 }
 
 // For a K_i component labelled by u in M_{W-2}, every source shares the
