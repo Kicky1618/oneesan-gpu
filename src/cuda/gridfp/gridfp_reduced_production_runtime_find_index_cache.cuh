@@ -5,8 +5,14 @@
 #ifndef RP_RUNTIME_FIND_INDEX_CACHE
 #define RP_RUNTIME_FIND_INDEX_CACHE 0
 #endif
+// Storage bytes per source/destination set.  For WAYS=1 this is also the hash
+// bucket count.  Keeping this as the storage-size macro preserves the existing
+// subwarp shared-memory accounting when associativity changes.
 #ifndef RP_RUNTIME_FIND_INDEX_BUCKETS
 #define RP_RUNTIME_FIND_INDEX_BUCKETS 64
+#endif
+#ifndef RP_RUNTIME_FIND_INDEX_WAYS
+#define RP_RUNTIME_FIND_INDEX_WAYS 1
 #endif
 static_assert(RP_RUNTIME_FIND_INDEX_CACHE == 0 || RP_RUNTIME_FIND_INDEX_CACHE == 1,
               "RP_RUNTIME_FIND_INDEX_CACHE must be 0 or 1");
@@ -14,17 +20,29 @@ static_assert(RP_RUNTIME_FIND_INDEX_BUCKETS == 16 ||
               RP_RUNTIME_FIND_INDEX_BUCKETS == 32 ||
               RP_RUNTIME_FIND_INDEX_BUCKETS == 64,
               "RP_RUNTIME_FIND_INDEX_BUCKETS must be 16, 32, or 64");
+static_assert(RP_RUNTIME_FIND_INDEX_WAYS == 1 ||
+              RP_RUNTIME_FIND_INDEX_WAYS == 2 ||
+              RP_RUNTIME_FIND_INDEX_WAYS == 4,
+              "RP_RUNTIME_FIND_INDEX_WAYS must be 1, 2, or 4");
+static_assert(RP_RUNTIME_FIND_INDEX_BUCKETS % RP_RUNTIME_FIND_INDEX_WAYS == 0,
+              "index-cache storage must divide evenly across ways");
+static constexpr int RP_RUNTIME_FIND_INDEX_HASH_BUCKETS =
+    RP_RUNTIME_FIND_INDEX_BUCKETS / RP_RUNTIME_FIND_INDEX_WAYS;
+static_assert(RP_RUNTIME_FIND_INDEX_HASH_BUCKETS == 16 ||
+              RP_RUNTIME_FIND_INDEX_HASH_BUCKETS == 32 ||
+              RP_RUNTIME_FIND_INDEX_HASH_BUCKETS == 64,
+              "index-cache hash buckets must be 16, 32, or 64");
 
 namespace oneesan::gridfp::reducedprod {
 
-// One byte per hash bucket stores latest_index+1 in bits 0..6 and a persistent
-// collision flag for the current component in bit 7.  The bytes do not need to
-// be cleared between components: a lane-0 register occupancy mask identifies
-// buckets written by the current component, so stale shared bytes are ignored.
-// Packing collision state into the existing byte avoids the extra source/dest
-// collision registers that a separate 64-bit mask would require.
+// Each bucket keeps WAYS most-recent indices, one byte each. Bits 0..6 store
+// index+1 and bit 7 of way 0 records overflow beyond the retained ways. The
+// occupancy word makes stale shared bytes harmless across components. First
+// insertion into a bucket clears only that bucket's extra ways; no full-table
+// clear is needed between components.
 struct RuntimeFindIndexCache {
-    std::uint8_t latest_plus_one[RP_RUNTIME_FIND_INDEX_BUCKETS];
+    std::uint8_t slot[RP_RUNTIME_FIND_INDEX_HASH_BUCKETS]
+                     [RP_RUNTIME_FIND_INDEX_WAYS];
 };
 static_assert(sizeof(RuntimeFindIndexCache) == RP_RUNTIME_FIND_INDEX_BUCKETS,
               "runtime find index cache footprint regression");
@@ -34,7 +52,7 @@ static constexpr int RP_RUNTIME_FIND_INDEX_CACHE_BYTES_PER_SUBGROUP =
     2 * RP_RUNTIME_FIND_INDEX_CACHE_BYTES_PER_SET;
 static_assert(RP_RUNTIME_FIND_INDEX_CACHE_BYTES_PER_SUBGROUP ==
               2 * RP_RUNTIME_FIND_INDEX_BUCKETS);
-static constexpr std::uint8_t RP_RUNTIME_FIND_INDEX_COLLIDED = 0x80u;
+static constexpr std::uint8_t RP_RUNTIME_FIND_INDEX_OVERFLOW = 0x80u;
 static constexpr std::uint8_t RP_RUNTIME_FIND_INDEX_VALUE_MASK = 0x7fu;
 
 __device__ __forceinline__ int runtime_find_index_bucket(DeviceKey k) {
@@ -42,7 +60,7 @@ __device__ __forceinline__ int runtime_find_index_bucket(DeviceKey k) {
         (k.blocked ? RP_RUNTIME_SHARED_BLOCKED_BIT : 0ULL);
     x ^= x >> 7;
     x ^= x >> 14;
-    return int(x & std::uint64_t(RP_RUNTIME_FIND_INDEX_BUCKETS - 1));
+    return int(x & std::uint64_t(RP_RUNTIME_FIND_INDEX_HASH_BUCKETS - 1));
 }
 
 __device__ __forceinline__ bool runtime_shared_key_matches(
@@ -53,6 +71,20 @@ __device__ __forceinline__ bool runtime_shared_key_matches(
 #else
     return key_equal(stored, k);
 #endif
+}
+
+__device__ __forceinline__ bool runtime_find_index_is_cached(
+    const RuntimeFindIndexCache& cache,
+    int bucket,
+    int index
+) {
+#pragma unroll
+    for (int way = 0; way < RP_RUNTIME_FIND_INDEX_WAYS; ++way) {
+        const int v = int(cache.slot[bucket][way] & RP_RUNTIME_FIND_INDEX_VALUE_MASK);
+        if (!v) break;
+        if (v - 1 == index) return true;
+    }
+    return false;
 }
 
 __device__ __forceinline__ int runtime_find_shared_key_indexed(
@@ -66,29 +98,34 @@ __device__ __forceinline__ int runtime_find_shared_key_indexed(
     const std::uint64_t bit = 1ULL << bucket;
     if ((occupancy & bit) == 0) return -1;
 
-    const std::uint8_t packed = cache.latest_plus_one[bucket];
-    const int candidate = int(packed & RP_RUNTIME_FIND_INDEX_VALUE_MASK) - 1;
-    if (candidate >= 0 && candidate < n) {
+    const bool overflow =
+        (cache.slot[bucket][0] & RP_RUNTIME_FIND_INDEX_OVERFLOW) != 0;
+#pragma unroll
+    for (int way = 0; way < RP_RUNTIME_FIND_INDEX_WAYS; ++way) {
+        const int v = int(cache.slot[bucket][way] & RP_RUNTIME_FIND_INDEX_VALUE_MASK);
+        if (!v) break;
+        const int candidate = v - 1;
+        if (candidate < 0 || candidate >= n)
+            return runtime_find_shared_key(a, n, k);
         if (runtime_shared_key_matches(a[candidate], k)) return candidate;
-        // If this bucket has contained exactly one key in the current component,
-        // candidate mismatch proves absence. Only genuinely collided buckets can
-        // contain an older matching key and require exact fallback.
-        if ((packed & RP_RUNTIME_FIND_INDEX_COLLIDED) == 0) return -1;
-#if RP_RUNTIME_FIND_RECENT_FIRST
-        for (int i = n - 1; i >= 0; --i) {
-            if (i == candidate) continue;
-            if (runtime_shared_key_matches(a[i], k)) return i;
-        }
-        return -1;
-#else
-        for (int i = 0; i < n; ++i) {
-            if (i == candidate) continue;
-            if (runtime_shared_key_matches(a[i], k)) return i;
-        }
-        return -1;
-#endif
     }
-    return runtime_find_shared_key(a, n, k);
+
+    // Every member of a non-overflowed bucket was compared above, so mismatch
+    // proves absence. Only buckets that have received more than WAYS distinct
+    // keys need an exact linear fallback for an older member.
+    if (!overflow) return -1;
+#if RP_RUNTIME_FIND_RECENT_FIRST
+    for (int i = n - 1; i >= 0; --i) {
+        if (runtime_find_index_is_cached(cache, bucket, i)) continue;
+        if (runtime_shared_key_matches(a[i], k)) return i;
+    }
+#else
+    for (int i = 0; i < n; ++i) {
+        if (runtime_find_index_is_cached(cache, bucket, i)) continue;
+        if (runtime_shared_key_matches(a[i], k)) return i;
+    }
+#endif
+    return -1;
 }
 
 __device__ __forceinline__ void runtime_find_index_record(
@@ -99,15 +136,28 @@ __device__ __forceinline__ void runtime_find_index_record(
 ) {
     const int bucket = runtime_find_index_bucket(k);
     const std::uint64_t bit = 1ULL << bucket;
-    const bool collided = (occupancy & bit) != 0;
-    const std::uint8_t old = cache.latest_plus_one[bucket];
-    const std::uint8_t flags = collided
-        ? std::uint8_t((old & RP_RUNTIME_FIND_INDEX_COLLIDED) |
-                       RP_RUNTIME_FIND_INDEX_COLLIDED)
-        : 0u;
-    cache.latest_plus_one[bucket] =
-        std::uint8_t(flags | std::uint8_t(index + 1));
-    occupancy |= bit;
+    if ((occupancy & bit) == 0) {
+        cache.slot[bucket][0] = std::uint8_t(index + 1);
+#pragma unroll
+        for (int way = 1; way < RP_RUNTIME_FIND_INDEX_WAYS; ++way)
+            cache.slot[bucket][way] = 0;
+        occupancy |= bit;
+        return;
+    }
+
+    bool overflow =
+        (cache.slot[bucket][0] & RP_RUNTIME_FIND_INDEX_OVERFLOW) != 0;
+    overflow |=
+        (cache.slot[bucket][RP_RUNTIME_FIND_INDEX_WAYS - 1] &
+         RP_RUNTIME_FIND_INDEX_VALUE_MASK) != 0;
+#pragma unroll
+    for (int way = RP_RUNTIME_FIND_INDEX_WAYS - 1; way > 0; --way) {
+        cache.slot[bucket][way] =
+            cache.slot[bucket][way - 1] & RP_RUNTIME_FIND_INDEX_VALUE_MASK;
+    }
+    cache.slot[bucket][0] = std::uint8_t(
+        std::uint8_t(index + 1) |
+        (overflow ? RP_RUNTIME_FIND_INDEX_OVERFLOW : 0u));
 }
 
 struct RuntimeIndexedSharedKeySetSink {
