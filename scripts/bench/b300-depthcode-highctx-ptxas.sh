@@ -45,6 +45,8 @@ printf 'backend\tkernel\tregisters\tstack_bytes\tspill_store_bytes\tspill_load_b
   build_one warpstriped_delta ldg
   build_one warpstriped_delta_cross5
   build_one warpstriped_delta_cross5 ldg
+  build_one warpstriped_delta_direct_cross5
+  build_one warpstriped_delta_direct_cross5 ldg
 } >>"$OUT"
 
 cat "$OUT"
@@ -58,7 +60,8 @@ for backend in (
     'depthcode_payload_warp','depthcode_payload_warp_ldg',
     'depthcode_payload_warpstriped','depthcode_payload_warpstriped_ldg',
     'depthcode_payload_warpstriped_delta','depthcode_payload_warpstriped_delta_ldg',
-    'depthcode_payload_warpstriped_delta_cross5','depthcode_payload_warpstriped_delta_cross5_ldg'):
+    'depthcode_payload_warpstriped_delta_cross5','depthcode_payload_warpstriped_delta_cross5_ldg',
+    'depthcode_payload_warpstriped_delta_direct_cross5','depthcode_payload_warpstriped_delta_direct_cross5_ldg'):
     all_rows=[r for r in rows if r['backend']==backend]
     high=[r for r in all_rows if 'high' in r['kernel'].lower()]
     if not high:
@@ -75,9 +78,10 @@ for backend in (
     print(f'{backend}_max_cmem0_bytes={max(cmem) if cmem else "NA"}')
     if cmem and max(cmem) >= 60*1024:
         print(f'{backend}_cmem0_headroom_warning=1')
-print('warp_dynamic_smem_note=warp, warpstriped, warpstriped_delta and warpstriped_delta_cross5 allocate one P10DCHighResolvedCtx per runtime warp; ptxas smem above is static only')
+print('warp_dynamic_smem_note=warp-striped variants allocate one P10DCHighResolvedCtx per runtime warp; ptxas smem above is static only')
 print('cross5_constant_table_bytes=6561')
 print('cross5_old_constant_table_bytes=15552')
+print('direct_resolve_intermediate_local_descriptors=0')
 PY
 
-echo "depthcode-highctx-ptxas OK n=$N arch=$ARCH transpose=$TRANSPOSE_MODE result=$OUT logs=$LOGDIR ternary_delta=1 cross5=1 cross5_table_bytes=6561" >&2
+echo "depthcode-highctx-ptxas OK n=$N arch=$ARCH transpose=$TRANSPOSE_MODE result=$OUT logs=$LOGDIR ternary_delta=1 cross5=1 cross5_table_bytes=6561 direct_resolve=1" >&2
