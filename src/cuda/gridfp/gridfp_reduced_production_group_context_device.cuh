@@ -17,7 +17,7 @@ namespace oneesan::gridfp::reducedprod {
 #define RP_RUNTIME_SUPPORT_RANK_SETBITS 1
 #endif
 #ifndef RP_RUNTIME_SECTOR_OFFSET_TABLE
-#define RP_RUNTIME_SECTOR_OFFSET_TABLE 0
+#define RP_RUNTIME_SECTOR_OFFSET_TABLE 1
 #endif
 static_assert(RP_RUNTIME_PRIMITIVE_RANK_SETBITS == 0 || RP_RUNTIME_PRIMITIVE_RANK_SETBITS == 1,
               "RP_RUNTIME_PRIMITIVE_RANK_SETBITS must be 0 or 1");
@@ -30,12 +30,12 @@ static_assert(RP_RUNTIME_SUPPORT_RANK_SETBITS == 0 || RP_RUNTIME_SUPPORT_RANK_SE
 static_assert(RP_RUNTIME_SECTOR_OFFSET_TABLE == 0 || RP_RUNTIME_SECTOR_OFFSET_TABLE == 1,
               "RP_RUNTIME_SECTOR_OFFSET_TABLE must be 0 or 1");
 
-static constexpr int RP_RUNTIME_SECTOR_OUTER_SLOTS = 14;
-static constexpr int RP_RUNTIME_SECTOR_LOCAL_SLOTS = 16;
+static constexpr int RP_RUNTIME_SECTOR_TABLE_ENTRIES = 1199;
 __device__ __constant__ std::uint32_t
-RP_RUNTIME_LOCAL_SECTOR_OFFSET[RP_RUNTIME_SECTOR_OUTER_SLOTS]
-                              [RP_RUNTIME_SECTOR_LOCAL_SLOTS];
-static_assert(sizeof(RP_RUNTIME_LOCAL_SECTOR_OFFSET) == 896);
+RP_RUNTIME_LOCAL_SECTOR_OFFSET[RP_RUNTIME_SECTOR_TABLE_ENTRIES] = {
+#include "gridfp_reduced_production_runtime_sector_offset_values.inc"
+};
+static_assert(sizeof(RP_RUNTIME_LOCAL_SECTOR_OFFSET) == 4796);
 
 struct GroupedComponentContextDevice {
     int owner = -1;
@@ -122,14 +122,34 @@ __device__ __forceinline__ Rank64 runtime_primitive_rank_support_device(
 #endif
 }
 
+__device__ __forceinline__ int runtime_sector_offset_row_base_device(int W) {
+    switch (W) {
+    case 8: return 0;
+    case 10: return 24;
+    case 12: return 59;
+    case 14: return 107;
+    case 16: return 170;
+    case 18: return 250;
+    case 20: return 349;
+    case 22: return 469;
+    case 24: return 612;
+    case 26: return 780;
+    case 28: return 975;
+    default: return -1;
+    }
+}
+
 __device__ __forceinline__ Rank64 runtime_group_local_sector_offset_device(
-    int L, int outer_ones, int local_ones
+    int W, int L, int outer_ones, int local_ones
 ) {
 #if RP_RUNTIME_SECTOR_OFFSET_TABLE
-    return RP_RUNTIME_LOCAL_SECTOR_OFFSET[outer_ones][local_ones];
-#else
-    return group_local_sector_offset_device(L, outer_ones, local_ones);
+    const int base = runtime_sector_offset_row_base_device(W);
+    if (base >= 0 && L == W / 2 + 1) {
+        const int index = base + outer_ones * (L + 1) + local_ones;
+        return RP_RUNTIME_LOCAL_SECTOR_OFFSET[index];
+    }
 #endif
+    return group_local_sector_offset_device(L, outer_ones, local_ones);
 }
 
 __device__ __forceinline__ int runtime_owner_from_group_base_device(
@@ -189,7 +209,7 @@ __device__ __forceinline__ GroupedDeviceRank grouped_rank_in_component_device(
 
     const Rank64 pr = runtime_primitive_rank_support_device(full_mate, W, occupied, full);
     Rank64 within = runtime_group_local_sector_offset_device(
-        ctx.L, ctx.outer_ones, local_ones);
+        W, ctx.L, ctx.outer_ones, local_ones);
 
     if (!k.blocked) {
         const Rank64 sr = runtime_compact_support_rank_device(local_mask, ctx.L, local_ones);
