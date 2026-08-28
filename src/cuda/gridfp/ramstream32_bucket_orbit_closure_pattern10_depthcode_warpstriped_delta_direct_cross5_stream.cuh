@@ -27,7 +27,7 @@ static void bucket_enqueue_high_orbit_closure_pattern10_depthcode_warpstriped_de
 ) {
     p10dc_warpstriped_delta_direct_cross5_require_threads(threads);
     dim3 block(threads), grid(gx, gy, unsigned(layout.main_blocks.size()));
-    const size_t smem = p10dc_warpctx_smem_bytes(threads);
+    const size_t smem = p10dc_direct_warpctx_smem_bytes(threads);
     for (int p = TARGET_W - 1; p >= LOW_LUT_K + 1; --p) {
         bucket_high_orbit_closure_pattern10_depthcode_warpstriped_delta_direct_cross5_kernel<<<grid, block, smem, stream>>>(p);
         ck(cudaGetLastError(), "bucket high pattern10 depthcode warpstriped-delta-direct-cross5 stream");
@@ -51,7 +51,7 @@ static void bucket_enqueue_reverse_high_pattern10_depthcode_warpstriped_delta_di
 ) {
     p10dc_warpstriped_delta_direct_cross5_require_threads(threads);
     dim3 block(threads), grid(gx, gy, unsigned(layout.main_blocks.size()));
-    const size_t smem = p10dc_warpctx_smem_bytes(threads);
+    const size_t smem = p10dc_direct_warpctx_smem_bytes(threads);
     for (int p = LOW_LUT_K + 1; p < TARGET_W; ++p) {
         bucket_reverse_high_pattern10_depthcode_warpstriped_delta_direct_cross5_kernel<<<grid, block, smem, stream>>>(p);
         ck(cudaGetLastError(), "bucket reverse high pattern10 depthcode warpstriped-delta-direct-cross5 stream");
