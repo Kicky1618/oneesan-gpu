@@ -41,7 +41,7 @@ static void p10dc_verify_rankchunk32_tables(
         got_blocks.size()*sizeof(uint32_t), cudaMemcpyDeviceToHost), "p10dc rankchunk32 blocks verify D2H");
     std::array<uint32_t, MAXW + 2> got_hoff{};
     ck(cudaMemcpyFromSymbol(got_hoff.data(), D_P10DC_LOW_RANKCHUNK_HOFF,
-        got_hoff.size()*sizeof(uint32_t)), "p10dc rankchunk32 aligned height offsets verify");
+        got_hoff.size()*sizeof(uint32_t)), "p10dc rankchunk32 height offsets verify");
 
     size_t compact = 0, stream_ix = 0, actual_codes = 0, padding = 0;
     uint32_t current_block_base = 0;
@@ -101,7 +101,7 @@ static void p10dc_verify_rankchunk32_tables(
     if (actual_codes != code_count || compact != meta_count ||
         padding != dt.low_rankchunk_padding_count ||
         stream_ix != dt.low_rankstream_count) {
-        std::cerr << "p10dc rankchunk32 padded walk mismatch owner=" << fixed
+        std::cerr << "p10dc rankchunk32 walk mismatch owner=" << fixed
                   << " actual=" << actual_codes << '/' << code_count
                   << " meta=" << compact << '/' << meta_count
                   << " padding=" << padding << '/' << dt.low_rankchunk_padding_count
@@ -197,8 +197,11 @@ int main() {
     std::cout << "bucket-closure-pattern10-depthcode-rankchunk32-cross5-selftest OK W=" << W
               << " control=resolved experiment=warpstriped_delta_direct_affine_rankchunk32_cross5"
               << " forward_exact=1 reverse_exact=1 rankchunk32_table_exact=1 padding_exact=1"
-              << " chunk_bits=24 prefix_bits=8 block=16 height_align=32"
-              << " block_base_loads_per_warp_max=2"
+              << " chunk_bits=" << P10DC_RANKCHUNK32_CHUNK_BITS
+              << " prefix_bits=" << P10DC_RANKCHUNK32_PREFIX_BITS
+              << " block=" << P10DC_RANKCHUNK32_BLOCK
+              << " height_align=" << P10DC_RANKCHUNK32_HEIGHT_ALIGN
+              << " third_chunk_bits=7 block_base_loads_per_warp_max=2"
               << " cross_runtime_div=0 cross_runtime_mod=0 cross_runtime_direct_lookup=0"
               << " old_prekey_offset_arrays_freed=1 fallback_structurally_unreachable=1\n";
     return 0;
