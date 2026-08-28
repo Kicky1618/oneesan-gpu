@@ -11,7 +11,7 @@ __device__ __forceinline__ uint32_t p10dc_cross5_apply_rankchunk32(
     const uint16_t* rank_row, uint32_t& lbase, BkczCrossAccum& sum
 ) {
     const uint8_t e = p10dc_rankstream_entry_load(
-        size_t(state) * P10DC_CROSS5_KEYS + chunk);
+        size_t(state) * P10DC_RANKSTREAM_LUT_STRIDE + chunk);
     uint8_t rankmask = uint8_t(e & P10DC_CROSS5_MASK_MASK);
     while (rankmask) {
         const int ordinal = __ffs(int(rankmask)) - 1;
