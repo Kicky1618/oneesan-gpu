@@ -53,6 +53,8 @@ printf 'backend\tkernel\tregisters\tstack_bytes\tspill_store_bytes\tspill_load_b
   build_one warpstriped_delta_direct_affine_prekey_cross5 ldg
   build_one warpstriped_delta_direct_affine_prekey_rank16_cross5
   build_one warpstriped_delta_direct_affine_prekey_rank16_cross5 ldg
+  build_one warpstriped_delta_direct_affine_prekey_rankstream_cross5
+  build_one warpstriped_delta_direct_affine_prekey_rankstream_cross5 ldg
 } >>"$OUT"
 
 cat "$OUT"
@@ -70,7 +72,8 @@ backends=(
     'depthcode_payload_warpstriped_delta_direct_cross5','depthcode_payload_warpstriped_delta_direct_cross5_ldg',
     'depthcode_payload_warpstriped_delta_direct_affine_cross5','depthcode_payload_warpstriped_delta_direct_affine_cross5_ldg',
     'depthcode_payload_warpstriped_delta_direct_affine_prekey_cross5','depthcode_payload_warpstriped_delta_direct_affine_prekey_cross5_ldg',
-    'depthcode_payload_warpstriped_delta_direct_affine_prekey_rank16_cross5','depthcode_payload_warpstriped_delta_direct_affine_prekey_rank16_cross5_ldg')
+    'depthcode_payload_warpstriped_delta_direct_affine_prekey_rank16_cross5','depthcode_payload_warpstriped_delta_direct_affine_prekey_rank16_cross5_ldg',
+    'depthcode_payload_warpstriped_delta_direct_affine_prekey_rankstream_cross5','depthcode_payload_warpstriped_delta_direct_affine_prekey_rankstream_cross5_ldg')
 for backend in backends:
     all_rows=[r for r in rows if r['backend']==backend]
     high=[r for r in all_rows if 'high' in r['kernel'].lower()]
@@ -99,6 +102,9 @@ print('prekey_hot_code_load=0')
 print('prekey_hot_code_off_load=0')
 print('rank16_bytes_per_low_code=2*LOW_LUT_K')
 print('rank16_cross_runtime_direct_lookup=0')
+print('rankstream_model=offset32+rank16_per_L')
+print('rankstream_cross_runtime_direct_lookup=0')
+print('rankstream_extra_constant_lmask_bytes=243')
 PY
 
-echo "depthcode-highctx-ptxas OK n=$N arch=$ARCH transpose=$TRANSPOSE_MODE result=$OUT logs=$LOGDIR ternary_delta=1 cross5=1 direct_resolve=1 affine_rows=1 prekey=1 rank16=1" >&2
+echo "depthcode-highctx-ptxas OK n=$N arch=$ARCH transpose=$TRANSPOSE_MODE result=$OUT logs=$LOGDIR ternary_delta=1 cross5=1 direct_resolve=1 affine_rows=1 prekey=1 rank16=1 rankstream=1" >&2
