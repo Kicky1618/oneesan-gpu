@@ -1,6 +1,5 @@
 #include <cuda_runtime.h>
 
-#include <algorithm>
 #include <cstdint>
 #include <cstdlib>
 #include <iostream>
@@ -101,6 +100,7 @@ int main(int argc, char** argv) {
     const double ns_per_call = double(elapsed_ms) * 1.0e6 / double(calls);
     std::cout << "gridfp-runtime-owner-local-sector-parity-microprobe"
               << " parity=" << RP_RUNTIME_OWNER_LOCAL_SECTOR_PARITY
+              << " w28_tree=" << RP_RUNTIME_OWNER_LOCAL_SECTOR_W28_TREE
               << " W=28 L=15 outer_classes=14"
               << " blocks=" << blocks
               << " threads=" << threads
