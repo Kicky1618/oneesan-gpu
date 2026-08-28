@@ -6,6 +6,9 @@
 #ifndef RP_RUNTIME_OWNER_PREFIX_BINARY
 #define RP_RUNTIME_OWNER_PREFIX_BINARY 1
 #endif
+#ifndef RP_RUNTIME_OWNER_PREFIX_CARRY_BEGIN
+#define RP_RUNTIME_OWNER_PREFIX_CARRY_BEGIN 0
+#endif
 #ifndef RP_RUNTIME_OWNER_LOCAL_SECTOR_TABLE
 #define RP_RUNTIME_OWNER_LOCAL_SECTOR_TABLE 1
 #endif
@@ -17,6 +20,9 @@
 #endif
 static_assert(RP_RUNTIME_OWNER_PREFIX_BINARY == 0 || RP_RUNTIME_OWNER_PREFIX_BINARY == 1,
               "RP_RUNTIME_OWNER_PREFIX_BINARY must be 0 or 1");
+static_assert(RP_RUNTIME_OWNER_PREFIX_CARRY_BEGIN == 0 ||
+              RP_RUNTIME_OWNER_PREFIX_CARRY_BEGIN == 1,
+              "RP_RUNTIME_OWNER_PREFIX_CARRY_BEGIN must be 0 or 1");
 static_assert(RP_RUNTIME_OWNER_LOCAL_SECTOR_TABLE == 0 ||
               RP_RUNTIME_OWNER_LOCAL_SECTOR_TABLE == 1,
               "RP_RUNTIME_OWNER_LOCAL_SECTOR_TABLE must be 0 or 1");
@@ -69,6 +75,40 @@ __device__ __forceinline__ int runtime_owner_prefix_sector_device(
     for (int r = 0; r <= O; ++r)
         if (rank < prefix[r + 1]) return r;
     return -1;
+#endif
+}
+
+__device__ __forceinline__ int runtime_owner_prefix_sector_begin_device(
+    const Rank64* prefix, int O, Rank64 rank, Rank64& begin
+) {
+#if RP_RUNTIME_OWNER_PREFIX_BINARY && RP_RUNTIME_OWNER_PREFIX_CARRY_BEGIN
+    // Maintain begin == prefix[lo]. Whenever the lower bound advances, the
+    // endpoint that was just loaded is exactly the new sector begin. This
+    // removes the caller's post-search prefix[sector] reload, including when
+    // adjacent sectors have equal prefixes because this GPU owns no supports
+    // in one of the outer-popcount classes.
+    int lo = 0;
+    int hi = O + 1;
+    begin = 0;
+    while (lo < hi) {
+        const int mid = lo + ((hi - lo) >> 1);
+        const Rank64 end = prefix[mid + 1];
+        if (rank < end) {
+            hi = mid;
+        } else {
+            lo = mid + 1;
+            begin = end;
+        }
+    }
+    return lo <= O ? lo : -1;
+#else
+    const int sector = runtime_owner_prefix_sector_device(prefix, O, rank);
+    if (sector < 0) {
+        begin = 0;
+        return -1;
+    }
+    begin = prefix[sector];
+    return sector;
 #endif
 }
 
@@ -210,9 +250,11 @@ __device__ __forceinline__ MateID owner_component_label_unrank_planned_device(
     const int lo = reverse ? tile_start - 1 : tile_start - K - 1;
     const int hi = lo + L - 1;
 
-    const int outer_ones = runtime_owner_prefix_sector_device(plan.prefix, O, rank);
+    Rank64 prefix_begin = 0;
+    const int outer_ones = runtime_owner_prefix_sector_begin_device(
+        plan.prefix, O, rank, prefix_begin);
     if (outer_ones < 0) return 0;
-    const Rank64 local = rank - plan.prefix[outer_ones];
+    const Rank64 local = rank - prefix_begin;
 
     const Rank64 component_group = plan.component_group[outer_ones];
     if (!component_group) return 0;
