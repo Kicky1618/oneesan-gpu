@@ -18,6 +18,9 @@ struct Key {
     bool operator<(const Key& o) const {
         return blocked != o.blocked ? blocked < o.blocked : mate < o.mate;
     }
+    bool operator==(const Key& o) const {
+        return mate == o.mate && blocked == o.blocked;
+    }
 };
 using Terms = std::map<Key, int>;
 
