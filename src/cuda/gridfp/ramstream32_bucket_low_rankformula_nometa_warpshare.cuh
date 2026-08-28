@@ -8,12 +8,18 @@
 #ifndef P10DC_RANKFORMULA_NOMETA_COOPGROUP
 #define P10DC_RANKFORMULA_NOMETA_COOPGROUP 0
 #endif
+#ifndef P10DC_RANKFORMULA_NOMETA_COOP_UNROLL
+#define P10DC_RANKFORMULA_NOMETA_COOP_UNROLL 1
+#endif
 static_assert(P10DC_RANKFORMULA_NOMETA_WARPSHARE == 0 ||
               P10DC_RANKFORMULA_NOMETA_WARPSHARE == 1,
               "P10DC_RANKFORMULA_NOMETA_WARPSHARE must be 0 or 1");
 static_assert(P10DC_RANKFORMULA_NOMETA_COOPGROUP == 0 ||
               P10DC_RANKFORMULA_NOMETA_COOPGROUP == 1,
               "P10DC_RANKFORMULA_NOMETA_COOPGROUP must be 0 or 1");
+static_assert(P10DC_RANKFORMULA_NOMETA_COOP_UNROLL == 0 ||
+              P10DC_RANKFORMULA_NOMETA_COOP_UNROLL == 1,
+              "P10DC_RANKFORMULA_NOMETA_COOP_UNROLL must be 0 or 1");
 static_assert(!P10DC_RANKFORMULA_NOMETA_COOPGROUP ||
               P10DC_RANKFORMULA_NOMETA_WARPSHARE,
               "cooperative nometa successor loading requires warp sharing");
@@ -65,6 +71,8 @@ p10dc_low_rankformula_nometa_resolve_warpshare(uint32_t h, uint32_t rank) {
 // Otherwise each subgroup with unresolved high lanes has its leader load exactly
 // one successor group and broadcast it. Lanes remember the first cursor covering
 // their rank while continuing to advance the shared cursor for higher lanes.
+// The production distribution usually exits after about two ballots, so keeping
+// this loop rolled can substantially reduce static code size for B=16.
 __device__ __forceinline__ P10DCRankFormulaNometa4Resolved
 p10dc_low_rankformula_nometa_resolve_coopgroup(uint32_t h, uint32_t rank) {
     constexpr uint32_t B = P10DC_RANKFORMULA_NOMETA4_BLOCK;
@@ -89,7 +97,11 @@ p10dc_low_rankformula_nometa_resolve_coopgroup(uint32_t h, uint32_t rank) {
     uint32_t result_n = 0u, result_start = 0u;
     int result_delta = 0;
     bool resolved = false;
+#if P10DC_RANKFORMULA_NOMETA_COOP_UNROLL
 #pragma unroll
+#else
+#pragma unroll 1
+#endif
     for (int k = 0; k < int(B); ++k) {
         const uint32_t start = p10dc_rankformula_nometa4_group_start(cursor);
         const uint32_t count = p10dc_rankformula_nometa4_group_count(cursor);
