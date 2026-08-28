@@ -46,6 +46,9 @@ case "$MODE" in
   owner-lean)
     SRC_REL="src/cuda/gridfp/gridfp_reduced_production_owner_component_lean_microprobe.cu"
     ;;
+  owner-support)
+    SRC_REL="src/cuda/gridfp/gridfp_reduced_production_owner_support_probe.cu"
+    ;;
   p2p-cycle)
     SRC_REL="src/cuda/gridfp/gridfp_reduced_production_p2p_cycle_microprobe.cu"
     ;;
@@ -86,7 +89,7 @@ case "$MODE" in
     SRC_REL="src/cuda/gridfp/gridfp_reduced_production_grouped_support_rank_probe.cu"
     ;;
   *)
-    echo "invalid MODE=$MODE (forward|reverse|register|persistent|dense|edge|grouped|inplace|cycle|shift-cycle|turn|owner-component|owner-lean|p2p-cycle|p2p-token-cycle|p2p-token-plan|p2p-pair-queue|p2p-scratch-cycle|p2p-scratch-full|p2p-scratch-plan|p2p-traffic|p2p-traffic-matrix|p2p-capability|p2p-mailbox|p2p-owner-lut|support-rank)" >&2
+    echo "invalid MODE=$MODE (forward|reverse|register|persistent|dense|edge|grouped|inplace|cycle|shift-cycle|turn|owner-component|owner-lean|owner-support|p2p-cycle|p2p-token-cycle|p2p-token-plan|p2p-pair-queue|p2p-scratch-cycle|p2p-scratch-full|p2p-scratch-plan|p2p-traffic|p2p-traffic-matrix|p2p-capability|p2p-mailbox|p2p-owner-lut|support-rank)" >&2
     exit 2
     ;;
 esac
