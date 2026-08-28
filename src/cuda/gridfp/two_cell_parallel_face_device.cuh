@@ -15,18 +15,22 @@ __device__ __forceinline__ int prefix_height(PackedWord w, int boundary) {
     return 1 + 2 * __popc(w.left & mask) - __popc(w.support & mask);
 }
 
-// Parenthesis matching without a per-lane rightward scan.  For an L at p the
-// mate is the first later R whose post-R height equals the pre-L height.
-__device__ __forceinline__ int partner_match_any(PackedWord w, int lane) {
-    const bool in_range = lane < w.len;
-    const Symbol c = in_range ? symbol(w, lane) : TC_N;
+// All lanes already know their pre/post symbol heights.  A match-any group keyed
+// by pre-L / post-R height gives every L lane all possible same-level R lanes;
+// its first later R is the parenthesis mate.
+__device__ __forceinline__ int partner_match_any_cached(
+    Symbol c,
+    int h_before,
+    int h_after,
+    int lane,
+    int len
+) {
     int key = 0x100 + lane;
-    if (c == TC_L) key = prefix_height(w, lane);
-    else if (c == TC_R) key = prefix_height(w, lane + 1);
-
+    if (c == TC_L) key = h_before;
+    else if (c == TC_R) key = h_after;
     const unsigned same_height = __match_any_sync(kFullWarp, key);
     const unsigned r_mask = __ballot_sync(
-        kFullWarp, in_range && c == TC_R);
+        kFullWarp, lane < len && c == TC_R);
     if (c != TC_L) return -1;
     const unsigned later_r = same_height & r_mask & ~low_mask(lane + 1);
     return later_r ? (__ffs(static_cast<int>(later_r)) - 1) : -1;
@@ -42,8 +46,8 @@ __device__ __forceinline__ int partner_match_any(PackedWord w, int lane) {
 // Exhaustive CPU enumeration through W=14 finds that all face-generated
 // candidates are already valid and mutually distinct, including against the
 // four fixed sources.  Therefore the hot path needs neither valid_word rescans
-// nor scalar duplicate elimination.  A ballot gives the valid L candidates and
-// popcount gives each lane its stable output slot.
+// nor scalar duplicate elimination.  Each physical lane computes one prefix
+// height once; h_after, face tests, matching, and root detection all reuse it.
 __device__ __forceinline__ void deep_component_sources_compact(
     PackedWord label,
     int W,
@@ -85,24 +89,29 @@ __device__ __forceinline__ void deep_component_sources_compact(
     }
     __syncwarp();
 
-    const int boundary = lane <= W ? lane : W;
-    const int h = lane <= W ? prefix_height(z, boundary) : 0x3fffffff;
-    const int level = prefix_height(z, j);
+    const bool in_range = lane < W;
+    const Symbol c = in_range ? symbol(z, lane) : TC_N;
+    const int h_before = lane <= W ? prefix_height(z, lane) : 0x3fffffff;
+    const int h_after = h_before +
+        (c == TC_L ? 1 : (c == TC_R ? -1 : 0));
+    int level = lane == 0 ? prefix_height(z, j) : 0;
+    level = __shfl_sync(kFullWarp, level, 0);
+
     const unsigned left_bad = __ballot_sync(
-        kFullWarp, lane < j && h < level);
+        kFullWarp, lane < j && h_before < level);
     const unsigned right_bad = __ballot_sync(
-        kFullWarp, lane >= j + 3 && lane <= W && h < level);
+        kFullWarp, lane >= j + 3 && lane <= W && h_before < level);
     const int face_left = left_bad ? (31 - __clz(left_bad)) + 1 : 0;
     const int face_right = right_bad
         ? (__ffs(static_cast<int>(right_bad)) - 1) - 1
         : W;
 
-    const int partner_q = partner_match_any(z, lane);
+    const int partner_q = partner_match_any_cached(
+        c, h_before, h_after, lane, W);
 
     PackedKey mine{};
     bool valid = false;
-    if (lane < W && symbol(z, lane) == TC_L &&
-        lane >= face_left && prefix_height(z, lane) == level) {
+    if (in_range && c == TC_L && lane >= face_left && h_before == level) {
         const int q = partner_q;
         if (q >= 0 && q < face_right) {
             PackedWord w = z;
@@ -148,8 +157,7 @@ __device__ __forceinline__ void deep_component_sources_compact(
     }
 
     const unsigned root_mask = __ballot_sync(
-        kFullWarp,
-        lane < W && symbol(z, lane) == TC_R && prefix_height(z, lane + 1) == 0);
+        kFullWarp, in_range && c == TC_R && h_after == 0);
     PackedKey root_key{};
     bool root_valid = false;
     if (lane == 0) {
@@ -176,7 +184,6 @@ __device__ __forceinline__ void deep_component_sources_compact(
         } else {
             *out_size = n;
         }
-        // Legacy A/B counter: partner rightward-loop depth is now exactly zero.
         *max_partner_rounds = 0;
     }
     __syncwarp();
