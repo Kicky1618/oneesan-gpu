@@ -14,6 +14,9 @@ constexpr int MAX_DEPTH = 15;
 constexpr int MAX_FACTOR = 14;
 constexpr uint8_t MASK_MASK = 0x1fu;
 constexpr int HALT_SHIFT = 5;
+constexpr uint8_t META_LCOUNT_MASK = 0x07u;
+constexpr int META_DELTA_SHIFT = 3;
+constexpr int META_DELTA_BIAS = 5;
 
 enum Symbol : uint32_t { N = 0, R = 1, L = 2 };
 
@@ -38,6 +41,23 @@ constexpr uint8_t lmask(uint32_t key) {
         if (digit(key, pos) == L)
             mask = uint8_t(mask | uint8_t(1u << pos));
     return mask;
+}
+
+constexpr int chunk_delta(uint32_t key) {
+    int d = 0;
+    for (int pos = 0; pos < CHUNK; ++pos) {
+        const uint32_t v = digit(key, pos);
+        if (v == R) --d;
+        else if (v == L) ++d;
+    }
+    return d;
+}
+
+constexpr uint8_t rankstream_meta(uint32_t key) {
+    const uint8_t lcount = popcount5(lmask(key));
+    return uint8_t(
+        lcount |
+        (uint8_t(chunk_delta(key) + META_DELTA_BIAS) << META_DELTA_SHIFT));
 }
 
 struct Walk {
@@ -150,6 +170,7 @@ int main() {
     static_assert(STATES == 26);
 
     uint64_t projection_cases = 0;
+    uint64_t fused16_cases = 0;
     for (int state = 1; state < STATES; ++state) {
         for (uint32_t key = 0; key < KEYN; ++key) {
             const uint8_t direct = direct_entry(key, state);
@@ -176,6 +197,23 @@ int main() {
 
             const uint8_t count = popcount5(lmask(key));
             if (count > CHUNK) return 7;
+
+            const uint8_t meta = rankstream_meta(key);
+            const uint16_t pair = uint16_t(ranked) | (uint16_t(meta) << 8);
+            const uint8_t pair_entry = uint8_t(pair);
+            const uint8_t pair_meta = uint8_t(pair >> 8);
+            const uint8_t decoded_lcount = uint8_t(pair_meta & META_LCOUNT_MASK);
+            const int decoded_delta =
+                int(pair_meta >> META_DELTA_SHIFT) - META_DELTA_BIAS;
+            if (pair_entry != ranked || pair_meta != meta ||
+                decoded_lcount != count || decoded_delta != chunk_delta(key)) {
+                std::cerr << "fused16 rankstream packing mismatch state=" << state
+                          << " key=" << key << " pair=" << pair
+                          << " entry=" << unsigned(pair_entry)
+                          << " meta=" << unsigned(pair_meta) << '\n';
+                return 8;
+            }
+            ++fused16_cases;
             ++projection_cases;
         }
     }
@@ -197,11 +235,12 @@ int main() {
         std::cerr << "unexpected CROSS5 state bounds got="
                   << max_input[0] << ',' << max_input[1] << ',' << max_input[2]
                   << " expected=15,20,25\n";
-        return 8;
+        return 9;
     }
 
     std::cout << "gridfp-cross5-rankstream-proof OK"
               << " projection_cases=" << projection_cases
+              << " fused16_cases=" << fused16_cases
               << " reachability_cases=" << reachability_cases
               << " chunk_state_bounds=" << max_input[0] << ','
               << max_input[1] << ',' << max_input[2]
@@ -211,6 +250,9 @@ int main() {
               << " rank_projection_exact=1"
               << " halt_projection_exact=1"
               << " partial_chunk_zero_prefix_exact=1"
+              << " fused16_entry_exact=1"
+              << " fused16_meta_exact=1"
+              << " fused16_byte_isolation_exact=1"
               << " fallback_structurally_unreachable=1\n";
     return 0;
 }
