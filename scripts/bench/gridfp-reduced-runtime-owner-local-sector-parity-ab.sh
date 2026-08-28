@@ -33,14 +33,14 @@ q={r['owner_local_sector_parity']:r for r in out}; old=float(q['0']['wall_ms_med
 print(f'runtime_owner_local_sector_parity_wall_speedup={old/new:.6f}x')
 print(f'runtime_owner_local_sector_parity_wall_delta_pct={(new/old-1)*100:.4f}%')
 print('runtime_owner_local_sector_parity_old=full_endpoint_binary_search')
-print('runtime_owner_local_sector_parity_new=odd_occupied_endpoint_binary_search')
+print('runtime_owner_local_sector_parity_new=positive_sector_binary_search')
 print('runtime_owner_local_sector_W28_candidates_old=15')
-print('runtime_owner_local_sector_W28_candidates_new=8')
+print('runtime_owner_local_sector_W28_candidates_new=7')
 print('runtime_owner_local_sector_W28_max_comparisons_old=4')
 print('runtime_owner_local_sector_W28_max_comparisons_new=3')
 print('runtime_owner_local_sector_extra_constant_bytes=0')
 print('runtime_owner_local_sector_extra_shared_bytes=0')
 print(f'summary={dst}')
 PY
-if [[ "$PTXAS_VERBOSE" == 1 ]]; then echo '--- ptxas full endpoint binary ---' >&2; grep -E 'Used .* registers|bytes smem|bytes cmem' "$LOGDIR/parity0.build.err" >&2 || true; echo '--- ptxas parity endpoint binary ---' >&2; grep -E 'Used .* registers|bytes smem|bytes cmem' "$LOGDIR/parity1.build.err" >&2 || true; fi
+if [[ "$PTXAS_VERBOSE" == 1 ]]; then echo '--- ptxas full endpoint binary ---' >&2; grep -E 'Used .* registers|bytes smem|bytes cmem' "$LOGDIR/parity0.build.err" >&2 || true; echo '--- ptxas positive-sector binary ---' >&2; grep -E 'Used .* registers|bytes smem|bytes cmem' "$LOGDIR/parity1.build.err" >&2 || true; fi
 echo "gridfp-reduced-runtime-owner-local-sector-parity-ab OK W=$W ngpu=$NGPU blocks=$BLOCKS repeats=$REPEATS result=$RESULT" >&2
