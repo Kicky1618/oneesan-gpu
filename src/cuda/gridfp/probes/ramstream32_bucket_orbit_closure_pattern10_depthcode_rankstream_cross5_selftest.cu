@@ -203,8 +203,7 @@ int main() {
     BucketFusedDirectHighRowsPrekeyRankStreamTables dt; dt.install_metadata(layout, bo, bf);
     BucketForwardPattern10DepthCodeDeviceTables fdt; fdt.install(fh);
     BucketReversePattern10DepthCodeDeviceTables rdt; rdt.install(rh);
-    p10dc_install_cross5_lut();
-    p10dc_install_rankstream_lmask();
+    p10dc_install_rankstream_lut();
 
     auto g0 = bkft_make_grid(ms, bs, im, ib, storage, layout, owner, phy);
     p10dc_rankstream_run_high(g0, layout, phy, bf, dt, false, false);
@@ -227,7 +226,9 @@ int main() {
               << " prekey_table_exact=1 rankstream_table_exact=1"
               << " rankstream_model=offset32+rank16_per_L"
               << " cross_runtime_ternary_fold=0 cross_runtime_direct_lookup=0"
-              << " fallback_structurally_unreachable=1 cross5_table_bytes=6561"
+              << " cross_runtime_ordinal_popcount=0 constant_loads_per_chunk=2"
+              << " fallback_structurally_unreachable=1 rankstream_lut_bytes=6561"
+              << " ordinary_cross5_lut_present=0"
               << " pm_accum=" << GPU_DIRECT_PM_ACCUM << '\n';
     return 0;
 }
