@@ -2,7 +2,7 @@
 set -euo pipefail
 source "$(dirname -- "${BASH_SOURCE[0]}")/../lib/common.sh"
 
-PROFILE_IN="${PROFILE_IN:-$ONEESAN_ROOT/work/b300_hbm_profile_local021.env}"
+PROFILE_IN="${PROFILE_IN:-$ONEESAN_ROOT/work/b300_hbm_profile_group21.env}"
 PROFILE_OUT="${PROFILE_OUT:-$ONEESAN_ROOT/work/b300_hbm_profile_refined21.env}"
 PREFIX="${PREFIX:-$ONEESAN_ROOT/work/b300_hbm_profile_orbit_quad_prefetch21}"
 [[ -f "$PROFILE_IN" ]] || { echo "missing PROFILE_IN=$PROFILE_IN" >&2; exit 2; }
@@ -21,6 +21,7 @@ ORBIT_PRECTX_WARPCOOP="${ORBIT_PRECTX_WARPCOOP:-0}"
 ORBIT_QUAD_SPARSE_DESC_MLP="${ORBIT_QUAD_SPARSE_DESC_MLP:-0}"
 ORBIT_QUAD_OVERLAP_BYPASS_LOCAL0="${ORBIT_QUAD_OVERLAP_BYPASS_LOCAL0:-0}"
 ORBIT_QUAD_CPASYNC_PREFETCH_BYTES="${ORBIT_QUAD_CPASYNC_PREFETCH_BYTES:-0}"
+ORBIT_QUAD_CPASYNC_GROUP_COLS="${ORBIT_QUAD_CPASYNC_GROUP_COLS:-1}"
 for n in ORBIT_COL_ILP ORBIT_SPARSE64 ORBIT_CPASYNC_PAIR ORBIT_PRECTX_FORWARD ORBIT_PRECTX_REVERSE ORBIT_PRECTX_COMPACT ORBITCTA_FLAT ORBITCTA_FLAT_CHUNK ORBITCTA_FLAT_BLOCKS_PER_SM ORBIT_QUAD_MLP ORBIT_QUAD_OVERLAP_LOCAL ORBIT_QUAD_LOCAL_DIRECT_MAX; do
   [[ -n "${!n+x}" ]] || { echo "profile missing $n" >&2; exit 2; }
 done
@@ -28,6 +29,7 @@ for x in ORBIT_SPARSE64 ORBIT_CPASYNC_PAIR ORBIT_PRECTX_FORWARD ORBIT_PRECTX_REV
   v="${!x}"; [[ "$v" == 0 || "$v" == 1 ]] || { echo "$x must be 0 or 1" >&2; exit 2; }
 done
 case "$ORBIT_QUAD_CPASYNC_PREFETCH_BYTES" in 0|64|128|256) ;; *) echo 'bad existing ORBIT_QUAD_CPASYNC_PREFETCH_BYTES' >&2; exit 2;; esac
+case "$ORBIT_QUAD_CPASYNC_GROUP_COLS" in 1|2|4) ;; *) echo 'bad ORBIT_QUAD_CPASYNC_GROUP_COLS' >&2; exit 2;; esac
 [[ "$ORBIT_QUAD_CPASYNC_PREFETCH_BYTES" == 0 ]] || { echo 'prefetch refine input must be untuned (prefetch=0)' >&2; exit 2; }
 [[ "$ORBIT_QUAD_MLP" == 1 && "$ORBIT_QUAD_OVERLAP_LOCAL" == 1 ]] || { echo 'prefetch refine requires selected quad overlap-local path' >&2; exit 2; }
 [[ "$ORBIT_CPASYNC_PAIR" == 1 && "$ORBIT_COL_ILP" == 4 ]] || { echo 'prefetch refine requires cp.async quad ILP4' >&2; exit 2; }
@@ -56,16 +58,18 @@ field(){ local k="$1" l="$2"; sed -nE "s/(^|.*[[:space:]])${k}=([^[:space:]]+).*
 sample(){ local pid="$1" out="$2"; : >"$out"; while kill -0 "$pid" 2>/dev/null; do nvidia-smi --query-gpu=utilization.gpu,utilization.memory --format=csv,noheader,nounits 2>/dev/null | awk -F',' '{g=$1+0;m=$2+0;sg+=g;sm+=m;if(m>mm)mm=m;n++}END{if(n)printf "%.6f %.6f %d\n",sg/n,sm/n,mm;else print "NA NA NA"}' >>"$out" || true; sleep "$SAMPLE_INTERVAL"; done; }
 
 for pf in $PREFETCH_VALUES; do
-  bin="$ONEESAN_BUILD_DIR/b300_orbit_quad_prefetch${pf}_wc${ORBIT_PRECTX_WARPCOOP}_qsd${ORBIT_QUAD_SPARSE_DESC_MLP}_ql0${ORBIT_QUAD_OVERLAP_BYPASS_LOCAL0}_n21"
+  bin="$ONEESAN_BUILD_DIR/b300_orbit_quad_prefetch${pf}_gc${ORBIT_QUAD_CPASYNC_GROUP_COLS}_wc${ORBIT_PRECTX_WARPCOOP}_qsd${ORBIT_QUAD_SPARSE_DESC_MLP}_ql0${ORBIT_QUAD_OVERLAP_BYPASS_LOCAL0}_n21"
   N=21 ARCH="$ARCH" OUT="$bin" PM_ACCUM="$PM_ACCUM" DIRECTGATHER64=1 DIRECTGATHER_SPARSE64="$ORBIT_SPARSE64" DIRECTGATHER_SORT_RANKS=0 \
     RANKFORMULA_MLP_WINDOW4=1 PAIR_MLP=1 CPASYNC_PAIR=1 QUAD_MLP=1 QUAD_OVERLAP_LOCAL=1 QUAD_LOCAL_DIRECT_MAX=0 \
-    QUAD_SPARSE_DESC_MLP="$ORBIT_QUAD_SPARSE_DESC_MLP" QUAD_OVERLAP_BYPASS_LOCAL0="$ORBIT_QUAD_OVERLAP_BYPASS_LOCAL0" QUAD_CPASYNC_PREFETCH_BYTES="$pf" \
+    QUAD_SPARSE_DESC_MLP="$ORBIT_QUAD_SPARSE_DESC_MLP" QUAD_OVERLAP_BYPASS_LOCAL0="$ORBIT_QUAD_OVERLAP_BYPASS_LOCAL0" \
+    QUAD_CPASYNC_PREFETCH_BYTES="$pf" QUAD_CPASYNC_GROUP_COLS="$ORBIT_QUAD_CPASYNC_GROUP_COLS" \
     ORBITCTA_FLAT=1 ORBITCTA_FLAT_CHUNK="$ORBITCTA_FLAT_CHUNK" ORBITCTA_COL_ILP=4 \
     PRECTX_FORWARD="$ORBIT_PRECTX_FORWARD" PRECTX_REVERSE="$ORBIT_PRECTX_REVERSE" PRECTX_COMPACT="$ORBIT_PRECTX_COMPACT" \
     PRECTX_WARPCOOP="$ORBIT_PRECTX_WARPCOOP" PRECTX_FLAT_BID=0 PRECTX_FLAT_BID_FUSED=0 PTXAS_VERBOSE=1 \
     bash "$ONEESAN_ROOT/scripts/build/b300-directgather-orbitcta.sh" >"$LOGDIR/pf${pf}.build.out" 2>"$LOGDIR/pf${pf}.build.err"
   grep -q "quad_cpasync_prefetch_bytes=$pf" "$LOGDIR/pf${pf}.build.err" || { echo "prefetch build marker mismatch pf=$pf" >&2; exit 6; }
-  python3 "$ONEESAN_ROOT/scripts/bench/parse-ptxas-resources.py" "$LOGDIR/pf${pf}.build.err" --label "pf${pf}" >>"$RESOURCE" || true
+  grep -q "quad_cpasync_group_cols=$ORBIT_QUAD_CPASYNC_GROUP_COLS" "$LOGDIR/pf${pf}.build.err" || { echo "group build marker mismatch gc=$ORBIT_QUAD_CPASYNC_GROUP_COLS" >&2; exit 6; }
+  python3 "$ONEESAN_ROOT/scripts/bench/parse-ptxas-resources.py" "$LOGDIR/pf${pf}.build.err" --label "pf${pf}_gc${ORBIT_QUAD_CPASYNC_GROUP_COLS}" >>"$RESOURCE" || true
 
   for ((r=1;r<=REPEATS;++r)); do
     so="$LOGDIR/pf${pf}_r${r}.out"; se="$LOGDIR/pf${pf}_r${r}.err"; util="$LOGDIR/pf${pf}_r${r}.util"
@@ -105,7 +109,8 @@ res={k:{r['residue'] for r in g} for k,g in by.items()}
 if any(len(v)!=1 for v in res.values()) or len({next(iter(v)) for v in res.values()})!=1: raise SystemExit(f'RESIDUE MISMATCH {res}')
 stats={}
 for k,g in by.items():
- stats[k]={'wall':statistics.median(float(r['wall_s']) for r in g),'high':statistics.median(float(r['high_s']) for r in g),'mc':statistics.median(float(r['avg_memctrl_util_pct']) for r in g if r['avg_memctrl_util_pct']!='NA')}
+ mc=[float(r['avg_memctrl_util_pct']) for r in g if r['avg_memctrl_util_pct']!='NA']
+ stats[k]={'wall':statistics.median(float(r['wall_s']) for r in g),'high':statistics.median(float(r['high_s']) for r in g),'mc':statistics.median(mc) if mc else float('nan')}
 winner=min(stats,key=lambda k:stats[k]['wall'])
 kv={};order=[]
 for line in open(profile_in):
@@ -116,8 +121,7 @@ for line in open(profile_in):
  kv[k]=v.strip('"')
 kv['ORBIT_QUAD_CPASYNC_PREFETCH_BYTES']=str(winner)
 if 'ORBIT_QUAD_CPASYNC_PREFETCH_BYTES' not in order: order.append('ORBIT_QUAD_CPASYNC_PREFETCH_BYTES')
-if winner:
- kv['ORBIT_PROFILE']=kv.get('ORBIT_PROFILE','orbit')+f'_pf{winner}'
+if winner: kv['ORBIT_PROFILE']=kv.get('ORBIT_PROFILE','orbit')+f'_pf{winner}'
 with open(profile_out,'w') as f:
  f.write('# generated by b300-hbm-profile-refine-orbit-quad-prefetch21.sh\n')
  for k in order:
@@ -128,4 +132,4 @@ for k in sorted(stats): print(f'PREFETCH_{k}',f"wall_s={stats[k]['wall']:.6f}",f
 print('BEST_QUAD_CPASYNC_PREFETCH_BYTES='+str(winner),f'profile_file={profile_out}')
 PY
 cat "$PROFILE_OUT"
-echo "orbit quad cpasync prefetch refine OK input=$PROFILE_IN output=$PROFILE_OUT result=$RESULT resources=$RESOURCE" >&2
+echo "orbit quad cpasync prefetch refine OK input=$PROFILE_IN output=$PROFILE_OUT result=$RESULT resources=$RESOURCE group_cols=$ORBIT_QUAD_CPASYNC_GROUP_COLS" >&2
