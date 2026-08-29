@@ -3,17 +3,18 @@ set -euo pipefail
 source "$(dirname -- "${BASH_SOURCE[0]}")/../lib/common.sh"
 
 PATCH_ONLY="${PIPE2_PRODUCER_PATCH_ONLY:-0}"
+QUAD_MLP="${QUAD_MLP:-0}"
+COL_ILP="${ORBITCTA_COL_ILP:-4}"
 [[ "$PATCH_ONLY" == 0 || "$PATCH_ONLY" == 1 ]] || { echo 'PIPE2_PRODUCER_PATCH_ONLY must be 0/1' >&2; exit 2; }
+[[ "$QUAD_MLP" == 0 || "$QUAD_MLP" == 1 ]] || { echo 'QUAD_MLP must be 0/1' >&2; exit 2; }
 [[ "${ORBITCTA_FLAT:-1}" == 1 && "${ORBITCTA_FLAT_DYNAMIC:-1}" == 1 && "${ORBITCTA_FLAT_DYNAMIC_PIPE2:-1}" == 1 ]] || {
   echo 'producer-warp requires flat dynamic pipe2' >&2; exit 2;
 }
 [[ "${ORBITCTA_FLAT_CHUNK:-1}" == 1 ]] || { echo 'producer-warp requires flat chunk=1' >&2; exit 2; }
 [[ "${ORBITCTA_FLAT_DYNAMIC_FUSE_LEASE_PREP:-0}" == 0 ]] || { echo 'producer-warp pipe2 requires fuse-lease-prep=0' >&2; exit 2; }
-# This experimental executor currently partitions four ILP slots as two pair
-# plan-sums. If QUAD_MLP leaked in from the caller, the A/B would change both
-# the warp partition and the plan-sum algorithm at once. Keep this wrapper a
-# one-factor experiment until a producer-warp-native quad executor exists.
-[[ "${QUAD_MLP:-0}" == 0 ]] || { echo 'producer-warp A/B currently requires QUAD_MLP=0' >&2; exit 2; }
+if [[ "$QUAD_MLP" == 1 && "$COL_ILP" != 4 ]]; then
+  echo 'producer-warp native QUAD_MLP=1 requires ORBITCTA_COL_ILP=4' >&2; exit 2
+fi
 
 base="$ONEESAN_ROOT/scripts/build/b300-directgather-orbitcta.sh"
 tmp="$ONEESAN_ROOT/scripts/build/.b300-directgather-orbitcta-pipe2-producer.$$.sh"
@@ -43,8 +44,9 @@ if [[ "$PATCH_ONLY" == 1 ]]; then
   bash -n "$tmp"
   grep -Fq -- '-DP10DC_ORBITCTA_FLAT_DYNAMIC_PIPE2_PRODUCER_WARP=1' "$tmp" || exit 3
   grep -Fq 'pipe2_producer_warp=1' "$tmp" || exit 3
-  echo 'b300_pipe2_producer_warp_patch=OK gpu_work=0'
+  echo "b300_pipe2_producer_warp_patch=OK quad_mlp=$QUAD_MLP col_ilp=$COL_ILP gpu_work=0"
   exit 0
 fi
-exec env ORBITCTA_FLAT=1 ORBITCTA_FLAT_CHUNK=1 ORBITCTA_FLAT_DYNAMIC=1 QUAD_MLP=0 \
+exec env ORBITCTA_FLAT=1 ORBITCTA_FLAT_CHUNK=1 ORBITCTA_FLAT_DYNAMIC=1 \
+  ORBITCTA_COL_ILP="$COL_ILP" QUAD_MLP="$QUAD_MLP" \
   ORBITCTA_FLAT_DYNAMIC_PIPE2=1 ORBITCTA_FLAT_DYNAMIC_FUSE_LEASE_PREP=0 bash "$tmp"
