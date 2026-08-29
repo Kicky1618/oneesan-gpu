@@ -37,11 +37,32 @@ SPECS=(
 )
 declare -A BINS BUILD_OK BUILD_ERR
 
+build_metadata_ok(){
+  local bout="$1" ilp="$2" high="$3" lowrec="$4" highrec="$5" mainrec="$6"
+  [[ -f "$bout" ]] || return 1
+  grep -Fq "main_pull_ilp=$ilp" "$bout" || return 1
+  grep -Fq "high_drop_chunk=$high" "$bout" || return 1
+  grep -Fq "low_main_recurrence=$lowrec" "$bout" || return 1
+  grep -Fq "high_main_recurrence=$highrec" "$bout" || return 1
+  grep -Fq "main_recurrence=$mainrec" "$bout" || return 1
+  grep -Fq 'batch_row_limit_env=B300_ROW_LIMIT' "$bout" || return 1
+  if [[ "$highrec" == 1 ]]; then
+    grep -Fq 'high_p_lo=14 high_symbol_range=13..27 high_trit_positions=15 high_min_fixed=7 high_fixed_lt7_fallback=raw_mate_rank' "$bout" || return 1
+  fi
+  if [[ "$mainrec" == 1 ]]; then
+    grep -Fq 'high_delta_bits=35 high_p_lo=14 high_symbol_range=13..27 high_trit_positions=15 high_min_fixed=7 high_fixed_lt7_fallback=raw_mate_rank' "$bout" || return 1
+  fi
+  return 0
+}
+
 build_candidate(){
   local mode="$1" ilp="$2" high="$3" lowrec="$4" highrec="$5" mainrec="$6"
   local bin="$ONEESAN_BUILD_DIR/b300_forced_pre_${mode}_n27" bout="$LOGDIR/${mode}.pre.build.out" berr="$LOGDIR/${mode}.pre.build.err"
   BINS[$mode]="$bin";BUILD_ERR[$mode]="$berr"
-  if [[ "$REBUILD" == 0 && -x "$bin" ]]; then BUILD_OK[$mode]=1;return 0;fi
+  if [[ "$REBUILD" == 0 && -x "$bin" ]] && build_metadata_ok "$bout" "$ilp" "$high" "$lowrec" "$highrec" "$mainrec"; then
+    BUILD_OK[$mode]=1;return 0
+  fi
+  if [[ "$REBUILD" == 0 && -x "$bin" ]]; then echo "stale or unverified binary: rebuilding $mode" >&2;fi
   echo "=== staged build $mode ilp=$ilp high=$high lowrec=$lowrec highrec=$highrec mainrec=$mainrec ===" >&2
   set +e
   N=27 ARCH="$ARCH" OUT="$bin" MAIN_PULL_ILP="$ilp" HIGH_DROP_CHUNK="$high" LOW_MAIN_RECURRENCE="$lowrec" HIGH_MAIN_RECURRENCE="$highrec" MAIN_RECURRENCE="$mainrec" \
@@ -51,7 +72,7 @@ build_candidate(){
   local rc=$?
   set -e
   if ((rc)); then echo "warning: exclude $mode build rc=$rc" >&2;BUILD_OK[$mode]=0;return 0;fi
-  if ! grep -Fq "main_pull_ilp=$ilp" "$bout" || ! grep -Fq "high_drop_chunk=$high" "$bout" || ! grep -Fq "low_main_recurrence=$lowrec" "$bout" || ! grep -Fq "high_main_recurrence=$highrec" "$bout" || ! grep -Fq "main_recurrence=$mainrec" "$bout" || ! grep -Fq 'batch_row_limit_env=B300_ROW_LIMIT' "$bout"; then
+  if ! build_metadata_ok "$bout" "$ilp" "$high" "$lowrec" "$highrec" "$mainrec"; then
     echo "warning: exclude $mode build metadata mismatch" >&2;BUILD_OK[$mode]=0;return 0
   fi
   BUILD_OK[$mode]=1
