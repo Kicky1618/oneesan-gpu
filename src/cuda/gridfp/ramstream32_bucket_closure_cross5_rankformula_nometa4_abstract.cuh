@@ -47,7 +47,9 @@ __device__ __align__(128) uint8_t D_P10DC_RANKFORMULA_ABSTRACT_SELECT[P10DC_RANK
 __device__ __align__(128) uint32_t D_P10DC_RANKFORMULA_ABSTRACT_DESC[P10DC_RANKFORMULA_ABSTRACT_DESC_N];
 __device__ __align__(128) uint16_t D_P10DC_RANKFORMULA_ABSTRACT_SRC[P10DC_RANKFORMULA_ABSTRACT_RANK_N];
 #endif
+#if !P10DC_RANKFORMULA_NOMETA_GROUP56
 __constant__ uint16_t D_P10DC_RANKFORMULA_ABSTRACT_OFF[P10DC_RANKFORMULA_ABSTRACT_OFF_N];
+#endif
 
 static uint32_t p10dc_rankformula_abstract_lpattern_host(int n, int h, uint32_t local) {
     uint32_t lp = 0; int s = h, rem = n;
@@ -165,7 +167,9 @@ static P10DCRankFormulaAbstractHost p10dc_rankformula_abstract_build_host() {
 
 static void p10dc_install_rankformula_abstract_lut() {
     static const auto t = p10dc_rankformula_abstract_build_host();
+#if !P10DC_RANKFORMULA_NOMETA_GROUP56
     ck(cudaMemcpyToSymbol(D_P10DC_RANKFORMULA_ABSTRACT_OFF, t.off.data(), t.off.size()*sizeof(uint16_t)), "p10dc abstract off LUT");
+#endif
 #if P10DC_RANKFORMULA_ABSTRACT_SELECT8
 #if P10DC_RANKFORMULA_ABSTRACT_SRCPACK10
     ck(cudaMemcpyToSymbol(D_P10DC_RANKFORMULA_ABSTRACT_SRC03, t.src03.data(), t.src03.size()*sizeof(uint32_t)), "p10dc abstract src03 LUT");
@@ -214,7 +218,11 @@ __device__ __forceinline__ BkczCrossAccum p10dc_resolved_low_preimages_cross5_ra
     if(z.n<=h)return BkczCrossAccum(0);
     const uint32_t lcount=(z.n-h)>>1;
     const uint32_t local=rank-z.start;
+#if P10DC_RANKFORMULA_NOMETA_GROUP56
+    const uint32_t di=z.abstract_off+local;
+#else
     const uint32_t di=uint32_t(D_P10DC_RANKFORMULA_ABSTRACT_OFF[z.n*16u+h])+local;
+#endif
 #if P10DC_RANKFORMULA_ABSTRACT_SELECT8
     uint32_t select;
 #if P10DC_RANKFORMULA_ABSTRACT_DEPTH4
