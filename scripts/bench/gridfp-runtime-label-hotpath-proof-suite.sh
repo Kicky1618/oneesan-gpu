@@ -11,6 +11,7 @@ PROOFS=(
   gridfp-codec-table-consensus-gate-proof.sh
   gridfp-codec-table-physical-replacement-proof.sh
   gridfp-codec-table-physical-consensus-gate-proof.sh
+  gridfp-codec-table-w28-motzkin-reachability-proof.sh
   gridfp-runtime-owner-prefix-carry-begin-proof.sh
   gridfp-runtime-owner-local-sector-carry-begin-proof.sh
   gridfp-runtime-owner-local-sector-compact-table-proof.sh
