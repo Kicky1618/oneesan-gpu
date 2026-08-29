@@ -154,7 +154,12 @@ smoke(){
   set -e
   kill "$dp" 2>/dev/null || true; wait "$dp" 2>/dev/null || true
   if ((rc)); then printf '%s\t%s\tfailed:%s\tNA\tNA\tNA\tNA\t0\n' "$mode" "$bin" "$rc" >>"$RESULT"; return 0; fi
-  local line="$(grep '^residue=' "$so" | tail -n1 || true)"
+  local line
+  if [[ "$family" == forced ]]; then
+    line="$(grep '^backend=gridfp-b300-hbm32-forced2window-opt-batch ' "$so" | tail -n1 || true)"
+  else
+    line="$(grep '^residue=' "$so" | tail -n1 || true)"
+  fi
   if [[ -z "$line" ]]; then printf '%s\t%s\tfailed:no_residue\tNA\tNA\tNA\tNA\t0\n' "$mode" "$bin" >>"$RESULT"; return 0; fi
   local avg mx ns; IFS=$'\t' read -r avg mx ns <<<"$(sample_summary "$dm")"
   printf '%s\t%s\tok\t%s\t%s\t%s\t%s\t%s\n' "$mode" "$bin" "$(field residue "$line")" "$(field wall_s "$line")" "$avg" "$mx" "$ns" >>"$RESULT"
