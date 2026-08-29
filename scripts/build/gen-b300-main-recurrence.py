@@ -74,16 +74,20 @@ marker='__global__ void gather_main_kernel('
 if s.count(marker)!=1:raise SystemExit(f'gather_main marker expected once, got {s.count(marker)}')
 helpers=r'''__device__ __forceinline__ bool b300_high_main_state_active(){
     if constexpr(TARGET_W!=28)return false;
-    else {constexpr uint32_t HIGH=((uint32_t(1)<<28)-1u)^((uint32_t(1)<<14)-1u);return (D_MAIN_FIXED&HIGH)==0;}
+    else {
+        // MAX_WINDOW=14 can execute through p=14, whose pair reads position13.
+        constexpr uint32_t HIGH=((uint32_t(1)<<28)-1u)^((uint32_t(1)<<13)-1u);
+        return (D_MAIN_FIXED&HIGH)==0;
+    }
 }
-__device__ __forceinline__ MateValue b300_high_state_get(MateID x,int p){return MateValue(b300_main_trit_get(x,p-14));}
+__device__ __forceinline__ MateValue b300_high_state_get(MateID x,int p){return MateValue(b300_main_trit_get(x,p-13));}
 __device__ __forceinline__ MateValuePair b300_high_state_pair(MateID x,int p){return MateValuePair(uint32_t(b300_high_state_get(x,p-1))|(uint32_t(b300_high_state_get(x,p))<<2));}
 __device__ __forceinline__ long long b300_high_state_delta(MateID x){const unsigned long long u=(x>>25)&((MateID(1)<<35)-1ULL);return static_cast<long long>(u<<29)>>29;}
 __device__ __forceinline__ int b300_high_state_height(MateID x){return int((x>>60)&15ULL);}
 __device__ __forceinline__ MateID b300_high_state_pack_current(MateID x,long long d,int h){constexpr MateID TM=(MateID(1)<<25)-1ULL,DM=(MateID(1)<<35)-1ULL;return (x&TM)|((MateID(d)&DM)<<25)|(MateID(h&15)<<60);}
 __device__ __forceinline__ MateID b300_pack_high_main_state(MateID m){MateID trits=0;
 #pragma unroll
-    for(int c=0;c<5;++c)trits|=MateID(b300_main_trit3(m,14+3*c,28))<<(5*c);return b300_high_state_pack_current(trits,0,1);}
+    for(int c=0;c<5;++c)trits|=MateID(b300_main_trit3(m,13+3*c,28))<<(5*c);return b300_high_state_pack_current(trits,0,1);}
 __device__ __forceinline__ MateID b300_pack_main_transition_cache(MateID m){if(b300_high_main_state_active())return b300_pack_high_main_state(m);return b300_pack_low_window_main_mate(m);}
 __device__ __forceinline__ void b300_high_state_step(long long&d,int&h,int p,MateValue v){
     if(v==R){d+=static_cast<long long>(D_BLOCK_DP[p-1][h])-static_cast<long long>(D_MAIN_DP[p][h]);--h;}
@@ -126,10 +130,10 @@ new='ck(cudaGetLastError(),"doubleD gather");ck(cudaDeviceSynchronize(),"doubleD
 if s.count(old)!=1:raise SystemExit(f'gather/init anchor count={s.count(old)}')
 s=s.replace(old,new,1)
 
-for required in ('b300_pack_main_transition_cache','b300_low_state_advance(m1,p)','b300_high_state_advance(m1,p)','b300_high_state_drop_rank','b300_low_cached_drop_rank(i,m,p)','b300_init_low_main_state_kernel'):
+for required in ('b300_pack_main_transition_cache','b300_low_state_advance(m1,p)','b300_high_state_advance(m1,p)','b300_high_state_drop_rank','b300_low_cached_drop_rank(i,m,p)','b300_init_low_main_state_kernel','p-13','13+3*c'):
     if required not in s:raise SystemExit(f'missing unified main recurrence artifact: {required}')
 if s.count('b300_pack_main_transition_cache(m)')!=2:raise SystemExit(f'expected two production unified packing calls, got {s.count("b300_pack_main_transition_cache(m)")}')
 if s.find('b300_pack_main_transition_cache')>s.find('__global__ void gather_main_kernel'):
     raise SystemExit('unified transition-cache helper emitted after gather_main')
 out.parent.mkdir(parents=True,exist_ok=True);out.write_text(s)
-print(f'generated {out} from {src}: unified_main_recurrence=1 ilp=2 extra_state_bytes=0 helper_before_gather=1 low_trit_bits=25 low_delta_bits=31 high_trit_bits=25 high_delta_bits=35 height_bits=4 mate_hbm_store_per_state_step=8 main_drop_walk_or_table_loads_per_state_step=0 main_height_walk_or_popcount_per_state_step=0')
+print(f'generated {out} from {src}: unified_main_recurrence=1 ilp=2 extra_state_bytes=0 helper_before_gather=1 low_trit_bits=25 low_delta_bits=31 high_trit_positions=15 high_trit_range=13..27 high_trit_bits=25 high_delta_bits=35 height_bits=4 mate_hbm_store_per_state_step=8 main_drop_walk_or_table_loads_per_state_step=0 main_height_walk_or_popcount_per_state_step=0')
