@@ -18,12 +18,18 @@
 #ifndef P10DC_ORBITCTA_FLAT_DYNAMIC_BATCH
 #define P10DC_ORBITCTA_FLAT_DYNAMIC_BATCH 1
 #endif
+#ifndef P10DC_ORBITCTA_FLAT_DYNAMIC_FUSE_LEASE_PREP
+#define P10DC_ORBITCTA_FLAT_DYNAMIC_FUSE_LEASE_PREP 0
+#endif
 static_assert(P10DC_ORBITCTA_FLAT_DYNAMIC_BATCH == 1 ||
               P10DC_ORBITCTA_FLAT_DYNAMIC_BATCH == 2 ||
               P10DC_ORBITCTA_FLAT_DYNAMIC_BATCH == 4 ||
               P10DC_ORBITCTA_FLAT_DYNAMIC_BATCH == 8 ||
               P10DC_ORBITCTA_FLAT_DYNAMIC_BATCH == 16,
               "dynamic flat queue batch must be 1,2,4,8,16");
+static_assert(P10DC_ORBITCTA_FLAT_DYNAMIC_FUSE_LEASE_PREP == 0 ||
+              P10DC_ORBITCTA_FLAT_DYNAMIC_FUSE_LEASE_PREP == 1,
+              "dynamic lease/prepare fusion must be 0 or 1");
 
 // One 32-bit queue head per device. Graph capture inserts a reset kernel before
 // every HIGH position. Each resident CTA atomically leases BATCH consecutive
@@ -187,6 +193,33 @@ __global__ void bucket_high_orbit_closure_pattern10_depthcode_orbitcta_flat_dyna
     __syncthreads();
     constexpr uint32_t BATCH = uint32_t(P10DC_ORBITCTA_FLAT_DYNAMIC_BATCH);
     for (;;) {
+#if P10DC_ORBITCTA_FLAT_DYNAMIC_FUSE_LEASE_PREP
+        if (threadIdx.x == 0) {
+            lease_base = atomicAdd(&D_P10DC_ORBITCTA_FLAT_NEXT, BATCH);
+            c.valid = 0;
+            if (lease_base < c.total)
+                p10dc_orbitcta_flat_dynamic_prepare_forward(c, lease_base, base_off, nblocks, p);
+        }
+        // One CTA barrier publishes both the lease id and the first prepared
+        // orbit. The baseline path needs one barrier for the lease and another
+        // for j=0 preparation.
+        __syncthreads();
+        if (lease_base >= c.total) break;
+        if (c.valid == 1) p10dc_orbitcta_flat_forward_columns(c);
+        __syncthreads();
+#pragma unroll 1
+        for (uint32_t j = 1; j < BATCH; ++j) {
+            if (threadIdx.x == 0) {
+                c.valid = 0;
+                const uint32_t k = lease_base + j;
+                if (k < c.total)
+                    p10dc_orbitcta_flat_dynamic_prepare_forward(c, k, base_off, nblocks, p);
+            }
+            __syncthreads();
+            if (c.valid == 1) p10dc_orbitcta_flat_forward_columns(c);
+            __syncthreads();
+        }
+#else
         if (threadIdx.x == 0)
             lease_base = atomicAdd(&D_P10DC_ORBITCTA_FLAT_NEXT, BATCH);
         __syncthreads();
@@ -203,6 +236,7 @@ __global__ void bucket_high_orbit_closure_pattern10_depthcode_orbitcta_flat_dyna
             if (c.valid == 1) p10dc_orbitcta_flat_forward_columns(c);
             __syncthreads();
         }
+#endif
     }
 }
 
@@ -229,6 +263,32 @@ __global__ void bucket_reverse_high_pattern10_depthcode_orbitcta_flat_dynamic_ke
     __syncthreads();
     constexpr uint32_t BATCH = uint32_t(P10DC_ORBITCTA_FLAT_DYNAMIC_BATCH);
     for (;;) {
+#if P10DC_ORBITCTA_FLAT_DYNAMIC_FUSE_LEASE_PREP
+        if (threadIdx.x == 0) {
+            lease_base = atomicAdd(&D_P10DC_ORBITCTA_FLAT_NEXT, BATCH);
+            c.valid = 0;
+            if (lease_base < c.total)
+                p10dc_orbitcta_flat_dynamic_prepare_reverse(
+                    c, lease_base, base_off, nblocks, p, edge);
+        }
+        __syncthreads();
+        if (lease_base >= c.total) break;
+        if (c.valid == 1) p10dc_orbitcta_flat_reverse_columns(c, edge);
+        __syncthreads();
+#pragma unroll 1
+        for (uint32_t j = 1; j < BATCH; ++j) {
+            if (threadIdx.x == 0) {
+                c.valid = 0;
+                const uint32_t k = lease_base + j;
+                if (k < c.total)
+                    p10dc_orbitcta_flat_dynamic_prepare_reverse(
+                        c, k, base_off, nblocks, p, edge);
+            }
+            __syncthreads();
+            if (c.valid == 1) p10dc_orbitcta_flat_reverse_columns(c, edge);
+            __syncthreads();
+        }
+#else
         if (threadIdx.x == 0)
             lease_base = atomicAdd(&D_P10DC_ORBITCTA_FLAT_NEXT, BATCH);
         __syncthreads();
@@ -245,5 +305,6 @@ __global__ void bucket_reverse_high_pattern10_depthcode_orbitcta_flat_dynamic_ke
             if (c.valid == 1) p10dc_orbitcta_flat_reverse_columns(c, edge);
             __syncthreads();
         }
+#endif
     }
 }
