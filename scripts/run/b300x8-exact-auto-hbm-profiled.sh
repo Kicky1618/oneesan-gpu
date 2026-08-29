@@ -11,8 +11,7 @@ PROFILE_FILE="${PROFILE_FILE:-$ONEESAN_ROOT/work/b300_hbm_profile_refined21.env}
 source "$PROFILE_FILE"
 
 # Backward-compatible defaults for profiles generated before compact prectx,
-# flat scheduling, flat-bid, warpcoop and chunked quad execution were added.
-# psm=0 means occupancy-derived forward/reverse pool sizes.
+# dynamic flat scheduling, flat-bid, warpcoop and chunked quad execution.
 WARP_PRECTX_COMPACT="${WARP_PRECTX_COMPACT:-0}"
 ORBIT_PRECTX_COMPACT="${ORBIT_PRECTX_COMPACT:-0}"
 ORBIT_PRECTX_FLAT_BID="${ORBIT_PRECTX_FLAT_BID:-0}"
@@ -20,6 +19,8 @@ ORBIT_PRECTX_FLAT_BID_FUSED="${ORBIT_PRECTX_FLAT_BID_FUSED:-0}"
 ORBIT_PRECTX_WARPCOOP="${ORBIT_PRECTX_WARPCOOP:-0}"
 ORBITCTA_FLAT="${ORBITCTA_FLAT:-0}"
 ORBITCTA_FLAT_CHUNK="${ORBITCTA_FLAT_CHUNK:-1}"
+ORBITCTA_FLAT_DYNAMIC="${ORBITCTA_FLAT_DYNAMIC:-0}"
+ORBITCTA_FLAT_DYNAMIC_BATCH="${ORBITCTA_FLAT_DYNAMIC_BATCH:-1}"
 ORBITCTA_FLAT_BLOCKS_PER_SM="${ORBITCTA_FLAT_BLOCKS_PER_SM:-0}"
 ORBIT_QUAD_MLP="${ORBIT_QUAD_MLP:-0}"
 ORBIT_QUAD_OVERLAP_LOCAL="${ORBIT_QUAD_OVERLAP_LOCAL:-0}"
@@ -39,15 +40,22 @@ PREFIX="${PREFIX:-$ONEESAN_ROOT/work/b300_exact_hbm_profiled_n27}"; LOGDIR="${LO
 RESULT="${RESULT:-${PREFIX}.tsv}"; PTXAS="${PTXAS:-${PREFIX}_ptxas.tsv}"; WORK_ROOT="${WORK_ROOT:-$ONEESAN_ROOT/work}"
 mkdir -p "$LOGDIR" "$(dirname "$RESULT")"
 
-for x in PM_ACCUM REBUILD SELECT_ONLY WARP_PRECTX_COMPACT ORBIT_PRECTX_COMPACT ORBIT_PRECTX_FLAT_BID ORBIT_PRECTX_FLAT_BID_FUSED ORBIT_PRECTX_WARPCOOP ORBITCTA_FLAT ORBIT_QUAD_MLP ORBIT_QUAD_OVERLAP_LOCAL ORBIT_QUAD_SPARSE_DESC_MLP ORBIT_QUAD_OVERLAP_BYPASS_LOCAL0; do
+for x in PM_ACCUM REBUILD SELECT_ONLY WARP_PRECTX_COMPACT ORBIT_PRECTX_COMPACT ORBIT_PRECTX_FLAT_BID ORBIT_PRECTX_FLAT_BID_FUSED ORBIT_PRECTX_WARPCOOP ORBITCTA_FLAT ORBITCTA_FLAT_DYNAMIC ORBIT_QUAD_MLP ORBIT_QUAD_OVERLAP_LOCAL ORBIT_QUAD_SPARSE_DESC_MLP ORBIT_QUAD_OVERLAP_BYPASS_LOCAL0; do
   v="${!x}"; [[ "$v" == 0 || "$v" == 1 ]] || { echo "$x must be 0 or 1" >&2; exit 2; }
 done
+case "$ORBITCTA_FLAT_DYNAMIC_BATCH" in 1|2|4|8|16) ;; *) echo 'ORBITCTA_FLAT_DYNAMIC_BATCH must be 1,2,4,8,16' >&2; exit 2;; esac
 case "$ORBIT_QUAD_CPASYNC_PREFETCH_BYTES" in 0|64|128|256) ;; *) echo 'ORBIT_QUAD_CPASYNC_PREFETCH_BYTES must be 0,64,128,256' >&2; exit 2;; esac
 case "$ORBIT_QUAD_CPASYNC_GROUP_COLS" in 1|2|4) ;; *) echo 'ORBIT_QUAD_CPASYNC_GROUP_COLS must be 1,2,4' >&2; exit 2;; esac
 case "$ORBITCTA_FLAT_CHUNK" in 1|2|4|8|16|32) ;; *) echo 'ORBITCTA_FLAT_CHUNK must be 1,2,4,8,16,32' >&2; exit 2;; esac
 [[ "$ORBITCTA_FLAT_BLOCKS_PER_SM" =~ ^[0-9]+$ ]] || { echo 'ORBITCTA_FLAT_BLOCKS_PER_SM must be non-negative integer (0=occupancy)' >&2; exit 2; }
 [[ "$ORBIT_QUAD_LOCAL_DIRECT_MAX" =~ ^[0-9]+$ ]] && (( ORBIT_QUAD_LOCAL_DIRECT_MAX <= 8 )) || { echo 'ORBIT_QUAD_LOCAL_DIRECT_MAX must be 0..8' >&2; exit 2; }
 [[ "$ORBITCTA_FLAT" == 1 || "$ORBITCTA_FLAT_CHUNK" == 1 ]] || { echo 'chunked orbit profile requires ORBITCTA_FLAT=1' >&2; exit 2; }
+if [[ "$ORBITCTA_FLAT_DYNAMIC" == 1 ]]; then
+  [[ "$ORBITCTA_FLAT" == 1 && "$ORBITCTA_FLAT_CHUNK" == 1 ]] || { echo 'dynamic orbit profile requires flat chunk=1' >&2; exit 2; }
+  [[ "$ORBIT_QUAD_MLP" == 0 && "$ORBIT_PRECTX_WARPCOOP" == 0 ]] || { echo 'dynamic queue is mutually exclusive with quad/warpcoop' >&2; exit 2; }
+else
+  [[ "$ORBITCTA_FLAT_DYNAMIC_BATCH" == 1 ]] || { echo 'dynamic batch >1 requires dynamic queue' >&2; exit 2; }
+fi
 command -v nvcc >/dev/null || { echo 'nvcc required' >&2; exit 2; }
 command -v nvidia-smi >/dev/null || { echo 'nvidia-smi required' >&2; exit 2; }
 (( $(nvidia-smi --query-gpu=index --format=csv,noheader | wc -l) >= 8 )) || { echo 'need 8 visible GPUs' >&2; exit 2; }
@@ -73,13 +81,13 @@ fi
 if [[ "$ORBIT_PRECTX_WARPCOOP" == 1 ]]; then
   [[ "$ORBITCTA_FLAT" == 1 ]] && (( ORBITCTA_FLAT_CHUNK > 1 )) || { echo 'ORBIT_PRECTX_WARPCOOP requires chunked flat orbit CTA' >&2; exit 2; }
   [[ "$ORBIT_PRECTX_COMPACT" == 1 && "$ORBIT_PRECTX_FORWARD" == 1 && "$ORBIT_PRECTX_REVERSE" == 1 ]] || { echo 'ORBIT_PRECTX_WARPCOOP requires compact forward+reverse prectx' >&2; exit 2; }
-  [[ "$ORBIT_PRECTX_FLAT_BID" == 0 ]] || { echo 'warpcoop and flat-bid are mutually exclusive' >&2; exit 2; }
+  [[ "$ORBIT_PRECTX_FLAT_BID" == 0 && "$ORBITCTA_FLAT_DYNAMIC" == 0 ]] || { echo 'warpcoop is mutually exclusive with flat-bid/dynamic' >&2; exit 2; }
 fi
 if [[ "$ORBIT_QUAD_MLP" == 1 ]]; then
   [[ "$ORBITCTA_FLAT" == 1 ]] || { echo 'ORBIT_QUAD_MLP requires flat orbit CTA' >&2; exit 2; }
   (( ORBITCTA_FLAT_CHUNK > 1 )) || { echo 'ORBIT_QUAD_MLP requires FLAT_CHUNK>1' >&2; exit 2; }
   [[ "$ORBIT_COL_ILP" == 4 ]] || { echo 'ORBIT_QUAD_MLP requires ORBIT_COL_ILP=4' >&2; exit 2; }
-  [[ "$ORBIT_PRECTX_FLAT_BID" == 0 && "$ORBIT_PRECTX_FLAT_BID_FUSED" == 0 ]] || { echo 'quad and flat-bid are mutually exclusive' >&2; exit 2; }
+  [[ "$ORBIT_PRECTX_FLAT_BID" == 0 && "$ORBIT_PRECTX_FLAT_BID_FUSED" == 0 && "$ORBITCTA_FLAT_DYNAMIC" == 0 ]] || { echo 'quad is mutually exclusive with flat-bid/dynamic' >&2; exit 2; }
 else
   [[ "$ORBIT_QUAD_OVERLAP_LOCAL" == 0 ]] || { echo 'ORBIT_QUAD_OVERLAP_LOCAL requires ORBIT_QUAD_MLP=1' >&2; exit 2; }
   (( ORBIT_QUAD_LOCAL_DIRECT_MAX == 0 )) || { echo 'ORBIT_QUAD_LOCAL_DIRECT_MAX requires ORBIT_QUAD_MLP=1' >&2; exit 2; }
@@ -106,7 +114,7 @@ fi
 has(){ [[ " $CANDIDATES " == *" $1 "* ]]; }
 FORCED_BIN="$ONEESAN_BUILD_DIR/b300_profiled_forced_n27"
 WARP_BIN="$ONEESAN_BUILD_DIR/b300_profiled_warp_${WARP_PROFILE}_n27"
-ORBIT_BIN="$ONEESAN_BUILD_DIR/b300_profiled_orbit_${ORBIT_PROFILE}_flat${ORBITCTA_FLAT}_chunk${ORBITCTA_FLAT_CHUNK}_psm${ORBITCTA_FLAT_BLOCKS_PER_SM}_bid${ORBIT_PRECTX_FLAT_BID}_bf${ORBIT_PRECTX_FLAT_BID_FUSED}_wc${ORBIT_PRECTX_WARPCOOP}_quad${ORBIT_QUAD_MLP}_qol${ORBIT_QUAD_OVERLAP_LOCAL}_qld${ORBIT_QUAD_LOCAL_DIRECT_MAX}_qsd${ORBIT_QUAD_SPARSE_DESC_MLP}_ql0${ORBIT_QUAD_OVERLAP_BYPASS_LOCAL0}_qgc${ORBIT_QUAD_CPASYNC_GROUP_COLS}_qpf${ORBIT_QUAD_CPASYNC_PREFETCH_BYTES}_n27"
+ORBIT_BIN="$ONEESAN_BUILD_DIR/b300_profiled_orbit_${ORBIT_PROFILE}_flat${ORBITCTA_FLAT}_chunk${ORBITCTA_FLAT_CHUNK}_dyn${ORBITCTA_FLAT_DYNAMIC}_db${ORBITCTA_FLAT_DYNAMIC_BATCH}_psm${ORBITCTA_FLAT_BLOCKS_PER_SM}_bid${ORBIT_PRECTX_FLAT_BID}_bf${ORBIT_PRECTX_FLAT_BID_FUSED}_wc${ORBIT_PRECTX_WARPCOOP}_quad${ORBIT_QUAD_MLP}_qol${ORBIT_QUAD_OVERLAP_LOCAL}_qld${ORBIT_QUAD_LOCAL_DIRECT_MAX}_qsd${ORBIT_QUAD_SPARSE_DESC_MLP}_ql0${ORBIT_QUAD_OVERLAP_BYPASS_LOCAL0}_qgc${ORBIT_QUAD_CPASYNC_GROUP_COLS}_qpf${ORBIT_QUAD_CPASYNC_PREFETCH_BYTES}_n27"
 
 if (( WARP_CPASYNC_PAIR || ORBIT_CPASYNC_PAIR )); then
   ARCH="$ARCH" NGPU=8 THREADS="$THREADS" bash "$ONEESAN_ROOT/scripts/bench/b300-cpasync-remote-peer-microprobe.sh" >"$LOGDIR/cpasync-peer.out" 2>"$LOGDIR/cpasync-peer.err"
@@ -131,12 +139,13 @@ if has warp_tuned && [[ "$REBUILD" == 1 || ! -x "$WARP_BIN" ]]; then
     bash "$ONEESAN_ROOT/scripts/build/b300-directgather-colilp-fast.sh" >"$LOGDIR/warp_tuned.build.out" 2>"$LOGDIR/warp_tuned.build.err"
 fi
 if has orbit_tuned && [[ "$REBUILD" == 1 || ! -x "$ORBIT_BIN" ]]; then
-  N=27 ARCH="$ARCH" OUT="$ORBIT_BIN" DIRECTGATHER64=1 DIRECTGATHER_SPARSE64="$ORBIT_SPARSE64" DIRECTGATHER_SORT_RANKS=0 ORBITCTA_COL_ILP="$ORBIT_COL_ILP" ORBITCTA_FLAT="$ORBITCTA_FLAT" ORBITCTA_FLAT_CHUNK="$ORBITCTA_FLAT_CHUNK" \
+  N=27 ARCH="$ARCH" OUT="$ORBIT_BIN" DIRECTGATHER64=1 DIRECTGATHER_SPARSE64="$ORBIT_SPARSE64" DIRECTGATHER_SORT_RANKS=0 ORBITCTA_COL_ILP="$ORBIT_COL_ILP" ORBITCTA_FLAT="$ORBITCTA_FLAT" ORBITCTA_FLAT_CHUNK="$ORBITCTA_FLAT_CHUNK" ORBITCTA_FLAT_DYNAMIC="$ORBITCTA_FLAT_DYNAMIC" ORBITCTA_FLAT_DYNAMIC_BATCH="$ORBITCTA_FLAT_DYNAMIC_BATCH" \
     PAIR_MLP=1 CPASYNC_PAIR="$ORBIT_CPASYNC_PAIR" QUAD_MLP="$ORBIT_QUAD_MLP" QUAD_OVERLAP_LOCAL="$ORBIT_QUAD_OVERLAP_LOCAL" QUAD_LOCAL_DIRECT_MAX="$ORBIT_QUAD_LOCAL_DIRECT_MAX" QUAD_SPARSE_DESC_MLP="$ORBIT_QUAD_SPARSE_DESC_MLP" QUAD_OVERLAP_BYPASS_LOCAL0="$ORBIT_QUAD_OVERLAP_BYPASS_LOCAL0" \
     QUAD_CPASYNC_PREFETCH_BYTES="$ORBIT_QUAD_CPASYNC_PREFETCH_BYTES" QUAD_CPASYNC_GROUP_COLS="$ORBIT_QUAD_CPASYNC_GROUP_COLS" \
     PRECTX_FORWARD="$ORBIT_PRECTX_FORWARD" PRECTX_REVERSE="$ORBIT_PRECTX_REVERSE" PRECTX_COMPACT="$ORBIT_PRECTX_COMPACT" PRECTX_WARPCOOP="$ORBIT_PRECTX_WARPCOOP" PRECTX_FLAT_BID="$ORBIT_PRECTX_FLAT_BID" PRECTX_FLAT_BID_FUSED="$ORBIT_PRECTX_FLAT_BID_FUSED" \
     RANKFORMULA_MLP_WINDOW4=1 PM_ACCUM="$PM_ACCUM" PTXAS_VERBOSE=1 \
     bash "$ONEESAN_ROOT/scripts/build/b300-directgather-orbitcta.sh" >"$LOGDIR/orbit_tuned.build.out" 2>"$LOGDIR/orbit_tuned.build.err"
+  grep -q "flat_dynamic=$ORBITCTA_FLAT_DYNAMIC flat_dynamic_batch=$ORBITCTA_FLAT_DYNAMIC_BATCH" "$LOGDIR/orbit_tuned.build.err" || { echo 'orbit dynamic build marker mismatch' >&2; exit 5; }
   grep -q "quad_cpasync_prefetch_bytes=$ORBIT_QUAD_CPASYNC_PREFETCH_BYTES" "$LOGDIR/orbit_tuned.build.err" || { echo 'orbit prefetch build marker mismatch' >&2; exit 5; }
   grep -q "quad_cpasync_group_cols=$ORBIT_QUAD_CPASYNC_GROUP_COLS" "$LOGDIR/orbit_tuned.build.err" || { echo 'orbit group build marker mismatch' >&2; exit 5; }
 fi
