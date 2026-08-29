@@ -5,8 +5,13 @@
 #ifndef P10DC_RANKFORMULA_PAIR_MLP
 #define P10DC_RANKFORMULA_PAIR_MLP 0
 #endif
+#ifndef P10DC_RANKFORMULA_CPASYNC_PAIR
+#define P10DC_RANKFORMULA_CPASYNC_PAIR 0
+#endif
 static_assert(P10DC_RANKFORMULA_PAIR_MLP == 0 || P10DC_RANKFORMULA_PAIR_MLP == 1,
               "P10DC_RANKFORMULA_PAIR_MLP must be 0 or 1");
+static_assert(P10DC_RANKFORMULA_CPASYNC_PAIR == 0 || P10DC_RANKFORMULA_CPASYNC_PAIR == 1,
+              "P10DC_RANKFORMULA_CPASYNC_PAIR must be 0 or 1");
 #if P10DC_RANKFORMULA_PAIR_MLP
 static_assert(P10DC_RANKFORMULA_DIRECTGATHER,
               "pair MLP currently requires DIRECTGATHER");
@@ -14,6 +19,13 @@ static_assert(P10DC_RANKFORMULA_DIRECTGATHER_DEPTHMAJOR,
               "pair MLP currently requires depth-major DIRECTGATHER");
 static_assert(P10DC_RANKFORMULA_MLP_WINDOW4,
               "pair MLP requires WINDOW4 to bound register pressure");
+#endif
+#if P10DC_RANKFORMULA_CPASYNC_PAIR
+static_assert(P10DC_RANKFORMULA_PAIR_MLP,
+              "cp.async pair path requires PAIR_MLP");
+static_assert(sizeof(Count) == 4,
+              "cp.async pair path assumes 32-bit Count values");
+extern __shared__ unsigned char p10dc_rankformula_dynamic_smem[];
 #endif
 
 struct P10DCRankFormulaPairAccum {
@@ -28,6 +40,45 @@ __device__ __forceinline__ uint4 p10dc_rankformula_directgather_depth_desc(
         h * P10DC_RANKFORMULA_ABSTRACT_SELECT_DEPTHS + (depth - 1u)]) + size_t(rank);
     return __ldg(D_P10DC_RANKFORMULA_DIRECTGATHER4 + gi);
 }
+
+#if P10DC_RANKFORMULA_CPASYNC_PAIR
+__device__ __forceinline__ Count* p10dc_rankformula_cpasync_slot(uint32_t slot) {
+    const size_t off = p10dc_direct_pair_scratch_offset_bytes(int(blockDim.x));
+    Count* base = reinterpret_cast<Count*>(p10dc_rankformula_dynamic_smem + off);
+    // Slot-major layout: for a fixed source ordinal, adjacent warp lanes target
+    // adjacent shared words.  This avoids the 14-word per-thread stride and the
+    // associated bank conflicts while keeping each thread's fourteen values private.
+    return base + size_t(slot) * blockDim.x + threadIdx.x;
+}
+
+__device__ __forceinline__ void p10dc_rankformula_cpasync_u32(
+    Count* dst, const Count* src, bool valid
+) {
+    if (!valid) {
+        *dst = Count(0);
+        return;
+    }
+#if __CUDA_ARCH__ >= 800
+    const uint32_t sdst = uint32_t(__cvta_generic_to_shared(dst));
+    const unsigned long long gsrc = reinterpret_cast<unsigned long long>(src);
+    asm volatile("cp.async.ca.shared.global [%0], [%1], 4;" :: "r"(sdst), "l"(gsrc));
+#else
+    *dst = *src;
+#endif
+}
+
+__device__ __forceinline__ void p10dc_rankformula_cpasync_commit() {
+#if __CUDA_ARCH__ >= 800
+    asm volatile("cp.async.commit_group;");
+#endif
+}
+
+__device__ __forceinline__ void p10dc_rankformula_cpasync_wait_all() {
+#if __CUDA_ARCH__ >= 800
+    asm volatile("cp.async.wait_group 0;");
+#endif
+}
+#endif
 
 __device__ __forceinline__ P10DCRankFormulaPairAccum
 p10dc_resolved_low_preimages_cross5_rankformula_nometa4_abstract_pair_fixed(
@@ -62,6 +113,58 @@ p10dc_resolved_low_preimages_cross5_rankformula_nometa4_abstract_pair_fixed(
     const uint32_t b4 = d1.z & 0xffffu, b5 = d1.z >> 16;
     const uint32_t b6 = d1.w & 0xffffu;
 
+#if P10DC_RANKFORMULA_CPASYNC_PAIR
+    // Stage all selected CROSS sources through shared memory.  No source value
+    // is kept live in a register while the requests are outstanding.  Two async
+    // groups are used so a lane can have up to fourteen independent 32-bit
+    // global/peer reads in flight without inflating the register live range.
+    p10dc_rankformula_cpasync_u32(p10dc_rankformula_cpasync_slot(0), source_row + a0, n0 > 0);
+    p10dc_rankformula_cpasync_u32(p10dc_rankformula_cpasync_slot(1), source_row + a1, n0 > 1);
+    p10dc_rankformula_cpasync_u32(p10dc_rankformula_cpasync_slot(2), source_row + a2, n0 > 2);
+    p10dc_rankformula_cpasync_u32(p10dc_rankformula_cpasync_slot(3), source_row + a3, n0 > 3);
+    p10dc_rankformula_cpasync_u32(p10dc_rankformula_cpasync_slot(4), source_row + a4, n0 > 4);
+    p10dc_rankformula_cpasync_u32(p10dc_rankformula_cpasync_slot(5), source_row + a5, n0 > 5);
+    p10dc_rankformula_cpasync_u32(p10dc_rankformula_cpasync_slot(6), source_row + a6, n0 > 6);
+    p10dc_rankformula_cpasync_commit();
+
+    p10dc_rankformula_cpasync_u32(p10dc_rankformula_cpasync_slot(7), source_row + b0, n1 > 0);
+    p10dc_rankformula_cpasync_u32(p10dc_rankformula_cpasync_slot(8), source_row + b1, n1 > 1);
+    p10dc_rankformula_cpasync_u32(p10dc_rankformula_cpasync_slot(9), source_row + b2, n1 > 2);
+    p10dc_rankformula_cpasync_u32(p10dc_rankformula_cpasync_slot(10), source_row + b3, n1 > 3);
+    p10dc_rankformula_cpasync_u32(p10dc_rankformula_cpasync_slot(11), source_row + b4, n1 > 4);
+    p10dc_rankformula_cpasync_u32(p10dc_rankformula_cpasync_slot(12), source_row + b5, n1 > 5);
+    p10dc_rankformula_cpasync_u32(p10dc_rankformula_cpasync_slot(13), source_row + b6, n1 > 6);
+    p10dc_rankformula_cpasync_commit();
+    p10dc_rankformula_cpasync_wait_all();
+
+    const BkczCrossAccum a03 = p10dc_rankformula_accum_add(
+        p10dc_rankformula_accum_add(
+            BkczCrossAccum(*p10dc_rankformula_cpasync_slot(0)),
+            BkczCrossAccum(*p10dc_rankformula_cpasync_slot(1))),
+        p10dc_rankformula_accum_add(
+            BkczCrossAccum(*p10dc_rankformula_cpasync_slot(2)),
+            BkczCrossAccum(*p10dc_rankformula_cpasync_slot(3))));
+    const BkczCrossAccum a46 = p10dc_rankformula_accum_add(
+        p10dc_rankformula_accum_add(
+            BkczCrossAccum(*p10dc_rankformula_cpasync_slot(4)),
+            BkczCrossAccum(*p10dc_rankformula_cpasync_slot(5))),
+        BkczCrossAccum(*p10dc_rankformula_cpasync_slot(6)));
+    const BkczCrossAccum b03 = p10dc_rankformula_accum_add(
+        p10dc_rankformula_accum_add(
+            BkczCrossAccum(*p10dc_rankformula_cpasync_slot(7)),
+            BkczCrossAccum(*p10dc_rankformula_cpasync_slot(8))),
+        p10dc_rankformula_accum_add(
+            BkczCrossAccum(*p10dc_rankformula_cpasync_slot(9)),
+            BkczCrossAccum(*p10dc_rankformula_cpasync_slot(10))));
+    const BkczCrossAccum b46 = p10dc_rankformula_accum_add(
+        p10dc_rankformula_accum_add(
+            BkczCrossAccum(*p10dc_rankformula_cpasync_slot(11)),
+            BkczCrossAccum(*p10dc_rankformula_cpasync_slot(12))),
+        BkczCrossAccum(*p10dc_rankformula_cpasync_slot(13)));
+    return P10DCRankFormulaPairAccum{
+        p10dc_rankformula_accum_add(a03, a46),
+        p10dc_rankformula_accum_add(b03, b46)};
+#else
     // Four-wide window for both columns.  The loads for column B are issued
     // before column A is reduced, increasing outstanding requests without
     // keeping fourteen source values live simultaneously.
@@ -98,5 +201,6 @@ p10dc_resolved_low_preimages_cross5_rankformula_nometa4_abstract_pair_fixed(
     return P10DCRankFormulaPairAccum{
         p10dc_rankformula_accum_add(sa03, sa46),
         p10dc_rankformula_accum_add(sb03, sb46)};
+#endif
 #endif
 }
