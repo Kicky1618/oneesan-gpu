@@ -15,6 +15,7 @@ RANKCHUNK32_ONESHFL="${RANKCHUNK32_ONESHFL:-1}"
 RANKCHUNK32_FUSED16="${RANKCHUNK32_FUSED16:-0}"
 RANKCHUNK32_DIRECT3="${RANKCHUNK32_DIRECT3:-0}"
 RANKCHUNK32_DIRECTMASK="${RANKCHUNK32_DIRECTMASK:-0}"
+RANKCHUNK32_ILP="${RANKCHUNK32_ILP:-1}"
 RANKCHUNK32_RANKMASK_PROFILE="${RANKCHUNK32_RANKMASK_PROFILE:-0}"
 RANKCHUNK32_RANKMASK_PROFILE_LOG2="${RANKCHUNK32_RANKMASK_PROFILE_LOG2:-0}"
 RANKCHUNK32_BYTEPACK="${RANKCHUNK32_BYTEPACK:-0}"
@@ -41,6 +42,7 @@ case "$HIGH_CTX" in
 esac
 case "$DEPTHCODE_DECODE_LOAD" in global|ldg) ;; *) echo "DEPTHCODE_DECODE_LOAD must be global or ldg" >&2; exit 2;; esac
 case "$RANKSTREAM_LUT_LOAD" in constant|ldg|ldg256) ;; *) echo "RANKSTREAM_LUT_LOAD must be constant, ldg, or ldg256" >&2; exit 2;; esac
+case "$RANKCHUNK32_ILP" in 1|2|4) ;; *) echo "RANKCHUNK32_ILP must be 1, 2, or 4" >&2; exit 2;; esac
 if [[ "$HIGH_CTX" == warpstriped_delta_direct_affine_rankchunk32_basepair64_cross5 ]]; then
   RANKCHUNK32_BYTEPACK=1
   RANKCHUNK32_BLOCK64=0
@@ -69,6 +71,14 @@ if [[ "$RANKCHUNK32_BLOCK64" == 1 && "$RANKCHUNK32_BYTEPACK" == 1 ]]; then echo 
 if [[ "$RANKCHUNK32_DIRECTMASK" == 1 && "$HIGH_CTX" != warpstriped_delta_direct_affine_rankchunk32_cross5 ]]; then
   echo "RANKCHUNK32_DIRECTMASK=1 requires HIGH_CTX=warpstriped_delta_direct_affine_rankchunk32_cross5" >&2
   exit 2
+fi
+if (( RANKCHUNK32_ILP > 1 )); then
+  if [[ "$RANKCHUNK32_DIRECTMASK" != 1 || "$HIGH_CTX" != warpstriped_delta_direct_affine_rankchunk32_cross5 ]]; then
+    echo "RANKCHUNK32_ILP>1 requires rankchunk32 DIRECTMASK warpstriped high path" >&2; exit 2
+  fi
+  if [[ "$RANKCHUNK32_ALIGN32" != 1 ]]; then
+    echo "RANKCHUNK32_ILP>1 requires RANKCHUNK32_ALIGN32=1" >&2; exit 2
+  fi
 fi
 if [[ "$RANKCHUNK32_DIRECTMASK" == 1 && "$RANKCHUNK32_RANKMASK_PROFILE" == 1 ]]; then
   echo "RANKCHUNK32_DIRECTMASK bypasses the CROSS5 rankmask profiler; disable RANKCHUNK32_RANKMASK_PROFILE" >&2
@@ -120,6 +130,7 @@ SUFFIX="_payload_${HIGH_CTX}_${TRANSPOSE_MODE}"
 [[ "$RANKCHUNK32_ONESHFL" == 0 ]] && SUFFIX="${SUFFIX}_rankchunk2shfl"
 [[ "$RANKCHUNK32_DIRECT3" == 1 ]] && SUFFIX="${SUFFIX}_rankchunkdirect3"
 [[ "$RANKCHUNK32_DIRECTMASK" == 1 ]] && SUFFIX="${SUFFIX}_rankchunkdirectmask"
+[[ "$RANKCHUNK32_ILP" != 1 ]] && SUFFIX="${SUFFIX}_ilp${RANKCHUNK32_ILP}"
 [[ "$RANKCHUNK32_RANKMASK_PROFILE" == 1 ]] && SUFFIX="${SUFFIX}_rankmaskprofile${RANKCHUNK32_RANKMASK_PROFILE_LOG2}"
 if [[ "$HIGH_CTX" == warpstriped_delta_direct_affine_rankdelta8_cross5 ]]; then
   [[ "$RANKDELTA8_FUSED13" == 1 ]] && SUFFIX="${SUFFIX}_rankdeltafused13"
@@ -159,6 +170,7 @@ TMPDIR="$ONEESAN_TMP_DIR" nvcc -O3 -std=c++17 -lineinfo -arch="$ARCH" \
   -DP10DC_RANKCHUNK32_FUSED16="$RANKCHUNK32_FUSED16" \
   -DP10DC_RANKCHUNK32_DIRECT3="$RANKCHUNK32_DIRECT3" \
   -DP10DC_RANKCHUNK32_DIRECTMASK="$RANKCHUNK32_DIRECTMASK" \
+  -DP10DC_WARPSTRIPED_ILP="$RANKCHUNK32_ILP" \
   -DP10DC_RANKCHUNK32_RANKMASK_PROFILE="$RANKCHUNK32_RANKMASK_PROFILE" \
   -DP10DC_RANKCHUNK32_RANKMASK_PROFILE_LOG2="$RANKCHUNK32_RANKMASK_PROFILE_LOG2" \
   -DP10DC_RANKCHUNK32_BYTEPACK="$RANKCHUNK32_BYTEPACK" \
@@ -174,4 +186,4 @@ TMPDIR="$ONEESAN_TMP_DIR" nvcc -O3 -std=c++17 -lineinfo -arch="$ARCH" \
   -DP10DC_RANKFORMULA_SLOTROW32="$RANKFORMULA_SLOTROW32" \
   "$SRC" -o "$OUT"
 
-echo "built $OUT (closure=pattern10-depthcode sidecar_bytes_per_orbit=0 temporary_depth_bytes=0 decode=payload-masks runtime_unrank=0 high_ctx=$HIGH_CTX decode_load=$DEPTHCODE_DECODE_LOAD rankstream_lut_load=$RANKSTREAM_LUT_LOAD rankchunk32_oneshfl=$RANKCHUNK32_ONESHFL rankchunk32_fused16=$RANKCHUNK32_FUSED16 rankchunk32_direct3=$RANKCHUNK32_DIRECT3 rankchunk32_directmask=$RANKCHUNK32_DIRECTMASK rankchunk32_rankmask_profile=$RANKCHUNK32_RANKMASK_PROFILE rankchunk32_rankmask_profile_log2=$RANKCHUNK32_RANKMASK_PROFILE_LOG2 rankchunk32_bytepack=$RANKCHUNK32_BYTEPACK rankchunk32_align32=$RANKCHUNK32_ALIGN32 rankchunk32_block64=$RANKCHUNK32_BLOCK64 rankdelta8_align32=$RANKDELTA8_ALIGN32 rankdelta8_fused13=$RANKDELTA8_FUSED13 rankformula_sparse_base=$RANKFORMULA_SPARSE_BASE rankformula_rawcode=$RANKFORMULA_RAWCODE rankformula_inline_cross=$RANKFORMULA_INLINE_CROSS rankformula_base_delta=$RANKFORMULA_BASE_DELTA rankformula_slotmeta=$RANKFORMULA_SLOTMETA rankformula_slotrow32=$RANKFORMULA_SLOTROW32 window=graph transpose=$TRANSPOSE_MODE pm_accum=$PM_ACCUM ternary_key4=$TERNARY_KEY4 ptxas_verbose=$PTXAS_VERBOSE)"
+echo "built $OUT (closure=pattern10-depthcode sidecar_bytes_per_orbit=0 temporary_depth_bytes=0 decode=payload-masks runtime_unrank=0 high_ctx=$HIGH_CTX decode_load=$DEPTHCODE_DECODE_LOAD rankstream_lut_load=$RANKSTREAM_LUT_LOAD rankchunk32_oneshfl=$RANKCHUNK32_ONESHFL rankchunk32_fused16=$RANKCHUNK32_FUSED16 rankchunk32_direct3=$RANKCHUNK32_DIRECT3 rankchunk32_directmask=$RANKCHUNK32_DIRECTMASK rankchunk32_ilp=$RANKCHUNK32_ILP rankchunk32_rankmask_profile=$RANKCHUNK32_RANKMASK_PROFILE rankchunk32_rankmask_profile_log2=$RANKCHUNK32_RANKMASK_PROFILE_LOG2 rankchunk32_bytepack=$RANKCHUNK32_BYTEPACK rankchunk32_align32=$RANKCHUNK32_ALIGN32 rankchunk32_block64=$RANKCHUNK32_BLOCK64 rankdelta8_align32=$RANKDELTA8_ALIGN32 rankdelta8_fused13=$RANKDELTA8_FUSED13 rankformula_sparse_base=$RANKFORMULA_SPARSE_BASE rankformula_rawcode=$RANKFORMULA_RAWCODE rankformula_inline_cross=$RANKFORMULA_INLINE_CROSS rankformula_base_delta=$RANKFORMULA_BASE_DELTA rankformula_slotmeta=$RANKFORMULA_SLOTMETA rankformula_slotrow32=$RANKFORMULA_SLOTROW32 window=graph transpose=$TRANSPOSE_MODE pm_accum=$PM_ACCUM ternary_key4=$TERNARY_KEY4 ptxas_verbose=$PTXAS_VERBOSE)"
