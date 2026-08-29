@@ -23,9 +23,9 @@ def demangle(name: str) -> str:
         return name
 
 
-def emit(label, name, data):
+def emit(label, name, data, contains):
     dname = demangle(name)
-    if "bucket_" not in dname:
+    if contains and not any(x in dname for x in contains):
         return
     print("\t".join([
         label,
@@ -44,10 +44,29 @@ def main():
     ap.add_argument("log")
     ap.add_argument("--label", required=True)
     ap.add_argument("--header", action="store_true")
+    ap.add_argument(
+        "--contains",
+        action="append",
+        default=None,
+        help="emit kernels whose demangled name contains this substring; repeatable. Default: bucket_",
+    )
+    ap.add_argument(
+        "--all",
+        action="store_true",
+        help="emit every ptxas function record (overrides the historical bucket_ default)",
+    )
     args = ap.parse_args()
 
     if args.header:
         print("backend\tkernel\tregisters\tstack_bytes\tspill_store_bytes\tspill_load_bytes\tsmem_bytes\tcmem0_bytes")
+
+    if args.all:
+        contains = []
+    elif args.contains:
+        contains = args.contains
+    else:
+        # Keep all existing callers byte-for-byte compatible in output scope.
+        contains = ["bucket_"]
 
     current = None
     records = {}
@@ -94,8 +113,18 @@ def main():
     if not records:
         print(f"no ptxas function records found in {args.log}", file=sys.stderr)
         return 2
+    emitted = 0
     for name in sorted(records, key=demangle):
-        emit(args.label, name, records[name])
+        before = emitted
+        dname = demangle(name)
+        if not contains or any(x in dname for x in contains):
+            emit(args.label, name, records[name], contains)
+            emitted += 1
+        else:
+            emitted = before
+    if emitted == 0:
+        print(f"no ptxas function records matched filters {contains!r} in {args.log}", file=sys.stderr)
+        return 3
     return 0
 
 
