@@ -21,6 +21,12 @@ def replace_function(text:str,name:str,new:str)->str:
     if end<0:raise SystemExit(f'function end not found: {name}')
     return text[:start]+new+text[end:]
 
+# Rewrite only the two production materialization calls before inserting a helper
+# which itself intentionally calls the low-window packer.
+pack_call='b300_pack_low_window_main_mate(m)'
+if s.count(pack_call)!=2:raise SystemExit(f'expected two main mate packing calls before helper insertion, got {s.count(pack_call)}')
+s=s.replace(pack_call,'b300_pack_main_transition_cache(m)',2)
+
 high_rank='b300_high_chunk_drop_rank(i,m,p)' if 'b300_high_chunk_drop_rank' in s else 'rank_drop_n_t<TARGET_W>(i,m,p)'
 marker='\n\nstatic Code rank_full(MateID m,int width)'
 if marker not in s:raise SystemExit('rank_full marker not found')
@@ -30,8 +36,6 @@ __device__ __forceinline__ bool b300_high_main_state_active(){
     if constexpr(TARGET_W!=28)return false;
     else {
         constexpr uint32_t HIGH=((uint32_t(1)<<28)-1u)^((uint32_t(1)<<14)-1u);
-        // Forced high window fixes only planner positions 13..0. Positions
-        // 14..27 therefore contain the complete transition state we retain.
         return (D_MAIN_FIXED&HIGH)==0;
     }
 }
@@ -88,16 +92,6 @@ __device__ __forceinline__ Code b300_main_pair_rank_h(Code dst_rank,int p,MateVa
 '''
 s=s.replace(marker,helper+marker,1)
 
-# Pack the main cache at both gather/materialization sites. Low-window packing is
-# preserved through the wrapper; high-window states now keep only positions14..27.
-old='b300_pack_low_window_main_mate(m)'
-n=s.count(old)
-if n!=2:raise SystemExit(f'expected two main mate packing calls, got {n}')
-s=s.replace(old,'b300_pack_main_transition_cache(m)')
-# Restore the wrapper's own low-cache call after the global replacement above.
-s=s.replace('return b300_pack_main_transition_cache(m);\n}\n__device__ __forceinline__ void b300_high_state_step',
-            'return b300_pack_low_window_main_mate(m);\n}\n__device__ __forceinline__ void b300_high_state_step',1)
-
 prepare=f'''__device__ __forceinline__ void b300_main_pull_prepare(
     Code i,MateID m,int p,Code nblock,
     Code& pair_j,bool& has_pair,Code& block_j,bool& has_block
@@ -119,17 +113,16 @@ old='const Count* __restrict__ in,const MateID* __restrict__ mates,Code n,'
 if s.count(old)!=1:raise SystemExit(f'ILP2 mate pointer anchor count={s.count(old)}')
 s=s.replace(old,'const Count* __restrict__ in,MateID* __restrict__ mates,Code n,',1)
 old='uint64_t a0=uint64_t(self0)+pair0+block0;if(a0>=mod)a0-=mod;if(a0>=mod)a0-=mod;out_main[i0]=Count(a0);'
-new=old+'if(b300_high_main_state_active())mates[i0]=b300_high_state_advance(m0,p);'
 if s.count(old)!=1:raise SystemExit('ILP2 lane0 store anchor not unique')
-s=s.replace(old,new,1)
+s=s.replace(old,old+'if(b300_high_main_state_active())mates[i0]=b300_high_state_advance(m0,p);',1)
 old='if(v1){uint64_t a1=uint64_t(self1)+pair1+block1;if(a1>=mod)a1-=mod;if(a1>=mod)a1-=mod;out_main[i1]=Count(a1);}'
-new='if(v1){uint64_t a1=uint64_t(self1)+pair1+block1;if(a1>=mod)a1-=mod;if(a1>=mod)a1-=mod;out_main[i1]=Count(a1);if(b300_high_main_state_active())mates[i1]=b300_high_state_advance(m1,p);}'
 if s.count(old)!=1:raise SystemExit('ILP2 lane1 store anchor not unique')
-s=s.replace(old,new,1)
+s=s.replace(old,'if(v1){uint64_t a1=uint64_t(self1)+pair1+block1;if(a1>=mod)a1-=mod;if(a1>=mod)a1-=mod;out_main[i1]=Count(a1);if(b300_high_main_state_active())mates[i1]=b300_high_state_advance(m1,p);}',1)
 
-for required in ('b300_high_main_state_active','b300_high_state_drop_rank','b300_main_pair_rank_h','MateID* __restrict__ mates','b300_pack_main_transition_cache','b300_high_state_advance(m1,p)'):
+for required in ('b300_high_main_state_active','b300_high_state_drop_rank','b300_main_pair_rank_h','b300_pack_main_transition_cache','b300_high_state_advance(m1,p)','return b300_pack_low_window_main_mate(m);'):
     if required not in s:raise SystemExit(f'missing high-main recurrence artifact: {required}')
-for forbidden in ('const MateID* __restrict__ mates','block_j=b300_low_window_cache_active()?b300_low_cached_drop_rank(i,m,p):rank_drop_n_t<TARGET_W>(i,m,p);'):
-    if forbidden in s:raise SystemExit(f'stale high-main artifact: {forbidden}')
+if s.count('b300_pack_main_transition_cache(m)')!=2:raise SystemExit(f'expected exactly two production transition-cache packing calls, got {s.count("b300_pack_main_transition_cache(m)")}')
+if 'block_j=b300_low_window_cache_active()?b300_low_cached_drop_rank(i,m,p):rank_drop_n_t<TARGET_W>(i,m,p);' in s:
+    raise SystemExit('stale ILP2 high drop path remains')
 out.parent.mkdir(parents=True,exist_ok=True);out.write_text(s)
 print(f'generated {out} from {src}: high_main_recurrence=1 ilp=2 extra_state_bytes=0 trit_bits=25 signed_delta_bits=35 height_bits=4 mate_hbm_store_per_state_step=8 high_drop_walk_or_table_loads_per_state_step=0 high_height_walk_per_state_step=0')
