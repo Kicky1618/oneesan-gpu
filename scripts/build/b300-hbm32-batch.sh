@@ -49,9 +49,11 @@ fi
 
 if [[ "$MAIN_PULL" == 1 ]]; then
   bash "$ONEESAN_ROOT/scripts/bench/b300-main-pull-operator-proof.sh"
+  bash "$ONEESAN_ROOT/scripts/bench/b300-main-pull-direct-pair-rank-proof.sh"
 fi
 if [[ "$BLOCK_PULL" == 1 ]]; then
   bash "$ONEESAN_ROOT/scripts/bench/b300-block-pull-operator-proof.sh"
+  bash "$ONEESAN_ROOT/scripts/bench/b300-group-rank-drop-insert-proof.sh"
 fi
 if [[ "$FAST_SHARD_ADDRESS8" == 1 ]]; then
   bash "$ONEESAN_ROOT/scripts/bench/b300-shard-address8-proof.sh"
