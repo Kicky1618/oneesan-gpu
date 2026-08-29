@@ -8,6 +8,9 @@
 #ifndef P10DC_RANKFORMULA_NOMETA_GROUP56
 #define P10DC_RANKFORMULA_NOMETA_GROUP56 0
 #endif
+#ifndef P10DC_RANKFORMULA_NOMETA_GROUP61
+#define P10DC_RANKFORMULA_NOMETA_GROUP61 0
+#endif
 static_assert(P10DC_RANKFORMULA_NOMETA_BLOCK == 4 ||
               P10DC_RANKFORMULA_NOMETA_BLOCK == 8 ||
               P10DC_RANKFORMULA_NOMETA_BLOCK == 16,
@@ -15,6 +18,11 @@ static_assert(P10DC_RANKFORMULA_NOMETA_BLOCK == 4 ||
 static_assert(P10DC_RANKFORMULA_NOMETA_GROUP56 == 0 ||
               P10DC_RANKFORMULA_NOMETA_GROUP56 == 1,
               "rankformula nometa group56 must be 0 or 1");
+static_assert(P10DC_RANKFORMULA_NOMETA_GROUP61 == 0 ||
+              P10DC_RANKFORMULA_NOMETA_GROUP61 == 1,
+              "rankformula nometa group61 must be 0 or 1");
+static_assert(!(P10DC_RANKFORMULA_NOMETA_GROUP56 && P10DC_RANKFORMULA_NOMETA_GROUP61),
+              "rankformula nometa group56 and group61 are mutually exclusive");
 static constexpr uint32_t P10DC_RANKFORMULA_NOMETA4_BLOCK =
     uint32_t(P10DC_RANKFORMULA_NOMETA_BLOCK);
 static constexpr uint32_t P10DC_RANKFORMULA_NOMETA4_MASKS = 1u << LOW_LUT_K;
@@ -48,28 +56,36 @@ static constexpr uint32_t p10dc_rankformula_nometa4_abstract_off_host(uint32_t n
 }
 
 // Default: self-indexed 59-bit group entry.
-// GROUP56: cooperative-only compact entry with abstract offset embedded:
-//   [14:0]  local group start (15 bits; max 29113)
-//   [17:15] L count (3 bits; max 7)
-//   [32:18] signed source_base-dest_base (15 bits)
-//   [42:33] group count (10 bits; max 1001)
-//   [55:43] universal abstract descriptor offset (13 bits; max 7059)
-//   [63:56] spare.
-// The cooperative subgroup leader retains its initial global group index in a
-// register and increments it for successor loads, so no self index is needed.
+// GROUP56: start15 + lcount3 + signed delta15 + count10 + abstract_off13.
+// GROUP61: start15 + end15 + absolute source_base15 + lcount3 + abstract_off13.
+// GROUP56/GROUP61 are cooperative-only: the subgroup leader keeps the initial
+// global group index in a register and increments it for successor loads.
 __constant__ uint64_t* D_P10DC_LOW_RANKFORMULA_NOMETA4_GROUP64;
 __constant__ uint16_t* D_P10DC_LOW_RANKFORMULA_NOMETA4_BLOCK16;
 __constant__ uint32_t D_P10DC_LOW_RANKFORMULA_NOMETA4_GOFF[MAXW + 2];
 __constant__ uint32_t D_P10DC_LOW_RANKFORMULA_NOMETA4_BOFF[MAXW + 2];
 
 __device__ __forceinline__ uint32_t p10dc_rankformula_nometa4_group_start(uint64_t x) {
-#if P10DC_RANKFORMULA_NOMETA_GROUP56
+#if P10DC_RANKFORMULA_NOMETA_GROUP56 || P10DC_RANKFORMULA_NOMETA_GROUP61
     return uint32_t(x) & 0x7fffu;
 #else
     return uint32_t(x) & 0xffffu;
 #endif
 }
-#if P10DC_RANKFORMULA_NOMETA_GROUP56
+#if P10DC_RANKFORMULA_NOMETA_GROUP61
+__device__ __forceinline__ uint32_t p10dc_rankformula_nometa4_group_end(uint64_t x) {
+    return uint32_t(x >> 15) & 0x7fffu;
+}
+__device__ __forceinline__ uint32_t p10dc_rankformula_nometa4_group_source_base(uint64_t x) {
+    return uint32_t(x >> 30) & 0x7fffu;
+}
+__device__ __forceinline__ uint32_t p10dc_rankformula_nometa4_group_lcount(uint64_t x) {
+    return uint32_t(x >> 45) & 0x07u;
+}
+__device__ __forceinline__ uint32_t p10dc_rankformula_nometa4_group_abstract_off(uint64_t x) {
+    return uint32_t(x >> 48) & 0x1fffu;
+}
+#elif P10DC_RANKFORMULA_NOMETA_GROUP56
 __device__ __forceinline__ uint32_t p10dc_rankformula_nometa4_group_lcount(uint64_t x) {
     return uint32_t(x >> 15) & 0x07u;
 }
@@ -85,16 +101,24 @@ __device__ __forceinline__ uint32_t p10dc_rankformula_nometa4_group_index(uint64
 }
 #endif
 __device__ __forceinline__ int p10dc_rankformula_nometa4_group_delta(uint64_t x) {
-#if P10DC_RANKFORMULA_NOMETA_GROUP56
+#if P10DC_RANKFORMULA_NOMETA_GROUP61
+    return int(p10dc_rankformula_nometa4_group_source_base(x)) -
+           int(p10dc_rankformula_nometa4_group_start(x));
+#elif P10DC_RANKFORMULA_NOMETA_GROUP56
     uint32_t z = uint32_t(x >> 18) & 0x7fffu;
-#else
-    uint32_t z = uint32_t(x >> 20) & 0x7fffu;
-#endif
     if (z & 0x4000u) z |= 0xffff8000u;
     return int(int32_t(z));
+#else
+    uint32_t z = uint32_t(x >> 20) & 0x7fffu;
+    if (z & 0x4000u) z |= 0xffff8000u;
+    return int(int32_t(z));
+#endif
 }
 __device__ __forceinline__ uint32_t p10dc_rankformula_nometa4_group_count(uint64_t x) {
-#if P10DC_RANKFORMULA_NOMETA_GROUP56
+#if P10DC_RANKFORMULA_NOMETA_GROUP61
+    return p10dc_rankformula_nometa4_group_end(x) -
+           p10dc_rankformula_nometa4_group_start(x);
+#elif P10DC_RANKFORMULA_NOMETA_GROUP56
     return uint32_t(x >> 33) & 0x03ffu;
 #else
     return uint32_t(x >> 35) & 0x03ffu;
@@ -106,6 +130,7 @@ struct P10DCRankFormulaNometa4Resolved {
     uint32_t start = 0;
     int base_delta = 0;
     uint32_t abstract_off = 0;
+    uint32_t source_base = 0;
 };
 
 __device__ __forceinline__ P10DCRankFormulaNometa4Resolved
@@ -116,24 +141,37 @@ p10dc_low_rankformula_nometa4_resolve(uint32_t h, uint32_t rank) {
     uint64_t e = D_P10DC_LOW_RANKFORMULA_NOMETA4_GROUP64[gi];
 #pragma unroll
     for (int k = 0; k < int(P10DC_RANKFORMULA_NOMETA4_BLOCK - 1u); ++k) {
+#if P10DC_RANKFORMULA_NOMETA_GROUP61
+        if (rank < p10dc_rankformula_nometa4_group_end(e)) break;
+#else
         const uint32_t start = p10dc_rankformula_nometa4_group_start(e);
         const uint32_t count = p10dc_rankformula_nometa4_group_count(e);
         if (rank < start + count) break;
+#endif
         ++gi;
         e = D_P10DC_LOW_RANKFORMULA_NOMETA4_GROUP64[gi];
     }
-#if P10DC_RANKFORMULA_NOMETA_GROUP56
+#if P10DC_RANKFORMULA_NOMETA_GROUP61
+    const uint32_t start = p10dc_rankformula_nometa4_group_start(e);
+    const uint32_t source_base = p10dc_rankformula_nometa4_group_source_base(e);
     const uint32_t lcount = p10dc_rankformula_nometa4_group_lcount(e);
     return P10DCRankFormulaNometa4Resolved{
-        h + 2u * lcount,
-        p10dc_rankformula_nometa4_group_start(e),
-        p10dc_rankformula_nometa4_group_delta(e),
-        p10dc_rankformula_nometa4_group_abstract_off(e)};
-#else
+        h + 2u * lcount, start, int(source_base) - int(start),
+        p10dc_rankformula_nometa4_group_abstract_off(e), source_base};
+#elif P10DC_RANKFORMULA_NOMETA_GROUP56
+    const uint32_t start = p10dc_rankformula_nometa4_group_start(e);
+    const int delta = p10dc_rankformula_nometa4_group_delta(e);
+    const uint32_t lcount = p10dc_rankformula_nometa4_group_lcount(e);
     return P10DCRankFormulaNometa4Resolved{
-        p10dc_rankformula_nometa4_group_n(e),
-        p10dc_rankformula_nometa4_group_start(e),
-        p10dc_rankformula_nometa4_group_delta(e), 0u};
+        h + 2u * lcount, start, delta,
+        p10dc_rankformula_nometa4_group_abstract_off(e),
+        uint32_t(int(start) + delta)};
+#else
+    const uint32_t start = p10dc_rankformula_nometa4_group_start(e);
+    const int delta = p10dc_rankformula_nometa4_group_delta(e);
+    return P10DCRankFormulaNometa4Resolved{
+        p10dc_rankformula_nometa4_group_n(e), start, delta, 0u,
+        uint32_t(int(start) + delta)};
 #endif
 }
 
@@ -157,7 +195,22 @@ struct BucketFusedDirectHighRowsRankFormulaNometa4Tables
         uint32_t start, uint32_t n, uint32_t h, int delta,
         uint32_t count, uint32_t group_index
     ) {
-#if P10DC_RANKFORMULA_NOMETA_GROUP56
+#if P10DC_RANKFORMULA_NOMETA_GROUP61
+        if (n < h || ((n - h) & 1u)) std::exit(760);
+        const uint32_t lcount = (n - h) >> 1;
+        const uint32_t aoff = p10dc_rankformula_nometa4_abstract_off_host(n, h);
+        const uint32_t end = start + count;
+        const int source_i = lcount ? int(start) + delta : 0;
+        if (start >= (1u << 15) || end >= (1u << 15) || end <= start ||
+            source_i < 0 || source_i >= (1 << 15) || lcount >= (1u << 3) ||
+            aoff >= (1u << 13))
+            std::exit(760);
+        return uint64_t(start) |
+               (uint64_t(end) << 15) |
+               (uint64_t(uint32_t(source_i)) << 30) |
+               (uint64_t(lcount) << 45) |
+               (uint64_t(aoff) << 48);
+#elif P10DC_RANKFORMULA_NOMETA_GROUP56
         if (n < h || ((n - h) & 1u)) std::exit(760);
         const uint32_t lcount = (n - h) >> 1;
         const uint32_t aoff = p10dc_rankformula_nometa4_abstract_off_host(n, h);
@@ -243,7 +296,7 @@ struct BucketFusedDirectHighRowsRankFormulaNometa4Tables
         int min_delta = 32767, max_delta = -32768;
         size_t delta_rows = 0;
         uint32_t max_groups_per_block = 0, max_locator_steps = 0, max_group_count = 0;
-        uint32_t max_group_index = 0, max_abstract_off = 0;
+        uint32_t max_group_index = 0, max_abstract_off = 0, max_group_end = 0, max_source_base = 0;
         uint64_t locator_steps_sum = 0, locator_codes = 0;
 
         for (uint32_t h = 0; h < uint32_t(MAXW + 2); ++h) {
@@ -259,12 +312,14 @@ struct BucketFusedDirectHighRowsRankFormulaNometa4Tables
                     ? uint32_t(v[q + 1u].start) : ranks[h];
                 const uint32_t count = end - uint32_t(z.start);
                 max_group_count = std::max(max_group_count, count);
+                max_group_end = std::max(max_group_end, end);
                 int delta = 0;
                 if (h + 2u < P10DC_RANKFORMULA_NOMETA4_HEIGHTS) {
                     const int32_t a = bref(h, z.mask);
                     const int32_t b = bref(h + 2u, z.mask);
                     if (a >= 0 && b >= 0) {
                         delta = int(b - a);
+                        max_source_base = std::max(max_source_base, uint32_t(b));
                         min_delta = std::min(min_delta, delta);
                         max_delta = std::max(max_delta, delta);
                         ++delta_rows;
@@ -386,17 +441,24 @@ struct BucketFusedDirectHighRowsRankFormulaNometa4Tables
                   << " avg_locator_steps=" << avg_steps
                   << " avg_group_loads_model=" << (1.0 + avg_steps)
                   << " max_group_count=" << max_group_count
+                  << " max_group_end=" << max_group_end
+                  << " max_source_base=" << max_source_base
                   << " max_group_index=" << max_group_index
                   << " max_abstract_off=" << max_abstract_off
                   << " delta_rows=" << delta_rows
                   << " min_base_delta=" << (delta_rows ? min_delta : 0)
                   << " max_base_delta=" << (delta_rows ? max_delta : 0)
                   << " group_load_bytes=8 block_load_bytes=2"
-#if P10DC_RANKFORMULA_NOMETA_GROUP56
+#if P10DC_RANKFORMULA_NOMETA_GROUP61
+                  << " group61=1 group_start_bits=15 group_end_bits=15 source_base_bits=15"
+                  << " group_lcount_bits=3 abstract_off_bits=13"
+                  << " group_pack_bits=61 group_spare_bits=3 self_group_index_bits=0"
+                  << " direct_end_compare=1 direct_source_base=1"
+#elif P10DC_RANKFORMULA_NOMETA_GROUP56
                   << " group56=1 group_lcount_bits=3 abstract_off_bits=13"
                   << " group_pack_bits=56 group_spare_bits=8 self_group_index_bits=0"
 #else
-                  << " group56=0 group_n_bits=4 support_positions_runtime=0"
+                  << " group56=0 group61=0 group_n_bits=4 support_positions_runtime=0"
                   << " group_pack_bits=59 group_spare_bits=5 self_group_index_bits=14"
 #endif
                   << " old_prekey_freed=1\n";
