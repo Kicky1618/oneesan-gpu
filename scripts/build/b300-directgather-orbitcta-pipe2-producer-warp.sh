@@ -9,6 +9,11 @@ PATCH_ONLY="${PIPE2_PRODUCER_PATCH_ONLY:-0}"
 }
 [[ "${ORBITCTA_FLAT_CHUNK:-1}" == 1 ]] || { echo 'producer-warp requires flat chunk=1' >&2; exit 2; }
 [[ "${ORBITCTA_FLAT_DYNAMIC_FUSE_LEASE_PREP:-0}" == 0 ]] || { echo 'producer-warp pipe2 requires fuse-lease-prep=0' >&2; exit 2; }
+# This experimental executor currently partitions four ILP slots as two pair
+# plan-sums. If QUAD_MLP leaked in from the caller, the A/B would change both
+# the warp partition and the plan-sum algorithm at once. Keep this wrapper a
+# one-factor experiment until a producer-warp-native quad executor exists.
+[[ "${QUAD_MLP:-0}" == 0 ]] || { echo 'producer-warp A/B currently requires QUAD_MLP=0' >&2; exit 2; }
 
 base="$ONEESAN_ROOT/scripts/build/b300-directgather-orbitcta.sh"
 tmp="$ONEESAN_ROOT/scripts/build/.b300-directgather-orbitcta-pipe2-producer.$$.sh"
@@ -41,5 +46,5 @@ if [[ "$PATCH_ONLY" == 1 ]]; then
   echo 'b300_pipe2_producer_warp_patch=OK gpu_work=0'
   exit 0
 fi
-exec env ORBITCTA_FLAT=1 ORBITCTA_FLAT_CHUNK=1 ORBITCTA_FLAT_DYNAMIC=1 \
+exec env ORBITCTA_FLAT=1 ORBITCTA_FLAT_CHUNK=1 ORBITCTA_FLAT_DYNAMIC=1 QUAD_MLP=0 \
   ORBITCTA_FLAT_DYNAMIC_PIPE2=1 ORBITCTA_FLAT_DYNAMIC_FUSE_LEASE_PREP=0 bash "$tmp"
