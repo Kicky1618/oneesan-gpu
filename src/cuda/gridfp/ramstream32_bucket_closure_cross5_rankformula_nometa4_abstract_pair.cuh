@@ -29,8 +29,6 @@ static_assert(P10DC_RANKFORMULA_MLP_WINDOW4,
 #if P10DC_RANKFORMULA_CPASYNC_PAIR
 static_assert(P10DC_RANKFORMULA_PAIR_MLP,
               "cp.async pair path requires PAIR_MLP");
-static_assert(!P10DC_RANKFORMULA_DIRECTGATHER64,
-              "cp.async pair + DIRECTGATHER64 is intentionally isolated");
 static_assert(sizeof(Count) == 4,
               "cp.async pair path assumes 32-bit Count values");
 extern __shared__ unsigned char p10dc_rankformula_dynamic_smem[];
@@ -164,10 +162,9 @@ p10dc_resolved_low_preimages_cross5_rankformula_nometa4_abstract_pair_fixed(
 #endif
 
 #if P10DC_RANKFORMULA_CPASYNC_PAIR
-    // Stage all selected CROSS sources through shared memory.  No source value
-    // is kept live in a register while the requests are outstanding.  Two async
-    // groups are used so a lane can have up to fourteen independent 32-bit
-    // global/peer reads in flight without inflating the register live range.
+    // Stage all selected CROSS sources through shared memory.  Descriptor
+    // decoding above is independent of 16-byte versus compressed 8-byte mode,
+    // so the same fourteen source slots serve both encodings.
     p10dc_rankformula_cpasync_u32(p10dc_rankformula_cpasync_slot(0), source_row + a0, n0 > 0);
     p10dc_rankformula_cpasync_u32(p10dc_rankformula_cpasync_slot(1), source_row + a1, n0 > 1);
     p10dc_rankformula_cpasync_u32(p10dc_rankformula_cpasync_slot(2), source_row + a2, n0 > 2);
