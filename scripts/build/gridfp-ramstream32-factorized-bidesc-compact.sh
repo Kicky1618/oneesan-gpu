@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# CI probe branch: compile compact bidesc v3.5 after NO_MAIN fix.
 set -euo pipefail
 source "$(dirname -- "${BASH_SOURCE[0]}")/../lib/common.sh"
 N="${N:-21}"
