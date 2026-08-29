@@ -15,6 +15,45 @@ def once(old,new,label):
     if n!=1:raise SystemExit(f'{label}: expected one match got {n}')
     s=s.replace(old,new,1)
 
+def replace_function(text,name,new_text):
+    # Match the device function definition, not calls to the function.  The
+    # generated CUDA is passed through several source-to-source transforms, so
+    # whitespace and line wrapping inside the body are intentionally ignored.
+    token='__device__ __forceinline__ Code '+name+'('
+    n=text.count(token)
+    if n!=1:
+        raise SystemExit(f'{name}: expected one function definition got {n}')
+    start=text.find(token)
+    brace=text.find('{',start)
+    if brace<0:
+        raise SystemExit(f'{name}: opening brace not found')
+    depth=0
+    end=-1
+    for i in range(brace,len(text)):
+        c=text[i]
+        if c=='{':
+            depth+=1
+        elif c=='}':
+            depth-=1
+            if depth==0:
+                end=i+1
+                break
+    if end<0:
+        raise SystemExit(f'{name}: closing brace not found')
+    body=text[start:end]
+    anchors=(
+        'constexpr MateID LOW_MASK',
+        'const MateID low=cached&LOW_MASK',
+        'for(int pos=14;pos>=0;--pos)',
+        'return delta>=0?main_rank+Code(delta):main_rank-Code(-delta);',
+    )
+    missing=[x for x in anchors if x not in body]
+    if missing:
+        raise SystemExit(f'{name}: semantic anchors missing: {missing}')
+    if 'D_LOW_DROP_CHUNK' in body:
+        raise SystemExit(f'{name}: transform already applied')
+    return text[:start]+new_text+text[end:]
+
 # Read-only table pointer. Layout: [chunk 0..2][entry height 0..MAXW+1][raw 8-bit
 # four-symbol code]. Each u32 packs signed 24-bit delta + 8-bit exit height.
 once('__constant__ uint32_t* D_HIGH_OFFSETS_BLOCK;',
@@ -55,27 +94,6 @@ static std::vector<uint32_t> build_low_drop_chunk_table(){
 '''
 s=s.replace(main_marker,host+main_marker,1)
 
-old=r'''__device__ __forceinline__ Code b300_low_cached_drop_rank(Code main_rank,MateID cached,int p){
-    constexpr MateID LOW_MASK=(MateID(1)<<30)-1ULL;
-    const MateID low=cached&LOW_MASK;
-    long long delta=-static_cast<long long>((cached>>30)&((MateID(1)<<30)-1ULL));
-    int h=int((cached>>60)&15ULL);
-#pragma unroll
-    for(int pos=14;pos>=0;--pos){
-        if(pos<=p)continue;
-        const MateValue v=mget(low,pos);
-        if(v==R){
-            delta+=static_cast<long long>(D_FULL_DP[pos-1][h])-static_cast<long long>(D_FULL_DP[pos][h]);
-            --h;
-        }else if(v==L){
-            const Code bm=D_FULL_DP[pos-1][h]+(h?D_FULL_DP[pos-1][h-1]:0);
-            const Code am=D_FULL_DP[pos][h]+(h?D_FULL_DP[pos][h-1]:0);
-            delta+=static_cast<long long>(bm)-static_cast<long long>(am);
-            ++h;
-        }
-    }
-    return delta>=0?main_rank+Code(delta):main_rank-Code(-delta);
-}'''
 new=r'''__device__ __forceinline__ Code b300_low_cached_drop_rank(Code main_rank,MateID cached,int p){
     constexpr MateID LOW_MASK=(MateID(1)<<30)-1ULL;
     constexpr int HC=MAXW+2;
@@ -107,7 +125,7 @@ new=r'''__device__ __forceinline__ Code b300_low_cached_drop_rank(Code main_rank
     }
     return delta>=0?main_rank+Code(delta):main_rank-Code(-delta);
 }'''
-once(old,new,'chunked low drop kernel')
+s=replace_function(s,'b300_low_cached_drop_rank',new)
 
 # Allocate/bind the tiny universal table once per GPU. It is independent of
 # group, row, residue and modulus.
