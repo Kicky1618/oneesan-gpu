@@ -18,9 +18,10 @@ MAIN_PULL_ILP2="${MAIN_PULL_ILP2:-0}"
 HEIGHT_CACHE="${HEIGHT_CACHE:-0}"
 RANK_DELTA_CACHE="${RANK_DELTA_CACHE:-0}"
 RANK_STATE_PACKED="${RANK_STATE_PACKED:-0}"
+RANK_STATE_ILP2="${RANK_STATE_ILP2:-0}"
 PTXAS_VERBOSE="${PTXAS_VERBOSE:-1}"
 
-for name in FAST_SHARD_ADDRESS8 MAIN_MATE_CACHE MAIN_PULL BLOCK_PULL BLOCK_MATE_CACHE MAIN_PULL_ILP2 HEIGHT_CACHE RANK_DELTA_CACHE RANK_STATE_PACKED PTXAS_VERBOSE; do
+for name in FAST_SHARD_ADDRESS8 MAIN_MATE_CACHE MAIN_PULL BLOCK_PULL BLOCK_MATE_CACHE MAIN_PULL_ILP2 HEIGHT_CACHE RANK_DELTA_CACHE RANK_STATE_PACKED RANK_STATE_ILP2 PTXAS_VERBOSE; do
   value="${!name}"
   if [[ "$value" != 0 && "$value" != 1 ]]; then echo "$name must be 0 or 1" >&2; exit 2; fi
 done
@@ -30,8 +31,9 @@ if [[ "$BLOCK_MATE_CACHE" == 1 && "$BLOCK_PULL" != 1 ]]; then echo "BLOCK_MATE_C
 for name in MAIN_PULL_ILP2 HEIGHT_CACHE RANK_DELTA_CACHE; do
   if [[ "${!name}" == 1 && ( "$MAIN_PULL" != 1 || "$BLOCK_PULL" != 1 || "$MAIN_MATE_CACHE" != 1 || "$BLOCK_MATE_CACHE" != 1 ) ]]; then echo "$name=1 requires full-pull plus both MateID caches" >&2; exit 2; fi
 done
-if (( MAIN_PULL_ILP2 + HEIGHT_CACHE + RANK_DELTA_CACHE > 1 )); then echo "MAIN_PULL_ILP2, HEIGHT_CACHE and RANK_DELTA_CACHE are separate A/B experiments for now" >&2; exit 2; fi
+if (( MAIN_PULL_ILP2 + HEIGHT_CACHE + RANK_DELTA_CACHE > 1 )); then echo "MAIN_PULL_ILP2, HEIGHT_CACHE and RANK_DELTA_CACHE are separate base experiments; use RANK_STATE_ILP2 to combine ILP2 with packed rank-state" >&2; exit 2; fi
 if [[ "$RANK_STATE_PACKED" == 1 && "$RANK_DELTA_CACHE" != 1 ]]; then echo "RANK_STATE_PACKED=1 requires RANK_DELTA_CACHE=1" >&2; exit 2; fi
+if [[ "$RANK_STATE_ILP2" == 1 && "$RANK_STATE_PACKED" != 1 ]]; then echo "RANK_STATE_ILP2=1 requires RANK_STATE_PACKED=1" >&2; exit 2; fi
 
 if [[ -z "$LOW_LUT_K" ]]; then if (( N >= 24 )); then LOW_LUT_K=13; else LOW_LUT_K=0; fi; fi
 if [[ -z "$HIGH_LUT_K" ]]; then if (( N >= 24 )); then HIGH_LUT_K=13; else HIGH_LUT_K=0; fi; fi
@@ -44,7 +46,7 @@ if [[ "$BLOCK_PULL" == 1 ]]; then
   bash "$ONEESAN_ROOT/scripts/bench/b300-group-rank-drop-insert-proof.sh"
   bash "$ONEESAN_ROOT/scripts/bench/b300-block-closure-rank-incremental-proof.sh"
 fi
-if [[ "$MAIN_PULL_ILP2" == 1 ]]; then bash "$ONEESAN_ROOT/scripts/bench/b300-ilp2-partition-proof.sh"; fi
+if [[ "$MAIN_PULL_ILP2" == 1 || "$RANK_STATE_ILP2" == 1 ]]; then bash "$ONEESAN_ROOT/scripts/bench/b300-ilp2-partition-proof.sh"; fi
 if [[ "$HEIGHT_CACHE" == 1 ]]; then bash "$ONEESAN_ROOT/scripts/bench/b300-height-recurrence-proof.sh"; fi
 if [[ "$RANK_DELTA_CACHE" == 1 ]]; then
   bash "$ONEESAN_ROOT/scripts/bench/b300-rank-delta-recurrence-proof.sh"
@@ -68,6 +70,7 @@ if [[ "$RANK_DELTA_CACHE" == 1 ]]; then
   RANK_DELTA_FREE_SRC="$ONEESAN_BUILD_DIR/b300_hbm32_n${N}_rank_delta_free_step.cu";python3 "$ONEESAN_ROOT/scripts/build/gen-b300-rank-delta-free-step.py" "$RANK_DELTA_SRC" "$RANK_DELTA_FREE_SRC"
   RANK_DELTA_REPORT_SRC="$ONEESAN_BUILD_DIR/b300_hbm32_n${N}_rank_delta_report.cu";python3 "$ONEESAN_ROOT/scripts/build/gen-b300-rank-delta-report.py" "$RANK_DELTA_FREE_SRC" "$RANK_DELTA_REPORT_SRC";BUILD_SRC="$RANK_DELTA_REPORT_SRC"
   if [[ "$RANK_STATE_PACKED" == 1 ]]; then RANK_STATE_SRC="$ONEESAN_BUILD_DIR/b300_hbm32_n${N}_rank_state_packed.cu";python3 "$ONEESAN_ROOT/scripts/build/gen-b300-rank-state-packed.py" "$BUILD_SRC" "$RANK_STATE_SRC";BUILD_SRC="$RANK_STATE_SRC";fi
+  if [[ "$RANK_STATE_ILP2" == 1 ]]; then RANK_STATE_ILP2_SRC="$ONEESAN_BUILD_DIR/b300_hbm32_n${N}_rank_state_ilp2.cu";python3 "$ONEESAN_ROOT/scripts/build/gen-b300-rank-state-ilp2.py" "$BUILD_SRC" "$RANK_STATE_ILP2_SRC";BUILD_SRC="$RANK_STATE_ILP2_SRC";fi
 fi
 
 ROW_SRC="$ONEESAN_BUILD_DIR/b300_hbm32_n${N}_rowlimit.cu";cp "$BUILD_SRC" "$ROW_SRC";python3 "$ONEESAN_ROOT/scripts/build/lower-b300-row-limit.py" "$ROW_SRC" "$ROW_SRC";BUILD_SRC="$ROW_SRC"
@@ -81,10 +84,11 @@ TMPDIR="$ONEESAN_TMP_DIR" nvcc -O3 -std=c++17 -lineinfo -arch="$ARCH" "${PTXAS_F
 echo "built $OUT"
 echo "  source=$SRC"
 echo "  build_source=$BUILD_SRC"
-echo "  n=$N width=$W arch=$ARCH low_lut_k=$LOW_LUT_K high_lut_k=$HIGH_LUT_K fast_shard_address8=$FAST_SHARD_ADDRESS8 main_mate_cache=$MAIN_MATE_CACHE main_pull=$MAIN_PULL block_pull=$BLOCK_PULL block_mate_cache=$BLOCK_MATE_CACHE main_pull_ilp2=$MAIN_PULL_ILP2 height_cache=$HEIGHT_CACHE rank_delta_cache=$RANK_DELTA_CACHE rank_state_packed=$RANK_STATE_PACKED ptxas_verbose=$PTXAS_VERBOSE"
+echo "  n=$N width=$W arch=$ARCH low_lut_k=$LOW_LUT_K high_lut_k=$HIGH_LUT_K fast_shard_address8=$FAST_SHARD_ADDRESS8 main_mate_cache=$MAIN_MATE_CACHE main_pull=$MAIN_PULL block_pull=$BLOCK_PULL block_mate_cache=$BLOCK_MATE_CACHE main_pull_ilp2=$MAIN_PULL_ILP2 height_cache=$HEIGHT_CACHE rank_delta_cache=$RANK_DELTA_CACHE rank_state_packed=$RANK_STATE_PACKED rank_state_ilp2=$RANK_STATE_ILP2 ptxas_verbose=$PTXAS_VERBOSE"
 echo "  row_limit_env=B300_ROW_LIMIT default_rows=$W runtime_threads_env=GRIDFP_THREADS default_threads=256 planner_target_env=GRIDFP_PLAN_TARGET_MIB scratch_target_separate=1"
 echo "  block_closure_scan=endpoint_setbits block_closure_candidate_rank=incremental_delta rank_same_calls_per_closure_candidate=0"
 if [[ "$MAIN_PULL_ILP2" == 1 ]]; then echo "  main_pull_destinations_per_thread=2 memory_request_phases=mate,self,pair,block register_pressure_requires_ab=1";fi
 if [[ "$HEIGHT_CACHE" == 1 ]]; then echo "  height_cache_bytes_per_state=1 height_cache_hbm_rw_per_step_bytes=2 prefix_height_popcounts_removed=main_pair,block_closure recurrence_step=O1";fi
 if [[ "$RANK_DELTA_CACHE" == 1 ]]; then echo "  rank_delta_bytes_per_state=8 rank_delta_hbm_rw_per_step_bytes=16 prefix_rank_walk_removed=main_drop,block_lift moving_fixed_checks=0 conditional_scratch=1 coverage_report=1 input_compat_normalized=1";fi
 if [[ "$RANK_STATE_PACKED" == 1 ]]; then echo "  rank_state_storage_bytes=8 delta_bits=56 height_bits=8 rank_state_hbm_rw_per_step_bytes=16 prefix_height_popcounts_removed=main_pair,block_closure width_max=28 full_state_bound=385719506620 fallback_required=0";fi
+if [[ "$RANK_STATE_ILP2" == 1 ]]; then echo "  rank_state_main_destinations_per_thread=2 rank_state_index_first=1 rank_state_hbm_request_overlap=pair,block,two_destinations register_pressure_requires_ab=1";fi
