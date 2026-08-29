@@ -15,11 +15,11 @@
 #endif
 #define P10DC_WARPSTRIPED_CTX P10DCDirectHighResolvedCtx
 #if P10DC_RANKFORMULA_PRECTX_FORWARD
-// The generic warp-striped kernel has qi/nn in lexical scope here. Keep its
-// scheduler fields intact; only replace the per-orbit execution context.
+// Keep the cheap destination-row address calculation local to the launch and
+// fetch only the expensive closure-source resolution from the precomputed table.
 #define P10DC_WARPSTRIPED_PREPARE_FORWARD(c,payload,loc,p,ss,js,ds,sr,jr,dr) do { \
-    (void)(payload); (void)(loc); (void)(p); (void)(ss); (void)(js); (void)(ds); \
-    (void)(sr); (void)(jr); (void)(dr); \
+    (void)(payload); (void)(loc); (void)(p); \
+    p10dc_direct_resolve_high_io((c),(ss),(js),(ds),(sr),(jr),(dr)); \
     p10dc_apply_forward_prectx((c), qi, nn); \
 } while(0)
 #else
