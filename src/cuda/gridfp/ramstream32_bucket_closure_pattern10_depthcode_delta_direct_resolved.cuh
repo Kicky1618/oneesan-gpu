@@ -8,14 +8,25 @@
 #ifndef P10DC_RANKFORMULA_CPASYNC_PAIR
 #define P10DC_RANKFORMULA_CPASYNC_PAIR 0
 #endif
+#ifndef P10DC_RANKFORMULA_QUAD_MLP
+#define P10DC_RANKFORMULA_QUAD_MLP 0
+#endif
 #ifndef P10DC_RANKFORMULA_CPASYNC_VALUES_PER_THREAD
+#if P10DC_RANKFORMULA_QUAD_MLP
+#define P10DC_RANKFORMULA_CPASYNC_VALUES_PER_THREAD 28
+#else
 #define P10DC_RANKFORMULA_CPASYNC_VALUES_PER_THREAD 14
+#endif
 #endif
 static_assert(P10DC_RANKFORMULA_CPASYNC_PAIR == 0 ||
               P10DC_RANKFORMULA_CPASYNC_PAIR == 1,
               "P10DC_RANKFORMULA_CPASYNC_PAIR must be 0 or 1");
-static_assert(P10DC_RANKFORMULA_CPASYNC_VALUES_PER_THREAD == 14,
-              "cp.async pair gather currently stages exactly fourteen values per thread");
+static_assert(P10DC_RANKFORMULA_QUAD_MLP == 0 ||
+              P10DC_RANKFORMULA_QUAD_MLP == 1,
+              "P10DC_RANKFORMULA_QUAD_MLP must be 0 or 1");
+static_assert(P10DC_RANKFORMULA_CPASYNC_VALUES_PER_THREAD ==
+                  (P10DC_RANKFORMULA_QUAD_MLP ? 28 : 14),
+              "cp.async scratch must match pair/quad source slots");
 
 // Experimental HIGH-only direct resolver. The canonical delta builder first
 // packs every closure source into BkczPlan.local[], then p10dc_resolve_high_rows
