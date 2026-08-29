@@ -5,21 +5,38 @@ source "$(dirname -- "${BASH_SOURCE[0]}")/../lib/common.sh"
 N="${N:-21}"; MOD="${MOD:-4294967291}"; NGPU="${NGPU:-8}"
 TARGET_MIB="${TARGET_MIB:-16384}"; MAX_WINDOW="${MAX_WINDOW:-14}"; ARCH="${ARCH:-native}"
 THREADS="${THREADS:-256}"; ORBIT_GY="${ORBIT_GY:-128}"; LOW_GX="${LOW_GX:-16}"; LOW_GY="${LOW_GY:-8}"
+ORBITCTA_COL_ILP="${ORBITCTA_COL_ILP:-2}"; PAIR_MLP="${PAIR_MLP:-1}"; CPASYNC_PAIR="${CPASYNC_PAIR:-0}"
+RANKFORMULA_MLP_WINDOW4="${RANKFORMULA_MLP_WINDOW4:-1}"; PM_ACCUM="${PM_ACCUM:-1}"
 REPEATS="${REPEATS:-1}"; EXPECT="${EXPECT:-}"
 if [[ -z "$EXPECT" && "$N" == 21 && "$MOD" == 4294967291 ]]; then EXPECT=998035516; fi
 command -v nvcc >/dev/null || { echo "nvcc required" >&2; exit 2; }
 command -v nvidia-smi >/dev/null || { echo "nvidia-smi required" >&2; exit 2; }
 [[ "$NGPU" == 8 ]] || { echo "orbit64 requires NGPU=8" >&2; exit 2; }
+for x in PAIR_MLP CPASYNC_PAIR RANKFORMULA_MLP_WINDOW4 PM_ACCUM; do v="${!x}"; [[ "$v" == 0 || "$v" == 1 ]] || { echo "$x must be 0 or 1" >&2; exit 2; }; done
+case "$ORBITCTA_COL_ILP" in 1|2|4) ;; *) echo "ORBITCTA_COL_ILP must be 1,2,4" >&2; exit 2;; esac
+if [[ "$PAIR_MLP" == 1 ]]; then
+  [[ "$RANKFORMULA_MLP_WINDOW4" == 1 ]] || { echo "PAIR_MLP requires WINDOW4=1" >&2; exit 2; }
+  [[ "$ORBITCTA_COL_ILP" == 2 || "$ORBITCTA_COL_ILP" == 4 ]] || { echo "PAIR_MLP requires ILP2/4" >&2; exit 2; }
+fi
+[[ "$CPASYNC_PAIR" == 0 || "$PAIR_MLP" == 1 ]] || { echo "CPASYNC_PAIR requires PAIR_MLP=1" >&2; exit 2; }
 
-PREFIX="${PREFIX:-$ONEESAN_ROOT/work/b300_orbit64_sparse64_ab_n${N}}"
+PREFIX="${PREFIX:-$ONEESAN_ROOT/work/b300_orbit64_sparse64_ab_n${N}_i${ORBITCTA_COL_ILP}_pair${PAIR_MLP}_cpa${CPASYNC_PAIR}}"
 LOGDIR="${LOGDIR:-${PREFIX}_logs}"; RESULT="${RESULT:-${PREFIX}.tsv}"; RESOURCE="${RESOURCE:-${PREFIX}_ptxas.tsv}"; PLAN="${PLAN:-${PREFIX}_plan.tsv}"
 mkdir -p "$LOGDIR" "$(dirname "$RESULT")"
-DENSE_BIN="$ONEESAN_BUILD_DIR/b300_orbit64_dense_n${N}"
-SPARSE_BIN="$ONEESAN_BUILD_DIR/b300_orbit64_sparse_n${N}"
+DENSE_BIN="$ONEESAN_BUILD_DIR/b300_orbit64_dense_i${ORBITCTA_COL_ILP}_n${N}"
+SPARSE_BIN="$ONEESAN_BUILD_DIR/b300_orbit64_sparse_i${ORBITCTA_COL_ILP}_n${N}"
+
+if [[ "$CPASYNC_PAIR" == 1 ]]; then
+  CPA_LOG="$LOGDIR/cpasync_peer.out"
+  ARCH="$ARCH" NGPU=8 THREADS="$THREADS" bash "$ONEESAN_ROOT/scripts/bench/b300-cpasync-remote-peer-microprobe.sh" >"$CPA_LOG" 2>&1
+  grep -q 'cp_async_remote_peer=OK exact=OK' "$CPA_LOG" || { cat "$CPA_LOG" >&2; exit 6; }
+fi
 
 build_case(){
   local mode="$1" sparse="$2" bin="$3"
-  N="$N" ARCH="$ARCH" OUT="$bin" DIRECTGATHER64=1 DIRECTGATHER_SPARSE64="$sparse" PTXAS_VERBOSE=1 \
+  N="$N" ARCH="$ARCH" OUT="$bin" DIRECTGATHER64=1 DIRECTGATHER_SPARSE64="$sparse" \
+    ORBITCTA_COL_ILP="$ORBITCTA_COL_ILP" PAIR_MLP="$PAIR_MLP" CPASYNC_PAIR="$CPASYNC_PAIR" \
+    RANKFORMULA_MLP_WINDOW4="$RANKFORMULA_MLP_WINDOW4" PM_ACCUM="$PM_ACCUM" PTXAS_VERBOSE=1 \
     bash "$ONEESAN_ROOT/scripts/build/b300-directgather-orbitcta.sh" \
     >"$LOGDIR/${mode}.build.out" 2>"$LOGDIR/${mode}.build.err"
 }
@@ -96,10 +113,10 @@ s={}
 for b,g in by.items():
     def med(k):return statistics.median(float(r[k]) for r in g)
     av=[float(r['mc_avg_pct']) for r in g if r['mc_avg_pct']!='NA'];mx=[float(r['mc_max_pct']) for r in g if r['mc_max_pct']!='NA']
-    s[b]=(med('wall_s'),med('forward_low_s')+med('reverse_low_s'),statistics.median(av) if av else float('nan'),max(mx) if mx else float('nan'))
-for b,(w,l,a,m) in sorted(s.items(),key=lambda x:x[1][0]):print(b,f'wall_s={w:.6f}',f'low_s={l:.6f}',f'mc_avg_pct={a:.3f}',f'mc_max_pct={m:.3f}')
-d=s['dense64'];q=s['sparse64'];print(f'sparse_wall_speedup={d[0]/q[0]:.6f}',f'sparse_low_speedup={d[1]/q[1]:.6f}',f'mc_avg_delta_pp={q[2]-d[2]:.3f}')
+    s[b]=(med('wall_s'),med('forward_low_s')+med('reverse_low_s'),med('forward_high_s')+med('reverse_high_s'),statistics.median(av) if av else float('nan'),max(mx) if mx else float('nan'))
+for b,(w,l,h,a,m) in sorted(s.items(),key=lambda x:x[1][0]):print(b,f'wall_s={w:.6f}',f'low_s={l:.6f}',f'high_s={h:.6f}',f'mc_avg_pct={a:.3f}',f'mc_max_pct={m:.3f}')
+d=s['dense64'];q=s['sparse64'];print(f'sparse_wall_speedup={d[0]/q[0]:.6f}',f'sparse_low_speedup={d[1]/q[1]:.6f}',f'sparse_high_speedup={d[2]/q[2]:.6f}',f'mc_avg_delta_pp={q[3]-d[3]:.3f}')
 PY
 
 cat "$PLAN"
-echo "result=$RESULT plan=$PLAN ptxas=$RESOURCE logs=$LOGDIR" >&2
+echo "result=$RESULT plan=$PLAN ptxas=$RESOURCE logs=$LOGDIR orbit_ilp=$ORBITCTA_COL_ILP pair_mlp=$PAIR_MLP cpasync_pair=$CPASYNC_PAIR window4=$RANKFORMULA_MLP_WINDOW4 pm_accum=$PM_ACCUM" >&2
