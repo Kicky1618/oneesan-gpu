@@ -14,6 +14,9 @@
 #ifndef P10DC_RANKFORMULA_DIRECTGATHER_DEPTHMAJOR
 #define P10DC_RANKFORMULA_DIRECTGATHER_DEPTHMAJOR 0
 #endif
+#ifndef P10DC_RANKFORMULA_DIRECTGATHER_SORTED
+#define P10DC_RANKFORMULA_DIRECTGATHER_SORTED 0
+#endif
 static_assert(P10DC_RANKFORMULA_DIRECTGATHER == 0 ||
               P10DC_RANKFORMULA_DIRECTGATHER == 1,
               "P10DC_RANKFORMULA_DIRECTGATHER must be 0 or 1");
@@ -26,12 +29,18 @@ static_assert(P10DC_RANKFORMULA_MLP_WINDOW4 == 0 ||
 static_assert(P10DC_RANKFORMULA_DIRECTGATHER_DEPTHMAJOR == 0 ||
               P10DC_RANKFORMULA_DIRECTGATHER_DEPTHMAJOR == 1,
               "P10DC_RANKFORMULA_DIRECTGATHER_DEPTHMAJOR must be 0 or 1");
+static_assert(P10DC_RANKFORMULA_DIRECTGATHER_SORTED == 0 ||
+              P10DC_RANKFORMULA_DIRECTGATHER_SORTED == 1,
+              "P10DC_RANKFORMULA_DIRECTGATHER_SORTED must be 0 or 1");
 static_assert(!P10DC_RANKFORMULA_DIRECTGATHER_FORCE7 ||
               P10DC_RANKFORMULA_DIRECTGATHER,
               "FORCE7 requires direct gather");
 static_assert(!P10DC_RANKFORMULA_DIRECTGATHER_DEPTHMAJOR ||
               P10DC_RANKFORMULA_DIRECTGATHER,
               "depth-major direct gather requires direct gather");
+static_assert(!P10DC_RANKFORMULA_DIRECTGATHER_SORTED ||
+              P10DC_RANKFORMULA_DIRECTGATHER,
+              "sorted direct gather requires direct gather");
 static_assert(!(P10DC_RANKFORMULA_DIRECTGATHER_FORCE7 &&
                 P10DC_RANKFORMULA_MLP_WINDOW4),
               "FORCE7 and WINDOW4 are intentionally isolated A/B modes");
