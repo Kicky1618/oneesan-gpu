@@ -5,17 +5,18 @@ source "$(dirname -- "${BASH_SOURCE[0]}")/../lib/common.sh"
 N="${1:-27}"
 if (( $# > 0 )); then shift; fi
 [[ "$N" == 27 ]] || { echo 'profiled HBM selector currently targets n=27' >&2; exit 2; }
-PROFILE_FILE="${PROFILE_FILE:-$ONEESAN_ROOT/work/b300_hbm_profile_tune21.env}"
+PROFILE_FILE="${PROFILE_FILE:-$ONEESAN_ROOT/work/b300_hbm_profile_refined21.env}"
 [[ -f "$PROFILE_FILE" ]] || { echo "missing profile file: $PROFILE_FILE" >&2; echo 'run: bash scripts/bench/b300-hbm-profile-auto21.sh' >&2; exit 2; }
 # shellcheck disable=SC1090
 source "$PROFILE_FILE"
 
 # Backward-compatible defaults for profiles generated before compact prectx and
-# flat persistent orbit scheduling were added.
+# flat persistent orbit scheduling were added. psm=0 means occupancy-derived
+# forward/reverse pool sizes, i.e. leave the runtime override unset.
 WARP_PRECTX_COMPACT="${WARP_PRECTX_COMPACT:-0}"
 ORBIT_PRECTX_COMPACT="${ORBIT_PRECTX_COMPACT:-0}"
 ORBITCTA_FLAT="${ORBITCTA_FLAT:-0}"
-ORBITCTA_FLAT_BLOCKS_PER_SM="${ORBITCTA_FLAT_BLOCKS_PER_SM:-8}"
+ORBITCTA_FLAT_BLOCKS_PER_SM="${ORBITCTA_FLAT_BLOCKS_PER_SM:-0}"
 
 PRIME="${SMOKE_PRIME:-4294967291}"; ARCH="${ARCH:-native}"; MAX_WINDOW="${MAX_WINDOW:-14}"
 FORCED_TARGET_MIB="${FORCED_TARGET_MIB:-65536}"; BUCKET_TARGET_MIB="${BUCKET_TARGET_MIB:-16384}"
@@ -28,7 +29,7 @@ RESULT="${RESULT:-${PREFIX}.tsv}"; PTXAS="${PTXAS:-${PREFIX}_ptxas.tsv}"; WORK_R
 mkdir -p "$LOGDIR" "$(dirname "$RESULT")"
 
 for x in PM_ACCUM REBUILD SELECT_ONLY WARP_PRECTX_COMPACT ORBIT_PRECTX_COMPACT ORBITCTA_FLAT; do v="${!x}"; [[ "$v" == 0 || "$v" == 1 ]] || { echo "$x must be 0 or 1" >&2; exit 2; }; done
-[[ "$ORBITCTA_FLAT_BLOCKS_PER_SM" =~ ^[0-9]+$ ]] && (( ORBITCTA_FLAT_BLOCKS_PER_SM > 0 )) || { echo 'ORBITCTA_FLAT_BLOCKS_PER_SM must be positive integer' >&2; exit 2; }
+[[ "$ORBITCTA_FLAT_BLOCKS_PER_SM" =~ ^[0-9]+$ ]] || { echo 'ORBITCTA_FLAT_BLOCKS_PER_SM must be non-negative integer (0=occupancy)' >&2; exit 2; }
 command -v nvcc >/dev/null || { echo 'nvcc required' >&2; exit 2; }
 command -v nvidia-smi >/dev/null || { echo 'nvidia-smi required' >&2; exit 2; }
 (( $(nvidia-smi --query-gpu=index --format=csv,noheader | wc -l) >= 8 )) || { echo 'need 8 visible GPUs' >&2; exit 2; }
@@ -43,7 +44,7 @@ done
 case "$WARP_COL_ILP" in 2|4) ;; *) echo "invalid WARP_COL_ILP=$WARP_COL_ILP" >&2; exit 2;; esac
 case "$ORBIT_COL_ILP" in 2|4) ;; *) echo "invalid ORBIT_COL_ILP=$ORBIT_COL_ILP" >&2; exit 2;; esac
 [[ "$WARP_PROFILE" =~ ^[A-Za-z0-9_.-]+$ && "$ORBIT_PROFILE" =~ ^[A-Za-z0-9_.-]+$ ]] || { echo 'unsafe profile name' >&2; exit 2; }
-[[ "$ORBIT_SORTED" == 0 && "$ORBIT_CPASYNC_LOCAL_PAIR" == 0 && "$ORBIT_CPASYNC_OVERLAP_LOCAL_PAIR" == 0 && "$ORBIT_QUAD_MLP" == 0 ]] || { echo 'profile requests orbit features not wired by orbit-CTA build' >&2; exit 2; }
+[[ "$ORBIT_SORTED" == 0 && "$ORBIT_CPASYNC_LOCAL_PAIR" == 0 && "$ORBIT_CPASYNC_OVERLAP_LOCAL_PAIR" == 0 && "$ORBIT_QUAD_MLP" == 0 ]] || { echo 'profile requests orbit features not wired by this profiled path' >&2; exit 2; }
 
 has(){ [[ " $CANDIDATES " == *" $1 "* ]]; }
 FORCED_BIN="$ONEESAN_BUILD_DIR/b300_profiled_forced_n27"
@@ -70,7 +71,7 @@ if has warp_tuned && [[ "$REBUILD" == 1 || ! -x "$WARP_BIN" ]]; then
     bash "$ONEESAN_ROOT/scripts/build/b300-directgather-colilp-fast.sh" >"$LOGDIR/warp_tuned.build.out" 2>"$LOGDIR/warp_tuned.build.err"
 fi
 if has orbit_tuned && [[ "$REBUILD" == 1 || ! -x "$ORBIT_BIN" ]]; then
-  N=27 ARCH="$ARCH" OUT="$ORBIT_BIN" DIRECTGATHER64=1 DIRECTGATHER_SPARSE64="$ORBIT_SPARSE64" DIRECTGATHER_SORT_RANKS=0 ORBITCTA_COL_ILP="$ORBIT_COL_ILP" ORBITCTA_FLAT="$ORBITCTA_FLAT" \
+  N=27 ARCH="$ARCH" OUT="$ORBIT_BIN" DIRECTGATHER64=1 DIRECTGATHER_SPARSE64="$ORBIT_SPARSE64" DIRECTGATHER_SORT_RANKS=0 ORBITCTA_COL_ILP="$ORBIT_COL_ILP" ORBITCTA_FLAT="$ORBITCTA_FLAT" ORBITCTA_FLAT_CHUNK=1 \
     PAIR_MLP=1 CPASYNC_PAIR="$ORBIT_CPASYNC_PAIR" PRECTX_FORWARD="$ORBIT_PRECTX_FORWARD" PRECTX_REVERSE="$ORBIT_PRECTX_REVERSE" PRECTX_COMPACT="$ORBIT_PRECTX_COMPACT" \
     RANKFORMULA_MLP_WINDOW4=1 PM_ACCUM="$PM_ACCUM" PTXAS_VERBOSE=1 \
     bash "$ONEESAN_ROOT/scripts/build/b300-directgather-orbitcta.sh" >"$LOGDIR/orbit_tuned.build.out" 2>"$LOGDIR/orbit_tuned.build.err"
@@ -119,9 +120,19 @@ smoke(){
   echo "=== profiled smoke $mode profile=$profile ===" >&2
   nvidia-smi dmon -s u -d 1 >"$dm" 2>/dev/null & local dp=$!
   set +e
-  if [[ "$family" == forced ]]; then GRIDFP_THREADS="$FORCED_THREADS" "$bin" 27 "$target" "$MAX_WINDOW" 8 "$PRIME" >"$so" 2>"$se"
-  elif [[ "$family" == warp ]]; then BUCKET_THREADS="$THREADS" BUCKET_GRID_X="$WARP_GX" BUCKET_GRID_Y="$WARP_GY" BUCKET_LOW_GRID_X="$LOW_GX" BUCKET_LOW_GRID_Y="$LOW_GY" "$bin" 27 "$target" "$MAX_WINDOW" 8 "$PRIME" >"$so" 2>"$se"
-  else BUCKET_THREADS="$THREADS" BUCKET_ORBITCTA_GRID_Y="$ORBIT_GY" BUCKET_ORBITCTA_FLAT_BLOCKS_PER_SM="$ORBITCTA_FLAT_BLOCKS_PER_SM" BUCKET_GRID_X="$LOW_GX" BUCKET_GRID_Y="$LOW_GY" BUCKET_LOW_GRID_X="$LOW_GX" BUCKET_LOW_GRID_Y="$LOW_GY" "$bin" 27 "$target" "$MAX_WINDOW" 8 "$PRIME" >"$so" 2>"$se"; fi
+  if [[ "$family" == forced ]]; then
+    GRIDFP_THREADS="$FORCED_THREADS" "$bin" 27 "$target" "$MAX_WINDOW" 8 "$PRIME" >"$so" 2>"$se"
+  elif [[ "$family" == warp ]]; then
+    BUCKET_THREADS="$THREADS" BUCKET_GRID_X="$WARP_GX" BUCKET_GRID_Y="$WARP_GY" BUCKET_LOW_GRID_X="$LOW_GX" BUCKET_LOW_GRID_Y="$LOW_GY" "$bin" 27 "$target" "$MAX_WINDOW" 8 "$PRIME" >"$so" 2>"$se"
+  elif [[ "$ORBITCTA_FLAT" == 1 && "$ORBITCTA_FLAT_BLOCKS_PER_SM" == 0 ]]; then
+    env -u BUCKET_ORBITCTA_FLAT_BLOCKS -u BUCKET_ORBITCTA_FLAT_BLOCKS_PER_SM \
+      BUCKET_THREADS="$THREADS" BUCKET_ORBITCTA_GRID_Y="$ORBIT_GY" BUCKET_GRID_X="$LOW_GX" BUCKET_GRID_Y="$LOW_GY" BUCKET_LOW_GRID_X="$LOW_GX" BUCKET_LOW_GRID_Y="$LOW_GY" \
+      "$bin" 27 "$target" "$MAX_WINDOW" 8 "$PRIME" >"$so" 2>"$se"
+  else
+    env -u BUCKET_ORBITCTA_FLAT_BLOCKS BUCKET_THREADS="$THREADS" BUCKET_ORBITCTA_GRID_Y="$ORBIT_GY" BUCKET_ORBITCTA_FLAT_BLOCKS_PER_SM="$ORBITCTA_FLAT_BLOCKS_PER_SM" \
+      BUCKET_GRID_X="$LOW_GX" BUCKET_GRID_Y="$LOW_GY" BUCKET_LOW_GRID_X="$LOW_GX" BUCKET_LOW_GRID_Y="$LOW_GY" \
+      "$bin" 27 "$target" "$MAX_WINDOW" 8 "$PRIME" >"$so" 2>"$se"
+  fi
   local rc=$?; set -e
   kill "$dp" 2>/dev/null || true; wait "$dp" 2>/dev/null || true
   if ((rc)); then printf '%s\t%s\t%s\tfailed:%s\tNA\tNA\tNA\tNA\t0\tNA\tNA\n' "$mode" "$profile" "$bin" "$rc" >>"$RESULT"; return 0; fi
@@ -171,7 +182,18 @@ print(f'seeded {cp} cached_residues={len(res)}',file=sys.stderr)
 PY
 
 if [[ "$SELECT_ONLY" == 1 ]]; then echo "SELECT_ONLY=1: selected $BEST/$BEST_PROFILE; CRT not continued" >&2; exit 0; fi
-if [[ "$BEST" == forced ]]; then export GRIDFP_THREADS="$FORCED_THREADS"; RUN_TARGET="$FORCED_TARGET_MIB"
-elif [[ "$BEST" == warp_tuned ]]; then export BUCKET_THREADS="$THREADS" BUCKET_GRID_X="$WARP_GX" BUCKET_GRID_Y="$WARP_GY" BUCKET_LOW_GRID_X="$LOW_GX" BUCKET_LOW_GRID_Y="$LOW_GY"; RUN_TARGET="$BUCKET_TARGET_MIB"
-else export BUCKET_THREADS="$THREADS" BUCKET_ORBITCTA_GRID_Y="$ORBIT_GY" BUCKET_ORBITCTA_FLAT_BLOCKS_PER_SM="$ORBITCTA_FLAT_BLOCKS_PER_SM" BUCKET_GRID_X="$LOW_GX" BUCKET_GRID_Y="$LOW_GY" BUCKET_LOW_GRID_X="$LOW_GX" BUCKET_LOW_GRID_Y="$LOW_GY"; RUN_TARGET="$BUCKET_TARGET_MIB"; fi
+if [[ "$BEST" == forced ]]; then
+  export GRIDFP_THREADS="$FORCED_THREADS"; RUN_TARGET="$FORCED_TARGET_MIB"
+elif [[ "$BEST" == warp_tuned ]]; then
+  export BUCKET_THREADS="$THREADS" BUCKET_GRID_X="$WARP_GX" BUCKET_GRID_Y="$WARP_GY" BUCKET_LOW_GRID_X="$LOW_GX" BUCKET_LOW_GRID_Y="$LOW_GY"; RUN_TARGET="$BUCKET_TARGET_MIB"
+else
+  export BUCKET_THREADS="$THREADS" BUCKET_ORBITCTA_GRID_Y="$ORBIT_GY" BUCKET_GRID_X="$LOW_GX" BUCKET_GRID_Y="$LOW_GY" BUCKET_LOW_GRID_X="$LOW_GX" BUCKET_LOW_GRID_Y="$LOW_GY"
+  unset BUCKET_ORBITCTA_FLAT_BLOCKS
+  if [[ "$ORBITCTA_FLAT" == 1 && "$ORBITCTA_FLAT_BLOCKS_PER_SM" != 0 ]]; then
+    export BUCKET_ORBITCTA_FLAT_BLOCKS_PER_SM="$ORBITCTA_FLAT_BLOCKS_PER_SM"
+  else
+    unset BUCKET_ORBITCTA_FLAT_BLOCKS_PER_SM
+  fi
+  RUN_TARGET="$BUCKET_TARGET_MIB"
+fi
 exec python3 "$ONEESAN_ROOT/scripts/solve/solve_b300_exact_batch.py" 27 --binary "$BEST_BIN" --target-mib "$RUN_TARGET" --max-window "$MAX_WINDOW" --gpus 8 --work-dir "$BEST_WORK" "$@"
