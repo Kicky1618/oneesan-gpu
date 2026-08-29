@@ -23,8 +23,8 @@ CANDIDATES="${CANDIDATES:-forced orbit_dense orbit_sparse}"
 PREFIX="${PREFIX:-$ONEESAN_ROOT/work/b300_exact_auto_n${N}}"
 LOGDIR="${LOGDIR:-${PREFIX}_logs}"
 SELECT_TSV="${SELECT_TSV:-${PREFIX}_select.tsv}"
-FINAL_WORK_DIR="${WORK_DIR:-$ONEESAN_ROOT/work/b300_exact_auto_selected_n${N}}"
-mkdir -p "$LOGDIR" "$(dirname "$SELECT_TSV")" "$FINAL_WORK_DIR"
+WORK_DIR_OVERRIDE="${WORK_DIR:-}"
+mkdir -p "$LOGDIR" "$(dirname "$SELECT_TSV")"
 
 command -v nvcc >/dev/null || { echo "nvcc required" >&2; exit 2; }
 command -v nvidia-smi >/dev/null || { echo "nvidia-smi required" >&2; exit 2; }
@@ -141,9 +141,16 @@ PY
 IFS=$'\t' read -r BEST_MODE BEST_BIN BEST_RESIDUE BEST_WALL <<<"$selection"
 echo "SELECTED backend=$BEST_MODE wall_s=$BEST_WALL residue=$BEST_RESIDUE" >&2
 
-# Seed the exact-batch checkpoint with the already-paid smoke residue. The
-# checkpoint fingerprint is deliberately computed exactly like
-# solve_b300_exact_batch.py, preventing cross-binary reuse.
+if [[ -n "$WORK_DIR_OVERRIDE" ]]; then
+  FINAL_WORK_DIR="$WORK_DIR_OVERRIDE"
+else
+  FINAL_WORK_DIR="$ONEESAN_ROOT/work/b300_exact_auto_${BEST_MODE}_n${N}"
+fi
+mkdir -p "$FINAL_WORK_DIR"
+
+# Seed/merge the exact-batch checkpoint with the already-paid smoke residue.
+# Never overwrite a checkpoint belonging to a different binary: that would lose
+# expensive CRT work and could mix incompatible solver results.
 python3 - "$FINAL_WORK_DIR" "$N" "$BEST_BIN" "$PRIME" "$BEST_RESIDUE" "$BEST_WALL" <<'PY'
 import hashlib,json,sys
 from pathlib import Path
@@ -154,15 +161,30 @@ with binary.open('rb') as f:
 fp={'schema':2,'binary_sha256':h.hexdigest()}
 work.mkdir(parents=True,exist_ok=True)
 cp=work/'checkpoint.json'
-cp.write_text(json.dumps({'n':n,'solver_fingerprint':fp,'residues':{str(p):{'residue':r,'wall_s':wall}}},indent=2,sort_keys=True)+'\n')
-print(f'seeded_checkpoint={cp} binary_sha256={fp["binary_sha256"]}',file=sys.stderr)
+residues={}
+if cp.exists():
+    old=json.loads(cp.read_text())
+    if int(old.get('n',-1))!=n:
+        raise SystemExit(f'existing checkpoint belongs to n={old.get("n")}')
+    if old.get('solver_fingerprint')!=fp:
+        raise SystemExit(f'existing checkpoint fingerprint differs from selected binary: {cp}')
+    residues=dict(old.get('residues',{}))
+oldp=residues.get(str(p))
+if oldp is not None and int(oldp['residue'])!=r:
+    raise SystemExit(f'smoke residue disagrees with existing checkpoint for p={p}: old={oldp["residue"]} new={r}')
+residues[str(p)]={'residue':r,'wall_s':wall}
+tmp=cp.with_suffix('.json.tmp')
+tmp.write_text(json.dumps({'n':n,'solver_fingerprint':fp,'residues':residues},indent=2,sort_keys=True)+'\n')
+tmp.replace(cp)
+print(f'seeded_checkpoint={cp} cached_residues={len(residues)} binary_sha256={fp["binary_sha256"]}',file=sys.stderr)
 PY
 
+if [[ "$BEST_MODE" == forced ]]; then RUN_TARGET_MIB="$TARGET_MIB"; else RUN_TARGET_MIB="$ORBIT_TARGET_MIB"; fi
 # Both backend families accept the same multi-modulus CLI. Keep both environment
 # families exported; unused variables are harmless for the selected executable.
 exec python3 "$ONEESAN_ROOT/scripts/solve/solve_b300_exact_batch.py" "$N" \
   --binary "$BEST_BIN" \
-  --target-mib "$([[ "$BEST_MODE" == forced ]] && echo "$TARGET_MIB" || echo "$ORBIT_TARGET_MIB")" \
+  --target-mib "$RUN_TARGET_MIB" \
   --max-window "$MAX_WINDOW" \
   --gpus 8 \
   --work-dir "$FINAL_WORK_DIR" \
