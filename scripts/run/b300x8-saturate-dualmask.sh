@@ -4,7 +4,7 @@ source "$(dirname -- "${BASH_SOURCE[0]}")/../lib/common.sh"
 
 N="${1:-27}"
 MOD="${2:-4294967291}"
-[[ "$N" == 27 ]] || { echo 'dualmask saturation wrapper currently targets n=27/W=28' >&2; exit 2; }
+[[ "$N" == 27 ]] || { echo 'saturation wrapper currently targets n=27/W=28' >&2; exit 2; }
 TARGET_MIB="${TARGET_MIB:-65536}"
 PLAN_MIB="${GRIDFP_PLAN_TARGET_MIB:-16384}"
 MAX_WINDOW="${MAX_WINDOW:-14}"
@@ -12,7 +12,7 @@ ROWS="${ROWS:-28}"
 THREADS="${GRIDFP_THREADS:-256}"
 ARCH="${ARCH:-native}"
 REBUILD="${REBUILD:-0}"
-TAG="n27_ilp4warp_dualmask"
+TAG="n27_ilp4warp_dualmask_closuretab"
 ISO="${ISO:-$ONEESAN_BUILD_DIR/${TAG}_gen}"
 BIN="${BIN:-$ONEESAN_BUILD_DIR/oneesan_cuda_gridfp_b300_hbm32_${TAG}}"
 mkdir -p "$ISO" "$ISO/tmp"
@@ -38,23 +38,30 @@ if [[ "$REBUILD" == 1 || ! -x "$BIN" ]]; then
 
   BUILD_SRC="$(sed -nE 's/^  build_source=(.*)$/\1/p' "$BUILD_OUT" | tail -n1)"
   [[ -n "$BUILD_SRC" && -f "$BUILD_SRC" ]] || { echo 'could not resolve generated CUDA source' >&2; exit 3; }
-  DUAL_SRC="$ISO/final_dualmask.cu"
+  DUAL_SRC="$ISO/dualmask.cu"
+  FINAL_SRC="$ISO/final_dualmask_closuretab.cu"
+
   bash "$ONEESAN_ROOT/scripts/bench/b300-block-pull-dualmask-proof.sh"
   bash "$ONEESAN_ROOT/scripts/bench/b300-block-closure-warp-batch-proof.sh"
-  python3 "$ONEESAN_ROOT/scripts/build/gen-b300-block-closure-warp-dualmask.py" "$BUILD_SRC" "$DUAL_SRC"
-  grep -Fq 'b300_closure_warp_endpoint_masks(d)' "$DUAL_SRC"
-  grep -Fq 'b300_block_closure_warp_kernel' "$DUAL_SRC"
+  bash "$ONEESAN_ROOT/scripts/bench/b300-closure-contrib-table-proof.sh"
 
-  echo '=== compile ILP4 + closure-warp + dualmask production binary ===' >&2
+  python3 "$ONEESAN_ROOT/scripts/build/gen-b300-block-closure-warp-dualmask.py" "$BUILD_SRC" "$DUAL_SRC"
+  python3 "$ONEESAN_ROOT/scripts/build/gen-b300-closure-contrib-table.py" "$DUAL_SRC" "$FINAL_SRC"
+  grep -Fq 'b300_closure_warp_endpoint_masks(d)' "$FINAL_SRC"
+  grep -Fq 'D_BLOCK_CLOSURE_CONTRIB' "$FINAL_SRC"
+  grep -Fq 'b300_block_closure_warp_kernel' "$FINAL_SRC"
+
+  echo '=== compile ILP4 + closure-warp + dualmask + closure-table production binary ===' >&2
   TMPDIR="$ISO/tmp" nvcc -O3 -std=c++17 -lineinfo -arch="$ARCH" -Xptxas=-v \
     -DTARGET_W=28 -DLOW_LUT_K=13 -DHIGH_LUT_K=13 \
     -DB300_FAST_SHARD_ADDRESS8=1 -DB300_BLOCK_CLOSURE_QUAD=0 \
-    "$DUAL_SRC" -o "$BIN" 2>"$ISO/dualmask.build.err"
+    "$FINAL_SRC" -o "$BIN" 2>"$ISO/final.build.err"
   [[ -x "$BIN" ]] || { echo 'candidate binary missing after nvcc' >&2; exit 3; }
 fi
 
 nvidia-smi --query-gpu=index,name,memory.total,memory.free --format=csv,noheader || true
-echo "B300 x8 saturation-dualmask n=$N rows=$ROWS threads=$THREADS target=${TARGET_MIB}MiB plan=${PLAN_MIB}MiB window=$MAX_WINDOW" >&2
+echo "B300 x8 saturation n=$N rows=$ROWS threads=$THREADS target=${TARGET_MIB}MiB plan=${PLAN_MIB}MiB window=$MAX_WINDOW" >&2
+echo 'features=rankstate_ilp4,closure_warp,dualmask,closure_contrib_constant_table,concurrent_io' >&2
 echo "BIN=$BIN" >&2
 export B300_ROW_LIMIT="$ROWS" GRIDFP_THREADS="$THREADS" GRIDFP_PLAN_TARGET_MIB="$PLAN_MIB"
 exec "$BIN" "$N" "$MOD" "$TARGET_MIB" "$MAX_WINDOW" 8
