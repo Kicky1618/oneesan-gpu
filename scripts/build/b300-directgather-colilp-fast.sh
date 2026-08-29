@@ -33,7 +33,6 @@ if [[ "$QUAD_MLP" == 1 ]]; then
   [[ "$PAIR_MLP" == 1 ]] || { echo "QUAD_MLP requires PAIR_MLP=1 for tail fallback" >&2; exit 2; }
   [[ "$COL_ILP" == 4 ]] || { echo "QUAD_MLP requires COL_ILP=4" >&2; exit 2; }
   [[ "$MLP_WINDOW4" == 1 ]] || { echo "QUAD_MLP requires MLP_WINDOW4=1" >&2; exit 2; }
-  [[ "$CPASYNC_PAIR" == 0 ]] || { echo "QUAD_MLP register experiment currently requires CPASYNC_PAIR=0" >&2; exit 2; }
   [[ "$CPASYNC_LOCAL_PAIR" == 0 ]] || { echo "QUAD_MLP currently requires CPASYNC_LOCAL_PAIR=0" >&2; exit 2; }
   [[ "$CPASYNC_OVERLAP_LOCAL_PAIR" == 0 ]] || { echo "QUAD_MLP currently requires CPASYNC_OVERLAP_LOCAL_PAIR=0" >&2; exit 2; }
 fi
