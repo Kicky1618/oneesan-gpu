@@ -9,13 +9,9 @@ MAX_WINDOW="${MAX_WINDOW:-27}"
 ROWS="${ROWS:-1}"
 GPUS=8
 ARCH="${ARCH:-native}"
-BACKEND="${BACKEND:-vmm}"
+BACKEND="${BACKEND:-sharded}"
 case "$BACKEND" in vmm|sharded) ;; *) echo "BACKEND must be vmm or sharded" >&2; exit 2;; esac
 [[ "$ROWS" =~ ^[0-9]+$ ]] && (( ROWS >= 1 && ROWS <= 28 )) || { echo "ROWS must be 1..28" >&2; exit 2; }
-if [[ "$BACKEND" == sharded && "$ROWS" != 28 ]]; then
-  echo "row-limited calibration is currently supported only by BACKEND=vmm; use ROWS=28 for sharded" >&2
-  exit 2
-fi
 OUT="${OUT:-$ONEESAN_BUILD_DIR/oneesan_cuda_gridfp_b300_hbm32_n27_x8_bandwidth_recovery_${BACKEND}}"
 PREFIX="${PREFIX:-$ONEESAN_ROOT/work/b300_hbm32_n27_x8_bandwidth_recovery_${BACKEND}_r${ROWS}}"
 BUILD_OUT="${BUILD_OUT:-${PREFIX}.build.out}"
@@ -29,15 +25,14 @@ command -v nvidia-smi >/dev/null || { echo "nvidia-smi is required" >&2; exit 2;
 visible="$(nvidia-smi --query-gpu=index --format=csv,noheader | wc -l)"
 (( visible >= GPUS )) || { echo "need $GPUS GPUs, visible=$visible" >&2; exit 2; }
 
-# The current ~2% memory-controller symptom is compute/control bound. This
-# candidate deliberately trades HBM traffic for less integer/control work:
-#   * K=13 rank/unrank LUTs
-#   * materialized MateID reused by the main transition kernels
-#   * p>1 destination-pull main update: no identity D2D copy, no main CAS scatter,
-#     and no blocked->main scatter kernel
-#   * VMM direct-global authoritative addressing by default
-#   * wide scratch request so large windows stay resident; the executable caps
-#     the request against cudaMemGetInfo()-reserve.
+# The observed ~2% memory-controller busy rate means the old kernel is spending
+# most cycles on rank/unrank, control flow and atomic push updates. The sharded
+# recovery backend therefore enables the complete pull stack:
+#   * shard-address8 (no 64-bit divide for 8-way addressing)
+#   * main/block MateID caches
+#   * p>1 main destination pull (no identity copy / main atomic scatter)
+#   * p>1 block destination pull (no block memset / block atomic scatter)
+#   * 64 GiB scratch request, capped by cudaMemGetInfo()-reserve.
 echo "=== build B300 n=27 bandwidth-recovery candidate backend=$BACKEND ===" >&2
 if [[ "$BACKEND" == vmm ]]; then
   N="$N" ARCH="$ARCH" OUT="$OUT" MAIN_MATE_CACHE=1 MAIN_PULL=1 \
@@ -47,15 +42,15 @@ if [[ "$BACKEND" == vmm ]]; then
     cat "$BUILD_OUT" >&2; exit 3; }
   grep -Fq 'authoritative_storage=contiguous_multi_gpu_vmm' "$BUILD_OUT" || {
     echo "VMM bandwidth-recovery build lost contiguous VMM storage" >&2; exit 3; }
-  grep -Fq 'row_limit_env=B300_ROW_LIMIT default_rows=28' "$BUILD_OUT" || {
-    echo "VMM bandwidth-recovery build lost row calibration support" >&2; exit 3; }
 else
-  N="$N" ARCH="$ARCH" OUT="$OUT" FAST_SHARD_ADDRESS8=1 MAIN_MATE_CACHE=1 MAIN_PULL=1 PTXAS_VERBOSE=1 \
+  N="$N" ARCH="$ARCH" OUT="$OUT" FAST_SHARD_ADDRESS8=1 MAIN_MATE_CACHE=1 MAIN_PULL=1 BLOCK_PULL=1 BLOCK_MATE_CACHE=1 PTXAS_VERBOSE=1 \
     bash "$ONEESAN_ROOT/scripts/build/b300-hbm32.sh" >"$BUILD_OUT" 2>"$BUILD_ERR"
-  grep -Fq 'main_mate_cache=1 main_pull=1' "$BUILD_OUT" || {
-    echo "sharded bandwidth-recovery build did not report MAIN_MATE_CACHE=1 MAIN_PULL=1" >&2
+  grep -Fq 'fast_shard_address8=1 main_mate_cache=1 main_pull=1 block_pull=1 block_mate_cache=1' "$BUILD_OUT" || {
+    echo "sharded bandwidth-recovery build did not report the complete pull/cache stack" >&2
     cat "$BUILD_OUT" >&2; exit 3; }
 fi
+grep -Fq 'row_limit_env=B300_ROW_LIMIT default_rows=28' "$BUILD_OUT" || {
+  echo "bandwidth-recovery build lost row calibration support" >&2; exit 3; }
 
 : >"$TELEMETRY"
 monitor_pid=""
@@ -68,8 +63,6 @@ cleanup_monitor(){
 }
 trap cleanup_monitor EXIT INT TERM
 
-# utilization.memory is the percentage of the sample interval during which the
-# memory controller is busy; this is the metric that exposed the ~2% problem.
 nvidia-smi \
   --query-gpu=timestamp,index,utilization.gpu,utilization.memory,power.draw,memory.used,memory.total \
   --format=csv,noheader,nounits -l 1 >"$TELEMETRY" 2>/dev/null &
@@ -79,11 +72,7 @@ sleep 1
 echo "=== run B300 x8 n=27 bandwidth-recovery candidate ===" >&2
 echo "backend=$BACKEND rows=$ROWS scratch_mib=$SCRATCH_MIB max_window=$MAX_WINDOW gpus=$GPUS telemetry=$TELEMETRY" >&2
 set +e
-if [[ "$BACKEND" == vmm ]]; then
-  B300_ROW_LIMIT="$ROWS" "$OUT" "$N" "$MOD" "$SCRATCH_MIB" "$MAX_WINDOW" "$GPUS" >"$RUN_OUT" 2>"$RUN_ERR"
-else
-  "$OUT" "$N" "$MOD" "$SCRATCH_MIB" "$MAX_WINDOW" "$GPUS" >"$RUN_OUT" 2>"$RUN_ERR"
-fi
+B300_ROW_LIMIT="$ROWS" "$OUT" "$N" "$MOD" "$SCRATCH_MIB" "$MAX_WINDOW" "$GPUS" >"$RUN_OUT" 2>"$RUN_ERR"
 rc=$?
 set -e
 cleanup_monitor
