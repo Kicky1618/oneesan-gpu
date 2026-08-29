@@ -32,7 +32,6 @@ if [[ "$CPASYNC_PAIR" == 1 ]]; then
   [[ "$MLP_WINDOW4" == 1 ]] || { echo "CPASYNC_PAIR requires MLP_WINDOW4=1" >&2; exit 2; }
   [[ "$FORCE7" == 0 ]] || { echo "CPASYNC_PAIR does not combine with FORCE7" >&2; exit 2; }
   [[ "$PREFETCH_NEXT" == 0 ]] || { echo "CPASYNC_PAIR prefetch combination is intentionally isolated; use PREFETCH_NEXT=0" >&2; exit 2; }
-  [[ "$DIRECTGATHER64" == 0 ]] || { echo "CPASYNC_PAIR directgather64 combination is intentionally isolated; use DIRECTGATHER64=0" >&2; exit 2; }
 fi
 if [[ "$SORTED" == 1 ]]; then
   [[ "$DEPTHMAJOR" == 1 ]] || { echo "SORTED currently targets DEPTHMAJOR=1" >&2; exit 2; }
