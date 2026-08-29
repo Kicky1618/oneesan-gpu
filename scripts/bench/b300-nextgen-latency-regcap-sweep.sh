@@ -10,8 +10,6 @@ mkdir -p "$LOGDIR" "$ONEESAN_BUILD_DIR" "$(dirname "$RESULT")"
 [[ "$HIGH_DROP_CHUNK" == 0 || "$HIGH_DROP_CHUNK" == 1 ]]||exit 2;case "$RECURRENCE_ILP" in 2|4|8);;*)exit 2;;esac;[[ "$RANDOM_CG" == 0 || "$RANDOM_CG" == 1 ]]||exit 2;[[ "$DUALMASK" == 0 || "$DUALMASK" == 1 ]]||exit 2;case "$CLOSURE_BATCH" in 0|2|4);;*)exit 2;;esac
 command -v nvcc >/dev/null||{ echo 'nvcc required' >&2;exit 2; };command -v nvidia-smi >/dev/null||{ echo 'nvidia-smi required' >&2;exit 2; };(( $(nvidia-smi --query-gpu=index --format=csv,noheader|wc -l)>=8 ))||{ echo 'need 8 visible GPUs' >&2;exit 2; }
 
-# Resolve one fully composed, uncapped source. Recompile it below so every
-# resource log contains only the exact tested nvcc invocation.
 GEN_BIN="$ONEESAN_BUILD_DIR/b300_nextgen_latency_source_n27";GEN_OUT="$LOGDIR/source.build.out";GEN_ERR="$LOGDIR/source.build.err"
 N=27 ARCH="$ARCH" OUT="$GEN_BIN" HIGH_DROP_CHUNK="$HIGH_DROP_CHUNK" RECURRENCE_ILP="$RECURRENCE_ILP" RANDOM_CG="$RANDOM_CG" PREFETCH_L2=0 DUALMASK="$DUALMASK" CLOSURE_BATCH="$CLOSURE_BATCH" MAXRREGCOUNT=0 BUILD_ERR="$GEN_ERR" PTXAS_VERBOSE=1 \
  bash "$ONEESAN_ROOT/scripts/build/b300-forced-nextgen.sh">"$GEN_OUT" 2>"$LOGDIR/source.build.driver.err"
@@ -21,11 +19,18 @@ PREF_SRC="$LOGDIR/prefetch.cu";python3 "$ONEESAN_ROOT/scripts/build/gen-b300-mai
 DEFS=(-DTARGET_W=28 -DLOW_LUT_K=14 -DHIGH_LUT_K=13);[[ "$CLOSURE_BATCH" == 0 ]]||DEFS+=("-DB300_BLOCK_CLOSURE_BATCH=$CLOSURE_BATCH")
 printf 'profile\tprefetch_l2\tcap\tbinary\tbuild_err\n'>"$LOGDIR/binaries.tsv"
 declare -A seen=()
-for cap in $REGCAP_LIST;do
+for cap in 0 $REGCAP_LIST;do
  [[ "$cap" =~ ^[0-9]+$ ]]&&((cap==0||(cap>=32&&cap<=255)))||{ echo "bad cap=$cap" >&2;exit 2; };[[ -z "${seen[$cap]+x}" ]]||continue;seen[$cap]=1
- for pre in 0 1;do profile="$([[ "$pre" == 1 ]]&&echo prefetch||echo sync)_r${cap}";src="$SYNC_SRC";[[ "$pre" == 0 ]]||src="$PREF_SRC";bin="$ONEESAN_BUILD_DIR/b300_nextgen_${profile}_h${HIGH_DROP_CHUNK}_i${RECURRENCE_ILP}_c${RANDOM_CG}_d${DUALMASK}_b${CLOSURE_BATCH}_n27";err="$LOGDIR/${profile}.build.err";reg=();((cap>0))&&reg+=("-maxrregcount=$cap");echo "=== compile $profile ===" >&2;set +e;TMPDIR="$ONEESAN_TMP_DIR" nvcc -O3 -std=c++17 -lineinfo -arch="$ARCH" -Xptxas=-v "${reg[@]}" "${DEFS[@]}" "$src" -o "$bin">"$LOGDIR/${profile}.compile.out" 2>"$err";rc=$?;set -e;if((rc));then echo "LATENCY_COMPILE_SKIP profile=$profile rc=$rc" >&2;continue;fi;[[ -x "$bin" ]]||continue;printf '%s\t%s\t%s\t%s\t%s\n' "$profile" "$pre" "$cap" "$bin" "$err">>"$LOGDIR/binaries.tsv";done
+ for pre in 0 1;do
+   if [[ "$pre" == 1 ]];then cls=prefetch;src="$PREF_SRC";else cls=sync;src="$SYNC_SRC";fi
+   profile="${cls}_r${cap}";bin="$ONEESAN_BUILD_DIR/b300_nextgen_${profile}_h${HIGH_DROP_CHUNK}_i${RECURRENCE_ILP}_c${RANDOM_CG}_d${DUALMASK}_b${CLOSURE_BATCH}_n27";err="$LOGDIR/${profile}.build.err";reg=();((cap>0))&&reg+=("-maxrregcount=$cap")
+   echo "=== compile $profile ===" >&2;set +e;TMPDIR="$ONEESAN_TMP_DIR" nvcc -O3 -std=c++17 -lineinfo -arch="$ARCH" -Xptxas=-v "${reg[@]}" "${DEFS[@]}" "$src" -o "$bin">"$LOGDIR/${profile}.compile.out" 2>"$err";rc=$?;set -e
+   if((rc));then echo "LATENCY_COMPILE_SKIP profile=$profile rc=$rc" >&2;continue;fi
+   [[ -x "$bin" ]]||continue;printf '%s\t%s\t%s\t%s\t%s\n' "$profile" "$pre" "$cap" "$bin" "$err">>"$LOGDIR/binaries.tsv"
+ done
 done
 (( $(wc -l<"$LOGDIR/binaries.tsv")>1 ))||{ echo 'no latency candidate compiled' >&2;exit 3; }
+grep -q '^sync_r0[[:space:]]' "$LOGDIR/binaries.tsv"||{ echo 'uncapped sync baseline did not compile' >&2;exit 3; }
 
 PARSER="$ONEESAN_ROOT/scripts/bench/parse-ptxas-resources.py";printf 'profile\tkernel\tregisters\tstack_bytes\tspill_store_bytes\tspill_load_bytes\tsmem_bytes\tcmem0_bytes\n'>"$RESOURCE"
 while IFS=$'\t' read -r profile pre cap bin err;do [[ "$profile" == profile ]]&&continue;python3 "$PARSER" "$err" --label "$profile" --contains main_pull_kernel_ilp2 >>"$RESOURCE"||true;done<"$LOGDIR/binaries.tsv"
