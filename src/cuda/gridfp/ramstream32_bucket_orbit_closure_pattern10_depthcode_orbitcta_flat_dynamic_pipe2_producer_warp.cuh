@@ -13,11 +13,13 @@ static_assert(P10DC_ORBITCTA_COL_ILP == 1 || P10DC_ORBITCTA_COL_ILP == 2 ||
 // Warp 0 is the producer. Remaining whole warps cover every column with a
 // compact logical thread id, preserving 32-lane contiguous accesses inside each
 // worker warp. This removes the standard pipe2 tail where warp 0 starts its own
-// 1/8 share only after lane 0 finishes preparing the next orbit.
+// 1/8 share only after lane 0 finishes preparing the next orbit. A partial last
+// warp would violate that contract for warp-level plan-sum helpers, so non-warp-
+// aligned block sizes fall back to the ordinary exact column executor.
 __device__ __forceinline__ void p10dc_orbitcta_flat_forward_columns_pipe2_producer_warp(
     P10DC_ORBITCTA_CTX& c
 ) {
-    if (blockDim.x <= 32) {
+    if (blockDim.x <= 32 || (uint32_t(blockDim.x) & 31u) != 0u) {
         p10dc_orbitcta_flat_forward_columns(c);
         return;
     }
@@ -92,7 +94,7 @@ __device__ __forceinline__ void p10dc_orbitcta_flat_forward_columns_pipe2_produc
 __device__ __forceinline__ void p10dc_orbitcta_flat_reverse_columns_pipe2_producer_warp(
     P10DC_ORBITCTA_CTX& c, bool edge
 ) {
-    if (blockDim.x <= 32) {
+    if (blockDim.x <= 32 || (uint32_t(blockDim.x) & 31u) != 0u) {
         p10dc_orbitcta_flat_reverse_columns(c, edge);
         return;
     }
