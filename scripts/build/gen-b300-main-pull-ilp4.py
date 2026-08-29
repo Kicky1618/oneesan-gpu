@@ -41,7 +41,6 @@ __global__ void main_pull_kernel_ilp4(
     for(Code base=tid;base<n;base+=4*grid){{
         const Code i0=base,i1=base+grid,i2=base+2*grid,i3=base+3*grid;
         const bool v1=i1<n,v2=i2<n,v3=i3<n;
-
         const MateID m0=mates[i0];
         const MateID m1=v1?mates[i1]:MateID(0);
         const MateID m2=v2?mates[i2]:MateID(0);
@@ -74,6 +73,13 @@ __global__ void main_pull_kernel_ilp4(
         if(v3){{uint64_t a3=uint64_t(self3)+pair3+block3;if(a3>=mod)a3-=mod;if(a3>=mod)a3-=mod;out_main[i3]=Count(a3);}}
     }}
 }}
+
+static inline int b300_main_pull_ilp4_blocks(Code n,int threads){{
+    if(!n)return 1;
+    const Code cover=Code(threads)*4;
+    const Code need=(n+cover-1)/cover;
+    return int(std::min<Code>(65535,std::max<Code>(1,need)));
+}}
 '''
 s=s.replace(marker,insert+marker,1)
 old='''if(ms.size){
@@ -81,12 +87,12 @@ old='''if(ms.size){
                 else main_pull_kernel<false><<<bm,threads,0,c.sMain>>>(cur,nullptr,ms.size,dcur,ds.size,nxt,p);
             }'''
 new='''if(ms.size){
-                if(useMate)main_pull_kernel_ilp4<<<bm,threads,0,c.sMain>>>(cur,c.dMate,ms.size,dcur,ds.size,nxt,p);
+                if(useMate)main_pull_kernel_ilp4<<<b300_main_pull_ilp4_blocks(ms.size,threads),threads,0,c.sMain>>>(cur,c.dMate,ms.size,dcur,ds.size,nxt,p);
                 else main_pull_kernel<false><<<bm,threads,0,c.sMain>>>(cur,nullptr,ms.size,dcur,ds.size,nxt,p);
             }'''
 if s.count(old)!=1:raise SystemExit(f'main pull launch anchor expected one match got {s.count(old)}')
 s=s.replace(old,new,1)
-for required in ('main_pull_kernel_ilp4','base+=4*grid','const Count pair3=','const Count block3=','b300_low_cached_drop_rank'):
+for required in ('main_pull_kernel_ilp4','base+=4*grid','const Count pair3=','const Count block3=','b300_low_cached_drop_rank','b300_main_pull_ilp4_blocks(ms.size,threads)','const Code cover=Code(threads)*4'):
     if required not in s:raise SystemExit(f'missing ILP4 artifact: {required}')
 out.parent.mkdir(parents=True,exist_ok=True);out.write_text(s)
-print(f'generated {out} from {src}: b300_main_pull_ilp4=1 destinations_per_thread=4 index_first=1 low_rank=chunked high_rank={"chunked" if "b300_high_chunk_drop_rank" in s else "generic"} register_pressure_requires_b300_ab=1')
+print(f'generated {out} from {src}: b300_main_pull_ilp4=1 destinations_per_thread=4 launch_blocks=ceil_n_over_4threads_capped65535 launch_mlp_fixed=1 index_first=1 low_rank=chunked high_rank={"chunked" if "b300_high_chunk_drop_rank" in s else "generic"} register_pressure_requires_b300_ab=1')
