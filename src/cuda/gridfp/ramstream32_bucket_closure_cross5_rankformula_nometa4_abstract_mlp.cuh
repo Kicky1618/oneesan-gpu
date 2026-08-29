@@ -11,6 +11,9 @@
 #ifndef P10DC_RANKFORMULA_MLP_WINDOW4
 #define P10DC_RANKFORMULA_MLP_WINDOW4 0
 #endif
+#ifndef P10DC_RANKFORMULA_DIRECTGATHER_DEPTHMAJOR
+#define P10DC_RANKFORMULA_DIRECTGATHER_DEPTHMAJOR 0
+#endif
 static_assert(P10DC_RANKFORMULA_DIRECTGATHER == 0 ||
               P10DC_RANKFORMULA_DIRECTGATHER == 1,
               "P10DC_RANKFORMULA_DIRECTGATHER must be 0 or 1");
@@ -20,9 +23,15 @@ static_assert(P10DC_RANKFORMULA_DIRECTGATHER_FORCE7 == 0 ||
 static_assert(P10DC_RANKFORMULA_MLP_WINDOW4 == 0 ||
               P10DC_RANKFORMULA_MLP_WINDOW4 == 1,
               "P10DC_RANKFORMULA_MLP_WINDOW4 must be 0 or 1");
+static_assert(P10DC_RANKFORMULA_DIRECTGATHER_DEPTHMAJOR == 0 ||
+              P10DC_RANKFORMULA_DIRECTGATHER_DEPTHMAJOR == 1,
+              "P10DC_RANKFORMULA_DIRECTGATHER_DEPTHMAJOR must be 0 or 1");
 static_assert(!P10DC_RANKFORMULA_DIRECTGATHER_FORCE7 ||
               P10DC_RANKFORMULA_DIRECTGATHER,
               "FORCE7 requires direct gather");
+static_assert(!P10DC_RANKFORMULA_DIRECTGATHER_DEPTHMAJOR ||
+              P10DC_RANKFORMULA_DIRECTGATHER,
+              "depth-major direct gather requires direct gather");
 static_assert(!(P10DC_RANKFORMULA_DIRECTGATHER_FORCE7 &&
                 P10DC_RANKFORMULA_MLP_WINDOW4),
               "FORCE7 and WINDOW4 are intentionally isolated A/B modes");
@@ -38,6 +47,10 @@ static_assert(P10DC_RANKFORMULA_ABSTRACT_SELECT8 &&
 // CROSS gather.
 __constant__ uint4* D_P10DC_RANKFORMULA_DIRECTGATHER4;
 __constant__ uint32_t D_P10DC_RANKFORMULA_DIRECTGATHER_OFF[MAXW + 2];
+#if P10DC_RANKFORMULA_DIRECTGATHER_DEPTHMAJOR
+__constant__ uint32_t D_P10DC_RANKFORMULA_DIRECTGATHER_DEPTH_OFF[
+    (MAXW + 2) * P10DC_RANKFORMULA_ABSTRACT_SELECT_DEPTHS];
+#endif
 #endif
 
 __device__ __forceinline__ BkczCrossAccum p10dc_rankformula_accum_add(
@@ -61,10 +74,15 @@ p10dc_resolved_low_preimages_cross5_rankformula_nometa4_abstract_mlp_fixed(
     if (!depth || depth > P10DC_RANKFORMULA_ABSTRACT_SELECT_DEPTHS)
         return BkczCrossAccum(0);
 #if P10DC_RANKFORMULA_DIRECTGATHER
+#if P10DC_RANKFORMULA_DIRECTGATHER_DEPTHMAJOR
+    const size_t gi = size_t(D_P10DC_RANKFORMULA_DIRECTGATHER_DEPTH_OFF[
+        h * P10DC_RANKFORMULA_ABSTRACT_SELECT_DEPTHS + (depth - 1u)]) + size_t(rank);
+#else
     const size_t gi =
         (size_t(D_P10DC_RANKFORMULA_DIRECTGATHER_OFF[h]) + size_t(rank)) *
             P10DC_RANKFORMULA_ABSTRACT_SELECT_DEPTHS +
         size_t(depth - 1u);
+#endif
     const uint4 d = __ldg(D_P10DC_RANKFORMULA_DIRECTGATHER4 + gi);
     const uint32_t count = d.w >> 16;
 #if !P10DC_RANKFORMULA_DIRECTGATHER_FORCE7
