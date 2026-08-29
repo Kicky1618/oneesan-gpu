@@ -8,8 +8,8 @@ ARCH="${ARCH:-native}";PRIME="${SMOKE_PRIME:-4294967291}";TARGET_MIB="${FORCED_T
 PROFILE_FILE="${PROFILE_FILE:-$ONEESAN_ROOT/work/b300_hbm_profile_refined21.env}"
 PREFIX="${PREFIX:-$ONEESAN_ROOT/work/b300_joint_calibrated_select_n27}";CAL_PREFIX="${CAL_PREFIX:-${PREFIX}.calibration}";CAL_LOG="${CAL_LOG:-${PREFIX}.calibration.log}"
 RECALIBRATE="${RECALIBRATE:-1}";SELECT_ONLY="${SELECT_ONLY:-1}"
-[[ "$RECALIBRATE" == 0 || "$RECALIBRATE" == 1 ]]||{ echo 'RECALIBRATE must be 0 or 1' >&2;exit 2; }
-[[ "$SELECT_ONLY" == 0 || "$SELECT_ONLY" == 1 ]]||{ echo 'SELECT_ONLY must be 0 or 1' >&2;exit 2; }
+N27_PRODUCER_WEIGHT_RACE="${N27_PRODUCER_WEIGHT_RACE:-1}";PWW_REBUILD="${PWW_REBUILD:-1}"
+for x in RECALIBRATE SELECT_ONLY N27_PRODUCER_WEIGHT_RACE PWW_REBUILD;do v="${!x}";[[ "$v" == 0 || "$v" == 1 ]]||{ echo "$x must be 0 or 1" >&2;exit 2; };done
 mkdir -p "$(dirname "$PREFIX")"
 getv(){ local k="$1" f="$2";sed -nE "s/^${k}=([^[:space:]]+).*/\\1/p" "$f"|tail -n1; }
 
@@ -33,7 +33,7 @@ N=27 ARCH="$ARCH" OUT="$BIN" HIGH_DROP_CHUNK="$HIGH" DUALMASK="$DUAL" CLOSURE_BA
 echo "JOINT CALIBRATED FORCED label=$LABEL binary=$BIN select_only=$SELECT_ONLY" >&2
 
 # Partial-row calibration can rank transformed and untransformed forced paths
-# differently from a complete n=27 prime.  Build the globally fastest partial
+# differently from a complete n=27 prime. Build the globally fastest partial
 # untransformed baseline too, unless it is exactly the selected configuration,
 # and let the downstream same-session full-prime race arbitrate both vs bucket.
 unset FORCED_BASE_BIN FORCED_BASE_LABEL FORCED_BASE_THREADS
@@ -47,6 +47,22 @@ if [[ "$DUAL" != 0 || "$BATCH" != 0 || "$HIGH" != "$BASE_HIGH" || "$THREADS" != 
   grep -Fq "mlp_calibrated_forced=1 high_drop_chunk=$BASE_HIGH dualmask=0 closure_batch=0" "$BASE_BUILD_OUT"
   export FORCED_BASE_BIN="$BASE_BIN" FORCED_BASE_LABEL="$BASE_LABEL" FORCED_BASE_THREADS="$BASE_THREADS"
   echo "JOINT BASELINE FORCED label=$BASE_LABEL binary=$BASE_BIN" >&2
+fi
+
+# The n=21 profile picks a producer share cheaply, but n=27 can have a different
+# column/prepare balance. Before the expensive forced-vs-bucket race, smoke all
+# requested producer weights on a complete n=27 prime and carry only the fastest
+# exact profile forward. If the profile is not a producer-warp profile, the
+# wrapper simply copies it and returns without extra GPU work.
+if [[ "$N27_PRODUCER_WEIGHT_RACE" == 1 ]];then
+  PWW_PROFILE_OUT="${PWW_PROFILE_OUT:-${PREFIX}.producer-weight.env}"
+  PWW_PREFIX="${PWW_PREFIX:-${PREFIX}.producer-weight}"
+  echo '=== joint calibrated selector: n27 producer-weight race ===' >&2
+  PROFILE_FILE="$PROFILE_FILE" PROFILE_OUT="$PWW_PROFILE_OUT" PREFIX="$PWW_PREFIX" \
+    WEIGHT_RACE_ONLY=1 WEIGHT_REBUILD="$PWW_REBUILD" ARCH="$ARCH" SMOKE_PRIME="$PRIME" MAX_WINDOW="$MAX_WINDOW" \
+    bash "$ONEESAN_ROOT/scripts/run/b300x8-exact-auto-hbm-profiled-producer-weight-race.sh" 27
+  [[ -s "$PWW_PROFILE_OUT" ]]||{ echo "producer-weight profile missing: $PWW_PROFILE_OUT" >&2;exit 4; }
+  PROFILE_FILE="$PWW_PROFILE_OUT"
 fi
 
 export SELECT_ONLY FORCED_OVERRIDE_BIN="$BIN" FORCED_OVERRIDE_LABEL="$LABEL" FORCED_OVERRIDE_THREADS="$THREADS" PROFILE_FILE SMOKE_PRIME="$PRIME" FORCED_TARGET_MIB="$TARGET_MIB" MAX_WINDOW
