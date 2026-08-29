@@ -38,6 +38,8 @@ NEXTSELF_SEARCH_REPEATS="${NEXTSELF_SEARCH_REPEATS:-1}"
 NEXTSELF_VALIDATE_REPEATS="${NEXTSELF_VALIDATE_REPEATS:-1}"
 HYBRID_MIN_SPEEDUP="${HYBRID_MIN_SPEEDUP:-1.01}"
 HYBRID_NS_MIN_SPEEDUP="${HYBRID_NS_MIN_SPEEDUP:-1.01}"
+HYBRID_NS_WIDTH_LIST="${HYBRID_NS_WIDTH_LIST:-1 2 4 8}"
+HYBRID_NS_DISTANCE_LIST="${HYBRID_NS_DISTANCE_LIST:-1 2 4}"
 HYBRID_NS_SEARCH_REPEATS="${HYBRID_NS_SEARCH_REPEATS:-1}"
 HYBRID_NS_VALIDATE_REPEATS="${HYBRID_NS_VALIDATE_REPEATS:-1}"
 
@@ -49,6 +51,14 @@ for x in NEXTSELF_SEARCH_REPEATS NEXTSELF_VALIDATE_REPEATS HYBRID_NS_SEARCH_REPE
   v="${!x}"
   [[ "$v" =~ ^[1-9][0-9]*$ ]] || { echo "$x must be >=1" >&2; exit 2; }
 done
+widths=()
+for w in $HYBRID_NS_WIDTH_LIST; do case "$w" in 1|2|4|8) ;; *) echo "bad HYBRID_NS_WIDTH_LIST entry=$w" >&2; exit 2;; esac; seen=0; for old in "${widths[@]}"; do [[ "$old" == "$w" ]] && seen=1; done; ((seen)) || widths+=("$w"); done
+((${#widths[@]})) || { echo 'HYBRID_NS_WIDTH_LIST must not be empty' >&2; exit 2; }
+HYBRID_NS_WIDTH_LIST="${widths[*]}"
+distances=()
+for d in $HYBRID_NS_DISTANCE_LIST; do case "$d" in 1|2|4) ;; *) echo "bad HYBRID_NS_DISTANCE_LIST entry=$d" >&2; exit 2;; esac; seen=0; for old in "${distances[@]}"; do [[ "$old" == "$d" ]] && seen=1; done; ((seen)) || distances+=("$d"); done
+((${#distances[@]})) || { echo 'HYBRID_NS_DISTANCE_LIST must not be empty' >&2; exit 2; }
+HYBRID_NS_DISTANCE_LIST="${distances[*]}"
 [[ "$NEXTSELF_THREADS" =~ ^[0-9]+$ ]] && (( NEXTSELF_THREADS >= 32 && NEXTSELF_THREADS <= 768 && NEXTSELF_THREADS % 32 == 0 )) || {
   echo 'NEXTSELF_THREADS must be warp multiple 32..768' >&2; exit 2;
 }
@@ -134,10 +144,11 @@ fi
 HYBRID_NS_OK=0
 HYBRID_NS_RC=0
 if (( HYBRID_OK )); then
-  echo '=== grand selector: stage/prepare hybrid8 + next-self composition ===' >&2
+  echo "=== grand selector: stage/prepare hybrid8 + next-self geometry widths=[$HYBRID_NS_WIDTH_LIST] distances=[$HYBRID_NS_DISTANCE_LIST] ===" >&2
   set +e
   MOD="$PRIME" PROFILE_FILE="$PROFILE_FILE" ARCH="$ARCH" TARGET_MIB="$TARGET_MIB" MAX_WINDOW="$MAX_WINDOW" \
     RUN_STAGED="$RUN_HYBRID_NS_STAGE" RUN_HYBRID_STAGE=0 PREPARE_ONLY=1 MIN_SPEEDUP="$HYBRID_NS_MIN_SPEEDUP" \
+    WIDTH_LIST="$HYBRID_NS_WIDTH_LIST" DISTANCE_LIST="$HYBRID_NS_DISTANCE_LIST" \
     SEARCH_REPEATS="$HYBRID_NS_SEARCH_REPEATS" VALIDATE_REPEATS="$HYBRID_NS_VALIDATE_REPEATS" \
     STAGED_PREFIX="$HYBRID_NS_PREFIX" HYBRID_PREFIX="$HYBRID_PREFIX" HYBRID_WINNER_ENV="$HYBRID_WINNER_ENV" \
     WINNER_ENV="$HYBRID_NS_WINNER_ENV" RACE_PREFIX="$HYBRID_NS_RACE_PREFIX" PREPARE_ENV="$HYBRID_NS_PREPARE_ENV" \
@@ -150,6 +161,8 @@ if (( HYBRID_OK )); then
     source "$HYBRID_NS_PREPARE_ENV"
     [[ "${B300_HYBRID8_NEXTSELF_PREPARED:-0}" == 1 ]] || { echo 'hybrid8 next-self prepared marker missing' >&2; exit 3; }
     [[ -x "$B300_HYBRID8_NEXTSELF_PREPARED_BIN" && -x "$B300_HYBRID8_NEXTSELF_PREPARED_CONTROL_BIN" ]] || { echo 'hybrid8 next-self prepared binaries missing' >&2; exit 3; }
+    case "${B300_HYBRID8_NEXTSELF_PREPARED_WIDTH:-}" in 1|2|4|8) ;; *) echo 'hybrid8 next-self prepared width missing/invalid' >&2; exit 3;; esac
+    case "${B300_HYBRID8_NEXTSELF_PREPARED_DISTANCE:-}" in 1|2|4) ;; *) echo 'hybrid8 next-self prepared distance missing/invalid' >&2; exit 3;; esac
     HYBRID_NS_OK=1
   elif (( HYBRID_NS_RC == 4 )); then
     echo 'grand selector: hybrid8 next-self rejected by staged gates' >&2
@@ -233,6 +246,10 @@ case "$MODE" in nextself_hybrid8_joint|hybrid8_nextself_composed_grand) DROP_JOI
   printf 'B300_GRAND_NEXTSELF_OK=%q\n' "$NEXTSELF_OK"
   printf 'B300_GRAND_HYBRID8_OK=%q\n' "$HYBRID_OK"
   printf 'B300_GRAND_HYBRID8_NEXTSELF_OK=%q\n' "$HYBRID_NS_OK"
+  printf 'B300_GRAND_HYBRID8_NEXTSELF_SEARCH_WIDTHS=%q\n' "$HYBRID_NS_WIDTH_LIST"
+  printf 'B300_GRAND_HYBRID8_NEXTSELF_SEARCH_DISTANCES=%q\n' "$HYBRID_NS_DISTANCE_LIST"
+  printf 'B300_GRAND_HYBRID8_NEXTSELF_WIDTH=%q\n' "${B300_HYBRID8_NEXTSELF_PREPARED_WIDTH:-0}"
+  printf 'B300_GRAND_HYBRID8_NEXTSELF_DISTANCE=%q\n' "${B300_HYBRID8_NEXTSELF_PREPARED_DISTANCE:-0}"
   printf 'B300_GRAND_HYBRID8_NEXTSELF_MANIFEST=%q\n' "${B300_HYBRID8_NEXTSELF_PREPARED_MANIFEST:-}"
   printf 'B300_GRAND_PRIMARY_BIN=%q\n' "$P_BIN"
   printf 'B300_GRAND_PRIMARY_LABEL=%q\n' "$P_LABEL"
@@ -258,7 +275,7 @@ case "$MODE" in nextself_hybrid8_joint|hybrid8_nextself_composed_grand) DROP_JOI
 } >"$SUMMARY_ENV"
 cat "$SUMMARY_ENV" >&2
 
-echo "=== grand full-prime race mode=$MODE nextself=$NEXTSELF_OK hybrid8=$HYBRID_OK hybrid8_nextself=$HYBRID_NS_OK ===" >&2
+echo "=== grand full-prime race mode=$MODE nextself=$NEXTSELF_OK hybrid8=$HYBRID_OK hybrid8_nextself=$HYBRID_NS_OK geometry=w${B300_HYBRID8_NEXTSELF_PREPARED_WIDTH:-0}d${B300_HYBRID8_NEXTSELF_PREPARED_DISTANCE:-0} ===" >&2
 exec env \
   PROFILE_FILE="$PROFILE_FILE" ARCH="$ARCH" SMOKE_PRIME="$PRIME" FORCED_TARGET_MIB="$TARGET_MIB" MAX_WINDOW="$MAX_WINDOW" \
   FORCED_OVERRIDE_BIN="$P_BIN" FORCED_OVERRIDE_LABEL="$P_LABEL" FORCED_OVERRIDE_THREADS="$P_THREADS" \
