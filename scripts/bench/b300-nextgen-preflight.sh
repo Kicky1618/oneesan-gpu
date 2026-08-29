@@ -13,6 +13,7 @@ shells=(
   scripts/bench/b300-nextgen-calibrate-latency.sh
   scripts/bench/b300-nextgen-cg-l2size-sweep.sh
   scripts/bench/b300-nextgen-calibrate-cgl2.sh
+  scripts/bench/b300-nextgen-hybrid-ilp8-sweep.sh
   scripts/run/b300x8-race-forced-set-profiled-once.sh
   scripts/run/b300x8-nextgen-select.sh
 )
@@ -43,6 +44,7 @@ race="$ONEESAN_ROOT/scripts/run/b300x8-race-forced-set-profiled-once.sh"
 lat="$ONEESAN_ROOT/scripts/bench/b300-nextgen-latency-regcap-sweep.sh"
 cgl2="$ONEESAN_ROOT/scripts/bench/b300-nextgen-cg-l2size-sweep.sh"
 staged="$ONEESAN_ROOT/scripts/bench/b300-nextgen-calibrate-cgl2.sh"
+hybrid8="$ONEESAN_ROOT/scripts/bench/b300-nextgen-hybrid-ilp8-sweep.sh"
 for s in \
   'RECURRENCE_ILP' \
   'RECURRENCE_HYBRID_ILP8' \
@@ -60,6 +62,17 @@ for f in "$randomcg" "$prefetch"; do
   for s in 'main_pull_kernel_ilp8_hybrid' 'hybrid_policy_consistent=1'; do
     grep -Fq "$s" "$f" || { echo "hybrid cache-policy transform marker missing file=$f marker=$s" >&2; exit 3; }
   done
+done
+for s in \
+  'BASE_RECURRENCE_ILP' \
+  'ILP8_THRESHOLDS' \
+  'RECURRENCE_HYBRID_ILP8="$hybrid"' \
+  'RECURRENCE_HYBRID_ILP8_MIN_STATES="$threshold"' \
+  'main_pull_kernel_ilp8_hybrid' \
+  'B300_HYBRID8_WINNER_THRESHOLD' \
+  'b300_nextgen_hybrid8_exact_intermediate_match=1' \
+  'spill_free'; do
+  grep -Fq "$s" "$hybrid8" || { echo "hybrid ILP8 sweep marker missing: $s" >&2; exit 3; }
 done
 for s in \
   'SELECT_ONLY="${SELECT_ONLY:-1}"' \
@@ -105,4 +118,4 @@ for s in \
   grep -Fq "$s" "$staged" || { echo "Stage-D calibration marker missing: $s" >&2; exit 3; }
 done
 
-echo 'b300_nextgen_preflight=OK bash_syntax=OK python_ast=OK ilp_partition=OK transform_order=OK hybrid_ilp8_builder=OK hybrid_cache_policy=OK uncapped_baseline=OK spill_gate=OK cgl2_stage_d=OK forced_set_single_pass=OK selection_default=only gpu_work=0 actions_triggered=0'
+echo 'b300_nextgen_preflight=OK bash_syntax=OK python_ast=OK ilp_partition=OK transform_order=OK hybrid_ilp8_builder=OK hybrid_cache_policy=OK hybrid_ilp8_sweep=OK uncapped_baseline=OK spill_gate=OK cgl2_stage_d=OK forced_set_single_pass=OK selection_default=only gpu_work=0 actions_triggered=0'
