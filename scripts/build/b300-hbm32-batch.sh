@@ -31,7 +31,7 @@ PTXAS_VERBOSE="${PTXAS_VERBOSE:-1}"
 for name in MAIN_MATE_CACHE MAIN_PULL BLOCK_PULL BLOCK_MATE_CACHE FAST_SHARD_ADDRESS8 LOW_DROP_CACHE LOW_DROP_CHUNK LOW_BLOCK_CACHE HIGH_DROP_CHUNK RUNTIME_THREADS PTXAS_VERBOSE; do
   value="${!name}"; [[ "$value" == 0 || "$value" == 1 ]] || { echo "$name must be 0 or 1" >&2; exit 2; }
 done
-[[ "$MAIN_PULL_ILP" == 1 || "$MAIN_PULL_ILP" == 2 ]] || { echo "MAIN_PULL_ILP must be 1 or 2" >&2; exit 2; }
+case "$MAIN_PULL_ILP" in 1|2|4) ;; *) echo "MAIN_PULL_ILP must be 1, 2, or 4" >&2; exit 2;; esac
 if [[ "$MAIN_PULL" == 1 && "$MAIN_MATE_CACHE" != 1 ]]; then echo "MAIN_PULL=1 requires MAIN_MATE_CACHE=1" >&2; exit 2; fi
 if [[ "$BLOCK_PULL" == 1 && "$MAIN_PULL" != 1 ]]; then echo "BLOCK_PULL=1 requires MAIN_PULL=1" >&2; exit 2; fi
 if [[ "$BLOCK_MATE_CACHE" == 1 && "$BLOCK_PULL" != 1 ]]; then echo "BLOCK_MATE_CACHE=1 requires BLOCK_PULL=1" >&2; exit 2; fi
@@ -39,7 +39,7 @@ if [[ "$LOW_DROP_CACHE" == 1 && ( "$MAIN_PULL" != 1 || "$MAIN_MATE_CACHE" != 1 )
 if [[ "$LOW_DROP_CHUNK" == 1 && "$LOW_DROP_CACHE" != 1 ]]; then echo "LOW_DROP_CHUNK=1 requires LOW_DROP_CACHE=1" >&2; exit 2; fi
 if [[ "$LOW_BLOCK_CACHE" == 1 && ( "$LOW_DROP_CHUNK" != 1 || "$BLOCK_MATE_CACHE" != 1 ) ]]; then echo "LOW_BLOCK_CACHE=1 requires LOW_DROP_CHUNK=1 BLOCK_MATE_CACHE=1" >&2; exit 2; fi
 if [[ "$HIGH_DROP_CHUNK" == 1 && ( "$LOW_DROP_CACHE" != 1 || "$BLOCK_PULL" != 1 ) ]]; then echo "HIGH_DROP_CHUNK=1 requires LOW_DROP_CACHE=1 BLOCK_PULL=1" >&2; exit 2; fi
-if [[ "$MAIN_PULL_ILP" == 2 && "$MAIN_PULL" != 1 ]]; then echo "MAIN_PULL_ILP=2 requires MAIN_PULL=1" >&2; exit 2; fi
+if [[ "$MAIN_PULL_ILP" != 1 && "$MAIN_PULL" != 1 ]]; then echo "MAIN_PULL_ILP=$MAIN_PULL_ILP requires MAIN_PULL=1" >&2; exit 2; fi
 
 if [[ -z "$LOW_LUT_K" ]]; then if (( N >= 27 )); then LOW_LUT_K=14; else LOW_LUT_K=0; fi; fi
 if [[ -z "$HIGH_LUT_K" ]]; then if (( N >= 27 )); then HIGH_LUT_K=13; else HIGH_LUT_K=0; fi; fi
@@ -56,6 +56,8 @@ fi
 if [[ "$LOW_DROP_CACHE" == 1 ]]; then bash "$ONEESAN_ROOT/scripts/bench/b300-low-window-drop-cache-proof.sh"; fi
 if [[ "$LOW_DROP_CHUNK" == 1 ]]; then bash "$ONEESAN_ROOT/scripts/bench/b300-low-drop-chunk-proof.sh"; fi
 if [[ "$LOW_BLOCK_CACHE" == 1 ]]; then bash "$ONEESAN_ROOT/scripts/bench/b300-low-block-cache-proof.sh"; fi
+if [[ "$MAIN_PULL_ILP" == 2 ]]; then bash "$ONEESAN_ROOT/scripts/bench/b300-ilp2-partition-proof.sh"; fi
+if [[ "$MAIN_PULL_ILP" == 4 ]]; then bash "$ONEESAN_ROOT/scripts/bench/b300-ilp4-partition-proof.sh"; fi
 if [[ "$FAST_SHARD_ADDRESS8" == 1 ]]; then bash "$ONEESAN_ROOT/scripts/bench/b300-shard-address8-proof.sh"; fi
 
 BUILD_SRC="$SRC"
@@ -68,6 +70,7 @@ if [[ "$LOW_DROP_CHUNK" == 1 ]]; then LOW_DROP_CHUNK_SRC="$ONEESAN_BUILD_DIR/b30
 if [[ "$HIGH_DROP_CHUNK" == 1 ]]; then HIGH_DROP_CHUNK_SRC="$ONEESAN_BUILD_DIR/b300_hbm32_batch_n${N}_high_drop_chunk.cu"; python3 "$ONEESAN_ROOT/scripts/build/gen-b300-high-drop-chunk.py" "$BUILD_SRC" "$HIGH_DROP_CHUNK_SRC"; BUILD_SRC="$HIGH_DROP_CHUNK_SRC"; fi
 if [[ "$LOW_BLOCK_CACHE" == 1 ]]; then LOW_BLOCK_SRC="$ONEESAN_BUILD_DIR/b300_hbm32_batch_n${N}_low_block_cache.cu"; python3 "$ONEESAN_ROOT/scripts/build/gen-b300-low-block-cache.py" "$BUILD_SRC" "$LOW_BLOCK_SRC"; BUILD_SRC="$LOW_BLOCK_SRC"; fi
 if [[ "$MAIN_PULL_ILP" == 2 ]]; then ILP_SRC="$ONEESAN_BUILD_DIR/b300_hbm32_batch_n${N}_main_pull_ilp2.cu"; python3 "$ONEESAN_ROOT/scripts/build/gen-b300-main-pull-ilp2.py" "$BUILD_SRC" "$ILP_SRC"; BUILD_SRC="$ILP_SRC"; fi
+if [[ "$MAIN_PULL_ILP" == 4 ]]; then ILP_SRC="$ONEESAN_BUILD_DIR/b300_hbm32_batch_n${N}_main_pull_ilp4.cu"; python3 "$ONEESAN_ROOT/scripts/build/gen-b300-main-pull-ilp4.py" "$BUILD_SRC" "$ILP_SRC"; BUILD_SRC="$ILP_SRC"; fi
 if [[ "$FAST_SHARD_ADDRESS8" == 1 ]]; then SHARD_SRC="$ONEESAN_BUILD_DIR/b300_hbm32_batch_n${N}_shard8.cu"; python3 "$ONEESAN_ROOT/scripts/build/gen-b300-batch-shard-address8.py" "$BUILD_SRC" "$SHARD_SRC"; BUILD_SRC="$SHARD_SRC"; fi
 if [[ "$RUNTIME_THREADS" == 1 ]]; then THREAD_SRC="$ONEESAN_BUILD_DIR/b300_hbm32_batch_n${N}_runtime_threads.cu"; python3 "$ONEESAN_ROOT/scripts/build/gen-b300-runtime-threads.py" "$BUILD_SRC" "$THREAD_SRC"; BUILD_SRC="$THREAD_SRC"; fi
 
@@ -77,3 +80,4 @@ echo "built $OUT"
 echo "  source=$SRC"
 echo "  build_source=$BUILD_SRC"
 echo "  n=$N width=$W arch=$ARCH low_lut_k=$LOW_LUT_K high_lut_k=$HIGH_LUT_K main_mate_cache=$MAIN_MATE_CACHE main_pull=$MAIN_PULL main_pull_ilp=$MAIN_PULL_ILP block_pull=$BLOCK_PULL block_mate_cache=$BLOCK_MATE_CACHE low_drop_cache=$LOW_DROP_CACHE low_drop_chunk=$LOW_DROP_CHUNK low_block_cache=$LOW_BLOCK_CACHE high_drop_chunk=$HIGH_DROP_CHUNK fast_shard_address8=$FAST_SHARD_ADDRESS8 runtime_threads=$RUNTIME_THREADS"
+if [[ "$MAIN_PULL_ILP" == 4 ]]; then echo "  main_pull_destinations_per_thread=4 memory_request_phases=mate,self,pair,block register_pressure_requires_ab=1"; fi
