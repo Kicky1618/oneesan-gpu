@@ -29,7 +29,8 @@ fi
 [[ "$REQUIRE_ALL_PAIRS" == 0 || "$REQUIRE_ALL_PAIRS" == 1 ]] || { echo "REQUIRE_ALL_PAIRS must be 0 or 1" >&2; exit 2; }
 [[ "$REQUIRE_CLEAN_TREE" == 0 || "$REQUIRE_CLEAN_TREE" == 1 ]] || { echo "REQUIRE_CLEAN_TREE must be 0 or 1" >&2; exit 2; }
 if ! command -v nvcc >/dev/null || ! command -v nvidia-smi >/dev/null; then echo "nvcc and nvidia-smi are required" >&2; exit 2; fi
-visible="$(nvidia-smi --query-gpu=index --format=csv,noheader | wc -l)"; (( visible >= NGPU )) || { echo "need $NGPU GPUs for exact phase, visible=$visible" >&2; exit 2; }
+visible="$(nvidia-smi --query-gpu=index --format=csv,noheader | wc -l)"
+(( visible >= 1 )) || { echo "need at least one visible GPU for W28 physical screening" >&2; exit 2; }
 
 PREFIX="${PREFIX:-$ONEESAN_ROOT/work/gridfp_codec_table_physical_decision}"
 LOGDIR="${LOGDIR:-${PREFIX}_logs}"; SUMMARY="${SUMMARY:-${PREFIX}_summary.txt}"; MANIFEST="${MANIFEST:-${PREFIX}_manifest.txt}"
@@ -49,7 +50,8 @@ fi
   echo "head_sha=$head_sha"
   echo "tracked_dirty=$dirty"
   echo "candidate_mode_requested=$CANDIDATE_MODE"
-  echo "ngpu=$NGPU"
+  echo "visible_gpus=$visible"
+  echo "exact_ngpu=$NGPU"
   echo "repeats=$REPEATS"
   echo "exact_blocks=$EXACT_BLOCKS"
   echo "w28_blocks=$W28_BLOCKS"
@@ -92,6 +94,7 @@ if [[ "$CANDIDATE_MODE" == auto ]]; then
     cat "$PROXY_GATE_OUT" >"$SUMMARY"
     echo 'physical_decision_proxy_ready=0' >>"$SUMMARY"
     echo 'physical_decision_next_step=KEEP_PROXY_ONLY' >>"$SUMMARY"
+    echo "manifest=$MANIFEST" >>"$SUMMARY"
     cat "$SUMMARY"
     echo "gridfp-codec-table-physical-decision-suite OK proxy_rejected=1 summary=$SUMMARY" >&2
     exit 0
@@ -133,6 +136,26 @@ then
   } >"$SUMMARY"
   cat "$SUMMARY"
   echo "gridfp-codec-table-physical-decision-suite OK early_reject=1 candidate_mode=$CANDIDATE_MODE summary=$SUMMARY" >&2
+  exit 0
+fi
+
+# A one-GPU machine can complete the cheap W28 screen. Stop cleanly here when
+# the surviving candidate still needs the multi-GPU exact confirmation.
+if (( visible < NGPU )); then
+  {
+    echo '[w28_physical]'; grep -E '(w28_physical_|summary=)' "$W28_OUT" || true; echo
+    echo 'physical_decision_w28_ready=1'
+    echo 'physical_decision_exact_skipped=1'
+    echo 'physical_decision_exact_pending=1'
+    echo 'physical_decision_production_promotion_ready=0'
+    echo "physical_decision_required_exact_gpus=$NGPU"
+    echo "physical_decision_visible_gpus=$visible"
+    echo 'physical_decision_next_step=NEED_MULTI_GPU_EXACT'
+    echo "w28_summary=$W28_SUMMARY"
+    echo "manifest=$MANIFEST"
+  } >"$SUMMARY"
+  cat "$SUMMARY"
+  echo "gridfp-codec-table-physical-decision-suite OK w28_only=1 candidate_mode=$CANDIDATE_MODE summary=$SUMMARY" >&2
   exit 0
 fi
 
