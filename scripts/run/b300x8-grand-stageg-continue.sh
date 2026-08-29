@@ -7,6 +7,16 @@ SELECTED_ENV="${SELECTED_ENV:-$ONEESAN_ROOT/work/b300_grand_stageg_firstpass_n27
 # shellcheck disable=SC1090
 source "$SELECTED_ENV"
 
+# New Stage-G first-pass artifacts expose the same normalized contract as the
+# base grand selector. Route them through the hardened promotion path so race
+# TSV/profile/binary/checkpoint fingerprints and HEAD provenance are checked in
+# exactly one place. Keep the legacy branch below only for already-created old
+# Stage-G env files that predate normalization.
+if [[ "${B300_GRAND_SELECTED_VALIDATED:-0}" == 1 ]]; then
+  echo 'Stage-G selection uses normalized grand contract; delegating hardened exact promotion' >&2
+  exec env SELECTED_ENV="$SELECTED_ENV" "$ONEESAN_ROOT/scripts/run/b300x8-grand-promote-exact.sh" 27 "$@"
+fi
+
 if [[ "${B300_GRAND_STAGEG_SELECTED_VALIDATED:-0}" == 1 ]]; then
   BIN="$B300_GRAND_STAGEG_SELECTED_BINARY"; BIN_SHA="$B300_GRAND_STAGEG_SELECTED_BINARY_SHA256"; RUNTIME="$B300_GRAND_STAGEG_SELECTED_RUNTIME_KIND"
   RUN_THREADS="$B300_GRAND_STAGEG_SELECTED_THREADS"; TARGET="$B300_GRAND_STAGEG_SELECTED_TARGET_MIB"; WORK="$B300_GRAND_STAGEG_SELECTED_WORK_DIR"; CHECKPOINT="$B300_GRAND_STAGEG_SELECTED_CHECKPOINT"
@@ -14,9 +24,6 @@ if [[ "${B300_GRAND_STAGEG_SELECTED_VALIDATED:-0}" == 1 ]]; then
   [[ -s "$BASE_ENV" ]] || { echo 'Stage-G base selected env missing' >&2; exit 3; }
   # shellcheck disable=SC1090
   source "$BASE_ENV"
-elif [[ "${B300_GRAND_SELECTED_VALIDATED:-0}" == 1 ]]; then
-  BIN="$B300_GRAND_SELECTED_BINARY"; BIN_SHA="$B300_GRAND_SELECTED_BINARY_SHA256"; RUNTIME="$B300_GRAND_SELECTED_RUNTIME_KIND"
-  RUN_THREADS="$B300_GRAND_SELECTED_THREADS"; TARGET="$B300_GRAND_SELECTED_TARGET_MIB"; WORK="$B300_GRAND_SELECTED_WORK_DIR"; CHECKPOINT="$B300_GRAND_SELECTED_CHECKPOINT"
 else
   echo 'selected env has no validated grand selection' >&2; exit 3
 fi
@@ -27,8 +34,7 @@ MAX_WINDOW="${MAX_WINDOW:-${B300_GRAND_SELECTED_MAX_WINDOW:-14}}"
 NOW_SHA="$(sha256sum "$BIN" | awk '{print $1}')"; [[ "$NOW_SHA" == "$BIN_SHA" ]] || { echo 'selected binary SHA changed' >&2; exit 3; }
 [[ "$MAX_WINDOW" =~ ^[1-9][0-9]*$ && "$TARGET" =~ ^[1-9][0-9]*$ ]] || exit 3
 
-# Recreate only the runtime launch environment; the schema-3 checkpoint already
-# pins the binary and profile hashes and solve_b300_exact_batch.py verifies it.
+# Legacy runtime reconstruction for old Stage-G artifacts only.
 case "$RUNTIME" in
   forced)
     [[ "$RUN_THREADS" =~ ^[0-9]+$ ]] && ((RUN_THREADS>=32&&RUN_THREADS<=1024&&RUN_THREADS%32==0)) || exit 3
@@ -49,5 +55,6 @@ case "$RUNTIME" in
   *) echo "bad selected runtime=$RUNTIME" >&2; exit 3;;
 esac
 
+echo "WARNING: continuing from legacy Stage-G contract with reduced provenance checks" >&2
 echo "=== continue exact n=27 runtime=$RUNTIME binary=$(basename "$BIN") work=$WORK cached_checkpoint=$CHECKPOINT ===" >&2
 exec python3 "$ONEESAN_ROOT/scripts/solve/solve_b300_exact_batch.py" 27 --binary "$BIN" --target-mib "$TARGET" --max-window "$MAX_WINDOW" --gpus 8 --work-dir "$WORK" "$@"
