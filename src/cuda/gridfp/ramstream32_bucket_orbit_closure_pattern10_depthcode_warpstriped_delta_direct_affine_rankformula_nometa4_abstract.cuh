@@ -1,5 +1,13 @@
 #pragma once
 
+// Pair/overlap helpers directly read SPARSE64 index/primary pointers.  Make the
+// runtime declarations visible before those helpers are parsed; the B300 table
+// builder itself is included later by the translation-unit entry point.
+#if defined(P10DC_RANKFORMULA_DIRECTGATHER_SPARSE64) && P10DC_RANKFORMULA_DIRECTGATHER_SPARSE64
+#include "ramstream32_bucket_closure_cross5_rankformula_nometa4_directgather64.cuh"
+#include "ramstream32_bucket_closure_cross5_rankformula_nometa4_directgather_sparse64.cuh"
+#endif
+
 #ifndef P10DC_RANKFORMULA_QUAD_MLP
 #define P10DC_RANKFORMULA_QUAD_MLP 0
 #endif
