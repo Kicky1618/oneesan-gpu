@@ -6,17 +6,24 @@
 
 #include "two_cell_snake_stage_api.hpp"
 
-extern "C" int oneesan_two_cell_left_boundary_stage(
+namespace {
+
+int run_left_stage(
     std::uint32_t* d_values,
     int W,
-    int requested_max_cluster,
+    int cluster_arg,
     std::uint64_t shared_limit_bytes,
-    std::uint32_t mod
+    std::uint32_t mod,
+    bool forced
 ) {
-    if (!d_values || W < 6 || W > oneesan::twocell::kMaxWidth ||
-        (requested_max_cluster != 1 && requested_max_cluster != 2 &&
-         requested_max_cluster != 4 && requested_max_cluster != 8) || mod < 3)
+    if (!d_values || W < 6 || W > oneesan::twocell::kMaxWidth || mod < 3)
         return 131;
+    if (forced) {
+        if (cluster_arg != 2 && cluster_arg != 4 && cluster_arg != 8) return 131;
+    } else if (cluster_arg != 1 && cluster_arg != 2 &&
+               cluster_arg != 4 && cluster_arg != 8) {
+        return 131;
+    }
 
     const RankTables rt = oneesan::twocell::make_rank_tables();
     const StationaryRankTables st = oneesan::twocell::make_stationary_rank_tables(rt);
@@ -67,9 +74,12 @@ extern "C" int oneesan_two_cell_left_boundary_stage(
     const int outer_bits = W - 4;
     for (int o = 0; o <= outer_bits; ++o) {
         const Rank support_count = rt.choose[outer_bits][o];
-        const auto choice = choose_left_boundary_runtime_bucket(
-            o, support_count, per_block_limit, static_shared,
-            requested_max_cluster, rt);
+        const auto choice = forced
+            ? forced_left_boundary_choice(cluster_arg, o, support_count,
+                                          per_block_limit, static_shared, rt)
+            : choose_left_boundary_runtime_bucket(o, support_count,
+                                                  per_block_limit, static_shared,
+                                                  cluster_arg, rt);
         if (!choice.ok) {
             cudaFree(d_left); cudaFree(d_reflection);
             cudaFree(d_offset); cudaFree(d_error);
@@ -88,4 +98,24 @@ extern "C" int oneesan_two_cell_left_boundary_stage(
     cudaFree(d_offset);
     cudaFree(d_error);
     return error ? 135 : 0;
+}
+
+} // namespace
+
+extern "C" int oneesan_two_cell_left_boundary_stage(
+    std::uint32_t* d_values, int W, int requested_max_cluster,
+    std::uint64_t shared_limit_bytes, std::uint32_t mod
+) {
+    return run_left_stage(
+        d_values, W, requested_max_cluster,
+        shared_limit_bytes, mod, false);
+}
+
+extern "C" int oneesan_two_cell_left_boundary_stage_forced(
+    std::uint32_t* d_values, int W, int forced_cluster,
+    std::uint64_t shared_limit_bytes, std::uint32_t mod
+) {
+    return run_left_stage(
+        d_values, W, forced_cluster,
+        shared_limit_bytes, mod, true);
 }
