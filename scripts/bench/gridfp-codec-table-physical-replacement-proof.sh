@@ -5,49 +5,51 @@ source "$(dirname -- "${BASH_SOURCE[0]}")/../lib/common.sh"
 DEVICE="$ONEESAN_ROOT/src/cuda/gridfp/gridfp_reduced_production_device.cuh"
 PHYSICAL="$ONEESAN_ROOT/src/cuda/gridfp/gridfp_reduced_production_codec_physical_device.cuh"
 COMPONENT="$ONEESAN_ROOT/src/cuda/gridfp/gridfp_reduced_production_component_microprobe.cu"
+COMPILE_PROBE="$ONEESAN_ROOT/src/cuda/gridfp/gridfp_codec_table_physical_compile_probe.cu"
 CHOOSE_PROOF="$ONEESAN_ROOT/scripts/bench/gridfp-choose-sym-u32-table-proof.sh"
 PRIMITIVE_PROOF="$ONEESAN_ROOT/scripts/bench/gridfp-primitive-sym-u32-table-proof.sh"
-for f in "$DEVICE" "$PHYSICAL" "$COMPONENT" "$CHOOSE_PROOF" "$PRIMITIVE_PROOF"; do
+for f in "$DEVICE" "$PHYSICAL" "$COMPONENT" "$COMPILE_PROBE" "$CHOOSE_PROOF" "$PRIMITIVE_PROOF"; do
   [[ -f "$f" ]] || { echo "missing physical replacement proof input: $f" >&2; exit 2; }
 done
 
-# Value exactness is independently proved against generated DP tables.
 bash "$CHOOSE_PROOF" >/dev/null
 bash "$PRIMITIVE_PROOF" >/dev/null
 
-# The production header owns no codec declaration directly anymore; one
-# physical-layout header is the single declaration/redirect point.
 grep -Fq '#include "gridfp_reduced_production_codec_physical_device.cuh"' "$DEVICE"
 if grep -Eq '^__constant__ Rank64 RP_(CHOOSE|PRIMITIVE)' "$DEVICE"; then
   echo "legacy codec constant declaration escaped physical-layout header" >&2
   exit 3
 fi
 
-# Default mode must preserve the exact old u64 constant layout.
+# Mode zero is byte-for-byte the legacy table type/shape.
 grep -Fq '#define RP_EXPERIMENTAL_CODEC_CHOOSE_PHYSICAL_MODE 0' "$PHYSICAL"
 grep -Fq '#define RP_EXPERIMENTAL_CODEC_PRIMITIVE_PHYSICAL_MODE 0' "$PHYSICAL"
 grep -Fq '__constant__ Rank64 RP_CHOOSE[RP_MAX_W + 1][RP_MAX_W + 1];' "$PHYSICAL"
 grep -Fq '__constant__ Rank64 RP_PRIMITIVE[RP_MAX_W + 1][RP_MAX_W + 2];' "$PHYSICAL"
 
-# In physical modes, legacy host upload targets are plain device-global sinks,
-# not constant-memory arrays. Device compilation alone sees the proxy macro.
-choose_sink_count="$(grep -Fc '__device__ Rank64 RP_CHOOSE[RP_MAX_W + 1][RP_MAX_W + 1];' "$PHYSICAL")"
-primitive_sink_count="$(grep -Fc '__device__ Rank64 RP_PRIMITIVE[RP_MAX_W + 1][RP_MAX_W + 2];' "$PHYSICAL")"
-[[ "$choose_sink_count" == 3 ]] || { echo "expected 3 choose upload-sink branches, got $choose_sink_count" >&2; exit 4; }
-[[ "$primitive_sink_count" == 2 ]] || { echo "expected 2 primitive upload-sink branches, got $primitive_sink_count" >&2; exit 5; }
+# Nonzero physical modes must not retain legacy u64 symbols in any memory
+# space. Candidate u32 constants and device-only proxy macros are the only
+# storage/read path.
+if grep -Fq '__device__ Rank64 RP_CHOOSE[RP_MAX_W + 1][RP_MAX_W + 1];' "$PHYSICAL"; then
+  echo "physical choose still contains a legacy global upload sink" >&2; exit 4
+fi
+if grep -Fq '__device__ Rank64 RP_PRIMITIVE[RP_MAX_W + 1][RP_MAX_W + 2];' "$PHYSICAL"; then
+  echo "physical primitive still contains a legacy global upload sink" >&2; exit 5
+fi
 grep -Fq '#if defined(__CUDA_ARCH__)' "$PHYSICAL"
 grep -Fq '#define RP_CHOOSE CodecPhysicalChooseProxy{}' "$PHYSICAL"
 grep -Fq '#define RP_PRIMITIVE CodecPhysicalPrimitiveProxy{}' "$PHYSICAL"
 grep -Fq 'physical choose layout cannot be combined with an RP_CHOOSE preinclude remap' "$PHYSICAL"
 grep -Fq 'physical primitive layout cannot be combined with an RP_PRIMITIVE preinclude remap' "$PHYSICAL"
 
-# Host cudaMemcpyToSymbol calls remain valid for the global upload sinks, while
-# the CUDA device pass removes those lines before RP_CHOOSE/RP_PRIMITIVE proxy
-# macro expansion can touch a host-only call expression.
-grep -Fq '#if !defined(__CUDA_ARCH__) || RP_EXPERIMENTAL_CODEC_CHOOSE_PHYSICAL_MODE == 0' "$COMPONENT"
-grep -Fq 'cudaMemcpyToSymbol(RP_CHOOSE, choose, sizeof(choose))' "$COMPONENT"
-grep -Fq '#if !defined(__CUDA_ARCH__) || RP_EXPERIMENTAL_CODEC_PRIMITIVE_PHYSICAL_MODE == 0' "$COMPONENT"
-grep -Fq 'cudaMemcpyToSymbol(RP_PRIMITIVE, primitive, sizeof(primitive))' "$COMPONENT"
+# Host table uploads exist only in mode zero. With a physical candidate, the
+# old symbol is neither declared nor referenced in host or device compilation.
+for src in "$COMPONENT" "$COMPILE_PROBE"; do
+  grep -Fq '#if RP_EXPERIMENTAL_CODEC_CHOOSE_PHYSICAL_MODE == 0' "$src"
+  grep -Fq 'cudaMemcpyToSymbol(RP_CHOOSE' "$src"
+  grep -Fq '#if RP_EXPERIMENTAL_CODEC_PRIMITIVE_PHYSICAL_MODE == 0' "$src"
+  grep -Fq 'cudaMemcpyToSymbol(RP_PRIMITIVE' "$src"
+done
 
 python3 - <<'PY'
 choose={0:6728,1:900,2:1740,3:3364}
@@ -65,11 +67,10 @@ for mode,(c,p,name) in layouts.items():
     total=choose[c]+primitive[p]
     assert total==expected[mode], (mode,total,expected[mode])
     print(f'physical_layout_mode{mode}_name={name} choose_mode={c} primitive_mode={p} constant_bytes={total} saved_bytes={13688-total}')
-print('physical_layout_upload_sink_bytes_when_both_replaced=13688')
-print('physical_layout_upload_sink_memory_space=global')
-print('physical_layout_device_reads_legacy_sink=0')
-print('physical_layout_device_pass_host_copy_guard=1')
+print('physical_layout_legacy_symbol_bytes_nonzero_mode=0')
+print('physical_layout_legacy_host_upload_nonzero_mode=0')
+print('physical_layout_device_reads_legacy_symbol=0')
 print('physical_layout_exact=1')
 PY
 
-echo "gridfp-codec-table-physical-replacement-proof OK default_legacy_constant=1 physical_old_constant_removed=1 host_copy_guard=1 exact=1"
+echo "gridfp-codec-table-physical-replacement-proof OK default_legacy_constant=1 physical_legacy_symbol_removed=1 host_upload_removed=1 exact=1"
