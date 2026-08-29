@@ -8,6 +8,53 @@ static void p10dc_warpstriped_delta_direct_affine_rankformula_nometa4_abstract_r
         std::exit(774);
     }
 }
+
+static void p10dc_rankformula_nometa4_abstract_report_high_occupancy(int threads) {
+    const size_t smem = p10dc_direct_warpctx_smem_bytes(threads);
+    int device = 0;
+    ck(cudaGetDevice(&device), "rankformula occupancy get device");
+    cudaDeviceProp prop{};
+    ck(cudaGetDeviceProperties(&prop, device), "rankformula occupancy device props");
+    int fblocks = 0, rblocks = 0;
+    ck(cudaOccupancyMaxActiveBlocksPerMultiprocessor(
+           &fblocks,
+           bucket_high_orbit_closure_pattern10_depthcode_warpstriped_delta_direct_affine_rankformula_nometa4_abstract_kernel,
+           threads, smem),
+       "rankformula forward HIGH occupancy");
+    ck(cudaOccupancyMaxActiveBlocksPerMultiprocessor(
+           &rblocks,
+           bucket_reverse_high_pattern10_depthcode_warpstriped_delta_direct_affine_rankformula_nometa4_abstract_kernel,
+           threads, smem),
+       "rankformula reverse HIGH occupancy");
+    cudaFuncAttributes fa{}, ra{};
+    ck(cudaFuncGetAttributes(
+           &fa,
+           bucket_high_orbit_closure_pattern10_depthcode_warpstriped_delta_direct_affine_rankformula_nometa4_abstract_kernel),
+       "rankformula forward HIGH attributes");
+    ck(cudaFuncGetAttributes(
+           &ra,
+           bucket_reverse_high_pattern10_depthcode_warpstriped_delta_direct_affine_rankformula_nometa4_abstract_kernel),
+       "rankformula reverse HIGH attributes");
+    const int warp_cap = prop.maxThreadsPerMultiProcessor / prop.warpSize;
+    const int fwarps = fblocks * (threads / prop.warpSize);
+    const int rwarps = rblocks * (threads / prop.warpSize);
+    std::cerr << "rankformula_high_occupancy device=" << device
+              << " threads=" << threads
+              << " dynamic_smem_bytes=" << smem
+              << " forward_regs=" << fa.numRegs
+              << " reverse_regs=" << ra.numRegs
+              << " forward_static_smem=" << fa.sharedSizeBytes
+              << " reverse_static_smem=" << ra.sharedSizeBytes
+              << " forward_blocks_per_sm=" << fblocks
+              << " reverse_blocks_per_sm=" << rblocks
+              << " forward_warps_per_sm=" << fwarps
+              << " reverse_warps_per_sm=" << rwarps
+              << " warp_cap=" << warp_cap
+              << " forward_warp_occupancy_pct=" << (warp_cap ? 100.0 * double(fwarps) / double(warp_cap) : 0.0)
+              << " reverse_warp_occupancy_pct=" << (warp_cap ? 100.0 * double(rwarps) / double(warp_cap) : 0.0)
+              << '\n';
+}
+
 static void bucket_enqueue_low_orbit_closure_pattern10_depthcode_warpstriped_delta_direct_affine_rankformula_nometa4_abstract(const StorageLayout& layout,cudaStream_t stream,int threads=256,int gx=16,int gy=8){dim3 block(threads),grid(gx,gy,unsigned(layout.main_blocks.size()));for(int p=LOW_LUT_K;p>=1;--p){bucket_low_orbit_closure_pattern10_depthcode_kernel<<<grid,block,0,stream>>>(p);ck(cudaGetLastError(),"bucket low rankformula-nometa4-abstract stream");}}
 static void bucket_enqueue_high_orbit_closure_pattern10_depthcode_warpstriped_delta_direct_affine_rankformula_nometa4_abstract(const StorageLayout& layout,cudaStream_t stream,int threads=256,int gx=16,int gy=8){p10dc_warpstriped_delta_direct_affine_rankformula_nometa4_abstract_require_threads(threads);dim3 block(threads),grid(gx,gy,unsigned(layout.main_blocks.size()));const size_t smem=p10dc_direct_warpctx_smem_bytes(threads);for(int p=TARGET_W-1;p>=LOW_LUT_K+1;--p){bucket_high_orbit_closure_pattern10_depthcode_warpstriped_delta_direct_affine_rankformula_nometa4_abstract_kernel<<<grid,block,smem,stream>>>(p);ck(cudaGetLastError(),"bucket high rankformula-nometa4-abstract stream");}}
 static void bucket_enqueue_reverse_low_pattern10_depthcode_warpstriped_delta_direct_affine_rankformula_nometa4_abstract(const StorageLayout& layout,cudaStream_t stream,int threads=256,int gx=16,int gy=8){dim3 block(threads),grid(gx,gy,unsigned(layout.main_blocks.size()));for(int p=1;p<=LOW_LUT_K;++p){bucket_reverse_low_pattern10_depthcode_kernel<<<grid,block,0,stream>>>(p);ck(cudaGetLastError(),"bucket reverse low rankformula-nometa4-abstract stream");}}
