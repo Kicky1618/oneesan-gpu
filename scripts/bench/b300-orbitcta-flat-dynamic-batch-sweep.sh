@@ -39,7 +39,7 @@ done
 
 field(){ local k="$1" l="$2"; sed -nE "s/(^|.*[[:space:]])${k}=([^[:space:]]+).*/\\2/p" <<<"$l" | tail -n1; }
 sample(){ local pid="$1" out="$2"; : >"$out"; while kill -0 "$pid" 2>/dev/null; do nvidia-smi --query-gpu=utilization.gpu,utilization.memory --format=csv,noheader,nounits 2>/dev/null | awk -F',' '{g=$1+0;m=$2+0;sg+=g;sm+=m;if(m>mm)mm=m;n++}END{if(n)printf "%.6f %.6f %d\n",sg/n,sm/n,mm;else print "NA NA NA"}' >>"$out" || true; sleep "$SAMPLE_INTERVAL"; done; }
-printf 'mode\tdynamic\tbatch\trepeat\tresidue\twall_s\tforward_high_s\treverse_high_s\thigh_s\tavg_gpu_util_pct\tavg_memctrl_util_pct\tmax_memctrl_util_pct\n' >"$RESULT"
+printf 'mode\tdynamic\tbatch\trepeat\tresidue\twall_s\tforward_high_s\treverse_high_s\thigh_s\tavg_gpu_util_pct\tavg_memctrl_util_pct\tmax_memctrl_util_pct\tforward_regs\treverse_regs\tforward_blocks_per_sm\treverse_blocks_per_sm\tforward_flat_blocks\treverse_flat_blocks\tscheduler_mode\tqueue_lease_batch\n' >"$RESULT"
 run_one(){
   local mode="$1" dynamic="$2" batch="$3" bin="$4" rep="$5"
   local so="$LOGDIR/${mode}_r${rep}.out" se="$LOGDIR/${mode}_r${rep}.err" util="$LOGDIR/${mode}_r${rep}.util"
@@ -49,6 +49,17 @@ run_one(){
   local line="$(grep '^residue=' "$so"|tail -n1||true)"; [[ -n "$line" ]] || { echo "$mode missing residue" >&2; exit 3; }
   local residue="$(field residue "$line")"; [[ "$residue" == "$EXPECT" ]] || { echo "$mode residue=$residue expected=$EXPECT" >&2; exit 4; }
   local detail="$(grep 'snake_onepass_graph_batch modulus=' "$se"|tail -n1||true)" fh rh high ag am mm
+  local grid="$(grep 'rankformula_orbitcta_flat_grid device=0 ' "$se"|head -n1||true)"
+  local occ="$(grep 'rankformula_orbitcta_flat_occupancy device=0 ' "$se"|head -n1||true)"
+  [[ -n "$grid" && -n "$occ" ]] || { echo "$mode missing flat runtime metadata" >&2; exit 5; }
+  local sched="$(field scheduler_mode "$grid")" runtime_batch="$(field flat_dynamic_batch "$grid")" lease="$(field queue_lease_batch "$grid")"
+  if [[ "$dynamic" == 1 ]]; then
+    [[ "$sched" == dynamic_atomic_queue ]] || { echo "$mode scheduler=$sched expected=dynamic_atomic_queue" >&2; exit 6; }
+    [[ "$runtime_batch" == "$batch" && "$lease" == "$batch" ]] || { echo "$mode batch runtime=$runtime_batch lease=$lease expected=$batch" >&2; exit 6; }
+  else
+    [[ "$sched" == static_cyclic ]] || { echo "$mode scheduler=$sched expected=static_cyclic" >&2; exit 6; }
+    [[ "$runtime_batch" == 1 && "$lease" == 0 ]] || { echo "$mode static batch runtime=$runtime_batch lease=$lease" >&2; exit 6; }
+  fi
   fh="$(field forward_high_s "$detail")"; rh="$(field reverse_high_s "$detail")"; [[ -n "$fh" && -n "$rh" ]] || { echo "$mode missing HIGH timing" >&2; exit 5; }
   high="$(python3 - "$fh" "$rh" <<'PY'
 import sys
@@ -56,7 +67,10 @@ print(f'{float(sys.argv[1])+float(sys.argv[2]):.9f}')
 PY
 )"
   read -r ag am mm < <(awk '{sg+=$1;sm+=$2;if($3>mm)mm=$3;n++}END{if(n)printf "%.6f %.6f %d\n",sg/n,sm/n,mm;else print "NA NA NA"}' "$util")
-  printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' "$mode" "$dynamic" "$batch" "$rep" "$residue" "$(field wall_s "$line")" "$fh" "$rh" "$high" "$ag" "$am" "$mm" >>"$RESULT"
+  printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
+    "$mode" "$dynamic" "$batch" "$rep" "$residue" "$(field wall_s "$line")" "$fh" "$rh" "$high" "$ag" "$am" "$mm" \
+    "$(field forward_regs "$occ")" "$(field reverse_regs "$occ")" "$(field forward_blocks_per_sm "$occ")" "$(field reverse_blocks_per_sm "$occ")" \
+    "$(field forward_flat_blocks "$grid")" "$(field reverse_flat_blocks "$grid")" "$sched" "$lease" >>"$RESULT"
 }
 for ((r=1;r<=REPEATS;++r)); do run_one static 0 1 "$STATIC_BIN" "$r"; done
 for b in $BATCHES; do for ((r=1;r<=REPEATS;++r)); do run_one "dynamic_b${b}" 1 "$b" "$ONEESAN_BUILD_DIR/b300_flat_dynamic_batch${b}_n${N}" "$r"; done; done
@@ -69,8 +83,9 @@ for mode in dict.fromkeys(r['mode'] for r in rows):
  g=[r for r in rows if r['mode']==mode]
  wall=statistics.median(float(r['wall_s']) for r in g); high=statistics.median(float(r['high_s']) for r in g)
  mc=[float(r['avg_memctrl_util_pct']) for r in g if r['avg_memctrl_util_pct']!='NA']; m=statistics.median(mc) if mc else float('nan')
- out.append((wall,high,mode,int(g[0]['dynamic']),int(g[0]['batch']),m))
-for w,h,n,d,b,m in sorted(out): print('DYNAMIC_BATCH',n,f'wall_s={w:.6f}',f'high_s={h:.6f}',f'mc_avg_pct={m:.3f}')
+ fr=int(g[0]['forward_regs'] or 0); rr=int(g[0]['reverse_regs'] or 0); fb=int(g[0]['forward_blocks_per_sm'] or 0); rb=int(g[0]['reverse_blocks_per_sm'] or 0)
+ out.append((wall,high,mode,int(g[0]['dynamic']),int(g[0]['batch']),m,fr,rr,fb,rb))
+for w,h,n,d,b,m,fr,rr,fb,rb in sorted(out): print('DYNAMIC_BATCH',n,f'wall_s={w:.6f}',f'high_s={h:.6f}',f'mc_avg_pct={m:.3f}',f'regs={fr}/{rr}',f'active_blocks_sm={fb}/{rb}')
 best=min(out)
 with open(winner,'w') as f:
  f.write('ORBITCTA_FLAT=1\nORBITCTA_FLAT_CHUNK=1\n')
