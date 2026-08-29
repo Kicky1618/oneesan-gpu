@@ -9,7 +9,7 @@ for req in (
     'using RankState = unsigned long long;',
     'b300_unpack_rank_delta','b300_unpack_rank_height','b300_pack_rank_state',
     'block_pull_rank_contrib','block_pull_endpoint_mask','block_pull_apply_delta',
-    'block_pull_kernel<true,true>'
+    'block_pull_kernel<true,true>','b300_rankstate_ilp4_blocks'
 ):
     if req not in s: raise SystemExit(f'block rank-state ILP4 requires generated artifact: {req}')
 
@@ -35,8 +35,6 @@ __device__ __forceinline__ Count b300_block_closure_payload_load(const Count* p)
     asm volatile("ld.global.cg.u32 %0, [%1];" : "=r"(v) : "l"(a));
     return Count(v);
 #else
-    // Preserve the original closure-quad cache policy exactly when the A/B
-    // switch is off.  Only B300_BLOCK_CLOSURE_CG=1 changes the load opcode.
     return *p;
 #endif
 }
@@ -132,10 +130,10 @@ __global__ void b300_block_pull_rankstate_ilp4_kernel(
 '''
 s=s.replace(marker,insert+marker,1)
 old='''if(ds.size){if(useRankDelta)block_pull_kernel<true,true><<<bd,threads,0,c.sBlock>>>(cur,c.dBlockMate,ds.size,dnext,p,c.dBlockRankDelta);'''
-new='''if(ds.size){if(useRankDelta)b300_block_pull_rankstate_ilp4_kernel<<<bd,threads,0,c.sBlock>>>(cur,c.dBlockMate,ds.size,dnext,p,c.dBlockRankDelta);'''
+new='''if(ds.size){if(useRankDelta)b300_block_pull_rankstate_ilp4_kernel<<<b300_rankstate_ilp4_blocks(ds.size,threads),threads,0,c.sBlock>>>(cur,c.dBlockMate,ds.size,dnext,p,c.dBlockRankDelta);'''
 if s.count(old)!=1: raise SystemExit(f'block rank-state ILP4 launch anchor expected one match got {s.count(old)}')
 s=s.replace(old,new,1)
-for req in ('b300_block_pull_rankstate_ilp4_kernel','base+=4*grid','endpoint3=','b300_block_rankstate_ilp4_closure','B300_BLOCK_CLOSURE_QUAD','B300_BLOCK_CLOSURE_CG','ld.global.cg.u32','Preserve the original closure-quad cache policy','b300_closure_quad_emit','rank_state[i3]=b300_pack_rank_state'):
+for req in ('b300_rankstate_ilp4_blocks','b300_block_pull_rankstate_ilp4_kernel','b300_rankstate_ilp4_blocks(ds.size,threads)','base+=4*grid','endpoint3=','b300_block_rankstate_ilp4_closure','B300_BLOCK_CLOSURE_QUAD','B300_BLOCK_CLOSURE_CG','ld.global.cg.u32','b300_closure_quad_emit','rank_state[i3]=b300_pack_rank_state'):
     if req not in s: raise SystemExit(f'missing block rank-state ILP4 artifact: {req}')
 out.parent.mkdir(parents=True,exist_ok=True);out.write_text(s)
-print(f'generated {out} from {src}: b300_block_rank_state_ilp4=1 destinations_per_thread=4 endpoint_loads_issued_before_closure=1 closure_slow_path=noinline closure_register_isolation=1 closure_quad_compile_switch=B300_BLOCK_CLOSURE_QUAD closure_cg_compile_switch=B300_BLOCK_CLOSURE_CG closure_cg_off_preserves_plain_load=1 packed_rank_state=1 rank_state_store_before_count_gather=1 register_live_range_reduced=1 register_pressure_requires_ab=1')
+print(f'generated {out} from {src}: b300_block_rank_state_ilp4=1 destinations_per_thread=4 launch_cover_per_thread=4 launch_blocks=ceil_n_over_4threads_capped65535 endpoint_loads_issued_before_closure=1 closure_slow_path=noinline closure_register_isolation=1 closure_quad_compile_switch=B300_BLOCK_CLOSURE_QUAD closure_cg_compile_switch=B300_BLOCK_CLOSURE_CG closure_cg_off_preserves_plain_load=1 packed_rank_state=1 rank_state_store_before_count_gather=1 register_live_range_reduced=1 register_pressure_requires_ab=1')
