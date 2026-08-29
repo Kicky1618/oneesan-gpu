@@ -14,8 +14,21 @@
 #ifndef P10DC_ORBITCTA_FLAT_CHUNK
 #define P10DC_ORBITCTA_FLAT_CHUNK 1
 #endif
+#ifndef P10DC_RANKFORMULA_PRECTX_WARPCOOP
+#define P10DC_RANKFORMULA_PRECTX_WARPCOOP 0
+#endif
 static_assert(P10DC_ORBITCTA_FLAT_CHUNK >= 2 && P10DC_ORBITCTA_FLAT_CHUNK <= 32,
               "chunked flat scheduler expects chunk size 2..32");
+static_assert(P10DC_RANKFORMULA_PRECTX_WARPCOOP == 0 ||
+              P10DC_RANKFORMULA_PRECTX_WARPCOOP == 1,
+              "P10DC_RANKFORMULA_PRECTX_WARPCOOP must be 0 or 1");
+#if P10DC_RANKFORMULA_PRECTX_WARPCOOP
+#include "ramstream32_bucket_precomputed_high_ctx_compact_warpcoop.cuh"
+static_assert(P10DC_RANKFORMULA_PRECTX_COMPACT == 1 &&
+              P10DC_RANKFORMULA_PRECTX_FORWARD == 1 &&
+              P10DC_RANKFORMULA_PRECTX_REVERSE == 1,
+              "warp-cooperative chunked prectx requires compact forward+reverse prectx");
+#endif
 
 __device__ __forceinline__ uint32_t p10dc_orbitcta_flat_advance_bid(
     const uint32_t* off, uint32_t base, uint32_t nblocks,
@@ -91,15 +104,39 @@ __global__ void bucket_high_orbit_closure_pattern10_depthcode_orbitcta_flat_chun
                     }
                     c.jb = bkf_high_main(js, jbid);
                     c.db = bkf_high_block(ds, uint32_t(c.xb.hs));
+                    c.kind = uint8_t(nn ? CPU_ORBIT_NN : CPU_ORBIT_NR);
+#if P10DC_RANKFORMULA_PRECTX_WARPCOOP
+                    // Direct I/O rows are independent of closure prectx. Publish
+                    // q temporarily through cross_depth; warp 0 replaces it with
+                    // the real CROSS depth after resolving compact row refs.
+                    p10dc_direct_resolve_high_io(
+                        c, ss, js, ds,
+                        bkf_loc_rank(sl), bkf_loc_rank(jl), bkf_loc_rank(dl));
+                    c.cross_depth = q;
+#else
                     const uint32_t payload = p10dc_payload(
                         op, false, true, sid, p, uint32_t(c.xb.hs));
                     P10DC_ORBITCTA_PREPARE_FORWARD(
                         c, payload, dl, p, ss, js, ds,
                         bkf_loc_rank(sl), bkf_loc_rank(jl), bkf_loc_rank(dl));
-                    c.kind = uint8_t(nn ? CPU_ORBIT_NN : CPU_ORBIT_NR);
+#endif
                     c.valid = 1;
                 }
             }
+#if P10DC_RANKFORMULA_PRECTX_WARPCOOP
+            if (threadIdx.x < 32u) {
+                // First sync publishes lane-0 setup. Capture q/kind in every
+                // warp-0 lane before lane BKCZ_MAX_LOCAL overwrites cross_depth.
+                __syncwarp();
+                const uint32_t coop_q = c.cross_depth;
+                const uint32_t coop_kind = uint32_t(c.kind);
+                const uint32_t coop_valid = uint32_t(c.valid);
+                __syncwarp();
+                if (coop_valid)
+                    p10dc_apply_forward_compact_prectx_warpcoop(
+                        c, coop_q, coop_kind == uint32_t(CPU_ORBIT_NN));
+            }
+#endif
             __syncthreads();
             if (c.valid) p10dc_orbitcta_flat_forward_columns(c);
             __syncthreads();
@@ -171,15 +208,34 @@ __global__ void bucket_reverse_high_pattern10_depthcode_orbitcta_flat_chunked_ke
                 if (c.xb.valid && c.xb.rows && c.xb.cols) {
                     c.jb = bkf_high_main(js, bkcp10_reverse_high_jblock(bid, c.xb, p, kind));
                     c.db = bkf_high_block(ds, uint32_t(c.xb.hs));
+                    c.kind = uint8_t(kind);
+#if P10DC_RANKFORMULA_PRECTX_WARPCOOP
+                    p10dc_direct_resolve_high_io(
+                        c, ss, js, ds,
+                        bkf_loc_rank(sl), bkf_loc_rank(jl), bkf_loc_rank(dl));
+                    c.cross_depth = q;
+#else
                     const uint32_t payload = p10dc_payload(
                         op, true, true, sid, p, uint32_t(c.xb.hs));
                     P10DC_ORBITCTA_PREPARE_REVERSE(
                         c, payload, edge ? sl : dl, edge ? c.xb : c.db, p, edge,
                         ss, js, ds, bkf_loc_rank(sl), bkf_loc_rank(jl), bkf_loc_rank(dl));
-                    c.kind = uint8_t(kind);
+#endif
                     c.valid = 1;
                 }
             }
+#if P10DC_RANKFORMULA_PRECTX_WARPCOOP
+            if (threadIdx.x < 32u) {
+                __syncwarp();
+                const uint32_t coop_q = c.cross_depth;
+                const uint32_t coop_kind = uint32_t(c.kind);
+                const uint32_t coop_valid = uint32_t(c.valid);
+                __syncwarp();
+                if (coop_valid)
+                    p10dc_apply_reverse_compact_prectx_warpcoop(
+                        c, coop_q, coop_kind);
+            }
+#endif
             __syncthreads();
             if (c.valid) p10dc_orbitcta_flat_reverse_columns(c, edge);
             __syncthreads();
