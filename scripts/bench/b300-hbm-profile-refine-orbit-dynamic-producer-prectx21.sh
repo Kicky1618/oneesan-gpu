@@ -32,16 +32,20 @@ ORBIT_PRECTX_FLAT_BID_FUSED="${ORBIT_PRECTX_FLAT_BID_FUSED:-0}"
 [[ "$ORBIT_QUAD_MLP" == 1 && "$ORBIT_COL_ILP" == 4 && "$ORBIT_CPASYNC_PAIR" == 1 ]] || { echo 'producer prectx exact runner currently requires quad=1 ILP4 cp.async=1' >&2; exit 2; }
 [[ "$ORBIT_PRECTX_FORWARD" == 1 && "$ORBIT_PRECTX_REVERSE" == 1 && "$ORBIT_PRECTX_COMPACT" == 1 ]] || { echo 'producer prectx exact runner requires compact forward+reverse prectx' >&2; exit 2; }
 [[ "$ORBIT_PRECTX_FLAT_BID_FUSED" == 0 ]] || { echo 'producer prectx exact runner currently requires flat-bid-fused=0' >&2; exit 2; }
-[[ "$ORBITCTA_FLAT_BLOCKS_PER_SM" == 0 ]] || { echo 'producer prectx exact runner currently requires occupancy-derived pool' >&2; exit 2; }
 for x in ORBIT_PRECTX_FLAT_BID ORBIT_PRECTX_FLAT_BID_FUSED; do v="${!x}"; [[ "$v" == 0 || "$v" == 1 ]] || exit 2; done
 case "$ORBITCTA_FLAT_DYNAMIC_BATCH" in 1|2|4|8|16) ;; *) exit 2;; esac
 case "$ORBITCTA_FLAT_DYNAMIC_ADAPTIVE_WAVES" in 0|1|2|4) ;; *) exit 2;; esac
+[[ "$ORBITCTA_FLAT_BLOCKS_PER_SM" =~ ^[0-9]+$ ]] || { echo 'ORBITCTA_FLAT_BLOCKS_PER_SM must be non-negative integer' >&2; exit 2; }
 
-N=21 ARCH="${ARCH:-sm_103}" TARGET_MIB="${TARGET_MIB:-16384}" MAX_WINDOW="${MAX_WINDOW:-14}" REPEATS="${REPEATS:-1}" PM_ACCUM="${PM_ACCUM:-1}" \
-DIRECTGATHER_SPARSE64="$ORBIT_SPARSE64" CPASYNC_PAIR=1 \
-ORBITCTA_FLAT_DYNAMIC_BATCH="$ORBITCTA_FLAT_DYNAMIC_BATCH" ORBITCTA_FLAT_DYNAMIC_ADAPTIVE_WAVES="$ORBITCTA_FLAT_DYNAMIC_ADAPTIVE_WAVES" \
-PRECTX_FLAT_BID="$ORBIT_PRECTX_FLAT_BID" PRECTX_FLAT_BID_FUSED="$ORBIT_PRECTX_FLAT_BID_FUSED" \
-PREFIX="$PREFIX" RESULT="$RESULT" bash "$ONEESAN_ROOT/scripts/bench/b300-orbitcta-flat-dynamic-pipe2-producer-prectx-warpcoop-ab.sh"
+runenv=(
+  N=21 ARCH="${ARCH:-sm_103}" TARGET_MIB="${TARGET_MIB:-16384}" MAX_WINDOW="${MAX_WINDOW:-14}" REPEATS="${REPEATS:-1}" PM_ACCUM="${PM_ACCUM:-1}"
+  DIRECTGATHER_SPARSE64="$ORBIT_SPARSE64" CPASYNC_PAIR=1
+  ORBITCTA_FLAT_DYNAMIC_BATCH="$ORBITCTA_FLAT_DYNAMIC_BATCH" ORBITCTA_FLAT_DYNAMIC_ADAPTIVE_WAVES="$ORBITCTA_FLAT_DYNAMIC_ADAPTIVE_WAVES"
+  PRECTX_FLAT_BID="$ORBIT_PRECTX_FLAT_BID" PRECTX_FLAT_BID_FUSED="$ORBIT_PRECTX_FLAT_BID_FUSED"
+  PREFIX="$PREFIX" RESULT="$RESULT"
+)
+if (( ORBITCTA_FLAT_BLOCKS_PER_SM > 0 )); then runenv+=(BUCKET_ORBITCTA_FLAT_BLOCKS_PER_SM="$ORBITCTA_FLAT_BLOCKS_PER_SM"); fi
+env "${runenv[@]}" bash "$ONEESAN_ROOT/scripts/bench/b300-orbitcta-flat-dynamic-pipe2-producer-prectx-warpcoop-ab.sh"
 [[ -f "$RESULT" ]] || { echo "missing producer prectx result=$RESULT" >&2; exit 3; }
 
 python3 - "$PROFILE_IN" "$RESULT" "$PROFILE_OUT" <<'PY'
@@ -75,4 +79,4 @@ open(pout,'w').write('\n'.join(out)+'\n')
 print('DYNAMIC_PRODUCER_PRECTX_REFINE',f'warpcoop={flag}',f'serial_wall={serial:.9f}',f'warpcoop_wall={coop:.9f}',f'profile_file={pout}')
 PY
 cat "$PROFILE_OUT"
-echo "dynamic producer prectx refine OK input=$PROFILE_IN output=$PROFILE_OUT result=$RESULT cached_bid=$ORBIT_PRECTX_FLAT_BID" >&2
+echo "dynamic producer prectx refine OK input=$PROFILE_IN output=$PROFILE_OUT result=$RESULT cached_bid=$ORBIT_PRECTX_FLAT_BID pool_per_sm=$ORBITCTA_FLAT_BLOCKS_PER_SM" >&2
