@@ -19,14 +19,12 @@ __device__ __forceinline__ bool runtime_turn_discover_expand_high_blocked_direct
 ) {
     const int p = W - 1;
 
-    // Inserting N beyond the high boundary leaves validity unchanged.
     if (is_endpoint(mget(b, p - 1))) {
         if (!sink.emit(DeviceKey{minsert(b, p, N), 0})) return false;
     }
 
-    // At p=W-1 there is no right closure family. If the inserted high pair is
-    // NN, the RL seed is automatically valid and only the left LL family can
-    // produce additional main preimages.
+    // At p=W-1 there is no right closure family. The RL seed is automatically
+    // valid and only the left LL family can produce additional main preimages.
     const MateID d = minsert(b, p - 1, N);
     if (mpair(d, p) != NN) return true;
     if (!sink.emit(DeviceKey{msetpair(d, p, RL), 0})) return false;
@@ -82,26 +80,29 @@ __device__ __forceinline__ bool runtime_turn_discover_expand_high_direct(
     if (pair == NR && !sink.emit(DeviceKey{msetpair(d, p, RN), 0})) return false;
     if (pair == NL && !sink.emit(DeviceKey{msetpair(d, p, LN), 0})) return false;
 
-    // The ordinary blocked predecessor branch is intentionally absent: turn
-    // expansion source components are main-only. The Q_{W-2} reconstruction
-    // below can still generate main preimages of a projected blocked branch.
+    // Preserve the ordinary blocked predecessor as well. Turn expansion wraps
+    // this helper in RuntimeMainOnlySink, so that sink drops the candidate;
+    // keeping it here makes the boundary dispatch semantically exact for any
+    // other caller that happens to use p=W-1 after this header is included.
+    if (mget(d, p) == N && is_endpoint(mget(d, p - 1))) {
+        if (!sink.emit(DeviceKey{mshrink(d, p), 1})) return false;
+    }
+
     const int q = p - 1;
     const MateValuePair qp = mpair(d, q);
     if (qp == NN || qp == LR) {
         const MateID nn = qp == NN ? d : msetpair(d, q, NN);
         const MateID b = mshrink(nn, q);
-        // Reachable Q_{W-2} main destinations make the lookahead-N condition
-        // and validity structural; both are proved by the host gate.
         if (!runtime_turn_discover_expand_high_blocked_direct(b, W, sink))
             return false;
     }
     return true;
 }
 
-// runtime_turn.cuh already routes high expansion through the optimized runtime
-// forward-discovery function when RP_RUNTIME_FAST_DISCOVERY_VALIDITY=1.  Wrap
-// that call here so the boundary p=W-1 case uses the smaller turn-specific
-// inverse while every other p keeps the generic structural implementation.
+// runtime_turn.cuh routes high expansion through the optimized runtime forward
+// discovery function when RP_RUNTIME_FAST_DISCOVERY_VALIDITY=1. Wrap that call
+// so the boundary p=W-1 case uses the smaller exact specialization while every
+// other p keeps the generic structural implementation.
 template<class Sink>
 __device__ __forceinline__ bool runtime_turn_discover_forward_dispatch(
     DeviceKey dest, int W, int p, Sink& sink
