@@ -18,6 +18,7 @@ struct BucketPattern10DepthCodeWarpStripedDeltaDirectAffineRankFormulaNometa4Abs
     void init(const StorageLayout& layout,int threads=256,int gx=16,int gy=8){
         p10dc_warpstriped_delta_direct_affine_rankformula_nometa4_abstract_require_threads(threads);
         p10dc_install_rankformula_abstract_lut();
+        p10dc_rankformula_nometa4_abstract_report_high_occupancy(threads);
         const int low_gx=p10dc_rankformula_grid_env("BUCKET_LOW_GRID_X",gx);
         const int low_gy=p10dc_rankformula_grid_env("BUCKET_LOW_GRID_Y",gy);
         const int high_gx=p10dc_rankformula_grid_env("BUCKET_HIGH_GRID_X",gx);
