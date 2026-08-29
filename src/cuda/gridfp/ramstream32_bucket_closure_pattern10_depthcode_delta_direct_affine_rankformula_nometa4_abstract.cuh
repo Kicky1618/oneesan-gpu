@@ -31,8 +31,6 @@ static_assert(!P10DC_RANKFORMULA_PAIR_MLP || P10DC_RANKFORMULA_GATHER_MLP,
               "PAIR_MLP requires GATHER_MLP");
 static_assert(!P10DC_RANKFORMULA_DIRECTGATHER64 || P10DC_RANKFORMULA_GATHER_MLP,
               "DIRECTGATHER64 requires GATHER_MLP");
-static_assert(!(P10DC_RANKFORMULA_DIRECTGATHER64 && P10DC_RANKFORMULA_PAIR_MLP),
-              "DIRECTGATHER64 pair path is intentionally isolated for A/B");
 static_assert(!(P10DC_RANKFORMULA_DIRECTGATHER64 && P10DC_RANKFORMULA_PREFETCH_NEXT),
               "DIRECTGATHER64 prefetch path is intentionally isolated for A/B");
 #if P10DC_RANKFORMULA_GATHER_MLP
