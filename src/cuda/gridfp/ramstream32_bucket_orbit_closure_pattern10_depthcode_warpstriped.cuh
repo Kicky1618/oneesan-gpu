@@ -128,10 +128,23 @@ __global__ void bucket_high_orbit_closure_pattern10_depthcode_warpstriped_kernel
 #endif
                     }
                 }
+#ifdef P10DC_WARPSTRIPED_PLAN_SUM_PAIR
+#pragma unroll
+                for (int t = 0; t < P10DC_WARPSTRIPED_COL_ILP; t += 2) {
+                    if (!live[t]) continue;
+                    if (live[t + 1]) {
+                        P10DC_WARPSTRIPED_PLAN_SUM_PAIR(
+                            c, db, lr[t], lr[t + 1], extra[t], extra[t + 1]);
+                    } else {
+                        extra[t] = p10dc_resolved_high_plan_sum(c, db, lr[t]);
+                    }
+                }
+#else
 #pragma unroll
                 for (int t = 0; t < P10DC_WARPSTRIPED_COL_ILP; ++t) {
                     if (live[t]) extra[t] = p10dc_resolved_high_plan_sum(c, db, lr[t]);
                 }
+#endif
 #pragma unroll
                 for (int t = 0; t < P10DC_WARPSTRIPED_COL_ILP; ++t) {
                     if (!live[t]) continue;
@@ -251,10 +264,23 @@ __global__ void bucket_reverse_high_pattern10_depthcode_warpstriped_kernel(int p
 #endif
                     }
                 }
+#ifdef P10DC_WARPSTRIPED_PLAN_SUM_PAIR
+#pragma unroll
+                for (int t = 0; t < P10DC_WARPSTRIPED_COL_ILP; t += 2) {
+                    if (!live[t]) continue;
+                    if (live[t + 1]) {
+                        P10DC_WARPSTRIPED_PLAN_SUM_PAIR(
+                            c, edge ? xb : db, lr[t], lr[t + 1], extra[t], extra[t + 1]);
+                    } else {
+                        extra[t] = p10dc_resolved_high_plan_sum(c, edge ? xb : db, lr[t]);
+                    }
+                }
+#else
 #pragma unroll
                 for (int t = 0; t < P10DC_WARPSTRIPED_COL_ILP; ++t) {
                     if (live[t]) extra[t] = p10dc_resolved_high_plan_sum(c, edge ? xb : db, lr[t]);
                 }
+#endif
 #pragma unroll
                 for (int t = 0; t < P10DC_WARPSTRIPED_COL_ILP; ++t) {
                     if (!live[t]) continue;
