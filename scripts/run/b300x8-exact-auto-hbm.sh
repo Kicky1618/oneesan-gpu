@@ -2,17 +2,18 @@
 set -euo pipefail
 source "$(dirname -- "${BASH_SOURCE[0]}")/../lib/common.sh"
 
-# PROFILED=1 consumes the exact n=21 tuner output and only races forced + the
-# best warp + the best orbit profile at n=27. Keep the existing staged HBM9
-# route as the default until real B300 measurements establish the profile path.
+# PROFILED=1 consumes the exact n=21 tuner output, cheaply preselects the n=27
+# forced family with partial rows, then full-smokes only best-forced + tuned-warp
+# + tuned-orbit. Keep the existing staged HBM9 route as the default until real
+# B300 measurements establish the profile path.
 PROFILED="${PROFILED:-0}"
 [[ "$PROFILED" == 0 || "$PROFILED" == 1 ]] || { echo 'PROFILED must be 0 or 1' >&2; exit 2; }
 if [[ "$PROFILED" == 1 ]]; then
   PROFILE_FILE="${PROFILE_FILE:-$ONEESAN_ROOT/work/b300_hbm_profile_tune21.env}"
   [[ -f "$PROFILE_FILE" ]] || { echo "missing PROFILE_FILE=$PROFILE_FILE" >&2; echo 'run tuner first: bash scripts/bench/b300-hbm-profile-tune21.sh' >&2; exit 2; }
   export PROFILE_FILE
-  echo "HBM profiled-auto profile_file=$PROFILE_FILE" >&2
-  exec "$ONEESAN_ROOT/scripts/run/b300x8-exact-auto-hbm-profiled.sh" "$@"
+  echo "HBM profiled-staged profile_file=$PROFILE_FILE forced_preselect_rows=${FORCED_PRESELECT_ROWS:-1}" >&2
+  exec "$ONEESAN_ROOT/scripts/run/b300x8-exact-auto-hbm-profiled-staged.sh" "$@"
 fi
 
 # Production entry point for the observed low-memory-controller regime. First
