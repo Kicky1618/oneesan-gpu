@@ -12,6 +12,7 @@ on:
       - 'scripts/build/gen-b300-mainrec-random-cg.py'
       - 'scripts/build/gen-b300-mainrec-prefetch-l2.py'
       - 'scripts/bench/b300-nextgen-*.sh'
+      - 'scripts/bench/b300-local-sm86-hybrid8-smoke.sh'
       - 'scripts/bench/b300-low-window-drop-cache-proof.sh'
       - 'scripts/bench/b300-main-recurrence-production-generate-proof.sh'
       - 'scripts/bench/b300-grand-selector-contract-preflight.sh'
@@ -44,6 +45,7 @@ on:
       - 'scripts/build/gen-b300-mainrec-random-cg.py'
       - 'scripts/build/gen-b300-mainrec-prefetch-l2.py'
       - 'scripts/bench/b300-nextgen-*.sh'
+      - 'scripts/bench/b300-local-sm86-hybrid8-smoke.sh'
       - 'scripts/bench/b300-low-window-drop-cache-proof.sh'
       - 'scripts/bench/b300-main-recurrence-production-generate-proof.sh'
       - 'scripts/bench/b300-grand-selector-contract-preflight.sh'
@@ -76,6 +78,8 @@ jobs:
     timeout-minutes: 5
     steps:
       - uses: actions/checkout@v4
+      - name: Syntax-check local sm86 hybrid smoke
+        run: bash -n scripts/bench/b300-local-sm86-hybrid8-smoke.sh
       - name: Validate low-window drop-cache rank decomposition
         run: bash scripts/bench/b300-low-window-drop-cache-proof.sh
       - name: Validate production recurrence transform composition
