@@ -12,6 +12,21 @@ static_assert(sizeof(P10DCHighClosureCompactPreCtx) ==
                   sizeof(uint32_t) * (BKCZ_MAX_LOCAL + 2u),
               "flat-bid cache must not grow compact prectx");
 
+__device__ __forceinline__ void p10dc_apply_loaded_compact_prectx(
+    P10DCDirectHighResolvedCtx& c,
+    const P10DCHighClosureCompactPreCtx& z
+) {
+    c.local_n = z.local_n;
+#pragma unroll
+    for (uint32_t i = 0; i < BKCZ_MAX_LOCAL; ++i)
+        if (i < uint32_t(z.local_n))
+            c.local_base[i] = p10dc_high_row_ref_resolve_unchecked(z.local_ref[i], z.fixed_hs);
+    c.cross_depth = uint32_t(z.cross_depth);
+    c.cross_base = z.cross_depth
+        ? p10dc_high_row_ref_resolve_unchecked(z.cross_ref, uint32_t(z.fixed_hs) + 2u)
+        : nullptr;
+}
+
 #if P10DC_RANKFORMULA_PRECTX_FORWARD
 __global__ void p10dc_annotate_forward_compact_prectx_bid_kernel(
     P10DCHighClosureCompactPreCtx* nn,
@@ -32,11 +47,12 @@ __global__ void p10dc_annotate_forward_compact_prectx_bid_kernel(
         nrnl[q].pad = uint8_t(bid);
 }
 
-__device__ __forceinline__ uint32_t p10dc_forward_compact_prectx_flat_bid(
+__device__ __forceinline__ P10DCHighClosureCompactPreCtx
+p10dc_load_forward_compact_prectx_flat(
     uint32_t q, bool nn
 ) {
-    return uint32_t(nn ? D_P10DC_COMPACT_PRECTX_FWD_NN[q].pad
-                       : D_P10DC_COMPACT_PRECTX_FWD_NRNL[q].pad);
+    return nn ? D_P10DC_COMPACT_PRECTX_FWD_NN[q]
+              : D_P10DC_COMPACT_PRECTX_FWD_NRNL[q];
 }
 #endif
 
@@ -64,12 +80,13 @@ __global__ void p10dc_annotate_reverse_compact_prectx_bid_kernel(
         nl[q].pad = uint8_t(bid);
 }
 
-__device__ __forceinline__ uint32_t p10dc_reverse_compact_prectx_flat_bid(
+__device__ __forceinline__ P10DCHighClosureCompactPreCtx
+p10dc_load_reverse_compact_prectx_flat(
     uint32_t q, uint32_t kind
 ) {
-    if (kind == CPU_ORBIT_NN) return uint32_t(D_P10DC_COMPACT_PRECTX_REV_NN[q].pad);
-    if (kind == CPU_ORBIT_NR) return uint32_t(D_P10DC_COMPACT_PRECTX_REV_NR[q].pad);
-    return uint32_t(D_P10DC_COMPACT_PRECTX_REV_NL[q].pad);
+    if (kind == CPU_ORBIT_NN) return D_P10DC_COMPACT_PRECTX_REV_NN[q];
+    if (kind == CPU_ORBIT_NR) return D_P10DC_COMPACT_PRECTX_REV_NR[q];
+    return D_P10DC_COMPACT_PRECTX_REV_NL[q];
 }
 #endif
 
@@ -101,6 +118,7 @@ struct BucketFusedCompactPrecomputedHighCtxFlatBidTables
         std::cerr << "p10dc_compact_flat_bid fixed_owner=" << fixed
                   << " bytes_added=0"
                   << " bid_storage=existing_pad_u8"
+                  << " fused_context_load=1"
                   << " forward=" << P10DC_RANKFORMULA_PRECTX_FORWARD
                   << " reverse=" << P10DC_RANKFORMULA_PRECTX_REVERSE
                   << '\n';
