@@ -11,10 +11,19 @@
 #ifndef P10DC_RANKFORMULA_QUAD_MLP
 #define P10DC_RANKFORMULA_QUAD_MLP 0
 #endif
+#ifndef P10DC_RANKFORMULA_QUAD_OVERLAP_LOCAL
+#define P10DC_RANKFORMULA_QUAD_OVERLAP_LOCAL 0
+#endif
+static_assert(P10DC_RANKFORMULA_QUAD_OVERLAP_LOCAL == 0 ||
+              P10DC_RANKFORMULA_QUAD_OVERLAP_LOCAL == 1,
+              "P10DC_RANKFORMULA_QUAD_OVERLAP_LOCAL must be 0 or 1");
 #if P10DC_RANKFORMULA_QUAD_MLP
 #include "ramstream32_bucket_closure_pattern10_depthcode_delta_direct_affine_rankformula_nometa4_abstract_quad.cuh"
 #else
 #include "ramstream32_bucket_closure_pattern10_depthcode_delta_direct_affine_rankformula_nometa4_abstract.cuh"
+#endif
+#if P10DC_RANKFORMULA_QUAD_OVERLAP_LOCAL
+#include "ramstream32_bucket_closure_pattern10_depthcode_rankformula_quad_overlap_local.cuh"
 #endif
 #include "ramstream32_bucket_rankformula_high_plan_profile.cuh"
 
@@ -61,6 +70,10 @@ static_assert(!P10DC_RANKFORMULA_CPASYNC_OVERLAP_LOCAL_PAIR ||
 static_assert(!P10DC_RANKFORMULA_CPASYNC_OVERLAP_LOCAL_PIPE2 ||
               P10DC_RANKFORMULA_CPASYNC_OVERLAP_LOCAL_PAIR,
               "overlap-local pipe2 requires overlap-local pair mode");
+static_assert(!P10DC_RANKFORMULA_QUAD_OVERLAP_LOCAL || P10DC_RANKFORMULA_QUAD_MLP,
+              "quad overlap-local requires QUAD_MLP");
+static_assert(!P10DC_RANKFORMULA_QUAD_OVERLAP_LOCAL || P10DC_RANKFORMULA_CPASYNC_PAIR,
+              "quad overlap-local requires CPASYNC_PAIR");
 #if P10DC_RANKFORMULA_PRECTX_FORWARD || P10DC_RANKFORMULA_PRECTX_REVERSE
 #if P10DC_RANKFORMULA_PRECTX_COMPACT
 #include "ramstream32_bucket_precomputed_high_ctx_compact.cuh"
@@ -135,9 +148,15 @@ static_assert(P10DC_WARPSTRIPED_COL_ILP == 2 || P10DC_WARPSTRIPED_COL_ILP == 4,
 #if P10DC_RANKFORMULA_QUAD_MLP
 static_assert(P10DC_WARPSTRIPED_COL_ILP == 4,
               "QUAD_MLP requires COL_ILP=4");
+#if P10DC_RANKFORMULA_QUAD_OVERLAP_LOCAL
+#define P10DC_WARPSTRIPED_PLAN_SUM_QUAD(c,db,lr0,lr1,lr2,lr3,out0,out1,out2,out3) \
+    p10dc_direct_resolved_high_plan_sum_quad_overlap_local( \
+        (c),(db),(lr0),(lr1),(lr2),(lr3),(out0),(out1),(out2),(out3))
+#else
 #define P10DC_WARPSTRIPED_PLAN_SUM_QUAD(c,db,lr0,lr1,lr2,lr3,out0,out1,out2,out3) \
     p10dc_direct_resolved_high_plan_sum_quad_cross5_rankformula_nometa4_abstract( \
         (c),(db),(lr0),(lr1),(lr2),(lr3),(out0),(out1),(out2),(out3))
+#endif
 #define P10DC_WARPSTRIPED_PLAN_SUM_QUAD_LOCAL 1
 #endif
 #define bucket_high_orbit_closure_pattern10_depthcode_warpstriped_kernel \
