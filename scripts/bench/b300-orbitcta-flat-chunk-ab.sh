@@ -47,7 +47,9 @@ if [[ "$PRECTX_COMPACT" == 1 ]]; then
   ARCH="$ARCH" PM_ACCUM="$PM_ACCUM" bash "$ONEESAN_ROOT/scripts/bench/compact-prectx-selftest.sh" >"$LOGDIR/compact-prectx.out" 2>"$LOGDIR/compact-prectx.err"
 fi
 
-COMMON=(N="$N" ARCH="$ARCH" ORBITCTA_FLAT=1 DIRECTGATHER64=1 DIRECTGATHER_SPARSE64="$SPARSE64" DIRECTGATHER_SORT_RANKS="$SORT_RANKS" ORBITCTA_COL_ILP="$COL_ILP" PAIR_MLP="$PAIR_MLP" CPASYNC_PAIR="$CPASYNC_PAIR" RANKFORMULA_MLP_WINDOW4="$WINDOW4" PM_ACCUM="$PM_ACCUM" PRECTX_FORWARD="$PRECTX_FORWARD" PRECTX_REVERSE="$PRECTX_REVERSE" PRECTX_COMPACT="$PRECTX_COMPACT" PTXAS_VERBOSE="$PTXAS_VERBOSE")
+# Keep this benchmark isolated to the chunk scheduler. Newer flat-bid and quad
+# experiments are forced off even if the parent shell exported them.
+COMMON=(N="$N" ARCH="$ARCH" ORBITCTA_FLAT=1 DIRECTGATHER64=1 DIRECTGATHER_SPARSE64="$SPARSE64" DIRECTGATHER_SORT_RANKS="$SORT_RANKS" ORBITCTA_COL_ILP="$COL_ILP" PAIR_MLP="$PAIR_MLP" CPASYNC_PAIR="$CPASYNC_PAIR" QUAD_MLP=0 QUAD_OVERLAP_LOCAL=0 QUAD_LOCAL_DIRECT_MAX=0 RANKFORMULA_MLP_WINDOW4="$WINDOW4" PM_ACCUM="$PM_ACCUM" PRECTX_FORWARD="$PRECTX_FORWARD" PRECTX_REVERSE="$PRECTX_REVERSE" PRECTX_COMPACT="$PRECTX_COMPACT" PRECTX_FLAT_BID=0 PRECTX_FLAT_BID_FUSED=0 PTXAS_VERBOSE="$PTXAS_VERBOSE")
 
 field(){ local k="$1" l="$2"; sed -nE "s/(^|.*[[:space:]])${k}=([^[:space:]]+).*/\\2/p" <<<"$l" | tail -n1; }
 sample(){ local pid="$1" out="$2"; : >"$out"; while kill -0 "$pid" 2>/dev/null; do nvidia-smi --query-gpu=utilization.gpu,utilization.memory --format=csv,noheader,nounits 2>/dev/null | awk -F',' '{g=$1+0;m=$2+0;sg+=g;sm+=m;if(g>mg)mg=g;if(m>mm)mm=m;n++}END{if(n)printf "%.6f %.6f %d %d\n",sg/n,sm/n,mg,mm}' >>"$out" || true; sleep "$SAMPLE_INTERVAL"; done; }
@@ -76,6 +78,8 @@ for chunk in $CHUNKS; do
     grid="$(grep 'rankformula_orbitcta_flat_grid device=0 ' "$se" | head -n1 || true)"
     occ="$(grep 'rankformula_orbitcta_flat_occupancy device=0 ' "$se" | head -n1 || true)"
     [[ "$(field flat_chunk "$grid")" == "$chunk" ]] || { echo "chunk=$chunk runtime grid log mismatch" >&2; exit 6; }
+    expected_mode=binary_search; (( chunk > 1 )) && expected_mode=chunk_amortized
+    [[ "$(field flat_bid_mode "$grid")" == "$expected_mode" ]] || { echo "chunk=$chunk flat_bid_mode mismatch" >&2; exit 6; }
     fh="$(field forward_high_s "$detail")"; rh="$(field reverse_high_s "$detail")"
     high="$(python3 - "$fh" "$rh" <<'PY'
 import sys
@@ -116,7 +120,11 @@ b=min(out,key=lambda z:z['wall_s'])
 with open(winner,'w') as f:
     f.write('ORBITCTA_FLAT=1\n')
     f.write(f'ORBITCTA_FLAT_CHUNK={b["chunk"]}\n')
+    f.write('PRECTX_FLAT_BID=0\nPRECTX_FLAT_BID_FUSED=0\nQUAD_MLP=0\nQUAD_OVERLAP_LOCAL=0\nQUAD_LOCAL_DIRECT_MAX=0\n')
 print('WINNER_CHUNK='+b['chunk'],f"wall_s={b['wall_s']:.6f}",f"high_s={b['high_s']:.6f}",f"winner_env={winner}")
 PY
 cat "$RESULT"
-echo "orbitcta flat chunk A/B OK result=$RESULT summary=$SUMMARY winner_env=$WINNER_ENV pool=${FLAT_BLOCKS:+blocks=$FLAT_BLOCKS}${FLAT_PER_SM:+per_sm=$FLAT_PER_SM}${FLAT_BLOCKS:-${FLAT_PER_SM:-auto-occupancy}}" >&2
+pool_desc=auto-occupancy
+[[ -z "$FLAT_PER_SM" ]] || pool_desc="per_sm=$FLAT_PER_SM"
+[[ -z "$FLAT_BLOCKS" ]] || pool_desc="blocks=$FLAT_BLOCKS"
+echo "orbitcta flat chunk A/B OK result=$RESULT summary=$SUMMARY winner_env=$WINNER_ENV pool=$pool_desc" >&2
