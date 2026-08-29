@@ -22,10 +22,10 @@ __global__ void codec_table_physical_compile_kernel(Rank64* out) {
 void codec_table_physical_compile_install() {
     Rank64 choose[RP_MAX_W + 1][RP_MAX_W + 1]{};
     Rank64 primitive[RP_MAX_W + 1][RP_MAX_W + 2]{};
-#if !defined(__CUDA_ARCH__) || RP_EXPERIMENTAL_CODEC_CHOOSE_PHYSICAL_MODE == 0
+#if RP_EXPERIMENTAL_CODEC_CHOOSE_PHYSICAL_MODE == 0
     (void)cudaMemcpyToSymbol(RP_CHOOSE, choose, sizeof(choose));
 #endif
-#if !defined(__CUDA_ARCH__) || RP_EXPERIMENTAL_CODEC_PRIMITIVE_PHYSICAL_MODE == 0
+#if RP_EXPERIMENTAL_CODEC_PRIMITIVE_PHYSICAL_MODE == 0
     (void)cudaMemcpyToSymbol(RP_PRIMITIVE, primitive, sizeof(primitive));
 #endif
 }
