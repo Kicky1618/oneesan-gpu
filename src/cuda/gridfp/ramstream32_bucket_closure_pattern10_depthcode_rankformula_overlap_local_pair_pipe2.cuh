@@ -27,6 +27,25 @@ __device__ __forceinline__ void p10dc_overlap_local_wait_one_pending() {
 #endif
 }
 
+__device__ __forceinline__ void p10dc_overlap_local_cpasync_u32(
+    Count* dst, const Count* src, bool valid
+) {
+#if __CUDA_ARCH__ >= 800
+    const uint32_t sdst = uint32_t(__cvta_generic_to_shared(dst));
+    const unsigned long long gsrc = reinterpret_cast<unsigned long long>(src);
+    const uint32_t keep = valid ? 1u : 0u;
+    // PTX ignore-src is a predicate operand: when true, no source bytes are
+    // consumed and the destination is zero-filled. This keeps the whole warp on
+    // one cp.async instruction stream instead of branching to a shared store.
+    asm volatile(
+        "{ .reg .pred p; setp.eq.u32 p, %2, 0; "
+        "cp.async.ca.shared.global [%0], [%1], 4, p; }"
+        :: "r"(sdst), "l"(gsrc), "r"(keep));
+#else
+    *dst = valid ? *src : Count(0);
+#endif
+}
+
 __device__ __forceinline__ void
 p10dc_direct_resolved_high_plan_sum_pair_overlap_local_pipe2(
     const P10DCDirectHighResolvedCtx& c, const BucketPhysicalBlock& db,
@@ -39,22 +58,22 @@ p10dc_direct_resolved_high_plan_sum_pair_overlap_local_pipe2(
             db.hs, lr0, lr1, c.cross_depth);
 
     if (have_cross) {
-        p10dc_rankformula_cpasync_u32(p10dc_rankformula_cpasync_slot(0), c.cross_base + r.a0, r.n0 > 0u);
-        p10dc_rankformula_cpasync_u32(p10dc_rankformula_cpasync_slot(1), c.cross_base + r.a1, r.n0 > 1u);
-        p10dc_rankformula_cpasync_u32(p10dc_rankformula_cpasync_slot(2), c.cross_base + r.a2, r.n0 > 2u);
-        p10dc_rankformula_cpasync_u32(p10dc_rankformula_cpasync_slot(3), c.cross_base + r.a3, r.n0 > 3u);
-        p10dc_rankformula_cpasync_u32(p10dc_rankformula_cpasync_slot(4), c.cross_base + r.a4, r.n0 > 4u);
-        p10dc_rankformula_cpasync_u32(p10dc_rankformula_cpasync_slot(5), c.cross_base + r.a5, r.n0 > 5u);
-        p10dc_rankformula_cpasync_u32(p10dc_rankformula_cpasync_slot(6), c.cross_base + r.a6, r.n0 > 6u);
+        p10dc_overlap_local_cpasync_u32(p10dc_rankformula_cpasync_slot(0), c.cross_base + r.a0, r.n0 > 0u);
+        p10dc_overlap_local_cpasync_u32(p10dc_rankformula_cpasync_slot(1), c.cross_base + r.a1, r.n0 > 1u);
+        p10dc_overlap_local_cpasync_u32(p10dc_rankformula_cpasync_slot(2), c.cross_base + r.a2, r.n0 > 2u);
+        p10dc_overlap_local_cpasync_u32(p10dc_rankformula_cpasync_slot(3), c.cross_base + r.a3, r.n0 > 3u);
+        p10dc_overlap_local_cpasync_u32(p10dc_rankformula_cpasync_slot(4), c.cross_base + r.a4, r.n0 > 4u);
+        p10dc_overlap_local_cpasync_u32(p10dc_rankformula_cpasync_slot(5), c.cross_base + r.a5, r.n0 > 5u);
+        p10dc_overlap_local_cpasync_u32(p10dc_rankformula_cpasync_slot(6), c.cross_base + r.a6, r.n0 > 6u);
         p10dc_rankformula_cpasync_commit();
 
-        p10dc_rankformula_cpasync_u32(p10dc_rankformula_cpasync_slot(7), c.cross_base + r.b0, r.n1 > 0u);
-        p10dc_rankformula_cpasync_u32(p10dc_rankformula_cpasync_slot(8), c.cross_base + r.b1, r.n1 > 1u);
-        p10dc_rankformula_cpasync_u32(p10dc_rankformula_cpasync_slot(9), c.cross_base + r.b2, r.n1 > 2u);
-        p10dc_rankformula_cpasync_u32(p10dc_rankformula_cpasync_slot(10), c.cross_base + r.b3, r.n1 > 3u);
-        p10dc_rankformula_cpasync_u32(p10dc_rankformula_cpasync_slot(11), c.cross_base + r.b4, r.n1 > 4u);
-        p10dc_rankformula_cpasync_u32(p10dc_rankformula_cpasync_slot(12), c.cross_base + r.b5, r.n1 > 5u);
-        p10dc_rankformula_cpasync_u32(p10dc_rankformula_cpasync_slot(13), c.cross_base + r.b6, r.n1 > 6u);
+        p10dc_overlap_local_cpasync_u32(p10dc_rankformula_cpasync_slot(7), c.cross_base + r.b0, r.n1 > 0u);
+        p10dc_overlap_local_cpasync_u32(p10dc_rankformula_cpasync_slot(8), c.cross_base + r.b1, r.n1 > 1u);
+        p10dc_overlap_local_cpasync_u32(p10dc_rankformula_cpasync_slot(9), c.cross_base + r.b2, r.n1 > 2u);
+        p10dc_overlap_local_cpasync_u32(p10dc_rankformula_cpasync_slot(10), c.cross_base + r.b3, r.n1 > 3u);
+        p10dc_overlap_local_cpasync_u32(p10dc_rankformula_cpasync_slot(11), c.cross_base + r.b4, r.n1 > 4u);
+        p10dc_overlap_local_cpasync_u32(p10dc_rankformula_cpasync_slot(12), c.cross_base + r.b5, r.n1 > 5u);
+        p10dc_overlap_local_cpasync_u32(p10dc_rankformula_cpasync_slot(13), c.cross_base + r.b6, r.n1 > 6u);
         p10dc_rankformula_cpasync_commit();
     }
 
