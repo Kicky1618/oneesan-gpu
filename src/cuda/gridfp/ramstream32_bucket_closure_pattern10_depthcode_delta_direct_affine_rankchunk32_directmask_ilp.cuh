@@ -63,10 +63,11 @@ __device__ __forceinline__ void p10dc_direct_resolved_high_plan_sum_rankchunk32_
             if (pending[j])
                 rank_row[j] = p10dc_low_rankchunk32_directoff_row(db.hs, lr[j]);
 
-        constexpr uint32_t MAXR = P10DC_RANKCHUNK32_MAX_L_PER_LEGAL_CODE;
-        uint16_t source_rank[ILP][MAXR]{};
+        constexpr uint32_t NRANK = P10DC_RANKCHUNK32_MAX_L_PER_LEGAL_CODE;
+        constexpr uint32_t RANK_STORAGE = NRANK ? NRANK : 1u;
+        uint16_t source_rank[ILP][RANK_STORAGE]{};
 #pragma unroll
-        for (uint32_t ordinal = 0; ordinal < MAXR; ++ordinal) {
+        for (uint32_t ordinal = 0; ordinal < NRANK; ++ordinal) {
 #pragma unroll
             for (int j = 0; j < ILP; ++j) {
                 if (pending[j] & uint8_t(1u << ordinal))
@@ -75,7 +76,7 @@ __device__ __forceinline__ void p10dc_direct_resolved_high_plan_sum_rankchunk32_
         }
 
 #pragma unroll
-        for (uint32_t ordinal = 0; ordinal < MAXR; ++ordinal) {
+        for (uint32_t ordinal = 0; ordinal < NRANK; ++ordinal) {
             Count v[ILP]{};
             uint8_t take[ILP]{};
 #pragma unroll
