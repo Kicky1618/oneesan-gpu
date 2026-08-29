@@ -11,7 +11,10 @@ __device__ __forceinline__ void cpasync_u32(uint32_t* dst,const uint32_t* src,bo
     const uint32_t smem=static_cast<uint32_t>(__cvta_generic_to_shared(dst));
     const unsigned long long gmem=reinterpret_cast<unsigned long long>(src);
     const uint32_t bytes=valid?4u:0u;
-    asm volatile("cp.async.cg.shared.global [%0], [%1], 4, %2;" :: "r"(smem),"l"(gmem),"r"(bytes));
+    // PTX permits 4/8/16-byte copies with .ca. The .cg cache operator is only
+    // valid for 16-byte cp.async, so use .ca for Count-sized random gathers.
+    // src-size=0 zero-fills the four-byte destination for invalid candidates.
+    asm volatile("cp.async.ca.shared.global [%0], [%1], 4, %2;" :: "r"(smem),"l"(gmem),"r"(bytes));
 #else
     *dst=valid?*src:0u;
 #endif
@@ -62,6 +65,6 @@ int main(){
     ck(cudaMemcpy(got.data(),dout,size_t(N)*4,cudaMemcpyDeviceToHost),"copy out");
     for(int i=0;i<N;++i)if(got[i]!=ref[i]){std::fprintf(stderr,"mismatch i=%d got=%u ref=%u\n",i,got[i],ref[i]);return 3;}
     cudaDeviceProp p{};ck(cudaGetDeviceProperties(&p,0),"props");
-    std::printf("b300-cpasync-gather-proof OK device=%s cc=%d.%d cases=%d loads=%llu zero_fill=%llu cp_bytes=4 exact=1\n",p.name,p.major,p.minor,N,(unsigned long long)loads,(unsigned long long)zeros);
+    std::printf("b300-cpasync-gather-proof OK device=%s cc=%d.%d cases=%d loads=%llu zero_fill=%llu cp_bytes=4 cache_operator=ca exact=1\n",p.name,p.major,p.minor,N,(unsigned long long)loads,(unsigned long long)zeros);
     return 0;
 }
