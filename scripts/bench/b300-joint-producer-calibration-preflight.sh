@@ -5,12 +5,13 @@ source "$(dirname -- "${BASH_SOURCE[0]}")/../lib/common.sh"
 joint="$ONEESAN_ROOT/scripts/run/b300x8-joint-calibrated-select.sh"
 weight="$ONEESAN_ROOT/scripts/run/b300x8-exact-auto-hbm-profiled-producer-weight-race.sh"
 adaptive="$ONEESAN_ROOT/scripts/run/b300x8-exact-auto-hbm-profiled-producer-adaptive-race.sh"
+coordinate="$ONEESAN_ROOT/scripts/run/b300x8-exact-auto-hbm-profiled-producer-coordinate-race.sh"
 adaptive_wrap="$ONEESAN_ROOT/scripts/run/b300x8-exact-auto-hbm-profiled-producer-adaptive.sh"
 single="$ONEESAN_ROOT/scripts/run/b300x8-race-external-forced-profiled-once.sh"
 buckets="$ONEESAN_ROOT/scripts/build/b300-profiled-buckets-only.sh"
 build="$ONEESAN_ROOT/scripts/build/b300-directgather-orbitcta-pipe2-producer-warp.sh"
 
-for f in "$joint" "$weight" "$adaptive" "$adaptive_wrap" "$single" "$buckets" "$build"; do
+for f in "$joint" "$weight" "$adaptive" "$coordinate" "$adaptive_wrap" "$single" "$buckets" "$build"; do
   [[ -f "$f" ]] || { echo "missing $f" >&2; exit 2; }
   bash -n "$f"
 done
@@ -34,9 +35,11 @@ done
 
 for s in \
   'PRODUCER_WEIGHTS=' \
+  'WEIGHT_ADAPTIVE_COLS=' \
   'WEIGHT_REPEATS=' \
   'statistics.median' \
   'ORBIT_N27_PRODUCER_WEIGHT_REPEATS=' \
+  'ORBIT_N27_PRODUCER_WEIGHT_FIXED_ADAPTIVE_COLS=' \
   'ORBITCTA_FLAT_DYNAMIC_PIPE2_PRODUCER_WORKER_WEIGHT' \
   'CANDIDATES=orbit_tuned' \
   'FATAL producer-weight residue mismatch'; do
@@ -53,6 +56,18 @@ for s in \
   'FATAL producer-adaptive residue mismatch' \
   'PRODUCER_ADAPTIVE_COLS="$best_threshold"'; do
   grep -Fq "$s" "$adaptive" || { echo "adaptive-race marker missing: $s" >&2; exit 3; }
+done
+
+for s in \
+  'COORDINATE_ROUNDS=' \
+  'COORDINATE_REPEATS=' \
+  'WEIGHT_ADAPTIVE_COLS="$old_t"' \
+  'b300x8-exact-auto-hbm-profiled-producer-weight-race.sh' \
+  'b300x8-exact-auto-hbm-profiled-producer-adaptive-race.sh' \
+  'PRODUCER COORDINATE converged' \
+  'ORBIT_N27_PRODUCER_COORDINATE_WEIGHT=' \
+  'ORBIT_N27_PRODUCER_COORDINATE_ADAPTIVE_COLS='; do
+  grep -Fq "$s" "$coordinate" || { echo "coordinate-refine marker missing: $s" >&2; exit 3; }
 done
 
 for s in \
@@ -82,4 +97,4 @@ done
 grep -Fq 'PRODUCER_ADAPTIVE_COLS=' "$build" || { echo 'producer build wrapper lost adaptive knob' >&2; exit 4; }
 grep -Fq 'P10DC_ORBITCTA_FLAT_DYNAMIC_PIPE2_PRODUCER_ADAPTIVE_COLS' "$build" || { echo 'producer build wrapper lost adaptive nvcc macro' >&2; exit 4; }
 
-echo 'b300_joint_producer_calibration_preflight=OK weight=OK adaptive=OK median=OK pww_pac_fingerprint=OK single_pass=OK gpu_work=0 actions_triggered=0'
+echo 'b300_joint_producer_calibration_preflight=OK weight=OK adaptive=OK coordinate=OK median=OK pww_pac_fingerprint=OK single_pass=OK gpu_work=0 actions_triggered=0'
