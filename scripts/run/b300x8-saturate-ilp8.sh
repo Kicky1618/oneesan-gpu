@@ -89,6 +89,11 @@ if [[ "$REBUILD" == 1 || ! -x "$BIN" ]]; then
   [[ -x "$BIN" ]] || { echo 'candidate binary missing after nvcc' >&2; exit 3; }
 fi
 
+if [[ -f "$ISO/final.build.err" ]]; then
+  echo '=== ILP8 PTXAS resource summary ===' >&2
+  grep -E 'ptxas info.*(Function properties|Used [0-9]+ registers|bytes spill|bytes stack frame|bytes cmem|bytes smem)' "$ISO/final.build.err" >&2 || true
+fi
+
 nvidia-smi --query-gpu=index,name,memory.total,memory.free --format=csv,noheader || true
 echo "B300 x8 saturation-main-ilp8 n=$N rows=$ROWS threads=$THREADS target=${TARGET_MIB}MiB plan=${PLAN_MIB}MiB window=$MAX_WINDOW random_cg=$RANDOM_CG warpscan=$WARP_SCAN maxrregcount=$MAXRREGCOUNT" >&2
 echo 'features=main_rankstate_ilp8,block_rankstate_ilp4,closure_warp,dualmask,closure_contrib_shift_cross_tables,random_cg_optional,closure_warpscan_optional,concurrent_io' >&2
