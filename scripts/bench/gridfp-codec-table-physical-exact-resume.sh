@@ -14,21 +14,29 @@ MIN_EXACT_SPEEDUP="${MIN_EXACT_SPEEDUP:-1.002}"
 MIN_W28_SPEEDUP="${MIN_W28_SPEEDUP:-1.002}"
 REQUIRE_ALL_PAIRS="${REQUIRE_ALL_PAIRS:-1}"
 REQUIRE_SAME_HEAD="${REQUIRE_SAME_HEAD:-1}"
+REQUIRE_CLEAN_TREE="${REQUIRE_CLEAN_TREE:-1}"
 [[ -f "$W28_SUMMARY" && -f "$W28_MANIFEST" ]] || {
   echo "usage: $0 <physical-w28-summary.tsv> <physical-decision-manifest.txt>" >&2; exit 2; }
 if (( NGPU < 2 || NGPU > 8 || BLOCKS < 1 || REPEATS < 1 || WARMUP < 0 )); then echo "invalid physical exact resume dimensions" >&2; exit 2; fi
 [[ "$REQUIRE_ALL_PAIRS" == 0 || "$REQUIRE_ALL_PAIRS" == 1 ]] || { echo "REQUIRE_ALL_PAIRS must be 0 or 1" >&2; exit 2; }
 [[ "$REQUIRE_SAME_HEAD" == 0 || "$REQUIRE_SAME_HEAD" == 1 ]] || { echo "REQUIRE_SAME_HEAD must be 0 or 1" >&2; exit 2; }
+[[ "$REQUIRE_CLEAN_TREE" == 0 || "$REQUIRE_CLEAN_TREE" == 1 ]] || { echo "REQUIRE_CLEAN_TREE must be 0 or 1" >&2; exit 2; }
 if ! command -v nvcc >/dev/null || ! command -v nvidia-smi >/dev/null; then echo "nvcc and nvidia-smi are required" >&2; exit 2; fi
 visible="$(nvidia-smi --query-gpu=index --format=csv,noheader | wc -l)"; (( visible >= NGPU )) || { echo "need $NGPU GPUs, visible=$visible" >&2; exit 2; }
 
 prior_head="$(sed -nE 's/^head_sha=(.*)$/\1/p' "$W28_MANIFEST" | tail -n1)"
 prior_mode="$(sed -nE 's/^candidate_mode_resolved=([1-5])$/\1/p' "$W28_MANIFEST" | tail -n1)"
 [[ -n "$prior_head" && -n "$prior_mode" ]] || { echo "W28 manifest is missing head_sha or candidate_mode_resolved" >&2; exit 3; }
-current_head=unknown
-if command -v git >/dev/null && git -C "$ONEESAN_ROOT" rev-parse --is-inside-work-tree >/dev/null 2>&1; then current_head="$(git -C "$ONEESAN_ROOT" rev-parse HEAD)"; fi
+current_head=unknown; current_dirty=unknown
+if command -v git >/dev/null && git -C "$ONEESAN_ROOT" rev-parse --is-inside-work-tree >/dev/null 2>&1; then
+  current_head="$(git -C "$ONEESAN_ROOT" rev-parse HEAD)"
+  if git -C "$ONEESAN_ROOT" diff --quiet -- . && git -C "$ONEESAN_ROOT" diff --cached --quiet -- .; then current_dirty=0; else current_dirty=1; fi
+fi
 if [[ "$REQUIRE_SAME_HEAD" == 1 && "$current_head" != "$prior_head" ]]; then
   echo "W28 result HEAD mismatch: prior=$prior_head current=$current_head" >&2; exit 4
+fi
+if [[ "$REQUIRE_CLEAN_TREE" == 1 && "$current_dirty" != 0 ]]; then
+  echo "physical exact resume requires a clean tracked tree; current_dirty=$current_dirty" >&2; exit 4
 fi
 
 # Verify the stored W28 result still meets the requested threshold and matches
@@ -50,6 +58,7 @@ LOGDIR="${LOGDIR:-${PREFIX}_logs}"; SUMMARY="${SUMMARY:-${PREFIX}_summary.txt}";
 mkdir -p "$LOGDIR" "$(dirname "$SUMMARY")" "$(dirname "$MANIFEST")"
 {
   echo "current_head=$current_head"
+  echo "current_tracked_dirty=$current_dirty"
   echo "source_w28_head=$prior_head"
   echo "candidate_mode=$prior_mode"
   echo "source_w28_summary=$W28_SUMMARY"
@@ -59,6 +68,8 @@ mkdir -p "$LOGDIR" "$(dirname "$SUMMARY")" "$(dirname "$MANIFEST")"
   echo "min_exact_speedup=$MIN_EXACT_SPEEDUP"
   echo "min_w28_speedup=$MIN_W28_SPEEDUP"
   echo "require_all_pairs=$REQUIRE_ALL_PAIRS"
+  echo "require_same_head=$REQUIRE_SAME_HEAD"
+  echo "require_clean_tree=$REQUIRE_CLEAN_TREE"
   nvidia-smi --query-gpu=index,name,driver_version --format=csv,noheader | sed 's/^/gpu=/'
   nvcc --version | tail -n1 | sed 's/^/nvcc=/'
 } >"$MANIFEST"
