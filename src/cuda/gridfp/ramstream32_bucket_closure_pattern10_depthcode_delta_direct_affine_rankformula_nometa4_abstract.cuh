@@ -28,9 +28,9 @@ __device__ __forceinline__ Count p10dc_direct_resolved_high_plan_sum_cross5_rank
     const P10DCDirectHighResolvedCtx& c, const BucketPhysicalBlock& db, uint32_t lr
 ) {
 #if P10DC_RANKFORMULA_GATHER_MLP
-    // Issue all ordinary source-row reads before starting the reduction.  This
-    // exposes up to BKCZ_MAX_LOCAL independent memory operations per lane to the
-    // scheduler instead of a load->mod-add dependency chain.
+    // First issue all ordinary source-row reads. Do not immediately consume
+    // them: run the independent cross resolver/gather while those HBM requests
+    // are outstanding, then reduce everything at the end.
     BkczCrossAccum v0 = 0, v1 = 0, v2 = 0, v3 = 0;
     BkczCrossAccum v4 = 0, v5 = 0, v6 = 0, v7 = 0;
     if constexpr (BKCZ_MAX_LOCAL > 0) if (c.local_n > 0) v0 = BkczCrossAccum(c.local_base[0][lr]);
@@ -42,20 +42,20 @@ __device__ __forceinline__ Count p10dc_direct_resolved_high_plan_sum_cross5_rank
     if constexpr (BKCZ_MAX_LOCAL > 6) if (c.local_n > 6) v6 = BkczCrossAccum(c.local_base[6][lr]);
     if constexpr (BKCZ_MAX_LOCAL > 7) if (c.local_n > 7) v7 = BkczCrossAccum(c.local_base[7][lr]);
 
+    BkczCrossAccum cross = 0;
+    if (c.cross_depth) {
+        cross = p10dc_resolved_low_preimages_cross5_rankformula_nometa4_abstract_mlp_fixed(
+            db.hs, lr, c.cross_depth, c.cross_base);
+    }
+
     const BkczCrossAccum a01 = p10dc_rankformula_accum_add(v0, v1);
     const BkczCrossAccum a23 = p10dc_rankformula_accum_add(v2, v3);
     const BkczCrossAccum a45 = p10dc_rankformula_accum_add(v4, v5);
     const BkczCrossAccum a67 = p10dc_rankformula_accum_add(v6, v7);
-    BkczCrossAccum sum = p10dc_rankformula_accum_add(
+    const BkczCrossAccum local = p10dc_rankformula_accum_add(
         p10dc_rankformula_accum_add(a01, a23),
         p10dc_rankformula_accum_add(a45, a67));
-
-    if (c.cross_depth) {
-        sum = p10dc_rankformula_accum_add(
-            sum,
-            p10dc_resolved_low_preimages_cross5_rankformula_nometa4_abstract_mlp_fixed(
-                db.hs, lr, c.cross_depth, c.cross_base));
-    }
+    const BkczCrossAccum sum = p10dc_rankformula_accum_add(local, cross);
 #if GPU_DIRECT_PM_ACCUM
     return gpu_direct_pm_reduce_u64(sum);
 #else
