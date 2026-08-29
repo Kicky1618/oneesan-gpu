@@ -52,6 +52,18 @@ __device__ __forceinline__ void block_pull_add_same_rank(
     pull_add_mod(acc,in_main[j]);
 }
 
+__device__ __forceinline__ uint32_t block_pull_endpoint_mask(MateID mate){
+    uint64_t x=(uint64_t(mate)|(uint64_t(mate)>>1))&0x5555555555555555ULL;
+    x=(x|(x>>1))&0x3333333333333333ULL;
+    x=(x|(x>>2))&0x0f0f0f0f0f0f0f0fULL;
+    x=(x|(x>>4))&0x00ff00ff00ff00ffULL;
+    x=(x|(x>>8))&0x0000ffff0000ffffULL;
+    x=(x|(x>>16))&0x00000000ffffffffULL;
+    uint32_t out=uint32_t(x);
+    if constexpr(TARGET_W<32)out&=(uint32_t(1)<<TARGET_W)-1u;
+    return out;
+}
+
 __global__ void block_pull_kernel(const Count*in_main,Code n,Count*out_block,int p){
     Code i=Code(blockIdx.x)*blockDim.x+threadIdx.x,stride=Code(gridDim.x)*blockDim.x;
     for(;i<n;i+=stride){
@@ -75,24 +87,32 @@ __global__ void block_pull_kernel(const Count*in_main,Code n,Count*out_block,int
                 block_pull_add_same_rank(acc,in_main,base_rank,d,x);
             }
 
+            // N contributes zero to the closure balance. Compress the MateID to
+            // a one-bit endpoint mask and scan only L/R positions. This preserves
+            // the exact legacy stopping condition while removing all N iterations.
+            const uint32_t endpoints=block_pull_endpoint_mask(d);
+            uint32_t left=endpoints&((uint32_t(1)<<(p-1))-1u);
             int bal=0;
-            for(int q=p-2;q>=0;--q){
-                MateValue v=mget(d,q);
+            while(left){
+                int q=31-__clz(left);MateValue v=mget(d,q);
                 if(bal==0&&v==L){
                     MateID x=msetpair(d,p,LL);x=mset(x,q,R);
                     block_pull_add_same_rank(acc,in_main,base_rank,d,x);
                 }
-                if(v==L)++bal;else if(v==R)--bal;
+                if(v==L)++bal;else --bal;
+                left^=uint32_t(1)<<q;
                 if(bal<0)break;
             }
+            uint32_t right=endpoints&~((uint32_t(1)<<(p+1))-1u);
             bal=0;
-            for(int q=p+1;q<TARGET_W;++q){
-                MateValue v=mget(d,q);
+            while(right){
+                int q=__ffs(right)-1;MateValue v=mget(d,q);
                 if(bal==0&&v==R){
                     MateID x=msetpair(d,p,RR);x=mset(x,q,L);
                     block_pull_add_same_rank(acc,in_main,base_rank,d,x);
                 }
-                if(v==R)++bal;else if(v==L)--bal;
+                if(v==R)++bal;else --bal;
+                right&=right-1u;
                 if(bal<0)break;
             }
         }
@@ -128,4 +148,4 @@ s = s.replace(old, new, 1)
 
 out.parent.mkdir(parents=True, exist_ok=True)
 out.write_text(s)
-print(f'generated {out} from {src}: b300_block_pull=1 p_scope=2..Wm1 block_atomic=0 block_memset=0 deferred_insert=p endpoint_rank=direct_lift closure_base_rank=direct_lift closure_candidate_rank=local_delta rl_validity_gate=1 full_group_rank_calls=0')
+print(f'generated {out} from {src}: b300_block_pull=1 p_scope=2..Wm1 block_atomic=0 block_memset=0 deferred_insert=p endpoint_rank=direct_lift closure_base_rank=direct_lift closure_candidate_rank=local_delta rl_validity_gate=1 closure_scan=endpoint_setbits full_group_rank_calls=0')
