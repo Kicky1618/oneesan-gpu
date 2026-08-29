@@ -54,6 +54,8 @@ done
 python3 - <<'PY'
 choose={0:6728,1:900,2:1740,3:3364}
 primitive={0:6960,1:900,2:3480}
+motzkin=6960
+legacy_three=6728+6960+motzkin
 layouts={
   0:(0,0,'baseline'),
   1:(1,1,'max_compact'),
@@ -62,15 +64,19 @@ layouts={
   4:(1,2,'sym_choose_full_primitive'),
   5:(3,2,'full_shape_both'),
 }
-expected={0:13688,1:1800,2:2640,3:4264,4:4380,5:6844}
+expected_pair={0:13688,1:1800,2:2640,3:4264,4:4380,5:6844}
+assert legacy_three==20648
 for mode,(c,p,name) in layouts.items():
-    total=choose[c]+primitive[p]
-    assert total==expected[mode], (mode,total,expected[mode])
-    print(f'physical_layout_mode{mode}_name={name} choose_mode={c} primitive_mode={p} constant_bytes={total} saved_bytes={13688-total}')
+    pair=choose[c]+primitive[p]
+    assert pair==expected_pair[mode], (mode,pair,expected_pair[mode])
+    three=pair+motzkin
+    print(f'physical_layout_mode{mode}_name={name} choose_mode={c} primitive_mode={p} choose_primitive_bytes={pair} choose_primitive_saved_bytes={13688-pair} three_table_bytes={three} three_table_saved_bytes={legacy_three-three}')
+print(f'physical_layout_motzkin_unmodified_bytes={motzkin}')
+print(f'physical_layout_legacy_three_table_bytes={legacy_three}')
 print('physical_layout_legacy_symbol_bytes_nonzero_mode=0')
 print('physical_layout_legacy_host_upload_nonzero_mode=0')
 print('physical_layout_device_reads_legacy_symbol=0')
 print('physical_layout_exact=1')
 PY
 
-echo "gridfp-codec-table-physical-replacement-proof OK default_legacy_constant=1 physical_legacy_symbol_removed=1 host_upload_removed=1 exact=1"
+echo "gridfp-codec-table-physical-replacement-proof OK default_legacy_constant=1 physical_legacy_symbol_removed=1 host_upload_removed=1 motzkin_unmodified=1 exact=1"
