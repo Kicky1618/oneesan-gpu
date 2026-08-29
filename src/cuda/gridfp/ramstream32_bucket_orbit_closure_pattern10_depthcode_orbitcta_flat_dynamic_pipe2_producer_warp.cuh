@@ -9,37 +9,56 @@
 #ifndef P10DC_ORBITCTA_FLAT_DYNAMIC_PIPE2_PRODUCER_WORKER_WEIGHT
 #define P10DC_ORBITCTA_FLAT_DYNAMIC_PIPE2_PRODUCER_WORKER_WEIGHT 0
 #endif
+#ifndef P10DC_ORBITCTA_FLAT_DYNAMIC_PIPE2_PRODUCER_ADAPTIVE_COLS
+#define P10DC_ORBITCTA_FLAT_DYNAMIC_PIPE2_PRODUCER_ADAPTIVE_COLS 0
+#endif
 static_assert(P10DC_ORBITCTA_COL_ILP == 1 || P10DC_ORBITCTA_COL_ILP == 2 ||
               P10DC_ORBITCTA_COL_ILP == 4,
               "pipe2 producer-warp columns require ILP 1,2,4");
 static_assert(P10DC_ORBITCTA_FLAT_DYNAMIC_PIPE2_PRODUCER_WORKER_WEIGHT >= 0 &&
               P10DC_ORBITCTA_FLAT_DYNAMIC_PIPE2_PRODUCER_WORKER_WEIGHT <= 4,
               "pipe2 producer worker weight must be 0..4");
+static_assert(P10DC_ORBITCTA_FLAT_DYNAMIC_PIPE2_PRODUCER_ADAPTIVE_COLS >= 0,
+              "pipe2 producer adaptive cols must be non-negative");
 #ifdef P10DC_ORBITCTA_PLAN_SUM_QUAD
 static_assert(P10DC_ORBITCTA_COL_ILP == 4,
               "producer-warp quad plan sum requires ILP=4");
 #endif
 
 // Warp 0 resolves the next context before entering the current column loop.
-// weight=0 is the existing producer-only mode: warp 0 owns no current columns
-// and the remaining warps cover the block compactly. weight>0 gives warp 0 one
-// virtual warp-slot after prepare while each worker warp owns WEIGHT slots:
+// weight=0 is producer-only: warp 0 owns no current columns. weight>0 gives
+// warp 0 one virtual warp-slot while every worker warp owns WEIGHT slots:
 //
 //   producer share = 1 / (1 + (nwarps-1)*WEIGHT).
 //
-// For 256 threads this is 1/8, 1/15, 1/22, 1/29 for weights 1..4, bridging
-// standard PIPE2 and producer-only instead of forcing a 12.5% -> 0% jump.
-// Every virtual slot is exactly 32 lanes, so each column has a unique logical
-// worker and pair/quad gather lane contiguity is preserved.
+// For 256 threads this is 1/8, 1/15, 1/22, 1/29 for weights 1..4. A fixed
+// weight is still the default. When ADAPTIVE_COLS>0, small current orbits keep
+// the selected base weight, while sufficiently wide orbits switch to weight=1
+// after prepare so the producer warp rejoins the memory-heavy column phase.
+// This changes only ownership of current columns; every virtual slot remains a
+// 32-lane warp and exact coverage is unchanged.
+__device__ __forceinline__ uint32_t
+p10dc_orbitcta_flat_pipe2_producer_effective_weight(uint32_t cols) {
+    constexpr uint32_t BASE =
+        uint32_t(P10DC_ORBITCTA_FLAT_DYNAMIC_PIPE2_PRODUCER_WORKER_WEIGHT);
+    constexpr uint32_t THRESH =
+        uint32_t(P10DC_ORBITCTA_FLAT_DYNAMIC_PIPE2_PRODUCER_ADAPTIVE_COLS);
+    if constexpr (THRESH == 0u || BASE == 1u) {
+        (void)cols;
+        return BASE;
+    } else {
+        return cols >= THRESH ? 1u : BASE;
+    }
+}
+
 __device__ __forceinline__ void p10dc_orbitcta_flat_pipe2_producer_partition(
+    uint32_t weight,
     uint32_t& first_slot, uint32_t& slot_count, uint32_t& logical_workers
 ) {
     const uint32_t tid = uint32_t(threadIdx.x);
     const uint32_t warp = tid >> 5;
     const uint32_t nwarps = uint32_t(blockDim.x) >> 5;
-    constexpr uint32_t WEIGHT =
-        uint32_t(P10DC_ORBITCTA_FLAT_DYNAMIC_PIPE2_PRODUCER_WORKER_WEIGHT);
-    if constexpr (WEIGHT == 0u) {
+    if (weight == 0u) {
         if (warp == 0u) {
             first_slot = 0u;
             slot_count = 0u;
@@ -54,10 +73,10 @@ __device__ __forceinline__ void p10dc_orbitcta_flat_pipe2_producer_partition(
             first_slot = 0u;
             slot_count = 1u;
         } else {
-            first_slot = 1u + (warp - 1u) * WEIGHT;
-            slot_count = WEIGHT;
+            first_slot = 1u + (warp - 1u) * weight;
+            slot_count = weight;
         }
-        logical_workers = (1u + (nwarps - 1u) * WEIGHT) << 5;
+        logical_workers = (1u + (nwarps - 1u) * weight) << 5;
     }
 }
 
@@ -70,10 +89,13 @@ __device__ __forceinline__ void p10dc_orbitcta_flat_forward_columns_pipe2_produc
     }
     constexpr int ILP = P10DC_ORBITCTA_COL_ILP;
     const uint32_t lane = uint32_t(threadIdx.x) & 31u;
-    uint32_t first_slot = 0u, slot_count = 0u, workers = 0u;
-    p10dc_orbitcta_flat_pipe2_producer_partition(first_slot, slot_count, workers);
-    if (!slot_count) return;
     const uint32_t cols = c.xb.cols;
+    const uint32_t weight =
+        p10dc_orbitcta_flat_pipe2_producer_effective_weight(cols);
+    uint32_t first_slot = 0u, slot_count = 0u, workers = 0u;
+    p10dc_orbitcta_flat_pipe2_producer_partition(
+        weight, first_slot, slot_count, workers);
+    if (!slot_count) return;
     Count* const ip_base = c.ip_base;
     Count* const jp_base = c.jp_base;
     Count* const dp_base = c.dp_base;
@@ -172,10 +194,13 @@ __device__ __forceinline__ void p10dc_orbitcta_flat_reverse_columns_pipe2_produc
     }
     constexpr int ILP = P10DC_ORBITCTA_COL_ILP;
     const uint32_t lane = uint32_t(threadIdx.x) & 31u;
-    uint32_t first_slot = 0u, slot_count = 0u, workers = 0u;
-    p10dc_orbitcta_flat_pipe2_producer_partition(first_slot, slot_count, workers);
-    if (!slot_count) return;
     const uint32_t cols = c.xb.cols;
+    const uint32_t weight =
+        p10dc_orbitcta_flat_pipe2_producer_effective_weight(cols);
+    uint32_t first_slot = 0u, slot_count = 0u, workers = 0u;
+    p10dc_orbitcta_flat_pipe2_producer_partition(
+        weight, first_slot, slot_count, workers);
+    if (!slot_count) return;
     Count* const ip_base = c.ip_base;
     Count* const jp_base = c.jp_base;
     Count* const dp_base = c.dp_base;
