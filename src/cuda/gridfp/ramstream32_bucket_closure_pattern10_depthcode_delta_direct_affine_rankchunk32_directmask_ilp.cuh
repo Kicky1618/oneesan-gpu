@@ -13,11 +13,10 @@ static_assert(P10DC_WARPSTRIPED_ILP == 1 || P10DC_WARPSTRIPED_ILP == 2 ||
 static_assert(P10DC_RANKCHUNK32_MAX_L_PER_LEGAL_CODE <= 7u,
               "directmask ILP assumes the global ordinal mask fits in 7 bits");
 
-// Batch independent memory chains in lock-step. Directmask mode carries an
-// absolute rankstream offset per LOW rank, so the ILP path no longer touches
-// rankchunk metadata, block-base tables, or warp shuffles at all. All selected
-// rank16 entries are prefetched before beginning source32 gathers, removing the
-// rank16 latency from the source-gather issue loop at the cost of registers.
+// Batch independent memory chains in lock-step. In rankplane mode each warp
+// reads the same ordinal plane at consecutive compact indices, exposing a
+// coalesced rank16 load before the random source32 gather. Without rankplane,
+// keep the direct-offset path as an A/B fallback.
 template<int ILP>
 __device__ __forceinline__ void p10dc_direct_resolved_high_plan_sum_rankchunk32_directmask_ilp(
     const P10DCDirectHighResolvedCtx& c, const BucketPhysicalBlock& db,
@@ -50,23 +49,28 @@ __device__ __forceinline__ void p10dc_direct_resolved_high_plan_sum_rankchunk32_
     }
 
     if (c.cross_depth) {
+        uint32_t compact[ILP]{};
         uint8_t pending[ILP]{};
         uint8_t lane_any = 0u;
 #pragma unroll
         for (int j = 0; j < ILP; ++j) {
-            if (valid[j])
-                pending[j] = p10dc_low_rankchunk32_directmask_load(
-                    db.hs, lr[j], c.cross_depth);
+            if (valid[j]) {
+                compact[j] = p10dc_low_rankchunk32_directcompact(db.hs, lr[j]);
+                pending[j] = p10dc_low_rankchunk32_directmask_load_compact(
+                    compact[j], c.cross_depth);
+            }
             lane_any = uint8_t(lane_any | uint8_t(pending[j] != 0u));
         }
 
         const unsigned active = __activemask();
         if (__any_sync(active, lane_any != 0u)) {
+#if !P10DC_RANKCHUNK32_RANKPLANE
             const uint16_t* rank_row[ILP]{};
 #pragma unroll
             for (int j = 0; j < ILP; ++j)
                 if (pending[j])
-                    rank_row[j] = p10dc_low_rankchunk32_directoff_row(db.hs, lr[j]);
+                    rank_row[j] = p10dc_low_rankchunk32_directoff_row_compact(compact[j]);
+#endif
 
             constexpr uint32_t NRANK = P10DC_RANKCHUNK32_MAX_L_PER_LEGAL_CODE;
             constexpr uint32_t RANK_STORAGE = NRANK ? NRANK : 1u;
@@ -75,8 +79,14 @@ __device__ __forceinline__ void p10dc_direct_resolved_high_plan_sum_rankchunk32_
             for (uint32_t ordinal = 0; ordinal < NRANK; ++ordinal) {
 #pragma unroll
                 for (int j = 0; j < ILP; ++j) {
-                    if (pending[j] & uint8_t(1u << ordinal))
+                    if (pending[j] & uint8_t(1u << ordinal)) {
+#if P10DC_RANKCHUNK32_RANKPLANE
+                        source_rank[j][ordinal] =
+                            p10dc_low_rankchunk32_directrank_load_compact(compact[j], ordinal);
+#else
                         source_rank[j][ordinal] = rank_row[j][ordinal];
+#endif
+                    }
                 }
             }
 
