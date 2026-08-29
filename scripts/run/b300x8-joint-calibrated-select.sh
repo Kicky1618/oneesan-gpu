@@ -16,7 +16,7 @@ getv(){ local k="$1" f="$2";sed -nE "s/^${k}=([^[:space:]]+).*/\\1/p" "$f"|tail 
 if [[ "$RECALIBRATE" == 1 || ! -s "$CAL_LOG" ]];then
   echo '=== joint calibrated selector: exhaustive forced row calibration ===' >&2
   ARCH="$ARCH" MOD="$PRIME" ROWS="${CAL_ROWS:-1}" TARGET_MIB="$TARGET_MIB" MAX_WINDOW="$MAX_WINDOW" \
-  THREADS_LIST="${THREADS_LIST:-128 256 512}" BATCH_LIST="${BATCH_LIST:-2 4}" HIGHDROP_LIST="${HIGHDROP_LIST:-0 1}" REPEATS="${REPEATS:-1}" TRANSFORM_MIN_SPEEDUP="${TRANSFORM_MIN_SPEEDUP:-1.01}" PREFIX="$CAL_PREFIX" \
+  THREADS_LIST="${THREADS_LIST:-128 256 512 1024}" BATCH_LIST="${BATCH_LIST:-2 4}" HIGHDROP_LIST="${HIGHDROP_LIST:-0 1}" REPEATS="${REPEATS:-1}" TRANSFORM_MIN_SPEEDUP="${TRANSFORM_MIN_SPEEDUP:-1.01}" PREFIX="$CAL_PREFIX" \
     bash "$ONEESAN_ROOT/scripts/bench/b300-forced-joint-calibrate.sh" | tee "$CAL_LOG"
 fi
 [[ "$(getv b300_forced_joint_exact_gates "$CAL_LOG")" == 1 ]]||{ echo 'joint calibration exact gate missing' >&2;exit 3; }
