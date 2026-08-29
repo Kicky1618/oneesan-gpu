@@ -73,6 +73,13 @@ for proof in \
   bash "$ONEESAN_ROOT/scripts/bench/$proof" >"$LOGDIR/${proof%.sh}.out" 2>"$LOGDIR/${proof%.sh}.err"
 done
 
+# Compile all 12 physical layout combinations before spending GPU time.
+env ARCH="$ARCH" PTXAS_VERBOSE="$PTXAS_VERBOSE" \
+  PREFIX="$ONEESAN_BUILD_DIR/gridfp_codec_table_physical_decision_compile" \
+  LOGDIR="$LOGDIR/compile-matrix" \
+  bash "$ONEESAN_ROOT/scripts/bench/gridfp-codec-table-physical-compile-matrix.sh" \
+  >"$LOGDIR/physical-compile-matrix.out" 2>"$LOGDIR/physical-compile-matrix.err"
+
 if [[ "$CANDIDATE_MODE" == auto ]]; then
   [[ -f "$PROXY_EXACT_SUMMARY" && -f "$PROXY_W28_SUMMARY" ]] || {
     echo "CANDIDATE_MODE=auto requires proxy exact and W28 summary TSVs" >&2; exit 2; }
