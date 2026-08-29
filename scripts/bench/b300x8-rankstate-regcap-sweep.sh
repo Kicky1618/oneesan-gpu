@@ -39,9 +39,9 @@ for cap in $CAPS; do
   [[ "$cap" =~ ^[0-9]+$ ]] || { echo "bad cap=$cap" >&2; exit 2; }
   bin="$LOGDIR/n${N}_cap${cap}"
   build="$LOGDIR/cap${cap}.build.log"
-  echo "=== build packed56+ILP2 cap=$cap ===" >&2
+  echo "=== build packed56+ILP2+concurrent-io cap=$cap ===" >&2
   N="$N" OUT="$bin" FAST_SHARD_ADDRESS8=1 MAIN_MATE_CACHE=1 MAIN_PULL=1 BLOCK_PULL=1 BLOCK_MATE_CACHE=1 \
-    MAIN_PULL_ILP2=0 HEIGHT_CACHE=0 RANK_DELTA_CACHE=1 RANK_STATE_PACKED=1 RANK_STATE_ILP2=1 \
+    MAIN_PULL_ILP2=0 HEIGHT_CACHE=0 RANK_DELTA_CACHE=1 RANK_STATE_PACKED=1 RANK_STATE_ILP2=1 CONCURRENT_GROUP_IO=1 \
     MAXRREGCOUNT="$cap" PTXAS_VERBOSE=1 "$ONEESAN_ROOT/scripts/build/b300-hbm32.sh" >"$build" 2>&1
   read -r regs ss sl < <(parse_ptxas "$build")
   for th in $THREADS_LIST; do
