@@ -17,14 +17,14 @@ template<class Sink>
 __device__ __forceinline__ bool runtime_turn_discover_expand_low_blocked_direct(
     MateID b, int W, Sink& sink
 ) {
-    // Reflection of the forward p=W-1 deferred endpoint preimage.  For a
+    // Reflection of the forward p=W-1 deferred endpoint preimage. For a
     // canonical reverse Q_2 blocked destination this source is structurally
     // valid, so no reverse-validity scan or transition recheck is necessary.
     if (is_endpoint(mget(b, 0))) {
         if (!sink.emit(DeviceKey{minsert(b, 0, N), 0})) return false;
     }
 
-    // Reflection of the high-boundary closure reconstruction.  In direct
+    // Reflection of the high-boundary closure reconstruction. In direct
     // reverse coordinates only the RL seed and RR family extend to the right.
     const MateID d = minsert(b, 1, N);
     if (mpair(d, 1) != NN) return true;
@@ -66,7 +66,7 @@ template<class Sink>
 __device__ __forceinline__ bool runtime_turn_discover_expand_low_direct(
     DeviceKey dest, int W, Sink& sink
 ) {
-    // Expansion sources are main-only.  A blocked destination can therefore
+    // Expansion sources are main-only. A blocked destination can therefore
     // only be reached through an included main branch.
     if (dest.blocked)
         return runtime_turn_discover_expand_low_blocked_direct(dest.mate, W, sink);
@@ -82,7 +82,7 @@ __device__ __forceinline__ bool runtime_turn_discover_expand_low_direct(
     if (pair == RN && !sink.emit(DeviceKey{msetpair(d, 1, NR), 0})) return false;
 
     // Reflection of the quotient-projection reconstruction at forward
-    // q=W-2.  The reconstructed blocked word is reverse-valid by construction;
+    // q=W-2. The reconstructed blocked word is reverse-valid by construction;
     // only the canonical lookahead-N condition remains dynamic.
     if (W > 2) {
         const MateValuePair qp = mpair(d, 2);
@@ -99,3 +99,5 @@ __device__ __forceinline__ bool runtime_turn_discover_expand_low_direct(
 }
 
 } // namespace oneesan::gridfp::reducedprod
+
+#include "gridfp_reduced_production_runtime_turn_high_expand_inverse.cuh"
