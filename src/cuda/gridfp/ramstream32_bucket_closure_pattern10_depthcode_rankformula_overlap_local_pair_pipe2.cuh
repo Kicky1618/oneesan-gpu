@@ -21,8 +21,6 @@ static_assert(BKCZ_MAX_LOCAL <= 8,
 
 __device__ __forceinline__ void p10dc_overlap_local_wait_one_pending() {
 #if __CUDA_ARCH__ >= 800
-    // Two groups are committed in A-then-B order. Leave B outstanding while
-    // consuming A so arithmetic covers part of the second group's latency.
     asm volatile("cp.async.wait_group 1;");
 #endif
 }
@@ -34,15 +32,21 @@ __device__ __forceinline__ void p10dc_overlap_local_cpasync_u32(
     const uint32_t sdst = uint32_t(__cvta_generic_to_shared(dst));
     const unsigned long long gsrc = reinterpret_cast<unsigned long long>(src);
     const uint32_t keep = valid ? 1u : 0u;
-    // PTX ignore-src is a predicate operand: when true, no source bytes are
-    // consumed and the destination is zero-filled. This keeps the whole warp on
-    // one cp.async instruction stream instead of branching to a shared store.
     asm volatile(
         "{ .reg .pred p; setp.eq.u32 p, %2, 0; "
         "cp.async.ca.shared.global [%0], [%1], 4, p; }"
         :: "r"(sdst), "l"(gsrc), "r"(keep));
 #else
     *dst = valid ? *src : Count(0);
+#endif
+}
+
+__device__ __forceinline__ void p10dc_overlap_local_prefetch_l2(const Count* p) {
+#if __CUDA_ARCH__ >= 800
+    const unsigned long long a = reinterpret_cast<unsigned long long>(p);
+    asm volatile("prefetch.global.L2 [%0];" :: "l"(a));
+#else
+    (void)p;
 #endif
 }
 
@@ -77,9 +81,10 @@ p10dc_direct_resolved_high_plan_sum_pair_overlap_local_pipe2(
         p10dc_rankformula_cpasync_commit();
     }
 
-    // Keep only one column's ordinary values live at a time. Compared with the
-    // 30-request overlap-local mode this deliberately trades some peak MLP for a
-    // much shorter register live range, which can admit more resident warps.
+    // Keep only A's ordinary values live. Before waiting on cross A, prefetch B's
+    // ordinary rows into L2. This restores ~30-request-class MLP (14 cross async
+    // + up to 8 A loads + up to 8 B prefetches) without carrying B's 8 values in
+    // registers during A reduction.
     BkczCrossAccum a0=0,a1=0,a2=0,a3=0,a4=0,a5=0,a6=0,a7=0;
     if constexpr (BKCZ_MAX_LOCAL > 0) if (c.local_n > 0) a0=__ldg(c.local_base[0]+lr0);
     if constexpr (BKCZ_MAX_LOCAL > 1) if (c.local_n > 1) a1=__ldg(c.local_base[1]+lr0);
@@ -89,6 +94,15 @@ p10dc_direct_resolved_high_plan_sum_pair_overlap_local_pipe2(
     if constexpr (BKCZ_MAX_LOCAL > 5) if (c.local_n > 5) a5=__ldg(c.local_base[5]+lr0);
     if constexpr (BKCZ_MAX_LOCAL > 6) if (c.local_n > 6) a6=__ldg(c.local_base[6]+lr0);
     if constexpr (BKCZ_MAX_LOCAL > 7) if (c.local_n > 7) a7=__ldg(c.local_base[7]+lr0);
+
+    if constexpr (BKCZ_MAX_LOCAL > 0) if (c.local_n > 0) p10dc_overlap_local_prefetch_l2(c.local_base[0]+lr1);
+    if constexpr (BKCZ_MAX_LOCAL > 1) if (c.local_n > 1) p10dc_overlap_local_prefetch_l2(c.local_base[1]+lr1);
+    if constexpr (BKCZ_MAX_LOCAL > 2) if (c.local_n > 2) p10dc_overlap_local_prefetch_l2(c.local_base[2]+lr1);
+    if constexpr (BKCZ_MAX_LOCAL > 3) if (c.local_n > 3) p10dc_overlap_local_prefetch_l2(c.local_base[3]+lr1);
+    if constexpr (BKCZ_MAX_LOCAL > 4) if (c.local_n > 4) p10dc_overlap_local_prefetch_l2(c.local_base[4]+lr1);
+    if constexpr (BKCZ_MAX_LOCAL > 5) if (c.local_n > 5) p10dc_overlap_local_prefetch_l2(c.local_base[5]+lr1);
+    if constexpr (BKCZ_MAX_LOCAL > 6) if (c.local_n > 6) p10dc_overlap_local_prefetch_l2(c.local_base[6]+lr1);
+    if constexpr (BKCZ_MAX_LOCAL > 7) if (c.local_n > 7) p10dc_overlap_local_prefetch_l2(c.local_base[7]+lr1);
 
     if (have_cross) p10dc_overlap_local_wait_one_pending();
 
