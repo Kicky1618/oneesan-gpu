@@ -8,15 +8,24 @@
 #ifndef P10DC_RANKFORMULA_DIRECTGATHER_FORCE7
 #define P10DC_RANKFORMULA_DIRECTGATHER_FORCE7 0
 #endif
+#ifndef P10DC_RANKFORMULA_MLP_WINDOW4
+#define P10DC_RANKFORMULA_MLP_WINDOW4 0
+#endif
 static_assert(P10DC_RANKFORMULA_DIRECTGATHER == 0 ||
               P10DC_RANKFORMULA_DIRECTGATHER == 1,
               "P10DC_RANKFORMULA_DIRECTGATHER must be 0 or 1");
 static_assert(P10DC_RANKFORMULA_DIRECTGATHER_FORCE7 == 0 ||
               P10DC_RANKFORMULA_DIRECTGATHER_FORCE7 == 1,
               "P10DC_RANKFORMULA_DIRECTGATHER_FORCE7 must be 0 or 1");
+static_assert(P10DC_RANKFORMULA_MLP_WINDOW4 == 0 ||
+              P10DC_RANKFORMULA_MLP_WINDOW4 == 1,
+              "P10DC_RANKFORMULA_MLP_WINDOW4 must be 0 or 1");
 static_assert(!P10DC_RANKFORMULA_DIRECTGATHER_FORCE7 ||
               P10DC_RANKFORMULA_DIRECTGATHER,
               "FORCE7 requires direct gather");
+static_assert(!(P10DC_RANKFORMULA_DIRECTGATHER_FORCE7 &&
+                P10DC_RANKFORMULA_MLP_WINDOW4),
+              "FORCE7 and WINDOW4 are intentionally isolated A/B modes");
 #if P10DC_RANKFORMULA_DIRECTGATHER
 static_assert(P10DC_RANKFORMULA_NOMETA_GROUP61,
               "direct gather currently targets GROUP61");
@@ -66,6 +75,27 @@ p10dc_resolved_low_preimages_cross5_rankformula_nometa4_abstract_mlp_fixed(
     const uint32_t r4 = d.z & 0xffffu, r5 = d.z >> 16;
     const uint32_t r6 = d.w & 0xffffu;
 
+#if P10DC_RANKFORMULA_MLP_WINDOW4
+    // Keep only four source values live at a time.  The full-width version can
+    // expose seven independent reads, but together with the eight ordinary
+    // source rows it can become register/occupancy limited on large Blackwell.
+    BkczCrossAccum v0 = 0, v1 = 0, v2 = 0, v3 = 0;
+    if (count > 0) v0 = BkczCrossAccum(__ldg(source_row + r0));
+    if (count > 1) v1 = BkczCrossAccum(__ldg(source_row + r1));
+    if (count > 2) v2 = BkczCrossAccum(__ldg(source_row + r2));
+    if (count > 3) v3 = BkczCrossAccum(__ldg(source_row + r3));
+    const BkczCrossAccum s03 = p10dc_rankformula_accum_add(
+        p10dc_rankformula_accum_add(v0, v1),
+        p10dc_rankformula_accum_add(v2, v3));
+
+    BkczCrossAccum v4 = 0, v5 = 0, v6 = 0;
+    if (count > 4) v4 = BkczCrossAccum(__ldg(source_row + r4));
+    if (count > 5) v5 = BkczCrossAccum(__ldg(source_row + r5));
+    if (count > 6) v6 = BkczCrossAccum(__ldg(source_row + r6));
+    const BkczCrossAccum s46 = p10dc_rankformula_accum_add(
+        p10dc_rankformula_accum_add(v4, v5), v6);
+    return p10dc_rankformula_accum_add(s03, s46);
+#else
     BkczCrossAccum v0 = 0, v1 = 0, v2 = 0, v3 = 0;
     BkczCrossAccum v4 = 0, v5 = 0, v6 = 0;
 #if P10DC_RANKFORMULA_DIRECTGATHER_FORCE7
@@ -103,6 +133,7 @@ p10dc_resolved_low_preimages_cross5_rankformula_nometa4_abstract_mlp_fixed(
     return p10dc_rankformula_accum_add(
         p10dc_rankformula_accum_add(a01, a23),
         p10dc_rankformula_accum_add(a45, v6));
+#endif
 #else
     const auto z = p10dc_low_rankformula_nometa_resolve_active(h, rank);
     if (z.n <= h) return BkczCrossAccum(0);
