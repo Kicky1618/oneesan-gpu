@@ -31,7 +31,10 @@ if [[ "$CPASYNC_PAIR" == 1 ]]; then
   grep -q 'cp_async_remote_peer=OK exact=OK' "$LOGDIR/cpasync-peer.out" || exit 5
 fi
 
-COMMON=(N="$N" ARCH="$ARCH" ORBITCTA_FLAT=1 ORBITCTA_FLAT_CHUNK=1 DIRECTGATHER64=1 DIRECTGATHER_SPARSE64="$SPARSE64" DIRECTGATHER_SORT_RANKS=0 ORBITCTA_COL_ILP="$COL_ILP" PAIR_MLP="$PAIR_MLP" CPASYNC_PAIR="$CPASYNC_PAIR" QUAD_MLP=0 QUAD_OVERLAP_LOCAL=0 QUAD_LOCAL_DIRECT_MAX=0 RANKFORMULA_MLP_WINDOW4="$WINDOW4" PM_ACCUM="$PM_ACCUM" PRECTX_FORWARD=1 PRECTX_REVERSE=1 PRECTX_COMPACT=1 PTXAS_VERBOSE="$PTXAS_VERBOSE")
+# Isolate the bid-cache bundle. The candidate intentionally includes both
+# zero-search bid lookup and the specialized no-depthcode-decode prectx hot
+# path. Context-load fusion is held at zero and benchmarked separately.
+COMMON=(N="$N" ARCH="$ARCH" ORBITCTA_FLAT=1 ORBITCTA_FLAT_CHUNK=1 DIRECTGATHER64=1 DIRECTGATHER_SPARSE64="$SPARSE64" DIRECTGATHER_SORT_RANKS=0 ORBITCTA_COL_ILP="$COL_ILP" PAIR_MLP="$PAIR_MLP" CPASYNC_PAIR="$CPASYNC_PAIR" QUAD_MLP=0 QUAD_OVERLAP_LOCAL=0 QUAD_LOCAL_DIRECT_MAX=0 RANKFORMULA_MLP_WINDOW4="$WINDOW4" PM_ACCUM="$PM_ACCUM" PRECTX_FORWARD=1 PRECTX_REVERSE=1 PRECTX_COMPACT=1 PRECTX_FLAT_BID_FUSED=0 PTXAS_VERBOSE="$PTXAS_VERBOSE")
 BASE_BIN="$ONEESAN_BUILD_DIR/b300_flat_prectx_bid0_n${N}"; CAND_BIN="$ONEESAN_BUILD_DIR/b300_flat_prectx_bid1_n${N}"
 env "${COMMON[@]}" PRECTX_FLAT_BID=0 OUT="$BASE_BIN" bash "$ONEESAN_ROOT/scripts/build/b300-directgather-orbitcta.sh" >"$LOGDIR/base.build.out" 2>"$LOGDIR/base.build.err"
 env "${COMMON[@]}" PRECTX_FLAT_BID=1 OUT="$CAND_BIN" bash "$ONEESAN_ROOT/scripts/build/b300-directgather-orbitcta.sh" >"$LOGDIR/cand.build.out" 2>"$LOGDIR/cand.build.err"
@@ -72,9 +75,9 @@ with open(summary,'w') as f:
  for k in ('wall_s','forward_high_s','reverse_high_s','high_s'): f.write(f'{k}\t{out["base"][k]}\t{out["cand"][k]}\t{out["base"][k]/out["cand"][k]}\n')
 winner_flag=1 if out['cand']['wall_s'] < out['base']['wall_s'] else 0
 with open(winner,'w') as f:
- f.write('ORBITCTA_FLAT=1\nORBITCTA_FLAT_CHUNK=1\nPRECTX_FORWARD=1\nPRECTX_REVERSE=1\nPRECTX_COMPACT=1\n')
+ f.write('ORBITCTA_FLAT=1\nORBITCTA_FLAT_CHUNK=1\nPRECTX_FORWARD=1\nPRECTX_REVERSE=1\nPRECTX_COMPACT=1\nPRECTX_FLAT_BID_FUSED=0\nQUAD_MLP=0\nQUAD_OVERLAP_LOCAL=0\nQUAD_LOCAL_DIRECT_MAX=0\n')
  f.write(f'PRECTX_FLAT_BID={winner_flag}\n')
-print(f"PRECTX_FLAT_BID wall_speedup={out['base']['wall_s']/out['cand']['wall_s']:.6f} high_speedup={out['base']['high_s']/out['cand']['high_s']:.6f} fh_speedup={out['base']['forward_high_s']/out['cand']['forward_high_s']:.6f} rh_speedup={out['base']['reverse_high_s']/out['cand']['reverse_high_s']:.6f} winner={winner_flag}")
+print(f"PRECTX_FLAT_BID_BUNDLE wall_speedup={out['base']['wall_s']/out['cand']['wall_s']:.6f} high_speedup={out['base']['high_s']/out['cand']['high_s']:.6f} fh_speedup={out['base']['forward_high_s']/out['cand']['forward_high_s']:.6f} rh_speedup={out['base']['reverse_high_s']/out['cand']['reverse_high_s']:.6f} winner={winner_flag}")
 PY
 cat "$RESULT"
-echo "flat prectx-bid A/B OK result=$RESULT summary=$SUMMARY winner_env=$WINNER_ENV" >&2
+echo "flat prectx-bid bundle A/B OK result=$RESULT summary=$SUMMARY winner_env=$WINNER_ENV" >&2
