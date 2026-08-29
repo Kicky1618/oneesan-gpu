@@ -12,6 +12,7 @@ bash "$ONEESAN_ROOT/scripts/bench/rankformula-nometa-group64-selfindex-proof.sh"
 bash "$ONEESAN_ROOT/scripts/bench/rankformula-nometa-group56-proof.sh"
 bash "$ONEESAN_ROOT/scripts/bench/rankformula-nometa-group56-coop-proof.sh"
 bash "$ONEESAN_ROOT/scripts/bench/rankformula-nometa-group61-proof.sh"
+bash "$ONEESAN_ROOT/scripts/bench/rankformula-nometa-group61-coop-proof.sh"
 bash "$ONEESAN_ROOT/scripts/bench/rankformula-nometa-warpshare-proof.sh"
 bash "$ONEESAN_ROOT/scripts/bench/rankformula-nometa-coopgroup-proof.sh"
 bash "$ONEESAN_ROOT/scripts/bench/rankformula-abstract-lut-proof.sh"
@@ -60,4 +61,4 @@ if [[ "$RUN_BUILD_SMOKE" == 1 ]]; then
     bash "$ONEESAN_ROOT/scripts/build/b300-bucket-snake-pattern10-depthcode-rankformula-nometa4-abstract.sh"
 fi
 
-echo "rankformula-nometa4-abstract-preflight OK w=$W n=$N metadata_bytes_per_code=0 exact_modes=b4_scalar,b8_scalar,b8_warpshare,b8_coopgroup,b16_coop_unrolled,b16_coop_rolled,b16_coop_rolled_select8,b16_coop_rolled_select8_srcpack10,b16_coop_rolled_depth4_srcpack10,b16_group56_compact,b16_group61_compact packed_group64_bits=59 group56_pack_bits=56 group61_pack_bits=61 group61_direct_end=1 group61_direct_source_base=1 group61_max_end=30114 group61_max_source_base=29113 support_positions_runtime=0 b16_aux_bytes_all=707406 b16_coopgroup_table_loads_model=215509 b16_avg_early_ballots=2.251382 base_abstract_lut_bytes=94206 depth4_srcpack10_lut_bytes=86058 group56_device_lut_bytes=85578 group61_layout_stage_device_lut_bytes=86058 compact_e2e_proof=1 compact_production_selected=2492769 depth14_15_fast_zero=1 ballot_runtime_loads=0 build_smoke_b16_rolled_group61=$RUN_BUILD_SMOKE" >&2
+echo "rankformula-nometa4-abstract-preflight OK w=$W n=$N metadata_bytes_per_code=0 exact_modes=b4_scalar,b8_scalar,b8_warpshare,b8_coopgroup,b16_coop_unrolled,b16_coop_rolled,b16_coop_rolled_select8,b16_coop_rolled_select8_srcpack10,b16_coop_rolled_depth4_srcpack10,b16_group56_compact,b16_group61_compact packed_group64_bits=59 group56_pack_bits=56 group61_pack_bits=61 group61_direct_end=1 group61_direct_source_base=1 group61_max_end=30114 group61_max_source_base=29113 group61_coop_exact=1201917 group61_coop_successor_loads=65159 support_positions_runtime=0 b16_aux_bytes_all=707406 b16_coopgroup_table_loads_model=215509 b16_avg_early_ballots=2.251382 base_abstract_lut_bytes=94206 depth4_srcpack10_lut_bytes=86058 group56_device_lut_bytes=85578 group61_layout_stage_device_lut_bytes=86058 compact_e2e_proof=1 compact_production_selected=2492769 depth14_15_fast_zero=1 ballot_runtime_loads=0 build_smoke_b16_rolled_group61=$RUN_BUILD_SMOKE" >&2
