@@ -112,12 +112,11 @@ FINAL_STAGE_ENV=""
 if [[ "$B300_MAINREC_HYBRID_WINNER_MODE" == hybrid ]]; then
   SELECTED_THRESHOLD="$B300_MAINREC_HYBRID_WINNER_THRESHOLD"
   SELECTED_THREADS="$B300_MAINREC_HYBRID_WINNER_THREADS"
-  python3 - "$B300_MAINREC_HYBRID_SPEEDUP_VS_ILP2" "$MIN_SPEEDUP" <<'PY'
+  if python3 - "$B300_MAINREC_HYBRID_SPEEDUP_VS_ILP2" "$MIN_SPEEDUP" <<'PY'
 import sys
-if float(sys.argv[1]) < float(sys.argv[2]): raise SystemExit(1)
+raise SystemExit(0 if float(sys.argv[1]) >= float(sys.argv[2]) else 1)
 PY
-  search_speed_ok=$?
-  if (( search_speed_ok == 0 )); then
+  then
     VALIDATED=1
     stage_i=0
     for rows in $VALIDATE_ROWS; do
@@ -138,7 +137,11 @@ PY
         break
       fi
     done
+  else
+    echo "search winner failed MIN_SPEEDUP=$MIN_SPEEDUP; falling back to ILP2 without error" >&2
   fi
+else
+  echo 'search selected ILP2 baseline; hybrid staged validation skipped' >&2
 fi
 
 if [[ "$VALIDATED" == 1 && -n "$FINAL_STAGE_ENV" ]]; then
