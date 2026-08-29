@@ -35,6 +35,14 @@ static_assert(P10DC_RANKFORMULA_DIRECTGATHER_SPARSE64,
 struct P10DCDirectGatherQuadPrimary {
     P10DCDirectGather64Word p0=0,p1=0,p2=0,p3=0;
 };
+struct P10DCDirectGatherQuadRare {
+    P10DCDirectGather64Word q0=0,q1=0,q2=0,q3=0;
+};
+
+__device__ __forceinline__ uint32_t
+p10dc_rankformula_qol_directgather64_count(P10DCDirectGather64Word p) {
+    return uint32_t((p>>45)&7u);
+}
 
 __device__ __forceinline__ P10DCDirectGather64Word
 p10dc_rankformula_qol_directgather64_primary_at(size_t gi) {
@@ -64,8 +72,9 @@ p10dc_rankformula_qol_directgather64_quad_primary(
     const size_t gi3=p10dc_rankformula_directgather_index(h,rank3,depth);
     P10DCDirectGatherQuadPrimary z{};
 #if P10DC_RANKFORMULA_DIRECTGATHER_SPARSE64 && P10DC_RANKFORMULA_QUAD_SPARSE_DESC_MLP
-    // Preserve four-column descriptor MLP without reviving the old 28-rank
-    // register footprint. First put all four sparse index words in flight.
+    // Four sparse index words are independent. Put them all in flight before
+    // computing compact descriptor indices; this restores descriptor MLP while
+    // keeping only packed words rather than 28 decoded ranks live.
     const size_t wi0=gi0>>5,wi1=gi1>>5,wi2=gi2>>5,wi3=gi3>>5;
     const uint32_t bit0=uint32_t(gi0)&31u,bit1=uint32_t(gi1)&31u;
     const uint32_t bit2=uint32_t(gi2)&31u,bit3=uint32_t(gi3)&31u;
@@ -85,8 +94,6 @@ p10dc_rankformula_qol_directgather64_quad_primary(
     if(hit2){const uint32_t lo=bit2?(bits2&(flag2-1u)):0u;ci2=uint32_t(ix2>>32)+uint32_t(__popc(lo));}
     if(hit3){const uint32_t lo=bit3?(bits3&(flag3-1u)):0u;ci3=uint32_t(ix3>>32)+uint32_t(__popc(lo));}
 
-    // Compact primary loads are also independent. Keep them adjacent so the
-    // compiler can overlap the four memory dependencies before rank decode.
     if(hit0) z.p0=__ldg(D_P10DC_RANKFORMULA_DIRECTGATHER_SPARSE64_PRIMARY+ci0);
     if(hit1) z.p1=__ldg(D_P10DC_RANKFORMULA_DIRECTGATHER_SPARSE64_PRIMARY+ci1);
     if(hit2) z.p2=__ldg(D_P10DC_RANKFORMULA_DIRECTGATHER_SPARSE64_PRIMARY+ci2);
@@ -100,28 +107,37 @@ p10dc_rankformula_qol_directgather64_quad_primary(
     return z;
 }
 
-__device__ __forceinline__ uint32_t
-p10dc_rankformula_qol_directgather64_count(P10DCDirectGather64Word p) {
-    return uint32_t((p>>45)&7u);
+#if P10DC_RANKFORMULA_DIRECTGATHER_SPARSE64 && P10DC_RANKFORMULA_QUAD_SPARSE_DESC_MLP
+__device__ __forceinline__ P10DCDirectGatherQuadRare
+p10dc_rankformula_qol_directgather64_quad_rare(
+    const P10DCDirectGatherQuadPrimary& p
+) {
+    P10DCDirectGatherQuadRare z{};
+    // Rare descriptor requests have no dependency on one another once the four
+    // primary words have arrived. Issue them as a quartet before source decode.
+    if(p10dc_rankformula_qol_directgather64_count(p.p0)>3u)
+        z.q0=__ldg(D_P10DC_RANKFORMULA_DIRECTGATHER_SPARSE64_RARE+uint32_t(p.p0>>48));
+    if(p10dc_rankformula_qol_directgather64_count(p.p1)>3u)
+        z.q1=__ldg(D_P10DC_RANKFORMULA_DIRECTGATHER_SPARSE64_RARE+uint32_t(p.p1>>48));
+    if(p10dc_rankformula_qol_directgather64_count(p.p2)>3u)
+        z.q2=__ldg(D_P10DC_RANKFORMULA_DIRECTGATHER_SPARSE64_RARE+uint32_t(p.p2>>48));
+    if(p10dc_rankformula_qol_directgather64_count(p.p3)>3u)
+        z.q3=__ldg(D_P10DC_RANKFORMULA_DIRECTGATHER_SPARSE64_RARE+uint32_t(p.p3>>48));
+    return z;
 }
+#endif
 
 __device__ __forceinline__ void
-p10dc_rankformula_quad_issue_primary_group(
-    P10DCDirectGather64Word p,uint32_t slot,const Count* source_row
+p10dc_rankformula_quad_issue_group_preloaded(
+    P10DCDirectGather64Word p,P10DCDirectGather64Word q,
+    uint32_t slot,const Count* source_row
 ) {
     const uint32_t n=p10dc_rankformula_qol_directgather64_count(p);
-    uint32_t r0=uint32_t(p&0x7fffu);
-    uint32_t r1=uint32_t((p>>15)&0x7fffu);
-    uint32_t r2=uint32_t((p>>30)&0x7fffu);
+    const uint32_t r0=uint32_t(p&0x7fffu);
+    const uint32_t r1=uint32_t((p>>15)&0x7fffu);
+    const uint32_t r2=uint32_t((p>>30)&0x7fffu);
     uint32_t r3=0,r4=0,r5=0,r6=0;
     if(n>3u){
-#if P10DC_RANKFORMULA_DIRECTGATHER_SPARSE64
-        const P10DCDirectGather64Word q=__ldg(
-            D_P10DC_RANKFORMULA_DIRECTGATHER_SPARSE64_RARE+uint32_t(p>>48));
-#else
-        const P10DCDirectGather64Word q=__ldg(
-            D_P10DC_RANKFORMULA_DIRECTGATHER64_RARE+uint32_t(p>>48));
-#endif
         r3=uint32_t(q&0x7fffu);r4=uint32_t((q>>15)&0x7fffu);
         r5=uint32_t((q>>30)&0x7fffu);r6=uint32_t((q>>45)&0x7fffu);
     }
@@ -134,6 +150,21 @@ p10dc_rankformula_quad_issue_primary_group(
     P10DC_QO_ISSUE(6,r6,6);
 #undef P10DC_QO_ISSUE
     p10dc_rankformula_cpasync_commit();
+}
+
+__device__ __forceinline__ void
+p10dc_rankformula_quad_issue_primary_group(
+    P10DCDirectGather64Word p,uint32_t slot,const Count* source_row
+) {
+    P10DCDirectGather64Word q=0;
+    if(p10dc_rankformula_qol_directgather64_count(p)>3u){
+#if P10DC_RANKFORMULA_DIRECTGATHER_SPARSE64
+        q=__ldg(D_P10DC_RANKFORMULA_DIRECTGATHER_SPARSE64_RARE+uint32_t(p>>48));
+#else
+        q=__ldg(D_P10DC_RANKFORMULA_DIRECTGATHER64_RARE+uint32_t(p>>48));
+#endif
+    }
+    p10dc_rankformula_quad_issue_group_preloaded(p,q,slot,source_row);
 }
 
 __device__ __forceinline__ BkczCrossAccum
@@ -168,13 +199,19 @@ p10dc_direct_resolved_high_plan_sum_quad_overlap_local(
         p10dc_rankformula_qol_directgather64_count(p.p2)|
         p10dc_rankformula_qol_directgather64_count(p.p3);
     if(any){
-        // Decode one packed descriptor at a time and immediately launch its
-        // source group. Rank temporaries die before the next column is decoded;
-        // the source requests remain outstanding in the async pipeline.
+#if P10DC_RANKFORMULA_DIRECTGATHER_SPARSE64 && P10DC_RANKFORMULA_QUAD_SPARSE_DESC_MLP
+        const P10DCDirectGatherQuadRare q=p10dc_rankformula_qol_directgather64_quad_rare(p);
+        p10dc_rankformula_quad_issue_group_preloaded(p.p0,q.q0,0,c.cross_base);
+        p10dc_rankformula_quad_issue_group_preloaded(p.p1,q.q1,7,c.cross_base);
+        p10dc_rankformula_quad_issue_group_preloaded(p.p2,q.q2,14,c.cross_base);
+        p10dc_rankformula_quad_issue_group_preloaded(p.p3,q.q3,21,c.cross_base);
+#else
+        // Baseline keeps rare-descriptor fetch and rank decode column-local.
         p10dc_rankformula_quad_issue_primary_group(p.p0,0,c.cross_base);
         p10dc_rankformula_quad_issue_primary_group(p.p1,7,c.cross_base);
         p10dc_rankformula_quad_issue_primary_group(p.p2,14,c.cross_base);
         p10dc_rankformula_quad_issue_primary_group(p.p3,21,c.cross_base);
+#endif
     }
 
     // Hide CROSS latency with ordinary local-source work. The register helper
