@@ -17,7 +17,6 @@ for b in $BATCH_LIST;do [[ "$b" == 2 || "$b" == 4 ]]||{ echo 'BATCH_LIST support
 command -v nvcc >/dev/null||{ echo 'nvcc required' >&2;exit 2; };command -v nvidia-smi >/dev/null||{ echo 'nvidia-smi required' >&2;exit 2; }
 (( $(nvidia-smi --query-gpu=index --format=csv,noheader|wc -l)>=GPUS ))||{ echo 'need 8 visible GPUs' >&2;exit 2; }
 
-# Build the proof-gated production source only once, with no post-transform.
 BASE_BIN="$ONEESAN_BUILD_DIR/b300_mainrec_combo_base_hd${HIGH_DROP_CHUNK}_n27";BASE_OUT="$LOGDIR/base.build.out";BASE_ERR="$LOGDIR/base.build.err"
 echo "=== combo source build MAIN_RECURRENCE highdrop=$HIGH_DROP_CHUNK ===" >&2
 N=27 ARCH="$ARCH" OUT="$BASE_BIN" HIGH_DROP_CHUNK="$HIGH_DROP_CHUNK" DUALMASK=0 BUILD_ERR="$BASE_ERR" CALIBRATED_BUILD_DIR="$ISO/basechain" PTXAS_VERBOSE=1 \
@@ -32,7 +31,16 @@ DUAL_BATCH_SRC="$ISO/dual_batch.cu";python3 "$ONEESAN_ROOT/scripts/build/gen-b30
 grep -Fq 'b300_block_endpoint_masks(d)' "$DUAL_SRC";grep -Fq 'B300_BLOCK_CLOSURE_BATCH' "$BATCH_SRC";grep -Fq 'b300_block_endpoint_masks(d)' "$DUAL_BATCH_SRC";grep -Fq 'B300_BLOCK_CLOSURE_BATCH' "$DUAL_BATCH_SRC"
 
 : >"$LOGDIR/variants.tsv";printf 'base\t0\t0\t%s\t%s\n' "$BASE_BIN" "$BASE_ERR" >>"$LOGDIR/variants.tsv"
-compile_one(){ local mode="$1" dual="$2" batch="$3" src="$4" bin="$ONEESAN_BUILD_DIR/b300_mainrec_combo_${mode}_hd${HIGH_DROP_CHUNK}_n27" err="$LOGDIR/$mode.build.err";echo "=== compile $mode dual=$dual batch=$batch ===" >&2;local defs=();((batch))&&defs+=("-DB300_BLOCK_CLOSURE_BATCH=$batch");TMPDIR="$ISO/tmp" nvcc -O3 -std=c++17 -lineinfo -arch="$ARCH" -Xptxas=-v -DTARGET_W=28 -DLOW_LUT_K=14 -DHIGH_LUT_K=13 "${defs[@]}" "$src" -o "$bin" >"$LOGDIR/$mode.build.out" 2>"$err";[[ -x "$bin" ]]||{ echo "missing $mode binary" >&2;exit 3; };printf '%s\t%s\t%s\t%s\t%s\n' "$mode" "$dual" "$batch" "$bin" "$err" >>"$LOGDIR/variants.tsv"; }
+compile_one(){
+ local mode="$1" dual="$2" batch="$3" src="$4"
+ local bin="$ONEESAN_BUILD_DIR/b300_mainrec_combo_${mode}_hd${HIGH_DROP_CHUNK}_n27"
+ local err="$LOGDIR/$mode.build.err"
+ echo "=== compile $mode dual=$dual batch=$batch ===" >&2
+ local defs=();((batch))&&defs+=("-DB300_BLOCK_CLOSURE_BATCH=$batch")
+ TMPDIR="$ISO/tmp" nvcc -O3 -std=c++17 -lineinfo -arch="$ARCH" -Xptxas=-v -DTARGET_W=28 -DLOW_LUT_K=14 -DHIGH_LUT_K=13 "${defs[@]}" "$src" -o "$bin" >"$LOGDIR/$mode.build.out" 2>"$err"
+ [[ -x "$bin" ]]||{ echo "missing $mode binary" >&2;exit 3; }
+ printf '%s\t%s\t%s\t%s\t%s\n' "$mode" "$dual" "$batch" "$bin" "$err" >>"$LOGDIR/variants.tsv"
+}
 compile_one dual 1 0 "$DUAL_SRC"
 for b in $BATCH_LIST;do compile_one "batch${b}" 0 "$b" "$BATCH_SRC";compile_one "dual_batch${b}" 1 "$b" "$DUAL_BATCH_SRC";done
 
@@ -53,7 +61,17 @@ print(f'{a(mem):.6f} {max(mem) if mem else float("nan"):.6f} {a(busy):.6f} {a(sm
 PY
 }
 printf 'mode\tdualmask\tclosure_batch\tthreads\trepeat\tresidue\twall_s\tmem_avg_pct\tmem_max_pct\tmem_busy_avg_pct\tsm_avg_pct\tpower_avg_w\tsamples\n' >"$RESULT"
-run_one(){ local mode="$1" dual="$2" batch="$3" bin="$4" t="$5" rep="$6" tag="${mode}_t${t}_r${rep}" out="$LOGDIR/$tag.out" err="$LOGDIR/$tag.err" tele="$LOGDIR/$tag.gpu.csv";nvidia-smi --query-gpu=timestamp,index,utilization.gpu,utilization.memory,power.draw --format=csv,noheader,nounits -lms 200 >"$tele" 2>/dev/null&local mon=$!;sleep 1;set +e;B300_ROW_LIMIT="$ROWS" GRIDFP_THREADS="$t" "$bin" 27 "$TARGET_MIB" "$MAX_WINDOW" 8 "$MOD" >"$out" 2>"$err";local rc=$?;set -e;kill "$mon" 2>/dev/null||true;wait "$mon" 2>/dev/null||true;((rc==0))||{ echo "$tag failed rc=$rc" >&2;tail -n 140 "$err" >&2||true;return "$rc"; };local line="$(grep '^backend=gridfp-b300-hbm32-forced2window-opt-batch ' "$out"|tail -n1||true)";[[ -n "$line" ]]||return 4;grep -Fq " rows=$ROWS calibration=$((ROWS<28?1:0)) "<<<"$line"||return 5;local stats="$(summarize "$tele")";printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' "$mode" "$dual" "$batch" "$t" "$rep" "$(field residue "$line")" "$(field wall_s "$line")" "$stats" >>"$RESULT"; }
+run_one(){
+ local mode="$1" dual="$2" batch="$3" bin="$4" t="$5" rep="$6"
+ local tag="${mode}_t${t}_r${rep}"
+ local out="$LOGDIR/$tag.out" err="$LOGDIR/$tag.err" tele="$LOGDIR/$tag.gpu.csv"
+ nvidia-smi --query-gpu=timestamp,index,utilization.gpu,utilization.memory,power.draw --format=csv,noheader,nounits -lms 200 >"$tele" 2>/dev/null&local mon=$!;sleep 1;set +e
+ B300_ROW_LIMIT="$ROWS" GRIDFP_THREADS="$t" "$bin" 27 "$TARGET_MIB" "$MAX_WINDOW" 8 "$MOD" >"$out" 2>"$err";local rc=$?;set -e
+ kill "$mon" 2>/dev/null||true;wait "$mon" 2>/dev/null||true
+ ((rc==0))||{ echo "$tag failed rc=$rc" >&2;tail -n 140 "$err" >&2||true;return "$rc"; }
+ local line="$(grep '^backend=gridfp-b300-hbm32-forced2window-opt-batch ' "$out"|tail -n1||true)";[[ -n "$line" ]]||return 4;grep -Fq " rows=$ROWS calibration=$((ROWS<28?1:0)) "<<<"$line"||return 5
+ local stats="$(summarize "$tele")";printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' "$mode" "$dual" "$batch" "$t" "$rep" "$(field residue "$line")" "$(field wall_s "$line")" "$stats" >>"$RESULT"
+}
 for t in $THREADS_LIST;do [[ "$t" =~ ^[0-9]+$ ]]&&((t>=32&&t<=1024&&t%32==0))||{ echo "bad threads=$t" >&2;exit 2; };for((r=1;r<=REPEATS;++r));do mapfile -t vv <"$LOGDIR/variants.tsv";if((!(r&1)));then mapfile -t vv < <(tac "$LOGDIR/variants.tsv");fi;for x in "${vv[@]}";do IFS=$'\t' read -r m d b bin _<<<"$x";run_one "$m" "$d" "$b" "$bin" "$t" "$r";done;done;done
 
 python3 - "$RESULT" <<'PY'
