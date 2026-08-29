@@ -41,14 +41,15 @@ for s in \
   'steady_state_orbit_barriers='; do
   grep -Fq "$s" "$graph" || { echo "missing pipe2 graph marker: $s" >&2; exit 3; }
 done
-for s in \
-  'PIPE2_PATCH_ONLY' \
-  'P10DC_ORBITCTA_FLAT_DYNAMIC_FUSE_LEASE_PREP' \
-  'P10DC_ORBITCTA_FLAT_DYNAMIC_PIPE2=1' \
-  'dynamic_pipe2=1'; do
-  grep -Fq "$s" "$build" || { echo "missing pipe2 build wrapper marker: $s" >&2; exit 3; }
+for s in 'PIPE2_PATCH_ONLY' 'ORBITCTA_FLAT_DYNAMIC_FUSE_LEASE_PREP=0' 'ORBITCTA_FLAT_DYNAMIC_PIPE2=1' 'native pipe2 nvcc macro missing'; do
+  grep -Fq "$s" "$build" || { echo "missing pipe2 convenience wrapper marker: $s" >&2; exit 3; }
 done
-grep -Fq 'P10DC_ORBITCTA_FLAT_DYNAMIC_FUSE_LEASE_PREP' "$base" || { echo 'base build no longer has lease-prep macro anchor' >&2; exit 3; }
+for s in \
+  'ORBITCTA_FLAT_DYNAMIC_PIPE2="${ORBITCTA_FLAT_DYNAMIC_PIPE2:-0}"' \
+  '-DP10DC_ORBITCTA_FLAT_DYNAMIC_PIPE2="$ORBITCTA_FLAT_DYNAMIC_PIPE2"' \
+  'flat_dynamic_pipe2=$ORBITCTA_FLAT_DYNAMIC_PIPE2'; do
+  grep -Fq -- "$s" "$base" || { echo "missing native pipe2 build wiring: $s" >&2; exit 3; }
+done
 
 # Structural correctness: pipe2 must distinguish a skipped prepared orbit from
 # queue exhaustion. The original c.valid-as-sentinel prototype was incorrect.
