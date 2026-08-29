@@ -7,8 +7,17 @@ N="${1:-27}";if (($#>0));then shift;fi
 FORCED_OVERRIDE_BIN="${FORCED_OVERRIDE_BIN:-}"
 FORCED_OVERRIDE_LABEL="${FORCED_OVERRIDE_LABEL:-external_forced}"
 FORCED_OVERRIDE_THREADS="${FORCED_OVERRIDE_THREADS:-256}"
+FORCED_BASE_BIN="${FORCED_BASE_BIN:-}"
+FORCED_BASE_LABEL="${FORCED_BASE_LABEL:-external_forced_base}"
+FORCED_BASE_THREADS="${FORCED_BASE_THREADS:-256}"
 [[ -n "$FORCED_OVERRIDE_BIN" && -x "$FORCED_OVERRIDE_BIN" ]]||{ echo 'FORCED_OVERRIDE_BIN must name an executable binary' >&2;exit 2; }
 [[ "$FORCED_OVERRIDE_THREADS" =~ ^[0-9]+$ ]]&&((FORCED_OVERRIDE_THREADS>=32&&FORCED_OVERRIDE_THREADS<=1024&&FORCED_OVERRIDE_THREADS%32==0))||{ echo 'FORCED_OVERRIDE_THREADS must be warp multiple 32..1024' >&2;exit 2; }
+HAS_FORCED_BASE=0
+if [[ -n "$FORCED_BASE_BIN" && "$FORCED_BASE_BIN" != "$FORCED_OVERRIDE_BIN" ]];then
+  [[ -x "$FORCED_BASE_BIN" ]]||{ echo 'FORCED_BASE_BIN must name an executable binary when supplied' >&2;exit 2; }
+  [[ "$FORCED_BASE_THREADS" =~ ^[0-9]+$ ]]&&((FORCED_BASE_THREADS>=32&&FORCED_BASE_THREADS<=1024&&FORCED_BASE_THREADS%32==0))||{ echo 'FORCED_BASE_THREADS must be warp multiple 32..1024' >&2;exit 2; }
+  HAS_FORCED_BASE=1
+fi
 
 PROFILE_FILE="${PROFILE_FILE:-$ONEESAN_ROOT/work/b300_hbm_profile_refined21.env}"
 [[ -f "$PROFILE_FILE" ]]||{ echo "missing profile file: $PROFILE_FILE" >&2;exit 2; }
@@ -68,14 +77,15 @@ PY
 printf 'backend\tprofile\tbinary\tstatus\tresidue\twall_s\tmc_avg_pct\tmc_max_pct\tmc_samples\n' >"$RESULT"
 
 smoke_forced(){
- local so="$LOGDIR/forced.out" se="$LOGDIR/forced.err" dm="$LOGDIR/forced.dmon"
+ local slot="$1" label="$2" bin="$3" threads="$4"
+ local so="$LOGDIR/${slot}.out" se="$LOGDIR/${slot}.err" dm="$LOGDIR/${slot}.dmon"
  nvidia-smi dmon -s u -d 1 >"$dm" 2>/dev/null&local dp=$!;set +e
- GRIDFP_THREADS="$FORCED_OVERRIDE_THREADS" "$FORCED_OVERRIDE_BIN" 27 "$FORCED_TARGET_MIB" "$MAX_WINDOW" 8 "$PRIME" >"$so" 2>"$se";local rc=$?;set -e
+ GRIDFP_THREADS="$threads" "$bin" 27 "$FORCED_TARGET_MIB" "$MAX_WINDOW" 8 "$PRIME" >"$so" 2>"$se";local rc=$?;set -e
  kill "$dp" 2>/dev/null||true;wait "$dp" 2>/dev/null||true
- if((rc));then printf '%s\t%s\t%s\tfailed:%s\tNA\tNA\tNA\tNA\t0\n' "$FORCED_OVERRIDE_LABEL" "t$FORCED_OVERRIDE_THREADS" "$FORCED_OVERRIDE_BIN" "$rc">>"$RESULT";return;fi
- local line="$(grep '^backend=gridfp-b300-hbm32-forced2window-opt-batch ' "$so"|tail -n1||true)";[[ -n "$line" ]]||{ echo 'external forced result missing' >&2;exit 4; }
+ if((rc));then printf '%s\t%s\t%s\tfailed:%s\tNA\tNA\tNA\tNA\t0\n' "$label" "t$threads" "$bin" "$rc">>"$RESULT";return;fi
+ local line="$(grep '^backend=gridfp-b300-hbm32-forced2window-opt-batch ' "$so"|tail -n1||true)";[[ -n "$line" ]]||{ echo "$slot external forced result missing" >&2;exit 4; }
  local avg mx ns;IFS=$'\t' read -r avg mx ns<<<"$(sample_summary "$dm")"
- printf '%s\t%s\t%s\tok\t%s\t%s\t%s\t%s\t%s\n' "$FORCED_OVERRIDE_LABEL" "t$FORCED_OVERRIDE_THREADS" "$FORCED_OVERRIDE_BIN" "$(field residue "$line")" "$(field wall_s "$line")" "$avg" "$mx" "$ns">>"$RESULT"
+ printf '%s\t%s\t%s\tok\t%s\t%s\t%s\t%s\t%s\n' "$label" "t$threads" "$bin" "$(field residue "$line")" "$(field wall_s "$line")" "$avg" "$mx" "$ns">>"$RESULT"
 }
 smoke_bucket(){
  local so="$LOGDIR/bucket.out" se="$LOGDIR/bucket.err" dm="$LOGDIR/bucket.dmon"
@@ -95,11 +105,14 @@ smoke_bucket(){
 }
 
 echo '=== external forced race: same-session complete one-prime smoke ===' >&2
-smoke_forced;smoke_bucket
-WIN="$(python3 - "$RESULT" <<'PY'
+smoke_forced forced_primary "$FORCED_OVERRIDE_LABEL" "$FORCED_OVERRIDE_BIN" "$FORCED_OVERRIDE_THREADS"
+if [[ "$HAS_FORCED_BASE" == 1 ]];then smoke_forced forced_base "$FORCED_BASE_LABEL" "$FORCED_BASE_BIN" "$FORCED_BASE_THREADS";fi
+smoke_bucket
+EXPECTED_OK=$((2+HAS_FORCED_BASE))
+WIN="$(python3 - "$RESULT" "$EXPECTED_OK" <<'PY'
 import csv,sys
-r=list(csv.DictReader(open(sys.argv[1]),delimiter='\t'));ok=[x for x in r if x['status']=='ok']
-if len(ok)!=2:raise SystemExit('both external forced and bucket must smoke successfully')
+r=list(csv.DictReader(open(sys.argv[1]),delimiter='\t'));expected=int(sys.argv[2]);ok=[x for x in r if x['status']=='ok']
+if len(ok)!=expected:raise SystemExit(f'all {expected} external-forced/profiled candidates must smoke successfully; got {len(ok)}')
 res={x['residue'] for x in ok}
 if len(res)!=1:raise SystemExit('FATAL external-forced/profiled residue mismatch '+repr({x['backend']:x['residue'] for x in ok}))
 for x in sorted(ok,key=lambda z:float(z['wall_s'])):print('EXTERNAL_RACE',x['backend'],'profile='+x['profile'],'wall_s='+x['wall_s'],'mc_avg='+x['mc_avg_pct'],file=sys.stderr)
@@ -127,6 +140,7 @@ print(f'seeded {cp} cached_residues={len(res)}',file=sys.stderr)
 PY
 if [[ "$SELECT_ONLY" == 1 ]];then echo "SELECT_ONLY=1: selected $BEST/$BEST_PROFILE; CRT not continued" >&2;exit 0;fi
 if [[ "$BEST_BIN" == "$FORCED_OVERRIDE_BIN" ]];then export GRIDFP_THREADS="$FORCED_OVERRIDE_THREADS";RUN_TARGET="$FORCED_TARGET_MIB"
+elif [[ "$HAS_FORCED_BASE" == 1 && "$BEST_BIN" == "$FORCED_BASE_BIN" ]];then export GRIDFP_THREADS="$FORCED_BASE_THREADS";RUN_TARGET="$FORCED_TARGET_MIB"
 elif [[ "$BUCKET_BACKEND" == warp_tuned ]];then export BUCKET_THREADS="$THREADS" BUCKET_GRID_X="$WARP_GX" BUCKET_GRID_Y="$WARP_GY" BUCKET_LOW_GRID_X="$LOW_GX" BUCKET_LOW_GRID_Y="$LOW_GY";RUN_TARGET="$BUCKET_TARGET_MIB"
 else export BUCKET_THREADS="$THREADS" BUCKET_ORBITCTA_GRID_Y="$ORBIT_GY" BUCKET_GRID_X="$LOW_GX" BUCKET_GRID_Y="$LOW_GY" BUCKET_LOW_GRID_X="$LOW_GX" BUCKET_LOW_GRID_Y="$LOW_GY";unset BUCKET_ORBITCTA_FLAT_BLOCKS;if [[ "$ORBITCTA_FLAT" == 1 && "$ORBITCTA_FLAT_BLOCKS_PER_SM" != 0 ]];then export BUCKET_ORBITCTA_FLAT_BLOCKS_PER_SM="$ORBITCTA_FLAT_BLOCKS_PER_SM";else unset BUCKET_ORBITCTA_FLAT_BLOCKS_PER_SM;fi;RUN_TARGET="$BUCKET_TARGET_MIB";fi
 exec python3 "$ONEESAN_ROOT/scripts/solve/solve_b300_exact_batch.py" 27 --binary "$BEST_BIN" --target-mib "$RUN_TARGET" --max-window "$MAX_WINDOW" --gpus 8 --work-dir "$BEST_WORK" "$@"
