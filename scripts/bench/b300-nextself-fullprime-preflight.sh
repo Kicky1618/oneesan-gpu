@@ -3,7 +3,9 @@ set -euo pipefail
 source "$(dirname -- "${BASH_SOURCE[0]}")/../lib/common.sh"
 
 RUNNER="$ONEESAN_ROOT/scripts/run/b300x8-ilp8-nextself-staged-fullprime-race.sh"
+COMMON="$ONEESAN_ROOT/scripts/lib/common.sh"
 [[ -f "$RUNNER" ]] || { echo "missing runner=$RUNNER" >&2; exit 2; }
+[[ -f "$COMMON" ]] || { echo "missing common=$COMMON" >&2; exit 2; }
 bash -n "$RUNNER"
 
 for marker in \
@@ -74,20 +76,26 @@ EOF
 chmod +x "$CAPTURE"
 
 PATCHED="$tmp/runner.sh"
-python3 - "$RUNNER" "$PATCHED" "$CAPTURE" <<'PY'
+python3 - "$RUNNER" "$PATCHED" "$CAPTURE" "$COMMON" <<'PY'
 from pathlib import Path
-import sys
+import shlex,sys
 src=Path(sys.argv[1]).read_text()
 out=Path(sys.argv[2])
 capture=sys.argv[3]
+common=sys.argv[4]
+source_line='source "$(dirname -- "${BASH_SOURCE[0]}")/../lib/common.sh"'
+if src.count(source_line)!=1:
+    raise SystemExit(f'common source anchor expected once, got {src.count(source_line)}')
+src=src.replace(source_line,'source '+shlex.quote(common),1)
 needle='"$ONEESAN_ROOT/scripts/run/b300x8-race-external-forced-profiled-once.sh" 27 "$@"'
 if src.count(needle)!=1:
     raise SystemExit(f'external runner anchor expected once, got {src.count(needle)}')
-src=src.replace(needle,repr(capture)[1:-1]+' 27 "$@"',1)
+src=src.replace(needle,shlex.quote(capture)+' 27 "$@"',1)
 out.write_text(src)
 PY
 chmod +x "$PATCHED"
 bash -n "$PATCHED"
+grep -Fq "source $(printf '%q' "$COMMON")" "$PATCHED" || { echo 'patched runner common path mismatch' >&2; exit 3; }
 
 PROFILE_FILE="$PROFILE" RUN_STAGED=0 WINNER_ENV="$WINNER" RACE_PREFIX="$tmp/work/race" \
   GRIDFP_THREADS=256 GRIDFP_PLAN_TARGET_MIB=16384 MIN_SPEEDUP=1.01 \
