@@ -39,7 +39,8 @@ __global__ void bucket_high_orbit_closure_pattern10_depthcode_orbitcta_kernel(in
     if (bid >= D_BKF_MAIN_NBLOCKS) return;
     const uint32_t pi = uint32_t((TARGET_W - 1) - p);
     const uint32_t oi = uint32_t(size_t(pi) * D_BKF_HIGH_PITCH + bid);
-    __shared__ P10DC_ORBITCTA_CTX c;
+    extern __shared__ unsigned long long orbitcta_forward_storage[];
+    P10DC_ORBITCTA_CTX& c = *reinterpret_cast<P10DC_ORBITCTA_CTX*>(orbitcta_forward_storage);
 
     if (threadIdx.x == 0) {
         const uint32_t na = D_BKF_HIGH_NN_OFF[oi], nb = D_BKF_HIGH_NN_OFF[oi + 1];
@@ -125,7 +126,8 @@ __global__ void bucket_reverse_high_pattern10_depthcode_orbitcta_kernel(int p) {
     const uint32_t pi = uint32_t(p - (LOW_LUT_K + 1));
     const uint32_t oi = uint32_t(size_t(pi) * D_RS54_PITCH + bid);
     const bool edge = p == TARGET_W - 1;
-    __shared__ P10DC_ORBITCTA_CTX c;
+    extern __shared__ unsigned long long orbitcta_reverse_storage[];
+    P10DC_ORBITCTA_CTX& c = *reinterpret_cast<P10DC_ORBITCTA_CTX*>(orbitcta_reverse_storage);
 
     if (threadIdx.x == 0) {
         const uint32_t na = D_RS54_HIGH_NN_OFF[oi], nb = D_RS54_HIGH_NN_OFF[oi + 1];
