@@ -20,17 +20,37 @@ insert=r'''
 #ifndef B300_BLOCK_CLOSURE_QUAD
 #define B300_BLOCK_CLOSURE_QUAD 0
 #endif
+#ifndef B300_BLOCK_CLOSURE_CG
+#define B300_BLOCK_CLOSURE_CG 0
+#endif
 static_assert(B300_BLOCK_CLOSURE_QUAD==0||B300_BLOCK_CLOSURE_QUAD==1,"B300_BLOCK_CLOSURE_QUAD must be 0 or 1");
+static_assert(B300_BLOCK_CLOSURE_CG==0||B300_BLOCK_CLOSURE_CG==1,"B300_BLOCK_CLOSURE_CG must be 0 or 1");
+static_assert(!B300_BLOCK_CLOSURE_CG || B300_BLOCK_CLOSURE_QUAD,
+              "B300_BLOCK_CLOSURE_CG requires B300_BLOCK_CLOSURE_QUAD");
+static_assert(sizeof(Count)==4,"B300 block closure payload assumes 32-bit Count");
+
+__device__ __forceinline__ Count b300_block_closure_payload_load(const Count* p){
+#if B300_BLOCK_CLOSURE_CG && __CUDA_ARCH__
+    uint32_t v;const unsigned long long a=reinterpret_cast<unsigned long long>(p);
+    asm volatile("ld.global.cg.u32 %0, [%1];" : "=r"(v) : "l"(a));
+    return Count(v);
+#else
+    return __ldg(p);
+#endif
+}
 
 struct B300ClosureQuadRanks{Code r0=0,r1=0,r2=0,r3=0;int n=0;};
 __device__ __forceinline__ void b300_closure_quad_flush(
     Count& acc,const Count* __restrict__ in_main,B300ClosureQuadRanks& q
 ){
 #if B300_BLOCK_CLOSURE_QUAD
-    const Count v0=q.n>0?in_main[q.r0]:Count(0);
-    const Count v1=q.n>1?in_main[q.r1]:Count(0);
-    const Count v2=q.n>2?in_main[q.r2]:Count(0);
-    const Count v3=q.n>3?in_main[q.r3]:Count(0);
+    // Keep the four independent payload loads adjacent so the scheduler can
+    // maintain multiple outstanding misses.  Optional .cg bypasses L1 for this
+    // large/random stream while retaining L2 caching.
+    const Count v0=q.n>0?b300_block_closure_payload_load(in_main+q.r0):Count(0);
+    const Count v1=q.n>1?b300_block_closure_payload_load(in_main+q.r1):Count(0);
+    const Count v2=q.n>2?b300_block_closure_payload_load(in_main+q.r2):Count(0);
+    const Count v3=q.n>3?b300_block_closure_payload_load(in_main+q.r3):Count(0);
     if(q.n>0)pull_add_mod(acc,v0);if(q.n>1)pull_add_mod(acc,v1);if(q.n>2)pull_add_mod(acc,v2);if(q.n>3)pull_add_mod(acc,v3);
     q.n=0;
 #else
@@ -95,9 +115,6 @@ __global__ void b300_block_pull_rankstate_ilp4_kernel(
         const RankDelta nr0=rd0+b300_rank_delta_step(l0,p,h0),nr1=v1?rd1+b300_rank_delta_step(l1,p,h1):RankDelta(0),nr2=v2?rd2+b300_rank_delta_step(l2,p,h2):RankDelta(0),nr3=v3?rd3+b300_rank_delta_step(l3,p,h3):RankDelta(0);
         const Code j0=ep0?b300_sub_rank_delta(i0,rd0):Code(0),j1=ep1?b300_sub_rank_delta(i1,rd1):Code(0),j2=ep2?b300_sub_rank_delta(i2,rd2):Code(0),j3=ep3?b300_sub_rank_delta(i3,rd3):Code(0);
 
-        // Rank-state output is independent of endpoint/closure Count reads.
-        // Store it before the long-latency phase so old packed states/deltas do
-        // not stay live while four endpoints and variable closure gathers wait.
         rank_state[i0]=b300_pack_rank_state(nr0,b300_rank_height_advance(h0,l0));
         if(v1)rank_state[i1]=b300_pack_rank_state(nr1,b300_rank_height_advance(h1,l1));
         if(v2)rank_state[i2]=b300_pack_rank_state(nr2,b300_rank_height_advance(h2,l2));
@@ -123,9 +140,9 @@ if s.count(old)!=1: raise SystemExit(f'block rank-state ILP4 launch anchor expec
 s=s.replace(old,new,1)
 for req in (
     'b300_block_pull_rankstate_ilp4_kernel','base+=4*grid','endpoint3=',
-    'b300_block_rankstate_ilp4_closure','B300_BLOCK_CLOSURE_QUAD','b300_closure_quad_emit',
-    'Rank-state output is independent','rank_state[i3]=b300_pack_rank_state'
+    'b300_block_rankstate_ilp4_closure','B300_BLOCK_CLOSURE_QUAD','B300_BLOCK_CLOSURE_CG',
+    'ld.global.cg.u32','b300_closure_quad_emit','rank_state[i3]=b300_pack_rank_state'
 ):
     if req not in s: raise SystemExit(f'missing block rank-state ILP4 artifact: {req}')
 out.parent.mkdir(parents=True,exist_ok=True);out.write_text(s)
-print(f'generated {out} from {src}: b300_block_rank_state_ilp4=1 destinations_per_thread=4 endpoint_loads_issued_before_closure=1 closure_slow_path=noinline closure_register_isolation=1 closure_quad_compile_switch=B300_BLOCK_CLOSURE_QUAD packed_rank_state=1 rank_state_store_before_count_gather=1 register_live_range_reduced=1 register_pressure_requires_ab=1')
+print(f'generated {out} from {src}: b300_block_rank_state_ilp4=1 destinations_per_thread=4 endpoint_loads_issued_before_closure=1 closure_slow_path=noinline closure_register_isolation=1 closure_quad_compile_switch=B300_BLOCK_CLOSURE_QUAD closure_cg_compile_switch=B300_BLOCK_CLOSURE_CG packed_rank_state=1 rank_state_store_before_count_gather=1 register_live_range_reduced=1 register_pressure_requires_ab=1')
