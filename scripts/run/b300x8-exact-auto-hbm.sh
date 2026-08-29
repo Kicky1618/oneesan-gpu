@@ -9,8 +9,11 @@ source "$(dirname -- "${BASH_SOURCE[0]}")/../lib/common.sh"
 PROFILED="${PROFILED:-0}"
 [[ "$PROFILED" == 0 || "$PROFILED" == 1 ]] || { echo 'PROFILED must be 0 or 1' >&2; exit 2; }
 if [[ "$PROFILED" == 1 ]]; then
-  PROFILE_FILE="${PROFILE_FILE:-$ONEESAN_ROOT/work/b300_hbm_profile_tune21.env}"
-  [[ -f "$PROFILE_FILE" ]] || { echo "missing PROFILE_FILE=$PROFILE_FILE" >&2; echo 'run tuner first: bash scripts/bench/b300-hbm-profile-tune21.sh' >&2; exit 2; }
+  if [[ -z "${PROFILE_FILE:-}" ]]; then
+    if [[ -f "$ONEESAN_ROOT/work/b300_hbm_profile_refined21.env" ]]; then PROFILE_FILE="$ONEESAN_ROOT/work/b300_hbm_profile_refined21.env"
+    else PROFILE_FILE="$ONEESAN_ROOT/work/b300_hbm_profile_tune21.env"; fi
+  fi
+  [[ -f "$PROFILE_FILE" ]] || { echo "missing PROFILE_FILE=$PROFILE_FILE" >&2; echo 'run tuner first: bash scripts/bench/b300-hbm-profile-auto21.sh' >&2; exit 2; }
   export PROFILE_FILE
   echo "HBM profiled-staged profile_file=$PROFILE_FILE forced_preselect_rows=${FORCED_PRESELECT_ROWS:-1}" >&2
   exec "$ONEESAN_ROOT/scripts/run/b300x8-exact-auto-hbm-profiled-staged.sh" "$@"
