@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 source "$(dirname -- "${BASH_SOURCE[0]}")/../lib/common.sh"
-N="${N:-27}";MOD="${MOD:-4294967291}";NGPU="${NGPU:-8}";TARGET_MIB="${TARGET_MIB:-65536}";MAX_WINDOW="${MAX_WINDOW:-$N}";ROWS="${ROWS:-1}";THREADS_LIST="${THREADS_LIST:-64 128 256 512}"
+N="${N:-27}";MOD="${MOD:-4294967291}";NGPU="${NGPU:-8}";TARGET_MIB="${TARGET_MIB:-65536}";MAX_WINDOW="${MAX_WINDOW:-14}";ROWS="${ROWS:-1}";THREADS_LIST="${THREADS_LIST:-64 128 256 512}"
 PREFIX="${PREFIX:-$ONEESAN_ROOT/work/b300_exact_thread_sweep}";LOGDIR="${LOGDIR:-${PREFIX}_logs}";RESULT="${RESULT:-${PREFIX}.tsv}";mkdir -p "$LOGDIR" "$(dirname "$RESULT")"
 BIN="$ONEESAN_BUILD_DIR/b300_exact_thread_sweep_n${N}"
 N="$N" FAST_SHARD_ADDRESS8=1 MAIN_MATE_CACHE=1 MAIN_PULL=1 BLOCK_PULL=1 BLOCK_MATE_CACHE=1 PTXAS_VERBOSE=1 OUT="$BIN" bash "$ONEESAN_ROOT/scripts/build/b300-hbm32.sh" >"$LOGDIR/build.out" 2>"$LOGDIR/build.err"
