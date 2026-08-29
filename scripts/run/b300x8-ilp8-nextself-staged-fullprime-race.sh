@@ -26,11 +26,13 @@ SAMPLE_INTERVAL="${SAMPLE_INTERVAL:-0.15}"
 RUN_STAGED="${RUN_STAGED:-1}"
 SELECT_ONLY="${SELECT_ONLY:-1}"
 REBUILD_BUCKETS="${REBUILD_BUCKETS:-1}"
+PREPARE_ONLY="${PREPARE_ONLY:-0}"
 STAGED_PREFIX="${STAGED_PREFIX:-$ONEESAN_ROOT/work/b300x8_ilp8_nextself_staged}"
 WINNER_ENV="${WINNER_ENV:-${STAGED_PREFIX}_winner.env}"
 RACE_PREFIX="${RACE_PREFIX:-$ONEESAN_ROOT/work/b300x8_ilp8_nextself_staged_fullprime_n27}"
+PREPARE_ENV="${PREPARE_ENV:-${RACE_PREFIX}_prepared.env}"
 
-for x in RANDOM_CG WARP_SCAN RUN_STAGED SELECT_ONLY REBUILD_BUCKETS; do
+for x in RANDOM_CG WARP_SCAN RUN_STAGED SELECT_ONLY REBUILD_BUCKETS PREPARE_ONLY; do
   v="${!x}"
   [[ "$v" == 0 || "$v" == 1 ]] || { echo "$x must be 0/1" >&2; exit 2; }
 done
@@ -91,7 +93,15 @@ MAXW=\$3
 NGPU=\$4
 MOD=\$5
 export B300_ROW_LIMIT=28 GRIDFP_THREADS="\$THREADS" GRIDFP_PLAN_TARGET_MIB="\$PLAN_MIB"
-exec "\$SRC" "\$N" "\$MOD" "\$TARGET" "\$MAXW" "\$NGPU"
+"\$SRC" "\$N" "\$MOD" "\$TARGET" "\$MAXW" "\$NGPU" | awk '
+  BEGIN{normalized=0}
+  /^backend=gridfp-b300-hbm32/ && /residue=/ && /wall_s=/ && !normalized {
+    sub(/^backend=[^ ]+ /,"backend=gridfp-b300-hbm32-forced2window-opt-batch ")
+    normalized=1
+  }
+  {print}
+  END{if(!normalized)exit 42}
+'
 EOF
   chmod +x "$out"
   bash -n "$out"
@@ -110,6 +120,8 @@ B300_NEXTSELF_PROMOTION_VARIANT=$(printf '%q' "$B300_NEXTSELF_VARIANT")
 B300_NEXTSELF_PROMOTION_THREADS=$(printf '%q' "$THREADS")
 B300_NEXTSELF_PROMOTION_CONTROL_BIN=$(printf '%q' "$B300_NEXTSELF_CONTROL_BIN")
 B300_NEXTSELF_PROMOTION_BIN=$(printf '%q' "$B300_NEXTSELF_BIN")
+B300_NEXTSELF_PROMOTION_CONTROL_ADAPTER=$(printf '%q' "$CONTROL_ADAPTER")
+B300_NEXTSELF_PROMOTION_ADAPTER=$(printf '%q' "$NEXTSELF_ADAPTER")
 B300_NEXTSELF_PROMOTION_CONTROL_SHA256=$CONTROL_SHA
 B300_NEXTSELF_PROMOTION_SHA256=$NEXTSELF_SHA
 B300_NEXTSELF_PROMOTION_WINNER_ENV_SHA256=$WINNER_ENV_SHA
@@ -119,6 +131,27 @@ EOF
 
 label="nextself_${B300_NEXTSELF_VARIANT}"
 base_label="staged_${B300_NEXTSELF_VARIANT}_control"
+
+if [[ "$PREPARE_ONLY" == 1 ]]; then
+  mkdir -p "$(dirname "$PREPARE_ENV")"
+  {
+    printf 'B300_NEXTSELF_PREPARED=1\n'
+    printf 'B300_NEXTSELF_PREPARED_BIN=%q\n' "$NEXTSELF_ADAPTER"
+    printf 'B300_NEXTSELF_PREPARED_LABEL=%q\n' "$label"
+    printf 'B300_NEXTSELF_PREPARED_THREADS=%q\n' "$THREADS"
+    printf 'B300_NEXTSELF_PREPARED_CONTROL_BIN=%q\n' "$CONTROL_ADAPTER"
+    printf 'B300_NEXTSELF_PREPARED_CONTROL_LABEL=%q\n' "$base_label"
+    printf 'B300_NEXTSELF_PREPARED_CONTROL_THREADS=%q\n' "$THREADS"
+    printf 'B300_NEXTSELF_PREPARED_STAGED_SPEEDUP=%q\n' "$B300_NEXTSELF_SPEEDUP"
+    printf 'B300_NEXTSELF_PREPARED_PARTIAL_RESIDUE=%q\n' "$B300_NEXTSELF_RESIDUE"
+    printf 'B300_NEXTSELF_PREPARED_PROFILE_FILE=%q\n' "$PROFILE_FILE"
+    printf 'B300_NEXTSELF_PREPARED_PROMOTION_ENV=%q\n' "${RACE_PREFIX}_promotion.env"
+  } >"$PREPARE_ENV"
+  cat "$PREPARE_ENV"
+  echo "NEXTSELF PREPARED env=$PREPARE_ENV label=$label control=$base_label staged_speedup=${B300_NEXTSELF_SPEEDUP}x" >&2
+  exit 0
+fi
+
 echo "=== full-prime race: $label vs $base_label vs profiled warp/orbit ===" >&2
 echo "staged_speedup=${B300_NEXTSELF_SPEEDUP}x control_sha=${CONTROL_SHA:0:12} nextself_sha=${NEXTSELF_SHA:0:12}" >&2
 
