@@ -4,11 +4,17 @@ from __future__ import annotations
 import pathlib
 import sys
 
-if len(sys.argv) != 3:
-    raise SystemExit('usage: gen-b300-mainrec-hybrid8-next-self-prefetch.py INPUT.cu OUTPUT.cu')
+if len(sys.argv) not in (3, 4):
+    raise SystemExit('usage: gen-b300-mainrec-hybrid8-next-self-prefetch.py INPUT.cu OUTPUT.cu [WIDTH]')
 
 src = pathlib.Path(sys.argv[1])
 out = pathlib.Path(sys.argv[2])
+try:
+    width = int(sys.argv[3], 0) if len(sys.argv) == 4 else 8
+except ValueError:
+    raise SystemExit('WIDTH must be one of 1,2,4,8')
+if width not in (1, 2, 4, 8):
+    raise SystemExit('WIDTH must be one of 1,2,4,8')
 s = src.read_text()
 
 for req in (
@@ -48,15 +54,14 @@ if s.count(anchor) != 1:
     raise SystemExit(f'hybrid8 self7 anchor expected one match got {s.count(anchor)}')
 
 lines = [anchor.rstrip('\n'), '        const Code next_base=base+Code(8)*grid;']
-for k in range(8):
+for k in range(width):
     lines.append(f'        const Code ni{k}=next_base+Code({k})*grid;')
-    lines.append(
-        f'        {helper_name}(ni{k}<n?in+ni{k}:in,ni{k}<n);'
-    )
+    lines.append(f'        {helper_name}(ni{k}<n?in+ni{k}:in,ni{k}<n);')
 insert = '\n'.join(lines) + '\n'
 s = s.replace(anchor, insert, 1)
 
-pref = s.find(f'{helper_name}(ni7<n?in+ni7:in,ni7<n);')
+last_prefetch = f'{helper_name}(ni{width-1}<n?in+ni{width-1}:in,ni{width-1}<n);'
+pref = s.find(last_prefetch)
 reduce_anchor = s.find('        const uint64_t mod=D_MOD;', pref)
 if pref < 0 or reduce_anchor < 0 or pref >= reduce_anchor:
     raise SystemExit('hybrid8 next-self prefetch must precede current-iteration reduction')
@@ -65,17 +70,19 @@ for req in (
     'prefetch.global.L2',
     'const Code next_base=base+Code(8)*grid',
     f'{helper_name}(ni0<n?in+ni0:in,ni0<n)',
-    f'{helper_name}(ni7<n?in+ni7:in,ni7<n)',
+    last_prefetch,
 ):
     if req not in s:
         raise SystemExit(f'missing hybrid8 next-self prefetch artifact: {req}')
+if width < 8 and f'const Code ni{width}=' in s:
+    raise SystemExit('hybrid8 next-self prefetch emitted more lanes than requested')
 
 out.parent.mkdir(parents=True, exist_ok=True)
 out.write_text(s)
 print(
     f'generated {out} from {src}: '
     'b300_mainrec_hybrid8_next_self_prefetch=1 '
-    'next_iteration_self_prefetches_per_thread=8 cache=L2 '
+    f'next_iteration_self_prefetches_per_thread={width} prefetch_width={width} cache=L2 '
     'prefetch_before_current_reduction=1 coalesced_per_k=1 '
     'semantics_unchanged=1 extra_shared_bytes=0'
 )
