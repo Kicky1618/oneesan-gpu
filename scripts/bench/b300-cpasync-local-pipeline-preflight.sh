@@ -11,19 +11,25 @@ bash -n "$ONEESAN_ROOT/scripts/build/b300-directgather-colilp-fast.sh"
 bash -n "$ONEESAN_ROOT/scripts/build/b300-rankformula-hbm-max.sh"
 bash -n "$ONEESAN_ROOT/scripts/bench/b300-cpasync-local-pair-ab.sh"
 bash -n "$ONEESAN_ROOT/scripts/bench/b300-cpasync-local-pipeline-ab.sh"
+bash -n "$ONEESAN_ROOT/scripts/bench/b300-overlap-local-cache-ab.sh"
+bash -n "$ONEESAN_ROOT/scripts/bench/b300-directgather-ncu-high.sh"
 
 mkdir -p "$ONEESAN_ROOT/work/b300_cpasync_local_preflight"
-for mode in cross local overlap; do
+for mode in cross local overlap pipe2 overlap_cg; do
+  local_cpa=0; overlap_cpa=0; pipe2=0; cg=0
   case "$mode" in
-    cross) local_cpa=0; overlap_cpa=0 ;;
-    local) local_cpa=1; overlap_cpa=0 ;;
-    overlap) local_cpa=0; overlap_cpa=1 ;;
+    cross) ;;
+    local) local_cpa=1 ;;
+    overlap) overlap_cpa=1 ;;
+    pipe2) overlap_cpa=1; pipe2=1 ;;
+    overlap_cg) overlap_cpa=1; cg=1 ;;
   esac
   bin="$ONEESAN_BUILD_DIR/b300_cpasync_local_preflight_${mode}_n${N}"
   echo "=== compile $mode ===" >&2
   N="$N" ARCH="$ARCH" OUT="$bin" COL_ILP=2 PM_ACCUM=1 \
     DEPTHMAJOR=1 PAIR_MLP=1 QUAD_MLP=0 MLP_WINDOW4=1 CPASYNC_PAIR=1 \
     CPASYNC_LOCAL_PAIR="$local_cpa" CPASYNC_OVERLAP_LOCAL_PAIR="$overlap_cpa" \
+    CPASYNC_OVERLAP_LOCAL_PIPE2="$pipe2" OVERLAP_LOCAL_CG="$cg" \
     DIRECTGATHER64=1 DIRECTGATHER_SPARSE64=1 SORTED=1 \
     FORCE7=0 PREFETCH_NEXT=0 PRECTX_FORWARD=0 PRECTX_REVERSE=0 PTXAS_VERBOSE=1 \
     bash "$ONEESAN_ROOT/scripts/build/b300-directgather-colilp-fast.sh" \
@@ -37,4 +43,4 @@ for mode in cross local overlap; do
   fi
 done
 
-echo "b300-cpasync-local-pipeline-preflight OK n=$N arch=$ARCH run_plan=$RUN_PLAN" >&2
+echo "b300-cpasync-local-pipeline-preflight OK n=$N arch=$ARCH run_plan=$RUN_PLAN modes='cross local overlap pipe2 overlap_cg'" >&2
