@@ -26,6 +26,8 @@ def replace_function(text:str,name:str,new:str)->str:
 
 # Compile-time threshold: 0 reproduces all-warp closure scheduling. Positive
 # values return closure states with fewer endpoint symbols to the scalar helper.
+# Inserting N at p-1 does not change endpoint count, so classification can use
+# the blocked mate directly: one popcount instead of minsert+bit compaction.
 marker='\n\n// Each warp first classifies 32 blocked states in parallel.'
 if marker not in s:raise SystemExit('closure warp comment marker not found')
 helper=r'''
@@ -35,17 +37,17 @@ helper=r'''
 #endif
 static_assert(B300_BLOCK_CLOSURE_WARP_MIN_ENDPOINTS>=0 && B300_BLOCK_CLOSURE_WARP_MIN_ENDPOINTS<=28,
               "B300_BLOCK_CLOSURE_WARP_MIN_ENDPOINTS must be 0..28");
-__device__ __forceinline__ bool b300_block_closure_warp_use_warp(MateID b,int p){
+__device__ __forceinline__ int b300_block_endpoint_count_fast(MateID b){
+    constexpr unsigned long long EVEN=0x5555555555555555ULL;
+    return __popcll((static_cast<unsigned long long>(b)|(static_cast<unsigned long long>(b)>>1))&EVEN);
+}
+__device__ __forceinline__ bool b300_block_closure_warp_use_warp(MateID b,int){
     if constexpr(B300_BLOCK_CLOSURE_WARP_MIN_ENDPOINTS==0)return true;
-    const MateID d=minsert(b,p-1,N);
-    return __popc(block_pull_endpoint_mask(d))>=B300_BLOCK_CLOSURE_WARP_MIN_ENDPOINTS;
+    return b300_block_endpoint_count_fast(b)>=B300_BLOCK_CLOSURE_WARP_MIN_ENDPOINTS;
 }
 '''
 s=s.replace(marker,helper+marker,1)
 
-# Endpoint kernel now also owns small closure states. Large closure states are
-# deliberately untouched here so the following warp kernel remains their sole
-# count/rank-state writer.
 kernel=r'''__global__ void b300_block_pull_rankstate_ilp4_kernel(
     const Count* __restrict__ in_main,const MateID* __restrict__ block_mates,
     Code n,Count* __restrict__ out_block,int p,RankState* __restrict__ rank_state
@@ -81,19 +83,18 @@ kernel=r'''__global__ void b300_block_pull_rankstate_ilp4_kernel(
 }'''
 s=replace_function(s,'b300_block_pull_rankstate_ilp4_kernel',kernel)
 
-# The warp kernel must use the identical predicate, making scalar and warp
-# closure ownership a disjoint exhaustive partition.
 old='unsigned closure_mask=__ballot_sync(mask,valid&&mget(my_b,p-1)==N);'
 new='unsigned closure_mask=__ballot_sync(mask,valid&&mget(my_b,p-1)==N&&b300_block_closure_warp_use_warp(my_b,p));'
 if s.count(old)!=1:raise SystemExit(f'closure ballot anchor expected once got {s.count(old)}')
 s=s.replace(old,new,1)
 
 for req in (
-    'B300_BLOCK_CLOSURE_WARP_MIN_ENDPOINTS','b300_block_closure_warp_use_warp',
-    'const bool sc0=cl0&&!w0','if(sc0)a0=b300_block_rankstate_ilp4_closure',
+    'B300_BLOCK_CLOSURE_WARP_MIN_ENDPOINTS','b300_block_endpoint_count_fast','__popcll',
+    'b300_block_closure_warp_use_warp','const bool sc0=cl0&&!w0',
+    'if(sc0)a0=b300_block_rankstate_ilp4_closure',
     'valid&&mget(my_b,p-1)==N&&b300_block_closure_warp_use_warp(my_b,p)',
     '__shfl_down_sync','b300_block_closure_warp_kernel<<<'
 ):
     if req not in s:raise SystemExit(f'closure-warp hybrid artifact missing: {req}')
 out.parent.mkdir(parents=True,exist_ok=True);out.write_text(s)
-print(f'generated {out} from {src}: b300_block_closure_warp_hybrid=1 threshold_macro=B300_BLOCK_CLOSURE_WARP_MIN_ENDPOINTS scalar_small_closure=1 warp_large_closure=1 disjoint_owner_predicate=1 extra_state_bytes=0')
+print(f'generated {out} from {src}: b300_block_closure_warp_hybrid=1 threshold_macro=B300_BLOCK_CLOSURE_WARP_MIN_ENDPOINTS threshold_cost=endpoint_popcount scalar_small_closure=1 warp_large_closure=1 disjoint_owner_predicate=1 extra_state_bytes=0')
