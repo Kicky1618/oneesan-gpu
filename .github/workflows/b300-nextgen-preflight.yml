@@ -5,12 +5,15 @@ on:
     paths:
       - 'scripts/build/b300-forced-nextgen.sh'
       - 'scripts/build/gen-b300-main-recurrence-ilp.py'
+      - 'scripts/build/gen-b300-main-recurrence-hybrid-ilp8.py'
+      - 'scripts/build/gen-b300-mainrec-hybrid8-next-self-prefetch.py'
       - 'scripts/build/gen-b300-mainrec-random-cg.py'
       - 'scripts/build/gen-b300-mainrec-prefetch-l2.py'
       - 'scripts/bench/b300-nextgen-*.sh'
       - 'scripts/bench/b300-main-recurrence-ilp-partition-proof.py'
       - 'scripts/bench/b300-mainrec-hybrid-ilp8-partition-proof.py'
       - 'scripts/bench/b300-mainrec-hybrid-ilp8-transform-preflight.sh'
+      - 'scripts/bench/b300-mainrec-hybrid8-nextself-transform-preflight.sh'
       - 'scripts/bench/b300-joint-nextgen-hybrid8-preflight.sh'
       - 'scripts/bench/b300x8-ilp8-nextself-staged-ab.sh'
       - 'scripts/run/b300x8-nextgen-select.sh'
@@ -27,12 +30,15 @@ on:
     paths:
       - 'scripts/build/b300-forced-nextgen.sh'
       - 'scripts/build/gen-b300-main-recurrence-ilp.py'
+      - 'scripts/build/gen-b300-main-recurrence-hybrid-ilp8.py'
+      - 'scripts/build/gen-b300-mainrec-hybrid8-next-self-prefetch.py'
       - 'scripts/build/gen-b300-mainrec-random-cg.py'
       - 'scripts/build/gen-b300-mainrec-prefetch-l2.py'
       - 'scripts/bench/b300-nextgen-*.sh'
       - 'scripts/bench/b300-main-recurrence-ilp-partition-proof.py'
       - 'scripts/bench/b300-mainrec-hybrid-ilp8-partition-proof.py'
       - 'scripts/bench/b300-mainrec-hybrid-ilp8-transform-preflight.sh'
+      - 'scripts/bench/b300-mainrec-hybrid8-nextself-transform-preflight.sh'
       - 'scripts/bench/b300-joint-nextgen-hybrid8-preflight.sh'
       - 'scripts/bench/b300x8-ilp8-nextself-staged-ab.sh'
       - 'scripts/run/b300x8-nextgen-select.sh'
@@ -58,6 +64,8 @@ jobs:
       - uses: actions/checkout@v4
       - name: Validate nextgen transform chain
         run: bash scripts/bench/b300-nextgen-preflight.sh
+      - name: Validate hybrid8 next-self transform composition
+        run: bash scripts/bench/b300-mainrec-hybrid8-nextself-transform-preflight.sh
       - name: Validate joint hybrid8 and next-self promotion chain
         run: bash scripts/bench/b300-joint-nextgen-hybrid8-preflight.sh
       - name: Validate grand next-self + hybrid8 selector
