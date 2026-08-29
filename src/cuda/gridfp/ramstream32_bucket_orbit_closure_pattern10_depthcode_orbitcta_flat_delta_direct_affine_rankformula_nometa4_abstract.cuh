@@ -33,6 +33,9 @@
 #ifndef P10DC_ORBITCTA_FLAT_DYNAMIC
 #define P10DC_ORBITCTA_FLAT_DYNAMIC 0
 #endif
+#ifndef P10DC_ORBITCTA_FLAT_DYNAMIC_PIPE2
+#define P10DC_ORBITCTA_FLAT_DYNAMIC_PIPE2 0
+#endif
 static_assert(P10DC_RANKFORMULA_PRECTX_COMPACT == 0 ||
               P10DC_RANKFORMULA_PRECTX_COMPACT == 1,
               "P10DC_RANKFORMULA_PRECTX_COMPACT must be 0 or 1");
@@ -42,6 +45,11 @@ static_assert(P10DC_RANKFORMULA_PRECTX_FLAT_BID == 0 ||
 static_assert(P10DC_ORBITCTA_FLAT_DYNAMIC == 0 ||
               P10DC_ORBITCTA_FLAT_DYNAMIC == 1,
               "P10DC_ORBITCTA_FLAT_DYNAMIC must be 0 or 1");
+static_assert(P10DC_ORBITCTA_FLAT_DYNAMIC_PIPE2 == 0 ||
+              P10DC_ORBITCTA_FLAT_DYNAMIC_PIPE2 == 1,
+              "P10DC_ORBITCTA_FLAT_DYNAMIC_PIPE2 must be 0 or 1");
+static_assert(!P10DC_ORBITCTA_FLAT_DYNAMIC_PIPE2 || P10DC_ORBITCTA_FLAT_DYNAMIC,
+              "dynamic pipe2 requires dynamic flat scheduler");
 static_assert(!P10DC_RANKFORMULA_PRECTX_COMPACT ||
               P10DC_RANKFORMULA_PRECTX_FORWARD ||
               P10DC_RANKFORMULA_PRECTX_REVERSE,
@@ -151,6 +159,9 @@ static_assert(P10DC_ORBITCTA_COL_ILP == 4,
 #endif
 #if P10DC_ORBITCTA_FLAT_DYNAMIC
 #include "ramstream32_bucket_orbit_closure_pattern10_depthcode_orbitcta_flat_dynamic.cuh"
+#if P10DC_ORBITCTA_FLAT_DYNAMIC_PIPE2
+#include "ramstream32_bucket_orbit_closure_pattern10_depthcode_orbitcta_flat_dynamic_pipe2.cuh"
+#endif
 #endif
 #endif
 
