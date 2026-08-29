@@ -3,9 +3,9 @@ set -euo pipefail
 source "$(dirname -- "${BASH_SOURCE[0]}")/../lib/common.sh"
 
 # B300/HGX preset for the HIGH closure when HBM controller utilization is low.
-# Keep the state representation exact, but maximize outstanding source reads:
-# B16 cooperative group resolver + direct GROUP61 fields + compact depth/source
-# LUT + independent gather issue + one final modular reduction.
+# Trade a few MiB of read-only descriptor traffic for much lower integer/control
+# pressure: direct rank->group descriptors + direct CROSS gather descriptors,
+# then issue all source reads independently before one balanced reduction.
 N="${N:-21}"
 ARCH="${ARCH:-native}"
 TRANSPOSE_MODE="${TRANSPOSE_MODE:-pipeline}"
@@ -18,6 +18,8 @@ RANKFORMULA_NOMETA_COOPGROUP=1 \
 RANKFORMULA_NOMETA_COOP_UNROLL=0 \
 RANKFORMULA_NOMETA_GROUP56=0 \
 RANKFORMULA_NOMETA_GROUP61=1 \
+RANKFORMULA_NOMETA_DIRECTMAP=1 \
+RANKFORMULA_DIRECTGATHER=1 \
 RANKFORMULA_ABSTRACT_SELECT8=1 \
 RANKFORMULA_ABSTRACT_DEPTH4=1 \
 RANKFORMULA_ABSTRACT_SRCPACK10=1 \
@@ -30,4 +32,4 @@ TRANSPOSE_MODE="$TRANSPOSE_MODE" \
 PTXAS_VERBOSE="${PTXAS_VERBOSE:-1}" \
 bash "$ONEESAN_ROOT/scripts/build/b300-bucket-snake-pattern10-depthcode-rankformula-nometa4-abstract.sh"
 
-printf 'b300-rankformula-hbm-fast OK out=%s n=%s block=16 group61=1 depth4=1 srcpack10=1 gather_mlp=1 pm_accum=1\n' "$OUT" "$N" >&2
+printf 'b300-rankformula-hbm-fast OK out=%s n=%s block=16 group61=1 directmap=1 directgather=1 depth4=1 srcpack10=1 gather_mlp=1 pm_accum=1\n' "$OUT" "$N" >&2
