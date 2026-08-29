@@ -25,8 +25,14 @@ case "$MODE" in
   packed)
     SRC_REL="src/cuda/gridfp/gridfp_reduced_production_p2p_packed_schedule_microprobe.cu"
     ;;
+  segmented)
+    SRC_REL="src/cuda/gridfp/gridfp_reduced_production_p2p_segmented_microprobe.cu"
+    ;;
+  segment-major)
+    SRC_REL="src/cuda/gridfp/gridfp_reduced_production_p2p_segment_major_microprobe.cu"
+    ;;
   *)
-    echo "invalid MODE=$MODE (baseline|ownerfirst|tie|worklist|compiled|packed)" >&2
+    echo "invalid MODE=$MODE (baseline|ownerfirst|tie|worklist|compiled|packed|segmented|segment-major)" >&2
     exit 2
     ;;
 esac
