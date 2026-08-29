@@ -17,13 +17,15 @@ static void p10dc_rankformula_nometa4_abstract_configure_high_smem(int threads) 
     ck(cudaGetDeviceProperties(&prop, device), "rankformula smem device props");
     const size_t default_limit = size_t(prop.sharedMemPerBlock);
     const size_t optin_limit = size_t(prop.sharedMemPerBlockOptin);
-    if (smem > optin_limit) {
-        std::cerr << "rankformula HIGH dynamic shared memory exceeds device opt-in limit"
+    const size_t hard_limit = optin_limit > default_limit ? optin_limit : default_limit;
+    if (smem > hard_limit) {
+        std::cerr << "rankformula HIGH dynamic shared memory exceeds device limit"
                   << " device=" << device
                   << " threads=" << threads
                   << " requested=" << smem
                   << " default_limit=" << default_limit
-                  << " optin_limit=" << optin_limit << '\n';
+                  << " optin_limit=" << optin_limit
+                  << " hard_limit=" << hard_limit << '\n';
         std::exit(773);
     }
     if (smem > default_limit) {
