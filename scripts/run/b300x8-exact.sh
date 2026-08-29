@@ -8,7 +8,19 @@ TARGET_MIB="${TARGET_MIB:-16384}"
 MAX_WINDOW="${MAX_WINDOW:-14}"
 NGPU="${NGPU:-8}"
 GRIDFP_VRAM_RESERVE_MIB="${GRIDFP_VRAM_RESERVE_MIB:-8192}"
+MAIN_MATE_CACHE="${MAIN_MATE_CACHE:-1}"
+MAIN_PULL="${MAIN_PULL:-1}"
+BLOCK_PULL="${BLOCK_PULL:-1}"
+REBUILD="${REBUILD:-0}"
 BIN="${BIN:-$ONEESAN_BUILD_DIR/oneesan_cuda_gridfp_b300_hbm32_batch_n${N}}"
+
+for name in MAIN_MATE_CACHE MAIN_PULL BLOCK_PULL REBUILD; do
+  value="${!name}"
+  [[ "$value" == 0 || "$value" == 1 ]] || { echo "$name must be 0 or 1" >&2; exit 2; }
+done
+if [[ "$BLOCK_PULL" == 1 && "$MAIN_PULL" != 1 ]]; then
+  echo "BLOCK_PULL=1 requires MAIN_PULL=1" >&2; exit 2
+fi
 
 if ! command -v nvidia-smi >/dev/null; then
   echo "nvidia-smi not found" >&2
@@ -20,13 +32,16 @@ if (( visible < NGPU )); then
   exit 2
 fi
 
-if [[ ! -x "$BIN" ]]; then
-  echo "$BIN not found; building optimized batch binary for n=$N" >&2
-  N="$N" OUT="$BIN" "$ONEESAN_ROOT/scripts/build/b300-hbm32-batch.sh"
+if [[ "$REBUILD" == 1 || ! -x "$BIN" ]]; then
+  echo "building optimized full-pull batch binary for n=$N mainpull=$MAIN_PULL blockpull=$BLOCK_PULL" >&2
+  N="$N" OUT="$BIN" MAIN_MATE_CACHE="$MAIN_MATE_CACHE" \
+  MAIN_PULL="$MAIN_PULL" BLOCK_PULL="$BLOCK_PULL" \
+  "$ONEESAN_ROOT/scripts/build/b300-hbm32-batch.sh"
 fi
 
 export GRIDFP_VRAM_RESERVE_MIB
 
+echo "exact batch n=$N gpus=$NGPU main_mate_cache=$MAIN_MATE_CACHE main_pull=$MAIN_PULL block_pull=$BLOCK_PULL binary=$BIN" >&2
 exec python3 "$ONEESAN_ROOT/scripts/solve/solve_b300_exact_batch.py" "$N" \
   --binary "$BIN" \
   --target-mib "$TARGET_MIB" \
