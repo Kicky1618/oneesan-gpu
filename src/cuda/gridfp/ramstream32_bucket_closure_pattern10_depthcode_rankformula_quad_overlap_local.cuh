@@ -17,6 +17,9 @@
 #ifndef P10DC_RANKFORMULA_QUAD_CPASYNC_PREFETCH_BYTES
 #define P10DC_RANKFORMULA_QUAD_CPASYNC_PREFETCH_BYTES 0
 #endif
+#ifndef P10DC_RANKFORMULA_QUAD_CPASYNC_GROUP_COLS
+#define P10DC_RANKFORMULA_QUAD_CPASYNC_GROUP_COLS 1
+#endif
 static_assert(P10DC_RANKFORMULA_QUAD_OVERLAP_LOCAL == 0 ||
               P10DC_RANKFORMULA_QUAD_OVERLAP_LOCAL == 1,
               "P10DC_RANKFORMULA_QUAD_OVERLAP_LOCAL must be 0 or 1");
@@ -31,6 +34,10 @@ static_assert(P10DC_RANKFORMULA_QUAD_CPASYNC_PREFETCH_BYTES == 0 ||
               P10DC_RANKFORMULA_QUAD_CPASYNC_PREFETCH_BYTES == 128 ||
               P10DC_RANKFORMULA_QUAD_CPASYNC_PREFETCH_BYTES == 256,
               "QUAD_CPASYNC_PREFETCH_BYTES must be 0,64,128,256");
+static_assert(P10DC_RANKFORMULA_QUAD_CPASYNC_GROUP_COLS == 1 ||
+              P10DC_RANKFORMULA_QUAD_CPASYNC_GROUP_COLS == 2 ||
+              P10DC_RANKFORMULA_QUAD_CPASYNC_GROUP_COLS == 4,
+              "QUAD_CPASYNC_GROUP_COLS must be 1,2,4");
 
 #if P10DC_RANKFORMULA_QUAD_OVERLAP_LOCAL
 static_assert(P10DC_RANKFORMULA_QUAD_MLP,
@@ -159,8 +166,10 @@ __device__ __forceinline__ void p10dc_rankformula_qol_cpasync_u32(
 #endif
 }
 
+// Issue one column's seven source copies but deliberately do not commit here.
+// The caller chooses whether one, two, or four columns share a cp.async group.
 __device__ __forceinline__ void
-p10dc_rankformula_quad_issue_group_preloaded(
+p10dc_rankformula_quad_issue_column_preloaded(
     P10DCDirectGather64Word p,P10DCDirectGather64Word q,
     uint32_t slot,const Count* source_row
 ) {
@@ -181,11 +190,10 @@ p10dc_rankformula_quad_issue_group_preloaded(
     P10DC_QO_ISSUE(4,r4,4);P10DC_QO_ISSUE(5,r5,5);
     P10DC_QO_ISSUE(6,r6,6);
 #undef P10DC_QO_ISSUE
-    p10dc_rankformula_cpasync_commit();
 }
 
 __device__ __forceinline__ void
-p10dc_rankformula_quad_issue_primary_group(
+p10dc_rankformula_quad_issue_primary_column(
     P10DCDirectGather64Word p,uint32_t slot,const Count* source_row
 ) {
     P10DCDirectGather64Word q=0;
@@ -196,7 +204,7 @@ p10dc_rankformula_quad_issue_primary_group(
         q=__ldg(D_P10DC_RANKFORMULA_DIRECTGATHER64_RARE+uint32_t(p>>48));
 #endif
     }
-    p10dc_rankformula_quad_issue_group_preloaded(p,q,slot,source_row);
+    p10dc_rankformula_quad_issue_column_preloaded(p,q,slot,source_row);
 }
 
 __device__ __forceinline__ BkczCrossAccum
@@ -252,15 +260,35 @@ p10dc_direct_resolved_high_plan_sum_quad_overlap_local(
     if(any){
 #if P10DC_RANKFORMULA_DIRECTGATHER_SPARSE64 && P10DC_RANKFORMULA_QUAD_SPARSE_DESC_MLP
         const P10DCDirectGatherQuadRare q=p10dc_rankformula_qol_directgather64_quad_rare(p);
-        p10dc_rankformula_quad_issue_group_preloaded(p.p0,q.q0,0,c.cross_base);
-        p10dc_rankformula_quad_issue_group_preloaded(p.p1,q.q1,7,c.cross_base);
-        p10dc_rankformula_quad_issue_group_preloaded(p.p2,q.q2,14,c.cross_base);
-        p10dc_rankformula_quad_issue_group_preloaded(p.p3,q.q3,21,c.cross_base);
+        p10dc_rankformula_quad_issue_column_preloaded(p.p0,q.q0,0,c.cross_base);
+#if P10DC_RANKFORMULA_QUAD_CPASYNC_GROUP_COLS == 1
+        p10dc_rankformula_cpasync_commit();
+#endif
+        p10dc_rankformula_quad_issue_column_preloaded(p.p1,q.q1,7,c.cross_base);
+#if P10DC_RANKFORMULA_QUAD_CPASYNC_GROUP_COLS <= 2
+        p10dc_rankformula_cpasync_commit();
+#endif
+        p10dc_rankformula_quad_issue_column_preloaded(p.p2,q.q2,14,c.cross_base);
+#if P10DC_RANKFORMULA_QUAD_CPASYNC_GROUP_COLS == 1
+        p10dc_rankformula_cpasync_commit();
+#endif
+        p10dc_rankformula_quad_issue_column_preloaded(p.p3,q.q3,21,c.cross_base);
+        p10dc_rankformula_cpasync_commit();
 #else
-        p10dc_rankformula_quad_issue_primary_group(p.p0,0,c.cross_base);
-        p10dc_rankformula_quad_issue_primary_group(p.p1,7,c.cross_base);
-        p10dc_rankformula_quad_issue_primary_group(p.p2,14,c.cross_base);
-        p10dc_rankformula_quad_issue_primary_group(p.p3,21,c.cross_base);
+        p10dc_rankformula_quad_issue_primary_column(p.p0,0,c.cross_base);
+#if P10DC_RANKFORMULA_QUAD_CPASYNC_GROUP_COLS == 1
+        p10dc_rankformula_cpasync_commit();
+#endif
+        p10dc_rankformula_quad_issue_primary_column(p.p1,7,c.cross_base);
+#if P10DC_RANKFORMULA_QUAD_CPASYNC_GROUP_COLS <= 2
+        p10dc_rankformula_cpasync_commit();
+#endif
+        p10dc_rankformula_quad_issue_primary_column(p.p2,14,c.cross_base);
+#if P10DC_RANKFORMULA_QUAD_CPASYNC_GROUP_COLS == 1
+        p10dc_rankformula_cpasync_commit();
+#endif
+        p10dc_rankformula_quad_issue_primary_column(p.p3,21,c.cross_base);
+        p10dc_rankformula_cpasync_commit();
 #endif
     }
 
@@ -268,6 +296,7 @@ p10dc_direct_resolved_high_plan_sum_quad_overlap_local(
     p10dc_rankformula_quad_local_register(c,lr0,lr1,lr2,lr3,s0,s1,s2,s3);
 
     if(any){
+#if P10DC_RANKFORMULA_QUAD_CPASYNC_GROUP_COLS == 1
         p10dc_rankformula_cross_quad_wait3();
         s0=p10dc_rankformula_accum_add(s0,p10dc_rankformula_quad_reduce_group(0));
         p10dc_rankformula_cross_quad_wait2();
@@ -276,6 +305,20 @@ p10dc_direct_resolved_high_plan_sum_quad_overlap_local(
         s2=p10dc_rankformula_accum_add(s2,p10dc_rankformula_quad_reduce_group(14));
         p10dc_rankformula_cpasync_wait_all();
         s3=p10dc_rankformula_accum_add(s3,p10dc_rankformula_quad_reduce_group(21));
+#elif P10DC_RANKFORMULA_QUAD_CPASYNC_GROUP_COLS == 2
+        p10dc_rankformula_cross_quad_wait1();
+        s0=p10dc_rankformula_accum_add(s0,p10dc_rankformula_quad_reduce_group(0));
+        s1=p10dc_rankformula_accum_add(s1,p10dc_rankformula_quad_reduce_group(7));
+        p10dc_rankformula_cpasync_wait_all();
+        s2=p10dc_rankformula_accum_add(s2,p10dc_rankformula_quad_reduce_group(14));
+        s3=p10dc_rankformula_accum_add(s3,p10dc_rankformula_quad_reduce_group(21));
+#else
+        p10dc_rankformula_cpasync_wait_all();
+        s0=p10dc_rankformula_accum_add(s0,p10dc_rankformula_quad_reduce_group(0));
+        s1=p10dc_rankformula_accum_add(s1,p10dc_rankformula_quad_reduce_group(7));
+        s2=p10dc_rankformula_accum_add(s2,p10dc_rankformula_quad_reduce_group(14));
+        s3=p10dc_rankformula_accum_add(s3,p10dc_rankformula_quad_reduce_group(21));
+#endif
     }
 #if GPU_DIRECT_PM_ACCUM
     out0=gpu_direct_pm_reduce_u64(s0);out1=gpu_direct_pm_reduce_u64(s1);
