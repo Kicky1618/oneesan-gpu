@@ -9,6 +9,7 @@ REPEATS="${REPEATS:-1}"; SAMPLE_INTERVAL="${SAMPLE_INTERVAL:-0.15}"
 BATCH="${ORBITCTA_FLAT_DYNAMIC_BATCH:-1}"; ADAPTIVE_WAVES="${ORBITCTA_FLAT_DYNAMIC_ADAPTIVE_WAVES:-0}"
 SPARSE64="${DIRECTGATHER_SPARSE64:-1}"; PM_ACCUM="${PM_ACCUM:-1}"; CPASYNC_PAIR="${CPASYNC_PAIR:-1}"
 PRECTX_FLAT_BID="${PRECTX_FLAT_BID:-0}"; PRECTX_FLAT_BID_FUSED="${PRECTX_FLAT_BID_FUSED:-0}"
+FLAT_PER_SM="${BUCKET_ORBITCTA_FLAT_BLOCKS_PER_SM:-}"; FLAT_BLOCKS="${BUCKET_ORBITCTA_FLAT_BLOCKS:-}"
 PREFIX="${PREFIX:-$ONEESAN_ROOT/work/b300_pipe2_producer_prectx_warpcoop_ab_n${N}_t${THREADS}_b${BATCH}_bid${PRECTX_FLAT_BID}}"
 LOGDIR="${LOGDIR:-${PREFIX}_logs}"; RESULT="${RESULT:-${PREFIX}.tsv}"; RESOURCE="${RESOURCE:-${PREFIX}_ptxas.tsv}"
 PARSER="$ONEESAN_ROOT/scripts/bench/parse-ptxas-resources.py"
@@ -24,6 +25,7 @@ case "$ADAPTIVE_WAVES" in 0|1|2|4) ;; *) echo 'adaptive waves must be 0,1,2,4' >
 for x in SPARSE64 PM_ACCUM CPASYNC_PAIR PRECTX_FLAT_BID PRECTX_FLAT_BID_FUSED; do v="${!x}"; [[ "$v" == 0 || "$v" == 1 ]] || { echo "$x must be 0/1" >&2; exit 2; }; done
 [[ "$CPASYNC_PAIR" == 1 ]] || { echo 'producer prectx A/B fixes CPASYNC_PAIR=1' >&2; exit 2; }
 [[ "$PRECTX_FLAT_BID_FUSED" == 0 ]] || { echo 'producer prectx warpcoop currently requires PRECTX_FLAT_BID_FUSED=0' >&2; exit 2; }
+[[ -z "$FLAT_PER_SM" || -z "$FLAT_BLOCKS" ]] || { echo 'set at most one flat pool override' >&2; exit 2; }
 command -v nvcc >/dev/null || { echo 'nvcc required' >&2; exit 2; }
 command -v nvidia-smi >/dev/null || { echo 'nvidia-smi required' >&2; exit 2; }
 (( $(nvidia-smi --query-gpu=index --format=csv,noheader | wc -l) >= NGPU )) || { echo "need $NGPU visible GPUs" >&2; exit 2; }
@@ -80,8 +82,10 @@ done; }
 printf 'variant\trepeat\tresidue\twall_s\tforward_high_s\treverse_high_s\thigh_s\tavg_gpu_pct\tavg_memctrl_pct\tpeak_gpu_pct\tpeak_memctrl_pct\tforward_regs\treverse_regs\tforward_blocks_per_sm\treverse_blocks_per_sm\n' >"$RESULT"
 run_one(){
   local name="$1" bin="$2" rep="$3" so="$LOGDIR/${name}_r${rep}.out" se="$LOGDIR/${name}_r${rep}.err" util="$LOGDIR/${name}_r${rep}.util"
-  BUCKET_THREADS="$THREADS" BUCKET_LOW_GRID_X="$LOW_GX" BUCKET_LOW_GRID_Y="$LOW_GY" \
-    "$bin" "$N" "$TARGET_MIB" "$MAX_WINDOW" "$NGPU" "$MOD" >"$so" 2>"$se" &
+  runenv=(BUCKET_THREADS="$THREADS" BUCKET_LOW_GRID_X="$LOW_GX" BUCKET_LOW_GRID_Y="$LOW_GY")
+  [[ -z "$FLAT_PER_SM" ]] || runenv+=(BUCKET_ORBITCTA_FLAT_BLOCKS_PER_SM="$FLAT_PER_SM")
+  [[ -z "$FLAT_BLOCKS" ]] || runenv+=(BUCKET_ORBITCTA_FLAT_BLOCKS="$FLAT_BLOCKS")
+  env "${runenv[@]}" "$bin" "$N" "$TARGET_MIB" "$MAX_WINDOW" "$NGPU" "$MOD" >"$so" 2>"$se" &
   local pid=$!; sample "$pid" "$util" & local sp=$!
   set +e; wait "$pid"; local rc=$?; set -e; wait "$sp" || true
   (( rc == 0 )) || { echo "$name repeat=$rep failed rc=$rc" >&2; exit "$rc"; }
@@ -117,4 +121,4 @@ print(f'producer_prectx_high_speedup={m("serial","high_s")/m("warpcoop","high_s"
 print(f'producer_prectx_memctrl_delta={m("warpcoop","avg_memctrl_pct")-m("serial","avg_memctrl_pct"):.6f}pp')
 PY
 
-echo "pipe2 producer-prectx warpcoop A/B OK result=$RESULT resources=$RESOURCE cached_bid=$PRECTX_FLAT_BID" >&2
+echo "pipe2 producer-prectx warpcoop A/B OK result=$RESULT resources=$RESOURCE cached_bid=$PRECTX_FLAT_BID flat_per_sm=${FLAT_PER_SM:-occupancy}" >&2
