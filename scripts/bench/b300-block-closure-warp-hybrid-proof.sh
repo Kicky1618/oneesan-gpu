@@ -10,7 +10,8 @@ mkdir -p "$(dirname "$BIN")"
 out="$($BIN)"
 printf '%s\n' "$out"
 grep -Fq 'b300-block-closure-warp-hybrid-proof OK' <<<"$out"
+grep -Fq 'endpoint_count_insert_n_invariant=1 endpoint_count_fast_popcount=1' <<<"$out"
 grep -Fq 'disjoint_partition=1 scalar_sum_exact=1 warp_sum_exact=1 rl_filter=valid_source_only exact=1' <<<"$out"
 grep -Eq 't[1-9][0-9]*_scalar=[1-9][0-9]*' <<<"$out"
 grep -Eq 't[1-9][0-9]*_warp=[1-9][0-9]*' <<<"$out"
-echo 'b300-block-closure-warp-hybrid-proof OK exact=1' >&2
+echo 'b300-block-closure-warp-hybrid-proof OK exact=1 endpoint_count_fast=1' >&2
