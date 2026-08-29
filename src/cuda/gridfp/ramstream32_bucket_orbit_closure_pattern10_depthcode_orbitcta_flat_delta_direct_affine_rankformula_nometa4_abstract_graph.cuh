@@ -9,6 +9,9 @@
 #ifndef P10DC_RANKFORMULA_PRECTX_FLAT_BID_FUSED
 #define P10DC_RANKFORMULA_PRECTX_FLAT_BID_FUSED 0
 #endif
+#ifndef P10DC_ORBITCTA_FLAT_DYNAMIC_BATCH
+#define P10DC_ORBITCTA_FLAT_DYNAMIC_BATCH 1
+#endif
 
 #if P10DC_ORBITCTA_FLAT_DYNAMIC
 #define P10DC_ORBITCTA_FLAT_FORWARD_KERNEL bucket_high_orbit_closure_pattern10_depthcode_orbitcta_flat_dynamic_kernel
@@ -91,6 +94,7 @@ static P10DCOrbitCtaFlatOccupancy p10dc_orbitcta_flat_report_high_occupancy(int 
               << " dynamic_smem_bytes=" << smem
               << " flat_chunk=" << P10DC_ORBITCTA_FLAT_CHUNK
               << " flat_dynamic=" << P10DC_ORBITCTA_FLAT_DYNAMIC
+              << " flat_dynamic_batch=" << P10DC_ORBITCTA_FLAT_DYNAMIC_BATCH
               << " scheduler_mode=" << P10DC_ORBITCTA_FLAT_SCHEDULER_MODE
               << " flat_bid_mode=" << P10DC_ORBITCTA_FLAT_BID_MODE
               << " flat_bid_fused=" << P10DC_RANKFORMULA_PRECTX_FLAT_BID_FUSED
@@ -211,11 +215,14 @@ struct BucketPattern10DepthCodeFlatOrbitCtaDirectAffineRankFormulaNometa4Abstrac
                   << " scheduler_mode=" << P10DC_ORBITCTA_FLAT_SCHEDULER_MODE
                   << " flat_chunk=" << P10DC_ORBITCTA_FLAT_CHUNK
                   << " flat_dynamic=" << P10DC_ORBITCTA_FLAT_DYNAMIC
+                  << " flat_dynamic_batch=" << P10DC_ORBITCTA_FLAT_DYNAMIC_BATCH
                   << " flat_bid_mode=" << P10DC_ORBITCTA_FLAT_BID_MODE
                   << " flat_bid_fused=" << P10DC_RANKFORMULA_PRECTX_FLAT_BID_FUSED
                   << " bid_binary_search_per_chunk="
                   << (P10DC_RANKFORMULA_PRECTX_FLAT_BID ? 0 : 1)
-                  << " queue_atomic_per_orbit=" << P10DC_ORBITCTA_FLAT_DYNAMIC
+                  << " queue_atomic_enabled=" << P10DC_ORBITCTA_FLAT_DYNAMIC
+                  << " queue_lease_batch="
+                  << (P10DC_ORBITCTA_FLAT_DYNAMIC ? P10DC_ORBITCTA_FLAT_DYNAMIC_BATCH : 0)
                   << " high_grid_y=1 high_grid_z=1"
                   << " context_smem_bytes=" << sizeof(P10DCDirectHighResolvedCtx)
                   << " launch_smem_bytes=" << p10dc_orbitcta_high_smem_bytes(threads)
