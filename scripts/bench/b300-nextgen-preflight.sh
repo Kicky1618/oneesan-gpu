@@ -18,6 +18,7 @@ shells=(
 )
 py=(
   scripts/build/gen-b300-main-recurrence-ilp.py
+  scripts/build/gen-b300-main-recurrence-hybrid-ilp8.py
   scripts/build/gen-b300-mainrec-random-cg.py
   scripts/build/gen-b300-mainrec-prefetch-l2.py
   scripts/bench/b300-main-recurrence-ilp-partition-proof.py
@@ -35,6 +36,8 @@ PY
 python3 "$ONEESAN_ROOT/scripts/bench/b300-main-recurrence-ilp-partition-proof.py" | grep -F 'b300-main-recurrence-ilp-partition-proof OK exact=1'
 
 builder="$ONEESAN_ROOT/scripts/build/b300-forced-nextgen.sh"
+randomcg="$ONEESAN_ROOT/scripts/build/gen-b300-mainrec-random-cg.py"
+prefetch="$ONEESAN_ROOT/scripts/build/gen-b300-mainrec-prefetch-l2.py"
 selector="$ONEESAN_ROOT/scripts/run/b300x8-nextgen-select.sh"
 race="$ONEESAN_ROOT/scripts/run/b300x8-race-forced-set-profiled-once.sh"
 lat="$ONEESAN_ROOT/scripts/bench/b300-nextgen-latency-regcap-sweep.sh"
@@ -42,13 +45,21 @@ cgl2="$ONEESAN_ROOT/scripts/bench/b300-nextgen-cg-l2size-sweep.sh"
 staged="$ONEESAN_ROOT/scripts/bench/b300-nextgen-calibrate-cgl2.sh"
 for s in \
   'RECURRENCE_ILP' \
+  'RECURRENCE_HYBRID_ILP8' \
+  'RECURRENCE_HYBRID_ILP8_MIN_STATES' \
+  'gen-b300-main-recurrence-hybrid-ilp8.py' \
   'RANDOM_CG_L2_FETCH_BYTES' \
   'PREFETCH_L2' \
   'DUALMASK' \
   'CLOSURE_BATCH' \
   'MAXRREGCOUNT' \
-  'transform_order=production_recurrence,recurrence_ilp,random_cg_l2_fetch,prefetch_l2,dualmask,closure_batch,register_cap'; do
+  'transform_order=production_recurrence,recurrence_ilp,recurrence_hybrid_ilp8,random_cg_l2_fetch,prefetch_l2,dualmask,closure_batch,register_cap'; do
   grep -Fq "$s" "$builder" || { echo "builder marker missing: $s" >&2; exit 3; }
+done
+for f in "$randomcg" "$prefetch"; do
+  for s in 'main_pull_kernel_ilp8_hybrid' 'hybrid_policy_consistent=1'; do
+    grep -Fq "$s" "$f" || { echo "hybrid cache-policy transform marker missing file=$f marker=$s" >&2; exit 3; }
+  done
 done
 for s in \
   'SELECT_ONLY="${SELECT_ONLY:-1}"' \
@@ -94,4 +105,4 @@ for s in \
   grep -Fq "$s" "$staged" || { echo "Stage-D calibration marker missing: $s" >&2; exit 3; }
 done
 
-echo 'b300_nextgen_preflight=OK bash_syntax=OK python_ast=OK ilp_partition=OK transform_order=OK uncapped_baseline=OK spill_gate=OK cgl2_stage_d=OK forced_set_single_pass=OK selection_default=only gpu_work=0 actions_triggered=0'
+echo 'b300_nextgen_preflight=OK bash_syntax=OK python_ast=OK ilp_partition=OK transform_order=OK hybrid_ilp8_builder=OK hybrid_cache_policy=OK uncapped_baseline=OK spill_gate=OK cgl2_stage_d=OK forced_set_single_pass=OK selection_default=only gpu_work=0 actions_triggered=0'
