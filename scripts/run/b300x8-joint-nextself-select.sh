@@ -7,6 +7,7 @@ if (( $# > 0 )); then shift; fi
 [[ "$N" == 27 ]] || { echo 'joint next-self selector targets n=27' >&2; exit 2; }
 
 PROFILE_FILE="${PROFILE_FILE:-$ONEESAN_ROOT/work/b300_hbm_profile_refined21.env}"
+ARCH="${ARCH:-native}"
 PREFIX="${PREFIX:-$ONEESAN_ROOT/work/b300_joint_nextself_n27}"
 JOINT_PREFIX="${JOINT_PREFIX:-${PREFIX}.joint}"
 PREPARE_ENV="${PREPARE_ENV:-${PREFIX}.joint.prepared.env}"
@@ -33,10 +34,8 @@ done
 [[ -f "$PROFILE_FILE" ]] || { echo "missing profile: $PROFILE_FILE" >&2; exit 2; }
 mkdir -p "$(dirname "$PREPARE_ENV")" "$(dirname "$NEXTSELF_WINNER_ENV")" "$(dirname "$RACE_PREFIX")"
 
-# Prepare the calibrated forced primary/baseline and the producer-tuned bucket
-# profile, but do not spend a complete-prime race yet.
 echo '=== joint next-self: prepare calibrated forced candidates and bucket profile ===' >&2
-PROFILE_FILE="$PROFILE_FILE" PREFIX="$JOINT_PREFIX" PREPARE_ONLY=1 PREPARE_ENV="$PREPARE_ENV" \
+PROFILE_FILE="$PROFILE_FILE" ARCH="$ARCH" PREFIX="$JOINT_PREFIX" PREPARE_ONLY=1 PREPARE_ENV="$PREPARE_ENV" \
   SELECT_ONLY=1 REBUILD_BUCKETS="$REBUILD_BUCKETS" \
   bash "$ONEESAN_ROOT/scripts/run/b300x8-joint-calibrated-select.sh" 27
 [[ -s "$PREPARE_ENV" ]] || { echo "joint prepare env missing: $PREPARE_ENV" >&2; exit 3; }
@@ -55,12 +54,9 @@ JOINT_BASE_THREADS="${FORCED_BASE_THREADS:-256}"
 TARGET_MIB="$FORCED_TARGET_MIB"
 PRIME="$SMOKE_PRIME"
 
-# Next-self is only promoted after the exact staged gate succeeds at the search
-# row count and every validation row count. A rejected optimization is not an
-# error for the overall selector; it falls back to the prepared joint race.
 if [[ "$RUN_NEXTSELF_STAGE" == 1 ]]; then
   echo "=== joint next-self: staged validation threads=$NEXTSELF_THREADS rows=$NEXTSELF_SEARCH_ROWS -> [$NEXTSELF_VALIDATE_ROWS] ===" >&2
-  N=27 GRIDFP_THREADS="$NEXTSELF_THREADS" TARGET_MIB="$TARGET_MIB" MAX_WINDOW="$MAX_WINDOW" \
+  N=27 ARCH="$ARCH" GRIDFP_THREADS="$NEXTSELF_THREADS" TARGET_MIB="$TARGET_MIB" MAX_WINDOW="$MAX_WINDOW" \
     SEARCH_ROWS="$NEXTSELF_SEARCH_ROWS" VALIDATE_ROWS="$NEXTSELF_VALIDATE_ROWS" \
     SEARCH_REPEATS="$NEXTSELF_SEARCH_REPEATS" VALIDATE_REPEATS="$NEXTSELF_VALIDATE_REPEATS" \
     MIN_SPEEDUP="$NEXTSELF_MIN_SPEEDUP" PREFIX="$NEXTSELF_PREFIX" WINNER_ENV="$NEXTSELF_WINNER_ENV" \
@@ -82,7 +78,7 @@ if [[ "${B300_NEXTSELF_STAGED_VALIDATED:-0}" == 1 ]]; then
   else
     unset FORCED_EXTRA2_BIN FORCED_EXTRA2_LABEL FORCED_EXTRA2_THREADS || true
   fi
-  exec env PROFILE_FILE="$PROFILE_FILE" TARGET_MIB="$TARGET_MIB" MAX_WINDOW="$MAX_WINDOW" \
+  exec env PROFILE_FILE="$PROFILE_FILE" ARCH="$ARCH" SMOKE_PRIME="$PRIME" TARGET_MIB="$TARGET_MIB" MAX_WINDOW="$MAX_WINDOW" \
     GRIDFP_THREADS="$NEXTSELF_THREADS" RUN_STAGED=0 WINNER_ENV="$NEXTSELF_WINNER_ENV" \
     SELECT_ONLY="$SELECT_ONLY" REBUILD_BUCKETS="$REBUILD_BUCKETS" RACE_PREFIX="$RACE_PREFIX" \
     "$ONEESAN_ROOT/scripts/run/b300x8-ilp8-nextself-staged-fullprime-race.sh" 27 "$@"
@@ -90,7 +86,7 @@ fi
 
 echo '=== joint next-self: staged candidate rejected; run calibrated joint/bucket race ===' >&2
 unset FORCED_EXTRA_BIN FORCED_EXTRA_LABEL FORCED_EXTRA_THREADS FORCED_EXTRA2_BIN FORCED_EXTRA2_LABEL FORCED_EXTRA2_THREADS || true
-exec env PROFILE_FILE="$PROFILE_FILE" SMOKE_PRIME="$PRIME" FORCED_TARGET_MIB="$TARGET_MIB" MAX_WINDOW="$MAX_WINDOW" \
+exec env PROFILE_FILE="$PROFILE_FILE" ARCH="$ARCH" SMOKE_PRIME="$PRIME" FORCED_TARGET_MIB="$TARGET_MIB" MAX_WINDOW="$MAX_WINDOW" \
   FORCED_OVERRIDE_BIN="$JOINT_PRIMARY_BIN" FORCED_OVERRIDE_LABEL="$JOINT_PRIMARY_LABEL" FORCED_OVERRIDE_THREADS="$JOINT_PRIMARY_THREADS" \
   FORCED_BASE_BIN="$JOINT_BASE_BIN" FORCED_BASE_LABEL="$JOINT_BASE_LABEL" FORCED_BASE_THREADS="$JOINT_BASE_THREADS" \
   SELECT_ONLY="$SELECT_ONLY" REBUILD_BUCKETS="$REBUILD_BUCKETS" PREFIX="$RACE_PREFIX" \
