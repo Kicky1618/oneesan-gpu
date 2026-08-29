@@ -5,14 +5,23 @@
 #ifndef P10DC_RANKFORMULA_DIRECTGATHER64
 #define P10DC_RANKFORMULA_DIRECTGATHER64 0
 #endif
+#ifndef P10DC_RANKFORMULA_DIRECTGATHER_SPARSE64
+#define P10DC_RANKFORMULA_DIRECTGATHER_SPARSE64 0
+#endif
 static_assert(P10DC_RANKFORMULA_DIRECTGATHER64 == 0 || P10DC_RANKFORMULA_DIRECTGATHER64 == 1,
               "P10DC_RANKFORMULA_DIRECTGATHER64 must be 0 or 1");
+static_assert(P10DC_RANKFORMULA_DIRECTGATHER_SPARSE64 == 0 ||
+              P10DC_RANKFORMULA_DIRECTGATHER_SPARSE64 == 1,
+              "P10DC_RANKFORMULA_DIRECTGATHER_SPARSE64 must be 0 or 1");
 #if P10DC_RANKFORMULA_DIRECTGATHER64
 static_assert(P10DC_RANKFORMULA_DIRECTGATHER,
               "DIRECTGATHER64 requires DIRECTGATHER");
 static_assert(!P10DC_RANKFORMULA_DIRECTGATHER_FORCE7,
               "DIRECTGATHER64 does not use FORCE7");
 #endif
+static_assert(!P10DC_RANKFORMULA_DIRECTGATHER_SPARSE64 ||
+              P10DC_RANKFORMULA_DIRECTGATHER64,
+              "SPARSE64 requires DIRECTGATHER64 encoding");
 
 using P10DCDirectGather64Word = unsigned long long;
 static_assert(sizeof(P10DCDirectGather64Word) == 8,
@@ -36,12 +45,21 @@ __device__ __forceinline__ size_t p10dc_rankformula_directgather_index(
 #endif
 }
 
+#if P10DC_RANKFORMULA_DIRECTGATHER_SPARSE64
+__device__ __forceinline__ BkczCrossAccum
+p10dc_resolved_low_preimages_cross5_rankformula_nometa4_directgather_sparse64_fixed(
+    uint32_t h, uint32_t rank, uint32_t depth, const Count* source_row);
+#endif
+
 __device__ __forceinline__ BkczCrossAccum
 p10dc_resolved_low_preimages_cross5_rankformula_nometa4_directgather64_fixed(
     uint32_t h, uint32_t rank, uint32_t depth, const Count* source_row
 ) {
 #if !P10DC_RANKFORMULA_DIRECTGATHER64
     return p10dc_resolved_low_preimages_cross5_rankformula_nometa4_abstract_mlp_fixed(
+        h, rank, depth, source_row);
+#elif P10DC_RANKFORMULA_DIRECTGATHER_SPARSE64
+    return p10dc_resolved_low_preimages_cross5_rankformula_nometa4_directgather_sparse64_fixed(
         h, rank, depth, source_row);
 #else
     if (!depth || depth > P10DC_RANKFORMULA_ABSTRACT_SELECT_DEPTHS)
@@ -102,3 +120,7 @@ p10dc_resolved_low_preimages_cross5_rankformula_nometa4_directgather64_fixed(
 #endif
 #endif
 }
+
+#if P10DC_RANKFORMULA_DIRECTGATHER_SPARSE64
+#include "ramstream32_bucket_closure_cross5_rankformula_nometa4_directgather_sparse64.cuh"
+#endif
