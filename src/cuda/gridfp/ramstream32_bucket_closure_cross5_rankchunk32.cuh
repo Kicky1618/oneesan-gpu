@@ -26,29 +26,46 @@ static_assert(P10DC_RANKCHUNK32_RANKMASK_PROFILE == 0 || P10DC_RANKCHUNK32_RANKM
 // {0,1,2,3,5,7} are reachable, but keep 32 bins so the real traffic run also
 // checks that assumption instead of baking it into the profiler.
 __device__ unsigned long long D_P10DC_RANKCHUNK32_RANKMASK_PROFILE[32];
+// Dynamic warp events at the profiler point: total, all-zero, all-nonzero,
+// mixed zero/nonzero. These expose whether an outer rankmask!=0 guard can skip
+// whole warps or merely introduce divergence.
+__device__ unsigned long long D_P10DC_RANKCHUNK32_RANKMASK_WARP_PROFILE[4];
 
 __device__ __forceinline__ void p10dc_rankchunk32_profile_rankmask(uint8_t rankmask) {
     const unsigned active = __activemask();
     const unsigned peers = __match_any_sync(active, unsigned(rankmask));
+    const unsigned zeros = __ballot_sync(active, rankmask == 0u);
     const unsigned lane = unsigned(threadIdx.x) & 31u;
-    const unsigned leader = unsigned(__ffs(int(peers)) - 1);
-    if (lane == leader) {
+    const unsigned peer_leader = unsigned(__ffs(int(peers)) - 1);
+    const unsigned active_leader = unsigned(__ffs(int(active)) - 1);
+    if (lane == peer_leader) {
         atomicAdd(&D_P10DC_RANKCHUNK32_RANKMASK_PROFILE[unsigned(rankmask)],
                   static_cast<unsigned long long>(__popc(peers)));
+    }
+    if (lane == active_leader) {
+        atomicAdd(&D_P10DC_RANKCHUNK32_RANKMASK_WARP_PROFILE[0], 1ull);
+        const unsigned kind = zeros == active ? 1u : (zeros == 0u ? 2u : 3u);
+        atomicAdd(&D_P10DC_RANKCHUNK32_RANKMASK_WARP_PROFILE[kind], 1ull);
     }
 }
 
 static void p10dc_rankchunk32_report_rankmask_profile_devices(int ngpu) {
     std::array<unsigned long long, 32> total{};
+    std::array<unsigned long long, 4> warps{};
     int restore = 0;
     ck(cudaGetDevice(&restore), "rankchunk32 profile get device");
     for (int g = 0; g < ngpu; ++g) {
         ck(cudaSetDevice(g), "rankchunk32 profile set device");
         std::array<unsigned long long, 32> one{};
+        std::array<unsigned long long, 4> one_warps{};
         ck(cudaMemcpyFromSymbol(one.data(), D_P10DC_RANKCHUNK32_RANKMASK_PROFILE,
                                 one.size() * sizeof(unsigned long long)),
            "rankchunk32 profile D2H");
+        ck(cudaMemcpyFromSymbol(one_warps.data(), D_P10DC_RANKCHUNK32_RANKMASK_WARP_PROFILE,
+                                one_warps.size() * sizeof(unsigned long long)),
+           "rankchunk32 warp profile D2H");
         for (size_t i = 0; i < one.size(); ++i) total[i] += one[i];
+        for (size_t i = 0; i < one_warps.size(); ++i) warps[i] += one_warps[i];
     }
     ck(cudaSetDevice(restore), "rankchunk32 profile restore device");
 
@@ -64,10 +81,16 @@ static void p10dc_rankchunk32_report_rankmask_profile_devices(int ngpu) {
     const double zero_frac = calls ? double(total[0]) / double(calls) : 0.0;
     const double nonzero_frac = calls ? 1.0 - zero_frac : 0.0;
     const double avg_popcount = calls ? double(selected) / double(calls) : 0.0;
+    const double all_zero_warp_frac = warps[0] ? double(warps[1]) / double(warps[0]) : 0.0;
+    const double all_nonzero_warp_frac = warps[0] ? double(warps[2]) / double(warps[0]) : 0.0;
+    const double mixed_warp_frac = warps[0] ? double(warps[3]) / double(warps[0]) : 0.0;
+    const double avg_active_lanes = warps[0] ? double(calls) / double(warps[0]) : 0.0;
     std::fprintf(stderr,
-        "rankchunk32_rankmask_profile scope=process_all_gpus_all_moduli warp_aggregated=1 total=%llu m0=%llu m1=%llu m2=%llu m3=%llu m4=%llu m5=%llu m6=%llu m7=%llu other=%llu disallowed=%llu zero_frac=%.9f nonzero_frac=%.9f avg_popcount=%.9f\n",
+        "rankchunk32_rankmask_profile scope=process_all_gpus_all_moduli warp_aggregated=1 total=%llu m0=%llu m1=%llu m2=%llu m3=%llu m4=%llu m5=%llu m6=%llu m7=%llu other=%llu disallowed=%llu zero_frac=%.9f nonzero_frac=%.9f avg_popcount=%.9f warp_events=%llu warp_all_zero=%llu warp_all_nonzero=%llu warp_mixed=%llu warp_all_zero_frac=%.9f warp_all_nonzero_frac=%.9f warp_mixed_frac=%.9f avg_active_lanes=%.9f\n",
         calls, total[0], total[1], total[2], total[3], total[4], total[5], total[6], total[7],
-        other, disallowed, zero_frac, nonzero_frac, avg_popcount);
+        other, disallowed, zero_frac, nonzero_frac, avg_popcount,
+        warps[0], warps[1], warps[2], warps[3], all_zero_warp_frac,
+        all_nonzero_warp_frac, mixed_warp_frac, avg_active_lanes);
 }
 #endif
 
