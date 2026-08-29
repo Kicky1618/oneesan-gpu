@@ -5,9 +5,14 @@ source "$(dirname -- "${BASH_SOURCE[0]}")/../lib/common.sh"
 N="${N:-21}"; MOD="${MOD:-4294967291}"; NGPU="${NGPU:-8}"; ARCH="${ARCH:-sm_103}"
 EXPECT="${EXPECT:-998035516}"; TARGET_MIB="${TARGET_MIB:-16384}"; MAX_WINDOW="${MAX_WINDOW:-14}"
 THREADS="${THREADS:-256}"; CHUNKS="${CHUNKS:-2 4 8}"; POOLS="${POOLS:-auto 1 2}"; REPEATS="${REPEATS:-1}"
-SPARSE64="${SPARSE64:-1}"; PRECTX_FORWARD="${PRECTX_FORWARD:-0}"; PRECTX_REVERSE="${PRECTX_REVERSE:-0}"; PRECTX_COMPACT="${PRECTX_COMPACT:-0}"
+SPARSE64="${SPARSE64:-1}"; QUAD_SPARSE_DESC_MLP="${QUAD_SPARSE_DESC_MLP:-0}"
+PRECTX_FORWARD="${PRECTX_FORWARD:-0}"; PRECTX_REVERSE="${PRECTX_REVERSE:-0}"; PRECTX_COMPACT="${PRECTX_COMPACT:-0}"
 LOW_GX="${LOW_GX:-16}"; LOW_GY="${LOW_GY:-8}"; SAMPLE_INTERVAL="${SAMPLE_INTERVAL:-0.20}"
 [[ "$N" == 21 && "$MOD" == 4294967291 && "$EXPECT" == 998035516 ]] || { echo 'default exact gate is n21/mod4294967291/residue998035516' >&2; exit 2; }
+for x in SPARSE64 QUAD_SPARSE_DESC_MLP PRECTX_FORWARD PRECTX_REVERSE PRECTX_COMPACT; do
+  v="${!x}"; [[ "$v" == 0 || "$v" == 1 ]] || { echo "$x must be 0 or 1" >&2; exit 2; }
+done
+[[ "$QUAD_SPARSE_DESC_MLP" == 0 || "$SPARSE64" == 1 ]] || { echo 'QUAD_SPARSE_DESC_MLP requires SPARSE64=1' >&2; exit 2; }
 command -v nvcc >/dev/null || { echo 'nvcc required' >&2; exit 2; }
 command -v nvidia-smi >/dev/null || { echo 'nvidia-smi required' >&2; exit 2; }
 
@@ -30,14 +35,14 @@ sample(){ local pid="$1" out="$2"; : >"$out"; while kill -0 "$pid" 2>/dev/null; 
 
 for chunk in $CHUNKS; do
   case "$chunk" in 2|4|8|16|32) ;; *) echo "bad chunk=$chunk" >&2; exit 2;; esac
-  bin="$ONEESAN_BUILD_DIR/b300_orbitcta_flat_qol_chunk${chunk}_n${N}"
+  bin="$ONEESAN_BUILD_DIR/b300_orbitcta_flat_qol_qsd${QUAD_SPARSE_DESC_MLP}_chunk${chunk}_n${N}"
   N="$N" ARCH="$ARCH" OUT="$bin" PM_ACCUM=1 DIRECTGATHER64=1 DIRECTGATHER_SPARSE64="$SPARSE64" \
     DIRECTGATHER_SORT_RANKS=0 RANKFORMULA_MLP_WINDOW4=1 PAIR_MLP=1 CPASYNC_PAIR=1 \
-    QUAD_MLP=1 QUAD_OVERLAP_LOCAL=1 QUAD_LOCAL_DIRECT_MAX=0 \
+    QUAD_MLP=1 QUAD_OVERLAP_LOCAL=1 QUAD_LOCAL_DIRECT_MAX=0 QUAD_SPARSE_DESC_MLP="$QUAD_SPARSE_DESC_MLP" \
     ORBITCTA_FLAT=1 ORBITCTA_FLAT_CHUNK="$chunk" ORBITCTA_COL_ILP=4 \
     PRECTX_FORWARD="$PRECTX_FORWARD" PRECTX_REVERSE="$PRECTX_REVERSE" PRECTX_COMPACT="$PRECTX_COMPACT" PTXAS_VERBOSE=1 \
     bash "$ONEESAN_ROOT/scripts/build/b300-directgather-orbitcta.sh" >"$LOGDIR/chunk${chunk}.build.out" 2>"$LOGDIR/chunk${chunk}.build.err"
-  python3 "$ONEESAN_ROOT/scripts/bench/parse-ptxas-resources.py" "$LOGDIR/chunk${chunk}.build.err" --label "qol_chunk${chunk}" >>"$RESOURCE" || true
+  python3 "$ONEESAN_ROOT/scripts/bench/parse-ptxas-resources.py" "$LOGDIR/chunk${chunk}.build.err" --label "qol_qsd${QUAD_SPARSE_DESC_MLP}_chunk${chunk}" >>"$RESOURCE" || true
 
   for pool in $POOLS; do
     [[ "$pool" == auto || "$pool" =~ ^[1-9][0-9]*$ ]] || { echo "bad pool=$pool" >&2; exit 2; }
@@ -70,9 +75,9 @@ PY
 done
 
 cat "$RESULT"
-python3 - "$RESULT" "$WINNER_ENV" <<'PY'
+python3 - "$RESULT" "$WINNER_ENV" "$QUAD_SPARSE_DESC_MLP" <<'PY'
 import csv,statistics,sys
-src,winner=sys.argv[1:]
+src,winner,qsd=sys.argv[1:]
 rows=list(csv.DictReader(open(src),delimiter='\t')); by={}
 for r in rows: by.setdefault((int(r['chunk']),r['pool']),[]).append(r)
 res={k:{x['residue'] for x in g} for k,g in by.items()}
@@ -92,12 +97,13 @@ with open(winner,'w') as f:
  f.write('ORBIT_QUAD_MLP=1\n')
  f.write('ORBIT_QUAD_OVERLAP_LOCAL=1\n')
  f.write('ORBIT_QUAD_LOCAL_DIRECT_MAX=0\n')
+ f.write(f'ORBIT_QUAD_SPARSE_DESC_MLP={qsd}\n')
  f.write('ORBIT_CPASYNC_PAIR=1\n')
  f.write('ORBIT_COL_ILP=4\n')
- f.write(f'ORBIT_QUAD_PROFILE=quad_chunk{b[2]}_pool{b[3]}\n')
+ f.write(f'ORBIT_QUAD_PROFILE=quad_qsd{qsd}_chunk{b[2]}_pool{b[3]}\n')
  f.write(f'ORBIT_QUAD_WALL_S={b[0]:.9f}\n')
  f.write(f'ORBIT_QUAD_HIGH_S={b[1]:.9f}\n')
-print('BEST_ORBITCTA_QUAD',f'chunk={b[2]}',f'pool={b[3]}',f'wall_s={b[0]:.6f}',f'high_s={b[1]:.6f}',f'mc_avg_pct={b[4]:.3f}',f'winner_env={winner}')
+print('BEST_ORBITCTA_QUAD',f'qsd={qsd}',f'chunk={b[2]}',f'pool={b[3]}',f'wall_s={b[0]:.6f}',f'high_s={b[1]:.6f}',f'mc_avg_pct={b[4]:.3f}',f'winner_env={winner}')
 PY
 
-echo "b300-orbitcta-flat-quad-sweep OK result=$RESULT resources=$RESOURCE winner_env=$WINNER_ENV" >&2
+echo "b300-orbitcta-flat-quad-sweep OK qsd=$QUAD_SPARSE_DESC_MLP result=$RESULT resources=$RESOURCE winner_env=$WINNER_ENV" >&2
