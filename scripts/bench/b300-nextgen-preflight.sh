@@ -25,6 +25,7 @@ py=(
   scripts/build/gen-b300-main-recurrence-hybrid-ilp8.py
   scripts/build/gen-b300-mainrec-random-cg.py
   scripts/build/gen-b300-mainrec-prefetch-l2.py
+  scripts/build/gen-b300-mainrec-hybrid8-next-self-prefetch.py
   scripts/bench/b300-main-recurrence-ilp-partition-proof.py
   scripts/bench/b300-mainrec-hybrid-ilp8-partition-proof.py
 )
@@ -45,6 +46,7 @@ bash "$ONEESAN_ROOT/scripts/bench/b300-mainrec-hybrid-ilp8-transform-preflight.s
 builder="$ONEESAN_ROOT/scripts/build/b300-forced-nextgen.sh"
 randomcg="$ONEESAN_ROOT/scripts/build/gen-b300-mainrec-random-cg.py"
 prefetch="$ONEESAN_ROOT/scripts/build/gen-b300-mainrec-prefetch-l2.py"
+hybrid_nextself="$ONEESAN_ROOT/scripts/build/gen-b300-mainrec-hybrid8-next-self-prefetch.py"
 selector="$ONEESAN_ROOT/scripts/run/b300x8-nextgen-select.sh"
 race="$ONEESAN_ROOT/scripts/run/b300x8-race-forced-set-profiled-once.sh"
 lat="$ONEESAN_ROOT/scripts/bench/b300-nextgen-latency-regcap-sweep.sh"
@@ -57,19 +59,27 @@ for s in \
   'RECURRENCE_ILP' \
   'RECURRENCE_HYBRID_ILP8' \
   'RECURRENCE_HYBRID_ILP8_MIN_STATES' \
+  'RECURRENCE_HYBRID_ILP8_NEXTSELF' \
   'gen-b300-main-recurrence-hybrid-ilp8.py' \
+  'gen-b300-mainrec-hybrid8-next-self-prefetch.py' \
   'RANDOM_CG_L2_FETCH_BYTES' \
   'PREFETCH_L2' \
   'DUALMASK' \
   'CLOSURE_BATCH' \
   'MAXRREGCOUNT' \
-  'transform_order=production_recurrence,recurrence_ilp,recurrence_hybrid_ilp8,random_cg_l2_fetch,prefetch_l2,dualmask,closure_batch,register_cap'; do
+  'transform_order=production_recurrence,recurrence_ilp,recurrence_hybrid_ilp8,random_cg_l2_fetch,prefetch_l2,hybrid8_nextself,dualmask,closure_batch,register_cap'; do
   grep -Fq "$s" "$builder" || { echo "builder marker missing: $s" >&2; exit 3; }
 done
 for f in "$randomcg" "$prefetch"; do
   for s in 'main_pull_kernel_ilp8_hybrid' 'hybrid_policy_consistent=1'; do
     grep -Fq "$s" "$f" || { echo "hybrid cache-policy transform marker missing file=$f marker=$s" >&2; exit 3; }
   done
+done
+for s in \
+  'b300_mainrec_hybrid8_next_self_prefetch=1' \
+  'main_pull_kernel_ilp8_hybrid' \
+  'b300_mainrec_hybrid8_prefetch_next_self_l2'; do
+  grep -Fq "$s" "$hybrid_nextself" || { echo "hybrid next-self transform marker missing: $s" >&2; exit 3; }
 done
 for s in \
   'BASE_RECURRENCE_ILP' \
@@ -157,4 +167,4 @@ for s in \
   grep -Fq "$s" "$staged" || { echo "Stage-D calibration marker missing: $s" >&2; exit 3; }
 done
 
-echo 'b300_nextgen_preflight=OK bash_syntax=OK python_ast=OK ilp_partition=OK hybrid_partition=OK hybrid_transform=OK transform_order=OK hybrid_ilp8_builder=OK hybrid_cache_policy=OK hybrid_ilp8_sweep=OK hybrid8_staged=OK row_scoped_residue=OK hybrid8_fullprime_gate=OK fingerprint_gate=OK uncapped_baseline=OK spill_gate=OK cgl2_stage_d=OK forced_set_single_pass=OK selection_default=only gpu_work=0 actions_triggered=0'
+echo 'b300_nextgen_preflight=OK bash_syntax=OK python_ast=OK ilp_partition=OK hybrid_partition=OK hybrid_transform=OK transform_order=OK hybrid_ilp8_builder=OK hybrid_cache_policy=OK hybrid8_nextself=OK hybrid_ilp8_sweep=OK hybrid8_staged=OK row_scoped_residue=OK hybrid8_fullprime_gate=OK fingerprint_gate=OK uncapped_baseline=OK spill_gate=OK cgl2_stage_d=OK forced_set_single_pass=OK selection_default=only gpu_work=0 actions_triggered=0'
