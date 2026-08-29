@@ -47,11 +47,13 @@ FILES=(
   scripts/build/b300-bucket-snake-pattern10-depthcode-rankformula-nometa4-abstract.sh
   scripts/bench/pattern10-depthcode-rankformula-nometa4-abstract-block-selftest.sh
   scripts/bench/rankformula-nometa4-abstract-preflight.sh
+  scripts/bench/rankformula-nometa-group56-proof.sh
   scripts/bench/rankformula-abstract-select8-proof.sh
   scripts/bench/rankformula-abstract-depth4-proof.sh
   scripts/bench/rankformula-abstract-srcpack10-proof.sh
   scripts/bench/rankformula-abstract-compact-proof.sh
   scripts/bench/b300-depthcode-rankformula-nometa-coop-unroll-ab.sh
+  scripts/bench/b300-depthcode-rankformula-nometa-group56-ab.sh
   scripts/bench/b300-depthcode-rankformula-abstract-select8-ab.sh
   scripts/bench/b300-depthcode-rankformula-abstract-srcpack10-ab.sh
   scripts/bench/b300-depthcode-rankformula-abstract-depth4-ab.sh
