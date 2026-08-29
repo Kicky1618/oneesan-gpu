@@ -81,9 +81,7 @@ struct CodecPhysicalChooseProxy {
         return CodecPhysicalChooseRowProxy{n};
     }
 };
-#if defined(__CUDA_ARCH__)
 #define RP_CHOOSE CodecPhysicalChooseProxy{}
-#endif
 #endif
 
 #if RP_EXPERIMENTAL_CODEC_PRIMITIVE_PHYSICAL_MODE == 0
@@ -131,9 +129,7 @@ struct CodecPhysicalPrimitiveProxy {
         return CodecPhysicalPrimitiveRowProxy{rem};
     }
 };
-#if defined(__CUDA_ARCH__)
 #define RP_PRIMITIVE CodecPhysicalPrimitiveProxy{}
-#endif
 #endif
 
 static constexpr int RP_CODEC_PHYSICAL_TABLE_BYTES =
