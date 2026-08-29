@@ -12,6 +12,7 @@ MAX_WINDOW="${MAX_WINDOW:-14}"
 SMOKE_PRIME="${SMOKE_PRIME:-4294967291}"
 FORCED_TARGET_MIB="${FORCED_TARGET_MIB:-65536}"
 BUCKET_TARGET_MIB="${BUCKET_TARGET_MIB:-16384}"
+WORK_ROOT="${WORK_ROOT:-$ONEESAN_ROOT/work}"
 REBUILD_BUCKETS="${REBUILD_BUCKETS:-1}"
 RUN_NEXTSELF_STAGE="${RUN_NEXTSELF_STAGE:-1}"
 RUN_HYBRID_STAGE="${RUN_HYBRID_STAGE:-1}"
@@ -27,10 +28,11 @@ HYBRID_NS_MIN_SPEEDUP="${HYBRID_NS_MIN_SPEEDUP:-1.01}"
 HYBRID_NS_SEARCH_REPEATS="${HYBRID_NS_SEARCH_REPEATS:-1}"
 HYBRID_NS_VALIDATE_REPEATS="${HYBRID_NS_VALIDATE_REPEATS:-1}"
 PREFIX="${PREFIX:-$ONEESAN_ROOT/work/b300_grand_firstpass_n27}"
+RACE_PREFIX="${RACE_PREFIX:-${PREFIX}.race}"
 LOG="${LOG:-${PREFIX}.log}"
 META="${META:-${PREFIX}.meta}"
 SELECTED_ENV="${SELECTED_ENV:-${PREFIX}.selected.env}"
-RACE_RESULT="${RACE_RESULT:-${PREFIX}.race.tsv}"
+RACE_RESULT="${RACE_RESULT:-${RACE_PREFIX}.tsv}"
 
 for x in REBUILD_BUCKETS RUN_NEXTSELF_STAGE RUN_HYBRID_STAGE RUN_HYBRID_NS_STAGE; do
   v="${!x}"
@@ -59,7 +61,7 @@ command -v sha256sum >/dev/null || { echo 'sha256sum required' >&2; exit 2; }
 GPU_COUNT="$(nvidia-smi --query-gpu=index --format=csv,noheader | wc -l)"
 (( GPU_COUNT >= 8 )) || { echo "need 8 visible GPUs; got $GPU_COUNT" >&2; exit 2; }
 
-mkdir -p "$(dirname "$LOG")" "$(dirname "$META")" "$(dirname "$SELECTED_ENV")"
+mkdir -p "$(dirname "$LOG")" "$(dirname "$META")" "$(dirname "$SELECTED_ENV")" "$WORK_ROOT"
 HEAD_SHA="$(git -C "$ONEESAN_ROOT" rev-parse HEAD)"
 HEAD_DIRTY=0
 [[ -z "$(git -C "$ONEESAN_ROOT" status --porcelain=v1 --untracked-files=normal)" ]] || HEAD_DIRTY=1
@@ -78,6 +80,9 @@ PROFILE_SHA="$(sha256sum "$PROFILE_FILE" | awk '{print $1}')"
   printf 'smoke_prime=%s\n' "$SMOKE_PRIME"
   printf 'forced_target_mib=%s\n' "$FORCED_TARGET_MIB"
   printf 'bucket_target_mib=%s\n' "$BUCKET_TARGET_MIB"
+  printf 'work_root=%s\n' "$WORK_ROOT"
+  printf 'race_prefix=%s\n' "$RACE_PREFIX"
+  printf 'race_result=%s\n' "$RACE_RESULT"
   printf 'select_only=1\n'
   printf 'rebuild_buckets=%s\n' "$REBUILD_BUCKETS"
   printf 'run_nextself_stage=%s\n' "$RUN_NEXTSELF_STAGE"
@@ -117,7 +122,7 @@ bash "$ONEESAN_ROOT/scripts/bench/b300-grand-selector-contract-preflight.sh"
 echo "=== B300 grand first-pass: n=27 head=${HEAD_SHA:0:12} GPUs=$GPU_COUNT SELECT_ONLY=1 ===" >&2
 set +e
 PROFILE_FILE="$PROFILE_FILE" ARCH="$ARCH" MAX_WINDOW="$MAX_WINDOW" SMOKE_PRIME="$SMOKE_PRIME" \
-  FORCED_TARGET_MIB="$FORCED_TARGET_MIB" BUCKET_TARGET_MIB="$BUCKET_TARGET_MIB" \
+  FORCED_TARGET_MIB="$FORCED_TARGET_MIB" BUCKET_TARGET_MIB="$BUCKET_TARGET_MIB" WORK_ROOT="$WORK_ROOT" RACE_PREFIX="$RACE_PREFIX" \
   SELECT_ONLY=1 REBUILD_BUCKETS="$REBUILD_BUCKETS" \
   RUN_NEXTSELF_STAGE="$RUN_NEXTSELF_STAGE" RUN_HYBRID_STAGE="$RUN_HYBRID_STAGE" RUN_HYBRID_NS_STAGE="$RUN_HYBRID_NS_STAGE" \
   NEXTSELF_THREADS="$NEXTSELF_THREADS" NEXTSELF_SEARCH_ROWS="$NEXTSELF_SEARCH_ROWS" \
@@ -167,7 +172,7 @@ IFS=$'\t' read -r BEST BEST_PROFILE BEST_BIN BEST_RES BEST_WALL <<<"$WIN"
 [[ -x "$BEST_BIN" ]] || { echo "selected binary missing: $BEST_BIN" >&2; exit 4; }
 BEST_SHA="$(sha256sum "$BEST_BIN" | awk '{print $1}')"
 SHA12="${BEST_SHA:0:12}"
-BEST_WORK="$ONEESAN_ROOT/work/b300_exact_singlepass_${BEST}_${BEST_PROFILE}_${SHA12}_n27"
+BEST_WORK="$WORK_ROOT/b300_exact_singlepass_${BEST}_${BEST_PROFILE}_${SHA12}_n27"
 CHECKPOINT="$BEST_WORK/checkpoint.json"
 [[ -s "$CHECKPOINT" ]] || { echo "seeded checkpoint missing: $CHECKPOINT" >&2; exit 4; }
 RACE_SHA="$(sha256sum "$RACE_RESULT" | awk '{print $1}')"
@@ -221,6 +226,7 @@ PY
   printf 'B300_GRAND_SELECTED_MAX_WINDOW=%q\n' "$MAX_WINDOW"
   printf 'B300_GRAND_SELECTED_WORK_DIR=%q\n' "$BEST_WORK"
   printf 'B300_GRAND_SELECTED_CHECKPOINT=%q\n' "$CHECKPOINT"
+  printf 'B300_GRAND_SELECTED_RACE_PREFIX=%q\n' "$RACE_PREFIX"
   printf 'B300_GRAND_SELECTED_RACE_RESULT=%q\n' "$RACE_RESULT"
   printf 'B300_GRAND_SELECTED_RACE_RESULT_SHA256=%q\n' "$RACE_SHA"
   printf 'B300_GRAND_SELECTED_FIRSTPASS_META=%q\n' "$META"
@@ -236,6 +242,7 @@ PY
   printf 'selected_runtime_kind=%s\n' "$RUNTIME_KIND"
   printf 'selected_target_mib=%s\n' "$RUN_TARGET"
   printf 'selected_work_dir=%s\n' "$BEST_WORK"
+  printf 'race_prefix=%s\n' "$RACE_PREFIX"
   printf 'race_result=%s\n' "$RACE_RESULT"
   printf 'race_result_sha256=%s\n' "$RACE_SHA"
   printf 'promotion_contract=1\n'
