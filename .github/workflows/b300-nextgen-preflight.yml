@@ -11,6 +11,7 @@ on:
       - 'scripts/bench/b300-nextgen-*.sh'
       - 'scripts/bench/b300-main-recurrence-ilp-partition-proof.py'
       - 'scripts/run/b300x8-nextgen-select.sh'
+      - 'scripts/run/b300x8-nextgen-hybrid8-staged-fullprime-race.sh'
       - 'scripts/run/b300x8-race-forced-set-profiled-once.sh'
       - '.github/workflows/b300-nextgen-preflight.yml'
   pull_request:
@@ -23,6 +24,7 @@ on:
       - 'scripts/bench/b300-nextgen-*.sh'
       - 'scripts/bench/b300-main-recurrence-ilp-partition-proof.py'
       - 'scripts/run/b300x8-nextgen-select.sh'
+      - 'scripts/run/b300x8-nextgen-hybrid8-staged-fullprime-race.sh'
       - 'scripts/run/b300x8-race-forced-set-profiled-once.sh'
       - '.github/workflows/b300-nextgen-preflight.yml'
   workflow_dispatch:
