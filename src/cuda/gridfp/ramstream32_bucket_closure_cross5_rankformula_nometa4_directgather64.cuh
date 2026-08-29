@@ -14,9 +14,13 @@ static_assert(!P10DC_RANKFORMULA_DIRECTGATHER_FORCE7,
               "DIRECTGATHER64 does not use FORCE7");
 #endif
 
+using P10DCDirectGather64Word = unsigned long long;
+static_assert(sizeof(P10DCDirectGather64Word) == 8,
+              "directgather64 word must be exactly 64 bits");
+
 #if P10DC_RANKFORMULA_DIRECTGATHER64
-__constant__ uint64_t* D_P10DC_RANKFORMULA_DIRECTGATHER64;
-__constant__ uint64_t* D_P10DC_RANKFORMULA_DIRECTGATHER64_RARE;
+__constant__ P10DCDirectGather64Word* D_P10DC_RANKFORMULA_DIRECTGATHER64;
+__constant__ P10DCDirectGather64Word* D_P10DC_RANKFORMULA_DIRECTGATHER64_RARE;
 #endif
 
 __device__ __forceinline__ size_t p10dc_rankformula_directgather_index(
@@ -42,8 +46,9 @@ p10dc_resolved_low_preimages_cross5_rankformula_nometa4_directgather64_fixed(
 #else
     if (!depth || depth > P10DC_RANKFORMULA_ABSTRACT_SELECT_DEPTHS)
         return BkczCrossAccum(0);
-    const uint64_t p = __ldg(D_P10DC_RANKFORMULA_DIRECTGATHER64 +
-                             p10dc_rankformula_directgather_index(h, rank, depth));
+    const P10DCDirectGather64Word p = __ldg(
+        D_P10DC_RANKFORMULA_DIRECTGATHER64 +
+        p10dc_rankformula_directgather_index(h, rank, depth));
     const uint32_t count = uint32_t((p >> 45) & 7u);
     if (!count) return BkczCrossAccum(0);
 
@@ -53,7 +58,8 @@ p10dc_resolved_low_preimages_cross5_rankformula_nometa4_directgather64_fixed(
     uint32_t r3 = 0, r4 = 0, r5 = 0, r6 = 0;
     if (count > 3) {
         const uint32_t rare_ix = uint32_t(p >> 48);
-        const uint64_t q = __ldg(D_P10DC_RANKFORMULA_DIRECTGATHER64_RARE + rare_ix);
+        const P10DCDirectGather64Word q = __ldg(
+            D_P10DC_RANKFORMULA_DIRECTGATHER64_RARE + rare_ix);
         r3 = uint32_t(q & 0x7fffu);
         r4 = uint32_t((q >> 15) & 0x7fffu);
         r5 = uint32_t((q >> 30) & 0x7fffu);
