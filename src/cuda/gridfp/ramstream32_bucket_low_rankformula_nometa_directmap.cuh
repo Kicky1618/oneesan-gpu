@@ -158,6 +158,18 @@ struct BucketFusedDirectHighRowsRankFormulaNometa4DirectMapTables
 
         const size_t gather_count = total * DEPTHS;
         std::vector<uint4> gather(gather_count, uint4{0u, 0u, 0u, 0u});
+#if P10DC_RANKFORMULA_DIRECTGATHER_DEPTHMAJOR
+        std::array<uint32_t,
+            (MAXW + 2) * P10DC_RANKFORMULA_ABSTRACT_SELECT_DEPTHS> depth_off{};
+        for (uint32_t h = 0; h < uint32_t(MAXW + 2); ++h) {
+            const uint64_t hbase = uint64_t(off[h]) * DEPTHS;
+            for (uint32_t depth = 1; depth <= DEPTHS; ++depth) {
+                const uint64_t z = hbase + uint64_t(depth - 1u) * count[h];
+                if (z >= uint64_t(1u) << 32) std::exit(798);
+                depth_off[h * DEPTHS + (depth - 1u)] = uint32_t(z);
+            }
+        }
+#endif
         uint64_t selected_total = 0;
         uint32_t max_selected = 0;
         for (uint32_t h = 0; h < P10DC_RANKFORMULA_NOMETA4_HEIGHTS; ++h) {
@@ -198,8 +210,12 @@ struct BucketFusedDirectHighRowsRankFormulaNometa4DirectMapTables
                         ++li;
                     }
                     rr[7] = uint16_t(nr);
+#if P10DC_RANKFORMULA_DIRECTGATHER_DEPTHMAJOR
+                    const size_t gi = size_t(depth_off[h * DEPTHS + (depth - 1u)]) + rank;
+#else
                     const size_t gi =
                         (size_t(off[h]) + rank) * DEPTHS + (depth - 1u);
+#endif
                     gather[gi] = uint4{
                         uint32_t(rr[0]) | (uint32_t(rr[1]) << 16),
                         uint32_t(rr[2]) | (uint32_t(rr[3]) << 16),
@@ -232,6 +248,11 @@ struct BucketFusedDirectHighRowsRankFormulaNometa4DirectMapTables
         ck(cudaMemcpyToSymbol(D_P10DC_RANKFORMULA_DIRECTGATHER_OFF,
                               off.data(), off.size() * sizeof(uint32_t)),
            "p10dc directgather offsets");
+#if P10DC_RANKFORMULA_DIRECTGATHER_DEPTHMAJOR
+        ck(cudaMemcpyToSymbol(D_P10DC_RANKFORMULA_DIRECTGATHER_DEPTH_OFF,
+                              depth_off.data(), depth_off.size() * sizeof(uint32_t)),
+           "p10dc directgather depth offsets");
+#endif
         std::cerr << "p10dc_low_rankformula_directgather fixed_owner=" << fixed
                   << " descriptors=" << gather_count
                   << " bytes=" << gather_count * sizeof(uint4)
@@ -239,6 +260,9 @@ struct BucketFusedDirectHighRowsRankFormulaNometa4DirectMapTables
                   << " avg_selected="
                   << (gather_count ? double(selected_total) / double(gather_count) : 0.0)
                   << " max_selected=" << max_selected
+                  << " depth_major=" << P10DC_RANKFORMULA_DIRECTGATHER_DEPTHMAJOR
+                  << " descriptor_lane_stride_bytes="
+                  << (P10DC_RANKFORMULA_DIRECTGATHER_DEPTHMAJOR ? sizeof(uint4) : DEPTHS * sizeof(uint4))
                   << " runtime_locator_loads=0"
                   << " runtime_depth_select_loads=0"
                   << " runtime_srcpack_loads=0"
