@@ -1,7 +1,5 @@
 #pragma once
 
-#include "ramstream32_bucket_closure_cross5_rankformula_nometa4_directgather64.cuh"
-
 #ifndef P10DC_RANKFORMULA_DIRECTGATHER_SPARSE64
 #define P10DC_RANKFORMULA_DIRECTGATHER_SPARSE64 0
 #endif
@@ -32,10 +30,6 @@ p10dc_resolved_low_preimages_cross5_rankformula_nometa4_directgather_sparse64_fi
     const size_t gi = p10dc_rankformula_directgather_index(h, rank, depth);
     const size_t wi = gi >> 5;
     const uint32_t bit = uint32_t(gi) & 31u;
-
-    // Across a warp, consecutive ranks hit at most two index words.  Identical
-    // addresses are coalesced by the read-only path, so keep the lookup simple:
-    // one 8-byte word supplies both the nonzero mask and compact-prefix base.
     const P10DCDirectGather64Word ix = __ldg(
         D_P10DC_RANKFORMULA_DIRECTGATHER_SPARSE64_INDEX + wi);
     const uint32_t bits = uint32_t(ix);
@@ -48,7 +42,7 @@ p10dc_resolved_low_preimages_cross5_rankformula_nometa4_directgather_sparse64_fi
     const P10DCDirectGather64Word p = __ldg(
         D_P10DC_RANKFORMULA_DIRECTGATHER_SPARSE64_PRIMARY + ci);
     const uint32_t count = uint32_t((p >> 45) & 7u);
-    if (!count) return BkczCrossAccum(0); // corruption guard; bitmap says nonzero.
+    if (!count) return BkczCrossAccum(0);
 
     const uint32_t r0 = uint32_t(p & 0x7fffu);
     const uint32_t r1 = uint32_t((p >> 15) & 0x7fffu);
