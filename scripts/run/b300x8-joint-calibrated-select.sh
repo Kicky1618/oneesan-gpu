@@ -7,7 +7,9 @@ N="${1:-27}";if(($#>0));then shift;fi
 ARCH="${ARCH:-native}";PRIME="${SMOKE_PRIME:-4294967291}";TARGET_MIB="${FORCED_TARGET_MIB:-65536}";MAX_WINDOW="${MAX_WINDOW:-14}"
 PROFILE_FILE="${PROFILE_FILE:-$ONEESAN_ROOT/work/b300_hbm_profile_refined21.env}"
 PREFIX="${PREFIX:-$ONEESAN_ROOT/work/b300_joint_calibrated_select_n27}";CAL_PREFIX="${CAL_PREFIX:-${PREFIX}.calibration}";CAL_LOG="${CAL_LOG:-${PREFIX}.calibration.log}"
-RECALIBRATE="${RECALIBRATE:-1}";[[ "$RECALIBRATE" == 0 || "$RECALIBRATE" == 1 ]]||{ echo 'RECALIBRATE must be 0 or 1' >&2;exit 2; }
+RECALIBRATE="${RECALIBRATE:-1}";SELECT_ONLY="${SELECT_ONLY:-1}"
+[[ "$RECALIBRATE" == 0 || "$RECALIBRATE" == 1 ]]||{ echo 'RECALIBRATE must be 0 or 1' >&2;exit 2; }
+[[ "$SELECT_ONLY" == 0 || "$SELECT_ONLY" == 1 ]]||{ echo 'SELECT_ONLY must be 0 or 1' >&2;exit 2; }
 mkdir -p "$(dirname "$PREFIX")"
 getv(){ local k="$1" f="$2";sed -nE "s/^${k}=([^[:space:]]+).*/\\1/p" "$f"|tail -n1; }
 
@@ -25,8 +27,8 @@ echo "=== joint calibrated selector: build $LABEL ===" >&2
 N=27 ARCH="$ARCH" OUT="$BIN" HIGH_DROP_CHUNK="$HIGH" DUALMASK="$DUAL" CLOSURE_BATCH="$BATCH" BUILD_ERR="$BUILD_ERR" PTXAS_VERBOSE=1 \
  bash "$ONEESAN_ROOT/scripts/build/b300-forced-mlp-calibrated.sh" >"$BUILD_OUT" 2>"${PREFIX}.build.driver.err"
 [[ -x "$BIN" ]]||{ echo 'joint calibrated binary missing' >&2;exit 4; };grep -Fq "mlp_calibrated_forced=1 high_drop_chunk=$HIGH dualmask=$DUAL closure_batch=$BATCH" "$BUILD_OUT"
-echo "JOINT CALIBRATED FORCED label=$LABEL binary=$BIN" >&2
+echo "JOINT CALIBRATED FORCED label=$LABEL binary=$BIN select_only=$SELECT_ONLY" >&2
 
-export SELECT_ONLY=1 FORCED_OVERRIDE_BIN="$BIN" FORCED_OVERRIDE_LABEL="$LABEL" FORCED_OVERRIDE_THREADS="$THREADS" PROFILE_FILE SMOKE_PRIME="$PRIME" FORCED_TARGET_MIB="$TARGET_MIB" MAX_WINDOW
+export SELECT_ONLY FORCED_OVERRIDE_BIN="$BIN" FORCED_OVERRIDE_LABEL="$LABEL" FORCED_OVERRIDE_THREADS="$THREADS" PROFILE_FILE SMOKE_PRIME="$PRIME" FORCED_TARGET_MIB="$TARGET_MIB" MAX_WINDOW
 export PREFIX="${RACE_PREFIX:-${PREFIX}.race}"
 exec "$ONEESAN_ROOT/scripts/run/b300x8-race-external-forced-profiled.sh" 27 "$@"
