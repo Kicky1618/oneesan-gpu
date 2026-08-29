@@ -28,6 +28,8 @@ REPEATS="${REPEATS:-2}"
 ILP_MODES="${ILP_MODES:-1 2 4}"
 PTXAS_VERBOSE="${PTXAS_VERBOSE:-1}"
 RUN_SELFTEST="${RUN_SELFTEST:-1}"
+SAMPLE_GPU_UTIL="${SAMPLE_GPU_UTIL:-1}"
+UTIL_SAMPLE_S="${UTIL_SAMPLE_S:-0.25}"
 
 PREFIX="${PREFIX:-$ONEESAN_ROOT/work/b300_depthcode_rankchunk32_ilp_ab_n${N}_${TRANSPOSE_MODE}_rankplane${RANKCHUNK32_RANKPLANE}}"
 RESULT="${RESULT:-${PREFIX}.tsv}"
@@ -37,7 +39,7 @@ LOGDIR="${LOGDIR:-${PREFIX}_logs}"
 case "$TRANSPOSE_MODE" in sync|events|pipeline) ;; *) echo "invalid TRANSPOSE_MODE" >&2; exit 2;; esac
 case "$DEPTHCODE_DECODE_LOAD" in global|ldg) ;; *) echo "invalid DEPTHCODE_DECODE_LOAD" >&2; exit 2;; esac
 case "$RANKSTREAM_LUT_LOAD" in constant|ldg|ldg256) ;; *) echo "invalid RANKSTREAM_LUT_LOAD" >&2; exit 2;; esac
-for x in RANKCHUNK32_RANKPLANE RANKCHUNK32_BLOCK64 PM_ACCUM TERNARY_KEY4 PTXAS_VERBOSE RUN_SELFTEST; do
+for x in RANKCHUNK32_RANKPLANE RANKCHUNK32_BLOCK64 PM_ACCUM TERNARY_KEY4 PTXAS_VERBOSE RUN_SELFTEST SAMPLE_GPU_UTIL; do
   v="${!x}"; [[ "$v" == 0 || "$v" == 1 ]] || { echo "$x must be 0 or 1" >&2; exit 2; }
 done
 for ilp in $ILP_MODES; do case "$ilp" in 1|2|4) ;; *) echo "ILP_MODES entries must be 1, 2, or 4" >&2; exit 2;; esac; done
@@ -88,14 +90,31 @@ build_one() {
     >"$LOGDIR/ilp_${ilp}.build.out" 2>"$LOGDIR/ilp_${ilp}.build.err"
 }
 
-printf 'ilp\trepeat\tresidue\twall_s\tforward_high_s\treverse_high_s\tforward_low_s\treverse_low_s\ttranspose_s\n' >"$RESULT"
+printf 'ilp\trepeat\tresidue\twall_s\tforward_high_s\treverse_high_s\tforward_low_s\treverse_low_s\ttranspose_s\tsm_active_avg_pct\tmem_active_avg_pct\tmem_max_pct\n' >"$RESULT"
 
 run_one() {
   local ilp="$1" bin="$2" rep="$3"
   local so="$LOGDIR/ilp_${ilp}_r${rep}.out" se="$LOGDIR/ilp_${ilp}_r${rep}.err"
-  BUCKET_THREADS="$BUCKET_THREADS" BUCKET_GRID_X="$BUCKET_GRID_X" BUCKET_GRID_Y="$BUCKET_GRID_Y" \
-    "$bin" "$N" "$TARGET_MIB" "$MAX_WINDOW" "$NGPU" "$MOD" >"$so" 2>"$se"
-  local line detail residue wall fh rh fl rl ts
+  local util="$LOGDIR/ilp_${ilp}_r${rep}.util.tsv"
+  : >"$util"
+
+  if [[ "$SAMPLE_GPU_UTIL" == 1 ]]; then
+    BUCKET_THREADS="$BUCKET_THREADS" BUCKET_GRID_X="$BUCKET_GRID_X" BUCKET_GRID_Y="$BUCKET_GRID_Y" \
+      "$bin" "$N" "$TARGET_MIB" "$MAX_WINDOW" "$NGPU" "$MOD" >"$so" 2>"$se" &
+    local pid=$!
+    while kill -0 "$pid" 2>/dev/null; do
+      nvidia-smi --query-gpu=utilization.gpu,utilization.memory --format=csv,noheader,nounits 2>/dev/null \
+        | awk -F',' '{gsub(/[[:space:]]/,"",$1); gsub(/[[:space:]]/,"",$2); if($1 ~ /^[0-9]+$/ && $2 ~ /^[0-9]+$/) print $1 "\t" $2}' \
+        >>"$util" || true
+      sleep "$UTIL_SAMPLE_S"
+    done
+    wait "$pid"
+  else
+    BUCKET_THREADS="$BUCKET_THREADS" BUCKET_GRID_X="$BUCKET_GRID_X" BUCKET_GRID_Y="$BUCKET_GRID_Y" \
+      "$bin" "$N" "$TARGET_MIB" "$MAX_WINDOW" "$NGPU" "$MOD" >"$so" 2>"$se"
+  fi
+
+  local line detail residue wall fh rh fl rl ts smu memu memmax
   line="$(grep '^residue=' "$so" | tail -n1 || true)"
   [[ -n "$line" ]] || { echo "ilp=$ilp missing residue" >&2; exit 3; }
   residue="$(field residue "$line")"; wall="$(field wall_s "$line")"
@@ -103,8 +122,25 @@ run_one() {
   detail="$(grep 'snake_onepass_graph_batch modulus=' "$se" | tail -n1 || true)"
   fh="$(field forward_high_s "$detail")"; rh="$(field reverse_high_s "$detail")"
   fl="$(field forward_low_s "$detail")"; rl="$(field reverse_low_s "$detail")"; ts="$(field transpose_s "$detail")"
-  printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' "$ilp" "$rep" "$residue" "$wall" \
-    "${fh:-NA}" "${rh:-NA}" "${fl:-NA}" "${rl:-NA}" "${ts:-NA}" >>"$RESULT"
+
+  smu=NA; memu=NA; memmax=NA
+  if [[ -s "$util" ]]; then
+    read -r smu memu memmax < <(awk '
+      BEGIN {sa=0; ma=0; na=0; s_all=0; m_all=0; n_all=0; mx=0}
+      $1 ~ /^[0-9]+([.][0-9]+)?$/ && $2 ~ /^[0-9]+([.][0-9]+)?$/ {
+        s_all += $1; m_all += $2; ++n_all; if ($2 > mx) mx=$2;
+        if ($1 >= 20) {sa += $1; ma += $2; ++na}
+      }
+      END {
+        if (na) printf "%.3f %.3f %.3f\n", sa/na, ma/na, mx;
+        else if (n_all) printf "%.3f %.3f %.3f\n", s_all/n_all, m_all/n_all, mx;
+        else print "NA NA NA";
+      }' "$util")
+  fi
+
+  printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
+    "$ilp" "$rep" "$residue" "$wall" "${fh:-NA}" "${rh:-NA}" "${fl:-NA}" "${rl:-NA}" "${ts:-NA}" \
+    "$smu" "$memu" "$memmax" >>"$RESULT"
 }
 
 for ilp in $ILP_MODES; do
@@ -122,7 +158,8 @@ python3 - "$RESULT" "$SUMMARY" "$RANKCHUNK32_RANKPLANE" <<'PY'
 import csv, statistics, sys
 src,dst,rankplane=sys.argv[1:]
 rows=list(csv.DictReader(open(src),delimiter='\t'))
-metrics=('wall_s','forward_high_s','reverse_high_s','forward_low_s','reverse_low_s','transpose_s')
+metrics=('wall_s','forward_high_s','reverse_high_s','forward_low_s','reverse_low_s','transpose_s',
+         'sm_active_avg_pct','mem_active_avg_pct','mem_max_pct')
 modes=[]
 for mode in sorted({r['ilp'] for r in rows}, key=int):
     group=[r for r in rows if r['ilp']==mode]
@@ -144,6 +181,10 @@ if '1' in q:
             a=float(q['1']['forward_high_s'])+float(q['1']['reverse_high_s'])
             b=float(q[mode]['forward_high_s'])+float(q[mode]['reverse_high_s'])
             print(f'rankchunk32_ilp1_to_{mode}_total_high_speedup={a/b:.6f}x')
+for r in modes:
+    print(f'ilp{r["ilp"]}_sm_active_avg_pct={r["sm_active_avg_pct"]}')
+    print(f'ilp{r["ilp"]}_mem_active_avg_pct={r["mem_active_avg_pct"]}')
+    print(f'ilp{r["ilp"]}_mem_max_pct={r["mem_max_pct"]}')
 print('ilp_model=independent_lr_chains_batched_before_consumption')
 print('rankplane='+rankplane)
 print('directmask_runtime_path=' + ('mask8_then_rank16plane_then_source32' if rankplane=='1' else 'mask8_then_offset32_then_rank16_then_source32'))
@@ -190,4 +231,4 @@ for mode in sys.argv[2:]:
 PY
 fi
 
-echo "b300-depthcode-rankchunk32-ilp-ab OK n=$N repeats=$REPEATS modes='$ILP_MODES' rankplane=$RANKCHUNK32_RANKPLANE selftest=$RUN_SELFTEST result=$RESULT logs=$LOGDIR" >&2
+echo "b300-depthcode-rankchunk32-ilp-ab OK n=$N repeats=$REPEATS modes='$ILP_MODES' rankplane=$RANKCHUNK32_RANKPLANE selftest=$RUN_SELFTEST sample_gpu_util=$SAMPLE_GPU_UTIL result=$RESULT logs=$LOGDIR" >&2
