@@ -27,26 +27,29 @@ RESOURCE="${RESOURCE:-${PREFIX}_ptxas.tsv}"; META="${META:-${PREFIX}_prectx.tsv}
 PARSER="$ONEESAN_ROOT/scripts/bench/parse-ptxas-resources.py"
 mkdir -p "$LOGDIR" "$(dirname "$RESULT")"
 
-# mode forward reverse
+# mode forward reverse compact
 CASES=(
-  "none 0 0"
-  "forward 1 0"
-  "reverse 0 1"
-  "both 1 1"
+  "none 0 0 0"
+  "forward_ptr 1 0 0"
+  "forward_compact 1 0 1"
+  "reverse_ptr 0 1 0"
+  "reverse_compact 0 1 1"
+  "both_ptr 1 1 0"
+  "both_compact 1 1 1"
 )
 
 field(){ local key="$1" line="$2"; sed -nE "s/(^|.*[[:space:]])${key}=([^[:space:]]+).*/\\2/p" <<<"$line" | tail -n1; }
 
 printf 'backend\tkernel\tregisters\tstack_bytes\tspill_store_bytes\tspill_load_bytes\tsmem_bytes\tcmem0_bytes\n' >"$RESOURCE"
-printf 'mode\towner_lines\tcontext_bytes\tfwd_nn\tfwd_nrnl\trev_nn\trev_nr\trev_nl\tresident_bytes_per_gpu\n' >"$META"
-printf 'mode\tprectx_forward\tprectx_reverse\trepeat\tresidue\twall_s\tforward_high_s\treverse_high_s\tforward_low_s\treverse_low_s\ttranspose_s\n' >"$RESULT"
+printf 'mode\tcompact\towner_lines\tcontext_bytes\tfwd_nn\tfwd_nrnl\trev_nn\trev_nr\trev_nl\tresident_bytes_per_gpu\textra_metadata_mib_plan\n' >"$META"
+printf 'mode\tprectx_forward\tprectx_reverse\tcompact\trepeat\tresidue\twall_s\tforward_high_s\treverse_high_s\tforward_low_s\treverse_low_s\ttranspose_s\n' >"$RESULT"
 
 for spec in "${CASES[@]}"; do
-  read -r mode pf pr <<<"$spec"
+  read -r mode pf pr compact <<<"$spec"
   bin="$ONEESAN_BUILD_DIR/orbitcta_prectx_${mode}_n${N}"
   N="$N" ARCH="$ARCH" OUT="$bin" DIRECTGATHER64=1 \
     DIRECTGATHER_SPARSE64="$DIRECTGATHER_SPARSE64" \
-    PRECTX_FORWARD="$pf" PRECTX_REVERSE="$pr" \
+    PRECTX_FORWARD="$pf" PRECTX_REVERSE="$pr" PRECTX_COMPACT="$compact" \
     ORBITCTA_COL_ILP="$COL_ILP" PAIR_MLP=0 CPASYNC_PAIR=0 \
     RANKFORMULA_MLP_WINDOW4="$WINDOW4" PM_ACCUM="$PM_ACCUM" PTXAS_VERBOSE=1 \
     bash "$ONEESAN_ROOT/scripts/build/b300-directgather-orbitcta.sh" \
@@ -64,38 +67,45 @@ for spec in "${CASES[@]}"; do
     residue="$(field residue "$line")"
     [[ "$residue" == "$EXPECT" ]] || { echo "$mode residue mismatch got=$residue expected=$EXPECT" >&2; exit 4; }
     detail="$(grep 'snake_onepass_graph_batch modulus=' "$se" | tail -n1 || true)"
-    printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
-      "$mode" "$pf" "$pr" "$rep" "$residue" "$(field wall_s "$line")" \
+    printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
+      "$mode" "$pf" "$pr" "$compact" "$rep" "$residue" "$(field wall_s "$line")" \
       "$(field forward_high_s "$detail")" "$(field reverse_high_s "$detail")" \
       "$(field forward_low_s "$detail")" "$(field reverse_low_s "$detail")" \
       "$(field transpose_s "$detail")" >>"$RESULT"
   done
 
-  # Every device builds a full pointer-valued context table because peer row
-  # addresses differ by device. Counts should be identical across owners. Use
-  # the first line for per-GPU resident bytes and record line count as a sanity check.
-  python3 - "$mode" "$LOGDIR/${mode}_r1.err" >>"$META" <<'PY'
+  # Every device builds a full context table because peer row addresses / row
+  # affine bases differ by fixed owner.  Parse the first owner as the per-GPU
+  # size and compare it to the generic plan's exact extra-metadata accounting.
+  python3 - "$mode" "$compact" "$LOGDIR/${mode}_r1.err" >>"$META" <<'PY'
 import re,sys
-mode,path=sys.argv[1:]
-lines=[]
+mode,compact,path=sys.argv[1:]
+lines=[]; extra='0'
 for line in open(path,encoding='utf-8',errors='replace'):
-    if 'p10dc_prectx_high fixed_owner=' not in line: continue
-    d={k:int(v) for k,v in re.findall(r'(closure_context_bytes|fwd_nn|fwd_nrnl|rev_nn|rev_nr|rev_nl)=([0-9]+)',line)}
+    if 'backend=gridfp-b300-bucket-snake-onepass-graph-batch-v0.1-plan' in line:
+        m=re.search(r'extra_metadata_mib=([^\s]+)',line)
+        if m: extra=m.group(1)
+    if ('p10dc_prectx_high fixed_owner=' not in line and
+        'p10dc_compact_prectx_high fixed_owner=' not in line):
+        continue
+    d={k:int(v) for k,v in re.findall(
+        r'(closure_context_bytes|fwd_nn|fwd_nrnl|rev_nn|rev_nr|rev_nl)=([0-9]+)',line)}
     lines.append(d)
 if not lines:
-    print('\t'.join([mode,'0','0','0','0','0','0','0','0']))
+    print('\t'.join([mode,compact,'0','0','0','0','0','0','0','0',extra]))
 else:
     d=lines[0]
     c=d.get('closure_context_bytes',0)
     counts=[d.get(k,0) for k in ('fwd_nn','fwd_nrnl','rev_nn','rev_nr','rev_nl')]
     resident=c*sum(counts)
-    print('\t'.join(map(str,[mode,len(lines),c,*counts,resident])))
+    print('\t'.join(map(str,[mode,compact,len(lines),c,*counts,resident,extra])))
 PY
 done
 
-python3 - "$RESULT" <<'PY'
+python3 - "$RESULT" "$META" <<'PY'
 import csv,statistics,sys
 rows=list(csv.DictReader(open(sys.argv[1]),delimiter='\t'))
+meta={r['mode']:r for r in csv.DictReader(open(sys.argv[2]),delimiter='\t')}
 by={}
 for r in rows: by.setdefault(r['mode'],[]).append(r)
 out=[]
@@ -105,8 +115,12 @@ for mode,g in by.items():
     z['high']=z['forward_high_s']+z['reverse_high_s']
     out.append((z['wall_s'],mode,z))
 for _,mode,z in sorted(out):
+    m=meta.get(mode,{})
     print(mode,f"wall={z['wall_s']:.6f}",f"high={z['high']:.6f}",
-          f"fh={z['forward_high_s']:.6f}",f"rh={z['reverse_high_s']:.6f}")
+          f"fh={z['forward_high_s']:.6f}",f"rh={z['reverse_high_s']:.6f}",
+          f"ctx_bytes={m.get('context_bytes','0')}",
+          f"resident_mib={int(m.get('resident_bytes_per_gpu','0'))/(1<<20):.3f}",
+          f"plan_extra_mib={m.get('extra_metadata_mib_plan','0')}")
 q={m:z for _,m,z in out}
 base=q.get('none')
 if base:
@@ -115,6 +129,11 @@ if base:
               f"high={base['high']/z['high']:.6f} "
               f"fh={base['forward_high_s']/z['forward_high_s']:.6f} "
               f"rh={base['reverse_high_s']/z['reverse_high_s']:.6f}")
+if 'both_ptr' in meta and 'both_compact' in meta:
+    p=int(meta['both_ptr']['resident_bytes_per_gpu'] or 0)
+    c=int(meta['both_compact']['resident_bytes_per_gpu'] or 0)
+    if p and c:
+        print(f"compact_metadata_reduction={p/c:.6f}x saved_mib={(p-c)/(1<<20):.3f}")
 print('BEST',sorted(out)[0][1],f"wall={sorted(out)[0][0]:.6f}")
 PY
 
