@@ -18,9 +18,8 @@ bash "$ONEESAN_ROOT/scripts/bench/b300-ilp4-partition-proof.sh"
 
 ILP2_BIN="$ONEESAN_BUILD_DIR/b300_rankstate_ilp2_ab_n27"
 ILP4_BIN="$ONEESAN_BUILD_DIR/b300_rankstate_ilp4_ab_n27"
+ILP4Q_BIN="$ONEESAN_BUILD_DIR/b300_rankstate_ilp4q_ab_n27"
 
-# Build the exact current ILP2 production candidate. This also leaves the packed
-# rank-state intermediate source before ILP2/concurrent-I/O lowering.
 N=27 ARCH="$ARCH" OUT="$ILP2_BIN" FAST_SHARD_ADDRESS8=1 \
   MAIN_MATE_CACHE=1 MAIN_PULL=1 BLOCK_PULL=1 BLOCK_MATE_CACHE=1 \
   MAIN_PULL_ILP2=0 HEIGHT_CACHE=0 RANK_DELTA_CACHE=1 RANK_STATE_PACKED=1 RANK_STATE_ILP2=1 \
@@ -43,14 +42,20 @@ python3 "$ONEESAN_ROOT/scripts/build/lower-b300-row-limit.py" "$ROW4_SRC" "$ROW4
 python3 "$ONEESAN_ROOT/scripts/build/gen-b300-runtime-threads.py" "$ROW4_SRC" "$THREAD4_SRC" >"$LOGDIR/ilp4.threads.transform.out"
 python3 "$ONEESAN_ROOT/scripts/build/gen-b300-plan-target.py" "$THREAD4_SRC" "$FINAL4_SRC" >"$LOGDIR/ilp4.plan.transform.out"
 
-TMPDIR="$ONEESAN_TMP_DIR" nvcc -O3 -std=c++17 -lineinfo -arch="$ARCH" -Xptxas=-v \
-  -DTARGET_W=28 -DLOW_LUT_K=13 -DHIGH_LUT_K=13 -DB300_FAST_SHARD_ADDRESS8=1 \
-  "$FINAL4_SRC" -o "$ILP4_BIN" >"$LOGDIR/ilp4.build.out" 2>"$LOGDIR/ilp4.build.err"
+compile4(){
+  local quad="$1" bin="$2" label="$3"
+  TMPDIR="$ONEESAN_TMP_DIR" nvcc -O3 -std=c++17 -lineinfo -arch="$ARCH" -Xptxas=-v \
+    -DTARGET_W=28 -DLOW_LUT_K=13 -DHIGH_LUT_K=13 -DB300_FAST_SHARD_ADDRESS8=1 \
+    -DB300_BLOCK_CLOSURE_QUAD="$quad" "$FINAL4_SRC" -o "$bin" >"$LOGDIR/${label}.build.out" 2>"$LOGDIR/${label}.build.err"
+}
+compile4 0 "$ILP4_BIN" ilp4
+compile4 1 "$ILP4Q_BIN" ilp4q
 
 PARSER="$ONEESAN_ROOT/scripts/bench/parse-ptxas-resources.py"
 printf 'mode\tkernel\tregisters\tstack_bytes\tspill_store_bytes\tspill_load_bytes\tsmem_bytes\tcmem0_bytes\n' >"$RESOURCE"
 python3 "$PARSER" "$LOGDIR/ilp2.build.err" --label ilp2 --contains rankstate_ilp2 >>"$RESOURCE" || true
 python3 "$PARSER" "$LOGDIR/ilp4.build.err" --label ilp4 --contains rankstate_ilp4 >>"$RESOURCE" || true
+python3 "$PARSER" "$LOGDIR/ilp4q.build.err" --label ilp4q --contains rankstate_ilp4 >>"$RESOURCE" || true
 
 field(){ local k="$1" l="$2"; sed -nE "s/(^|.*[[:space:]])${k}=([^[:space:]]+).*/\\2/p" <<<"$l" | tail -n1; }
 summarize(){ python3 - "$1" <<'PY'
@@ -81,8 +86,7 @@ run_one(){
   ((rc==0)) || { echo "$tag failed rc=$rc" >&2; tail -n 100 "$err" >&2 || true; return "$rc"; }
   local line residue wall stats
   line="$(grep '^backend=gridfp-b300-hbm32' "$out" | tail -n1 || true)"; [[ -n "$line" ]] || { echo "$tag missing backend line" >&2; return 4; }
-  residue="$(field residue "$line")"; wall="$(field wall_s "$line")"
-  stats="$(summarize "$tele")"
+  residue="$(field residue "$line")"; wall="$(field wall_s "$line")"; stats="$(summarize "$tele")"
   printf '%s\t%s\t%s\t%s\t%s\t%s\n' "$mode" "$threads" "$rep" "$residue" "$wall" "$stats" >>"$RESULT"
 }
 
@@ -91,6 +95,7 @@ for t in $THREADS_LIST; do
   for ((r=1;r<=REPEATS;++r)); do
     echo "=== ILP2 threads=$t repeat=$r ===" >&2; run_one ilp2 "$ILP2_BIN" "$t" "$r"
     echo "=== ILP4 threads=$t repeat=$r ===" >&2; run_one ilp4 "$ILP4_BIN" "$t" "$r"
+    echo "=== ILP4+closure-quad threads=$t repeat=$r ===" >&2; run_one ilp4q "$ILP4Q_BIN" "$t" "$r"
   done
 done
 
@@ -104,13 +109,9 @@ by={}
 for r in rows: by.setdefault((r['mode'],int(r['threads'])),[]).append(r)
 out=[]
 for (m,t),g in by.items():
-    wall=statistics.median(float(x['wall_s']) for x in g)
-    busy=statistics.median(float(x['mem_busy_avg_pct']) for x in g)
-    mem=statistics.median(float(x['mem_avg_pct']) for x in g)
-    sm=statistics.median(float(x['sm_avg_pct']) for x in g)
+    wall=statistics.median(float(x['wall_s']) for x in g);busy=statistics.median(float(x['mem_busy_avg_pct']) for x in g);mem=statistics.median(float(x['mem_avg_pct']) for x in g);sm=statistics.median(float(x['sm_avg_pct']) for x in g)
     out.append((wall,m,t,busy,mem,sm))
-for wall,m,t,busy,mem,sm in sorted(out):
-    print(f'{m} threads={t} wall_s={wall:.9f} mem_busy={busy:.3f}% mem_avg={mem:.3f}% sm_avg={sm:.3f}%')
+for wall,m,t,busy,mem,sm in sorted(out): print(f'{m} threads={t} wall_s={wall:.9f} mem_busy={busy:.3f}% mem_avg={mem:.3f}% sm_avg={sm:.3f}%')
 b=min(out)
 print('b300_rankstate_ilp24_residue_match=1')
 print(f'b300_rankstate_ilp24_best_mode={b[1]}')
