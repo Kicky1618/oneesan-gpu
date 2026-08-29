@@ -28,15 +28,15 @@ printf 'mode\tthreads\trepeat\tresidue\twall_s\tactive_max_s\tactive_sum_s\tmem_
 
 declare -A BIN
 build_one(){
-  local mode="$1" ilp2="$2" ilp4="$3" hot="$4"
+  local mode="$1" ilp2="$2" ilp4="$3" hot="$4" closureq="$5"
   local bin="$ONEESAN_BUILD_DIR/b300_rankstate_${mode}_n27" bout="$LOGDIR/${mode}.build.out" berr="$LOGDIR/${mode}.build.err"
   N=27 ARCH="$ARCH" OUT="$bin" FAST_SHARD_ADDRESS8=1 \
     MAIN_MATE_CACHE=1 MAIN_PULL=1 BLOCK_PULL=1 BLOCK_MATE_CACHE=1 MAIN_PULL_ILP2=0 HEIGHT_CACHE=0 \
-    RANK_DELTA_CACHE=1 RANK_STATE_PACKED=1 RANK_STATE_ILP2="$ilp2" RANK_STATE_ILP4="$ilp4" \
+    RANK_DELTA_CACHE=1 RANK_STATE_PACKED=1 RANK_STATE_ILP2="$ilp2" RANK_STATE_ILP4="$ilp4" BLOCK_CLOSURE_QUAD="$closureq" \
     HOT_DELTA_TABLE="$hot" CONCURRENT_GROUP_IO="$CONCURRENT_GROUP_IO" MAXRREGCOUNT="$MAXRREGCOUNT" PTXAS_VERBOSE=1 \
     bash "$ONEESAN_ROOT/scripts/build/b300-hbm32.sh" >"$bout" 2>"$berr"
   [[ -x "$bin" ]] || { echo "missing binary $bin" >&2; exit 3; }
-  grep -Fq "rank_state_ilp2=$ilp2 rank_state_ilp4=$ilp4 hot_delta_table=$hot" "$bout" || {
+  grep -Fq "rank_state_ilp2=$ilp2 rank_state_ilp4=$ilp4 block_closure_quad=$closureq hot_delta_table=$hot" "$bout" || {
     echo "$mode build metadata mismatch" >&2; tail -n 40 "$bout" >&2; exit 4;
   }
   if [[ "$hot" == 1 ]]; then
@@ -48,9 +48,10 @@ build_one(){
   BIN[$mode]="$bin"
 }
 
-build_one ilp2 1 0 0
-build_one ilp4 0 1 0
-build_one ilp4_hotd32 0 1 1
+build_one ilp2 1 0 0 0
+build_one ilp4 0 1 0 0
+build_one ilp4_hotd32 0 1 1 0
+build_one ilp4_hotd32_closureq 0 1 1 1
 
 field(){ local k="$1" l="$2"; sed -nE "s/(^|.*[[:space:]])${k}=([^[:space:]]+).*/\\2/p" <<<"$l" | tail -n1; }
 summarize_gpu(){ python3 - "$1" <<'PY'
@@ -85,10 +86,11 @@ run_one(){
   printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' "$mode" "$threads" "$rep" "$residue" "$wall" "$active" "$asum" "$stats" >>"$RESULT"
 }
 
+MODES=(ilp2 ilp4 ilp4_hotd32 ilp4_hotd32_closureq)
 for t in $THREADS_LIST; do
   [[ "$t" =~ ^[0-9]+$ ]] && (( t>=32 && t<=1024 && t%32==0 )) || { echo "bad threads=$t" >&2; exit 2; }
   for ((r=1;r<=REPEATS;++r)); do
-    for mode in ilp2 ilp4 ilp4_hotd32; do
+    for mode in "${MODES[@]}"; do
       echo "=== $mode threads=$t repeat=$r ===" >&2
       run_one "$mode" "$t" "$r"
     done
@@ -101,10 +103,11 @@ src,summary,winner=sys.argv[1:]
 rows=list(csv.DictReader(open(src),delimiter='\t'))
 if not rows: raise SystemExit('no results')
 res={r['residue'] for r in rows}
-if len(res)!=1: raise SystemExit('FATAL ILP2/ILP4/hotd32 residue mismatch '+repr(sorted(res)))
+if len(res)!=1: raise SystemExit('FATAL ILP2/ILP4/hotd32/closureq residue mismatch '+repr(sorted(res)))
 num=('wall_s','active_max_s','active_sum_s','mem_avg_pct','mem_max_pct','mem_busy_avg_pct','sm_avg_pct','power_avg_w')
+modes=('ilp2','ilp4','ilp4_hotd32','ilp4_hotd32_closureq')
 out=[]
-for mode in ('ilp2','ilp4','ilp4_hotd32'):
+for mode in modes:
   for threads in sorted({int(r['threads']) for r in rows if r['mode']==mode}):
     g=[r for r in rows if r['mode']==mode and int(r['threads'])==threads]
     z={'mode':mode,'threads':threads,'repeats':len(g),'residue':g[0]['residue']}
@@ -118,10 +121,14 @@ base=min((z for z in out if z['mode']=='ilp2'),key=lambda z:z['wall_s'])
 for z in sorted(out,key=lambda z:z['wall_s']):
   print(z['mode'],f"threads={z['threads']}",f"wall_s={z['wall_s']:.9f}",f"speedup_vs_ilp2={base['wall_s']/z['wall_s']:.6f}x",f"mem_busy={z['mem_busy_avg_pct']:.3f}%",f"mem_avg={z['mem_avg_pct']:.3f}%",f"sm_avg={z['sm_avg_pct']:.3f}%")
 best=min(out,key=lambda z:z['wall_s'])
+use_ilp2=best['mode']=='ilp2'; use_ilp4=not use_ilp2
+use_hot=best['mode'] in ('ilp4_hotd32','ilp4_hotd32_closureq')
+use_closureq=best['mode']=='ilp4_hotd32_closureq'
 with open(winner,'w') as f:
-  f.write(f'RANK_STATE_ILP2={1 if best["mode"]=="ilp2" else 0}\n')
-  f.write(f'RANK_STATE_ILP4={1 if best["mode"]!="ilp2" else 0}\n')
-  f.write(f'HOT_DELTA_TABLE={1 if best["mode"]=="ilp4_hotd32" else 0}\n')
+  f.write(f'RANK_STATE_ILP2={1 if use_ilp2 else 0}\n')
+  f.write(f'RANK_STATE_ILP4={1 if use_ilp4 else 0}\n')
+  f.write(f'HOT_DELTA_TABLE={1 if use_hot else 0}\n')
+  f.write(f'BLOCK_CLOSURE_QUAD={1 if use_closureq else 0}\n')
   f.write(f'GRIDFP_THREADS={best["threads"]}\n')
   f.write(f'RANKSTATE_RACE_WALL_S={best["wall_s"]:.9f}\n')
   f.write(f'RANKSTATE_RACE_MEM_BUSY_PCT={best["mem_busy_avg_pct"]:.6f}\n')
@@ -130,4 +137,4 @@ print('WINNER='+best['mode'],f"threads={best['threads']}",f"wall_s={best['wall_s
 PY
 cat "$RESULT"
 cat "$RESOURCE"
-echo "b300 rankstate ILP4/hotd32 race OK result=$RESULT summary=$SUMMARY winner=$WINNER_ENV" >&2
+echo "b300 rankstate ILP4/hotd32/closureq race OK result=$RESULT summary=$SUMMARY winner=$WINNER_ENV" >&2
