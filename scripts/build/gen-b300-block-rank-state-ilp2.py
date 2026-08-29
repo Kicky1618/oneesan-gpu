@@ -17,7 +17,11 @@ marker='\n\nstatic Code rank_full(MateID m,int width)'
 if marker not in s: raise SystemExit('rank_full marker not found')
 insert=r'''
 
-__device__ __forceinline__ Count b300_block_rankstate_closure(
+// Keep the variable-length closure walk out of the common endpoint kernel's
+// register allocation. About two thirds of W=28 blocked destinations take the
+// one-source endpoint path, so a device call on the minority closure path is a
+// better trade than making every resident warp carry closure temporaries.
+__device__ __noinline__ Count b300_block_rankstate_closure(
     const Count* __restrict__ in_main,Code i,MateID b,int p,int H,RankDelta next_rd
 ){
     Count acc=0;
@@ -94,9 +98,6 @@ __global__ void b300_block_pull_rankstate_ilp2_kernel(
         const RankDelta nr0=rd0+b300_rank_delta_step(l0,p,h0);
         const RankDelta nr1=v1?rd1+b300_rank_delta_step(l1,p,h1):RankDelta(0);
 
-        // Resolve both common one-source endpoint addresses before doing any
-        // closure scan. Their HBM loads can overlap each other and overlap the
-        // integer work of a closure destination in the other stream.
         const Code j0=ep0?b300_sub_rank_delta(i0,rd0):Code(0);
         const Code j1=ep1?b300_sub_rank_delta(i1,rd1):Code(0);
         const Count endpoint0=ep0?in_main[j0]:Count(0);
@@ -123,11 +124,7 @@ new='''if(ds.size){if(useRankDelta)b300_block_pull_rankstate_ilp2_kernel<<<bd,th
 if s.count(old)!=1: raise SystemExit(f'block rank-state ILP2 launch anchor expected one match got {s.count(old)}')
 s=s.replace(old,new,1)
 
-for req in (
-    'b300_block_rankstate_closure','b300_block_pull_rankstate_ilp2_kernel',
-    'base+=2*grid','const Count endpoint0=','const Count endpoint1=',
-    'rank_state[i0]=b300_pack_rank_state','rank_state[i1]=b300_pack_rank_state'
-):
+for req in ('__noinline__ Count b300_block_rankstate_closure','b300_block_pull_rankstate_ilp2_kernel','base+=2*grid','const Count endpoint0=','const Count endpoint1=','rank_state[i0]=b300_pack_rank_state','rank_state[i1]=b300_pack_rank_state'):
     if req not in s: raise SystemExit(f'missing block rank-state ILP2 artifact: {req}')
 out.parent.mkdir(parents=True,exist_ok=True);out.write_text(s)
-print(f'generated {out} from {src}: b300_block_rank_state_ilp2=1 destinations_per_thread=2 endpoint_loads_issued_before_closure=1 closure_exact_fallback_inline=1 packed_rank_state=1')
+print(f'generated {out} from {src}: b300_block_rank_state_ilp2=1 destinations_per_thread=2 endpoint_loads_issued_before_closure=1 closure_slow_path=noinline closure_register_isolation=1 packed_rank_state=1')
