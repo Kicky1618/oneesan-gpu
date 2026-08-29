@@ -31,6 +31,9 @@ done
 [[ "$NEXTSELF_THREADS" =~ ^[0-9]+$ ]] && ((NEXTSELF_THREADS>=32 && NEXTSELF_THREADS<=768 && NEXTSELF_THREADS%32==0)) || {
   echo 'NEXTSELF_THREADS must be warp multiple 32..768' >&2; exit 2;
 }
+for x in NEXTSELF_SEARCH_REPEATS NEXTSELF_VALIDATE_REPEATS; do
+  v="${!x}"; [[ "$v" =~ ^[1-9][0-9]*$ ]] || { echo "$x must be >=1" >&2; exit 2; }
+done
 [[ -f "$PROFILE_FILE" ]] || { echo "missing PROFILE_FILE=$PROFILE_FILE" >&2; exit 2; }
 command -v nvidia-smi >/dev/null || { echo 'nvidia-smi required' >&2; exit 2; }
 command -v nvcc >/dev/null || { echo 'nvcc required' >&2; exit 2; }
@@ -41,8 +44,7 @@ GPU_COUNT="$(nvidia-smi --query-gpu=index --format=csv,noheader | wc -l)"
 mkdir -p "$(dirname "$LOG")" "$(dirname "$META")"
 HEAD_SHA="$(git -C "$ONEESAN_ROOT" rev-parse HEAD)"
 HEAD_DIRTY=0
-git -C "$ONEESAN_ROOT" diff --quiet --ignore-submodules -- || HEAD_DIRTY=1
-git -C "$ONEESAN_ROOT" diff --cached --quiet --ignore-submodules -- || HEAD_DIRTY=1
+[[ -z "$(git -C "$ONEESAN_ROOT" status --porcelain=v1 --untracked-files=normal)" ]] || HEAD_DIRTY=1
 PROFILE_SHA="$(sha256sum "$PROFILE_FILE" | awk '{print $1}')"
 
 {
@@ -62,6 +64,8 @@ PROFILE_SHA="$(sha256sum "$PROFILE_FILE" | awk '{print $1}')"
   printf 'nextself_threads=%s\n' "$NEXTSELF_THREADS"
   printf 'nextself_search_rows=%s\n' "$NEXTSELF_SEARCH_ROWS"
   printf 'nextself_validate_rows=%s\n' "$NEXTSELF_VALIDATE_ROWS"
+  printf 'nextself_search_repeats=%s\n' "$NEXTSELF_SEARCH_REPEATS"
+  printf 'nextself_validate_repeats=%s\n' "$NEXTSELF_VALIDATE_REPEATS"
   printf 'nextself_min_speedup=%s\n' "$NEXTSELF_MIN_SPEEDUP"
   printf 'hybrid_min_speedup=%s\n' "$HYBRID_MIN_SPEEDUP"
   printf 'nvcc_version_begin=1\n'
@@ -73,7 +77,7 @@ PROFILE_SHA="$(sha256sum "$PROFILE_FILE" | awk '{print $1}')"
 } >"$META"
 
 if (( HEAD_DIRTY )); then
-  echo 'WARNING: repository has uncommitted changes; provenance records head_dirty=1' >&2
+  echo 'WARNING: repository has uncommitted or untracked changes; provenance records head_dirty=1' >&2
 fi
 
 echo '=== B300 grand first-pass: GPU-free preflight ===' >&2
