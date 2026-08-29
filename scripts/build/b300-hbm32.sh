@@ -13,9 +13,10 @@ FAST_SHARD_ADDRESS8="${FAST_SHARD_ADDRESS8:-0}"
 MAIN_MATE_CACHE="${MAIN_MATE_CACHE:-1}"
 MAIN_PULL="${MAIN_PULL:-0}"
 BLOCK_PULL="${BLOCK_PULL:-0}"
+BLOCK_MATE_CACHE="${BLOCK_MATE_CACHE:-$BLOCK_PULL}"
 PTXAS_VERBOSE="${PTXAS_VERBOSE:-1}"
 
-for name in FAST_SHARD_ADDRESS8 MAIN_MATE_CACHE MAIN_PULL BLOCK_PULL PTXAS_VERBOSE; do
+for name in FAST_SHARD_ADDRESS8 MAIN_MATE_CACHE MAIN_PULL BLOCK_PULL BLOCK_MATE_CACHE PTXAS_VERBOSE; do
   value="${!name}"
   if [[ "$value" != 0 && "$value" != 1 ]]; then
     echo "$name must be 0 or 1" >&2
@@ -30,12 +31,11 @@ if [[ "$BLOCK_PULL" == 1 && "$MAIN_PULL" != 1 ]]; then
   echo "BLOCK_PULL=1 requires MAIN_PULL=1" >&2
   exit 2
 fi
+if [[ "$BLOCK_MATE_CACHE" == 1 && "$BLOCK_PULL" != 1 ]]; then
+  echo "BLOCK_MATE_CACHE=1 requires BLOCK_PULL=1" >&2
+  exit 2
+fi
 
-# The previous production default enabled the rank/unrank LUTs only for n=27.
-# On B300 this leaves n=24..26 dominated by integer DP walks instead of HBM
-# traffic. K=13 is small compared with B300 HBM and removes roughly half of
-# every width-25..28 rank/unrank walk, so use it throughout the production
-# range. Smaller test widths retain the zero-LUT baseline unless overridden.
 if [[ -z "$LOW_LUT_K" ]]; then
   if (( N >= 24 )); then LOW_LUT_K=13; else LOW_LUT_K=0; fi
 fi
@@ -72,6 +72,11 @@ if [[ "$BLOCK_PULL" == 1 ]]; then
   python3 "$ONEESAN_ROOT/scripts/build/gen-b300-block-pull.py" "$BUILD_SRC" "$BLOCK_PULL_SRC"
   BUILD_SRC="$BLOCK_PULL_SRC"
 fi
+if [[ "$BLOCK_MATE_CACHE" == 1 ]]; then
+  BLOCK_MATE_SRC="$ONEESAN_BUILD_DIR/b300_hbm32_n${N}_full_pull_block_mate.cu"
+  python3 "$ONEESAN_ROOT/scripts/build/gen-b300-block-mate-cache.py" "$BUILD_SRC" "$BLOCK_MATE_SRC"
+  BUILD_SRC="$BLOCK_MATE_SRC"
+fi
 
 PTXAS_FLAGS=()
 if [[ "$PTXAS_VERBOSE" == 1 ]]; then
@@ -91,4 +96,4 @@ TMPDIR="$ONEESAN_TMP_DIR" nvcc \
 echo "built $OUT"
 echo "  source=$SRC"
 echo "  build_source=$BUILD_SRC"
-echo "  n=$N width=$W arch=$ARCH low_lut_k=$LOW_LUT_K high_lut_k=$HIGH_LUT_K fast_shard_address8=$FAST_SHARD_ADDRESS8 main_mate_cache=$MAIN_MATE_CACHE main_pull=$MAIN_PULL block_pull=$BLOCK_PULL ptxas_verbose=$PTXAS_VERBOSE"
+echo "  n=$N width=$W arch=$ARCH low_lut_k=$LOW_LUT_K high_lut_k=$HIGH_LUT_K fast_shard_address8=$FAST_SHARD_ADDRESS8 main_mate_cache=$MAIN_MATE_CACHE main_pull=$MAIN_PULL block_pull=$BLOCK_PULL block_mate_cache=$BLOCK_MATE_CACHE ptxas_verbose=$PTXAS_VERBOSE"
