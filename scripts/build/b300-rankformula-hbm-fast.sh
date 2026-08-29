@@ -3,13 +3,14 @@ set -euo pipefail
 source "$(dirname -- "${BASH_SOURCE[0]}")/../lib/common.sh"
 
 # B300/HGX preset for the HIGH closure when HBM controller utilization is low.
-# Trade a few MiB of read-only descriptor traffic for much lower integer/control
-# pressure: direct rank->group descriptors + direct CROSS gather descriptors.
+# Direct rank/group + direct CROSS descriptors remove integer/control pressure;
+# depth-major descriptor layout keeps same-depth warp reads contiguous.
 N="${N:-21}"
 ARCH="${ARCH:-native}"
 TRANSPOSE_MODE="${TRANSPOSE_MODE:-pipeline}"
 MAXRREGCOUNT="${MAXRREGCOUNT:-0}"
 RANKFORMULA_DIRECTGATHER_FORCE7="${RANKFORMULA_DIRECTGATHER_FORCE7:-0}"
+RANKFORMULA_DIRECTGATHER_DEPTHMAJOR="${RANKFORMULA_DIRECTGATHER_DEPTHMAJOR:-1}"
 RANKFORMULA_MLP_WINDOW4="${RANKFORMULA_MLP_WINDOW4:-0}"
 OUT="${OUT:-$ONEESAN_BUILD_DIR/oneesan_cuda_gridfp_b300_rankformula_hbm_fast_n${N}}"
 
@@ -23,6 +24,7 @@ RANKFORMULA_NOMETA_GROUP61=1 \
 RANKFORMULA_NOMETA_DIRECTMAP=1 \
 RANKFORMULA_DIRECTGATHER=1 \
 RANKFORMULA_DIRECTGATHER_FORCE7="$RANKFORMULA_DIRECTGATHER_FORCE7" \
+RANKFORMULA_DIRECTGATHER_DEPTHMAJOR="$RANKFORMULA_DIRECTGATHER_DEPTHMAJOR" \
 RANKFORMULA_MLP_WINDOW4="$RANKFORMULA_MLP_WINDOW4" \
 RANKFORMULA_ABSTRACT_SELECT8=1 \
 RANKFORMULA_ABSTRACT_DEPTH4=1 \
@@ -37,4 +39,4 @@ TRANSPOSE_MODE="$TRANSPOSE_MODE" \
 PTXAS_VERBOSE="${PTXAS_VERBOSE:-1}" \
 bash "$ONEESAN_ROOT/scripts/build/b300-bucket-snake-pattern10-depthcode-rankformula-nometa4-abstract.sh"
 
-printf 'b300-rankformula-hbm-fast OK out=%s n=%s block=16 group61=1 directmap=1 directgather=1 force7=%s mlp_window4=%s depth4=1 srcpack10=1 gather_mlp=1 maxrregcount=%s pm_accum=1\n' "$OUT" "$N" "$RANKFORMULA_DIRECTGATHER_FORCE7" "$RANKFORMULA_MLP_WINDOW4" "$MAXRREGCOUNT" >&2
+printf 'b300-rankformula-hbm-fast OK out=%s n=%s block=16 group61=1 directmap=1 directgather=1 depthmajor=%s force7=%s mlp_window4=%s depth4=1 srcpack10=1 gather_mlp=1 maxrregcount=%s pm_accum=1\n' "$OUT" "$N" "$RANKFORMULA_DIRECTGATHER_DEPTHMAJOR" "$RANKFORMULA_DIRECTGATHER_FORCE7" "$RANKFORMULA_MLP_WINDOW4" "$MAXRREGCOUNT" >&2
