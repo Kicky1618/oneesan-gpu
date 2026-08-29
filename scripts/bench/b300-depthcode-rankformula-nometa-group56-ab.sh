@@ -23,6 +23,7 @@ PARSER="$ONEESAN_ROOT/scripts/bench/parse-ptxas-resources.py"
 mkdir -p "$LOGDIR" "$(dirname "$RESULT")"
 bash "$ONEESAN_ROOT/scripts/bench/rankformula-nometa-group64-selfindex-proof.sh"
 bash "$ONEESAN_ROOT/scripts/bench/rankformula-nometa-group56-proof.sh"
+bash "$ONEESAN_ROOT/scripts/bench/rankformula-nometa-group56-coop-proof.sh"
 bash "$ONEESAN_ROOT/scripts/bench/rankformula-abstract-compact-proof.sh"
 field(){ local key="$1" line="$2"; sed -nE "s/(^|.*[[:space:]])${key}=([^[:space:]]+).*/\\2/p" <<<"$line" | tail -n1; }
 
@@ -102,6 +103,8 @@ print('group56_self_index_bits=0')
 print('group56_abstract_off_bits=13')
 print('group56_abstract_lut_bytes=85578')
 print('group56_runtime_off_table_load=0')
+print('group56_cooperative_exact_codes=1201917')
+print('group56_cooperative_successor_loads=65159')
 print('semantic_delta=group_layout_and_embedded_abstract_offset_only')
 PY
 
