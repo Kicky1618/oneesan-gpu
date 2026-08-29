@@ -16,7 +16,9 @@
 // Exact flat scheduler with no q->bucket offset search. The existing compact
 // prectx padding byte carries the source main bid, so each orbit keeps the
 // original one-orbit cyclic load distribution while deleting the 6-step
-// binary search from thread-0 setup.
+// binary search from thread-0 setup. The prectx already contains all closure
+// row information, so the runtime depthcode payload is intentionally not
+// decoded on this path either.
 __global__ void bucket_high_orbit_closure_pattern10_depthcode_orbitcta_flat_prectx_bid_kernel(int p) {
     const uint32_t nblocks = D_BKF_MAIN_NBLOCKS;
     if (!nblocks) return;
@@ -46,7 +48,6 @@ __global__ void bucket_high_orbit_closure_pattern10_depthcode_orbitcta_flat_prec
             const uint32_t bid = p10dc_forward_compact_prectx_flat_bid(q, nn);
             if (bid < nblocks) {
                 const BucketOrbitOp op = nn ? D_BKF_HIGH_NN[q] : D_BKF_HIGH_NRNL[q];
-                const uint32_t sid = nn ? 0u : 3u;
                 const uint32_t sl = bkf_orbit_src(op), jl = bkf_orbit_partner(op), dl = bkf_orbit_drop(op);
                 const uint32_t ss = bkf_loc_owner(sl), js = bkf_loc_owner(jl), ds = bkf_loc_owner(dl);
                 c.xb = bkf_high_main(ss, bid);
@@ -59,10 +60,8 @@ __global__ void bucket_high_orbit_closure_pattern10_depthcode_orbitcta_flat_prec
                     }
                     c.jb = bkf_high_main(js, jbid);
                     c.db = bkf_high_block(ds, uint32_t(c.xb.hs));
-                    const uint32_t payload = p10dc_payload(
-                        op, false, true, sid, p, uint32_t(c.xb.hs));
                     P10DC_ORBITCTA_PREPARE_FORWARD(
-                        c, payload, dl, p, ss, js, ds,
+                        c, 0u, dl, p, ss, js, ds,
                         bkf_loc_rank(sl), bkf_loc_rank(jl), bkf_loc_rank(dl));
                     c.kind = uint8_t(nn ? CPU_ORBIT_NN : CPU_ORBIT_NR);
                     c.valid = 1;
@@ -100,18 +99,18 @@ __global__ void bucket_reverse_high_pattern10_depthcode_orbitcta_flat_prectx_bid
     for (uint32_t k = uint32_t(blockIdx.x); k < c.total; k += uint32_t(gridDim.x)) {
         if (threadIdx.x == 0) {
             c.valid = 0;
-            uint32_t q = 0, kind = 0, sid = 0;
+            uint32_t q = 0, kind = 0;
             BucketOrbitOp op;
             if (k < c.n0) {
-                kind = CPU_ORBIT_NN; sid = 0u;
+                kind = CPU_ORBIT_NN;
                 q = D_RS54_HIGH_NN_OFF[base_off] + k;
                 op = D_RS54_HIGH_NN[q];
             } else if (k < c.n0 + c.n1) {
-                kind = CPU_ORBIT_NR; sid = 1u;
+                kind = CPU_ORBIT_NR;
                 q = D_RS54_HIGH_NR_OFF[base_off] + k - c.n0;
                 op = D_RS54_HIGH_NR[q];
             } else {
-                kind = CPU_ORBIT_NL; sid = 2u;
+                kind = CPU_ORBIT_NL;
                 q = D_RS54_HIGH_NL_OFF[base_off] + k - c.n0 - c.n1;
                 op = D_RS54_HIGH_NL[q];
             }
@@ -123,10 +122,8 @@ __global__ void bucket_reverse_high_pattern10_depthcode_orbitcta_flat_prectx_bid
                 if (c.xb.valid && c.xb.rows && c.xb.cols) {
                     c.jb = bkf_high_main(js, bkcp10_reverse_high_jblock(bid, c.xb, p, kind));
                     c.db = bkf_high_block(ds, uint32_t(c.xb.hs));
-                    const uint32_t payload = p10dc_payload(
-                        op, true, true, sid, p, uint32_t(c.xb.hs));
                     P10DC_ORBITCTA_PREPARE_REVERSE(
-                        c, payload, edge ? sl : dl, edge ? c.xb : c.db, p, edge,
+                        c, 0u, edge ? sl : dl, edge ? c.xb : c.db, p, edge,
                         ss, js, ds, bkf_loc_rank(sl), bkf_loc_rank(jl), bkf_loc_rank(dl));
                     c.kind = uint8_t(kind);
                     c.valid = 1;
