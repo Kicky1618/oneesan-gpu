@@ -15,8 +15,11 @@ shells=(
   scripts/bench/b300-nextgen-calibrate-cgl2.sh
   scripts/bench/b300-nextgen-hybrid-ilp8-sweep.sh
   scripts/bench/b300-nextgen-hybrid8-staged-calibrate.sh
+  scripts/bench/b300-nextgen-hybrid8-nextself-width-sweep.sh
+  scripts/bench/b300-nextgen-hybrid8-nextself-staged-calibrate.sh
   scripts/bench/b300-mainrec-hybrid-ilp8-transform-preflight.sh
   scripts/run/b300x8-nextgen-hybrid8-staged-fullprime-race.sh
+  scripts/run/b300x8-nextgen-hybrid8-nextself-staged-fullprime-race.sh
   scripts/run/b300x8-race-forced-set-profiled-once.sh
   scripts/run/b300x8-nextgen-select.sh
 )
@@ -55,11 +58,15 @@ staged="$ONEESAN_ROOT/scripts/bench/b300-nextgen-calibrate-cgl2.sh"
 hybrid8="$ONEESAN_ROOT/scripts/bench/b300-nextgen-hybrid-ilp8-sweep.sh"
 hybrid8_staged="$ONEESAN_ROOT/scripts/bench/b300-nextgen-hybrid8-staged-calibrate.sh"
 hybrid8_race="$ONEESAN_ROOT/scripts/run/b300x8-nextgen-hybrid8-staged-fullprime-race.sh"
+hybrid8_ns_width="$ONEESAN_ROOT/scripts/bench/b300-nextgen-hybrid8-nextself-width-sweep.sh"
+hybrid8_ns_staged="$ONEESAN_ROOT/scripts/bench/b300-nextgen-hybrid8-nextself-staged-calibrate.sh"
+hybrid8_ns_race="$ONEESAN_ROOT/scripts/run/b300x8-nextgen-hybrid8-nextself-staged-fullprime-race.sh"
 for s in \
   'RECURRENCE_ILP' \
   'RECURRENCE_HYBRID_ILP8' \
   'RECURRENCE_HYBRID_ILP8_MIN_STATES' \
   'RECURRENCE_HYBRID_ILP8_NEXTSELF' \
+  'RECURRENCE_HYBRID_ILP8_NEXTSELF_WIDTH' \
   'gen-b300-main-recurrence-hybrid-ilp8.py' \
   'gen-b300-mainrec-hybrid8-next-self-prefetch.py' \
   'RANDOM_CG_L2_FETCH_BYTES' \
@@ -77,6 +84,8 @@ for f in "$randomcg" "$prefetch"; do
 done
 for s in \
   'b300_mainrec_hybrid8_next_self_prefetch=1' \
+  'WIDTH must be one of 1,2,4,8' \
+  'prefetch_width=' \
   'main_pull_kernel_ilp8_hybrid' \
   'b300_mainrec_hybrid8_prefetch_next_self_l2'; do
   grep -Fq "$s" "$hybrid_nextself" || { echo "hybrid next-self transform marker missing: $s" >&2; exit 3; }
@@ -124,6 +133,33 @@ for s in \
   grep -Fq "$s" "$hybrid8_race" || { echo "hybrid8 full-prime marker missing: $s" >&2; exit 3; }
 done
 for s in \
+  'WIDTH_LIST="${WIDTH_LIST:-1 2 4 8}"' \
+  'RECURRENCE_HYBRID_ILP8_NEXTSELF_WIDTH="$width"' \
+  'B300_HYBRID8_NEXTSELF_WIDTH' \
+  'B300_HYBRID8_NEXTSELF_BEST_WIDTH' \
+  'resource_ok=len(rv)>=2' \
+  'b300_nextgen_hybrid8_nextself_exact_intermediate_match=1' \
+  'b300_nextgen_hybrid8_nextself_width_sweep=1'; do
+  grep -Fq "$s" "$hybrid8_ns_width" || { echo "hybrid8 next-self width-sweep marker missing: $s" >&2; exit 3; }
+done
+for s in \
+  'WIDTH_LIST="${WIDTH_LIST:-1 2 4 8}"' \
+  'b300-nextgen-hybrid8-nextself-width-sweep.sh' \
+  'SELECTED_WIDTH=0' \
+  'FATAL Stage-F width changed during validation' \
+  'B300_HYBRID8_NEXTSELF_FINAL_WIDTH' \
+  'B300_HYBRID8_NEXTSELF_SEARCH_WIDTHS' \
+  'width_locked=1'; do
+  grep -Fq "$s" "$hybrid8_ns_staged" || { echo "hybrid8 next-self staged-width marker missing: $s" >&2; exit 3; }
+done
+for s in \
+  'B300_HYBRID8_NEXTSELF_FINAL_WIDTH' \
+  'B300_HYBRID8_NEXTSELF_PROMOTION_WIDTH' \
+  'B300_HYBRID8_NEXTSELF_PREPARED_WIDTH' \
+  'nextgen_hybrid8_nextself_w${B300_HYBRID8_NEXTSELF_FINAL_WIDTH}_t${B300_HYBRID8_NEXTSELF_THRESHOLD}'; do
+  grep -Fq "$s" "$hybrid8_ns_race" || { echo "hybrid8 next-self width promotion marker missing: $s" >&2; exit 3; }
+done
+for s in \
   'SELECT_ONLY="${SELECT_ONLY:-1}"' \
   'b300-nextgen-calibrate-cgl2.sh' \
   'build_candidate final' \
@@ -167,4 +203,4 @@ for s in \
   grep -Fq "$s" "$staged" || { echo "Stage-D calibration marker missing: $s" >&2; exit 3; }
 done
 
-echo 'b300_nextgen_preflight=OK bash_syntax=OK python_ast=OK ilp_partition=OK hybrid_partition=OK hybrid_transform=OK transform_order=OK hybrid_ilp8_builder=OK hybrid_cache_policy=OK hybrid8_nextself=OK hybrid_ilp8_sweep=OK hybrid8_staged=OK row_scoped_residue=OK hybrid8_fullprime_gate=OK fingerprint_gate=OK uncapped_baseline=OK spill_gate=OK cgl2_stage_d=OK forced_set_single_pass=OK selection_default=only gpu_work=0 actions_triggered=0'
+echo 'b300_nextgen_preflight=OK bash_syntax=OK python_ast=OK ilp_partition=OK hybrid_partition=OK hybrid_transform=OK transform_order=OK hybrid_ilp8_builder=OK hybrid_cache_policy=OK hybrid8_nextself=OK hybrid8_nextself_width=OK hybrid_ilp8_sweep=OK hybrid8_staged=OK row_scoped_residue=OK hybrid8_fullprime_gate=OK fingerprint_gate=OK uncapped_baseline=OK spill_gate=OK cgl2_stage_d=OK forced_set_single_pass=OK selection_default=only gpu_work=0 actions_triggered=0'
