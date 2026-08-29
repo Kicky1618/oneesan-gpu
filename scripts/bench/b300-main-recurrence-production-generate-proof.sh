@@ -40,6 +40,11 @@ for x in (
     'b300_main_trit_get(x,p-13)',
     'b300_main_trit3(m,13+3*c,28)',
     '^((uint32_t(1)<<13)-1u)',
+    'B300_HIGH_REC_GROUPS',
+    'B300_HIGH_REC_FALLBACK_GROUPS',
+    '__builtin_popcount(pg.mf)>=7',
+    'high_rec_groups=',
+    'high_rec_fallback_groups=',
 ): need(x)
 for stale in ('b300_main_trit_get(x,p-14)','b300_main_trit3(m,14+3*c,28)'):
     if stale in s:raise SystemExit(f'stale 14..27 high-state artifact: {stale}')
@@ -48,6 +53,7 @@ gather=s.find('__global__ void gather_main_kernel')
 if helper<0 or gather<0 or helper>=gather:raise SystemExit(f'helper ordering invalid helper={helper} gather={gather}')
 if s.count('b300_pack_main_transition_cache(m)') != 2:raise SystemExit('expected exactly two production unified packing calls')
 if s.count('__popc(D_MAIN_FIXED)>=7') != 1:raise SystemExit('expected exactly one high recurrence fixed-bit gate')
+if s.count('high_rec_groups=') != 1 or s.count('high_rec_fallback_groups=') != 1:raise SystemExit('coverage result fields not unique')
 start=s.find('if(p>1){');end=s.find('}else{',start)
 if start<0 or end<0:raise SystemExit('p>1 process block not found')
 hot=s[start:end]
@@ -56,7 +62,7 @@ if 'main_to_block_kernel' in hot:raise SystemExit('stale main_to_block scatter r
 prep=s.find('__device__ __forceinline__ void b300_main_pull_prepare');prep_end=s.find('__global__ void main_pull_kernel_ilp2',prep);q=s[prep:prep_end]
 if 'high?b300_high_state_drop_rank' not in q:raise SystemExit('high recurrent drop not selected')
 if 'low?b300_low_cached_drop_rank' not in q:raise SystemExit('low recurrent drop not selected')
-print('b300-main-recurrence-production-generate-proof OK helper_before_gather=1 packing_calls=2 ilp2=1 low_recurrence=1 high_recurrence=1 high_symbol_range=13..27 high_p_lo=14 high_min_fixed=7 fixed_lt7_fallback=1 stale_main_to_block=0 exact_structure=1')
+print('b300-main-recurrence-production-generate-proof OK helper_before_gather=1 packing_calls=2 ilp2=1 low_recurrence=1 high_recurrence=1 high_symbol_range=13..27 high_p_lo=14 high_min_fixed=7 fixed_lt7_fallback=1 coverage_report=1 stale_main_to_block=0 exact_structure=1')
 PY
 
 echo "b300-main-recurrence-production-generate-proof OK source=$S10" >&2
