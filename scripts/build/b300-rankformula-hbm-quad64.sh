@@ -1,0 +1,35 @@
+#!/usr/bin/env bash
+set -euo pipefail
+source "$(dirname -- "${BASH_SOURCE[0]}")/../lib/common.sh"
+
+# Four-column register-MLP B300 experiment on the compact 64-bit direct-gather
+# descriptors.  Keep cp.async disabled so the comparison isolates register MLP.
+# PRECTX_FORWARD/REVERSE remain independently selectable for measured A/B use.
+N="${N:-27}"
+PRECTX_FORWARD="${PRECTX_FORWARD:-0}"
+PRECTX_REVERSE="${PRECTX_REVERSE:-0}"
+OUT="${OUT:-$ONEESAN_BUILD_DIR/oneesan_cuda_gridfp_b300_rankformula_hbm_quad64_f${PRECTX_FORWARD}r${PRECTX_REVERSE}_n${N}}"
+
+N="$N" OUT="$OUT" \
+COL_ILP=4 \
+DEPTHMAJOR=1 \
+PAIR_MLP=1 \
+QUAD_MLP=1 \
+MLP_WINDOW4=1 \
+DIRECTGATHER64=1 \
+DIRECTGATHER_SPARSE64=0 \
+CPASYNC_PAIR=0 \
+CPASYNC_LOCAL_PAIR=0 \
+CPASYNC_OVERLAP_LOCAL_PAIR=0 \
+PRECTX_FORWARD="$PRECTX_FORWARD" \
+PRECTX_REVERSE="$PRECTX_REVERSE" \
+PREFETCH_NEXT=0 \
+FORCE7=0 \
+SORTED=0 \
+PM_ACCUM="${PM_ACCUM:-1}" \
+MAXRREGCOUNT="${MAXRREGCOUNT:-0}" \
+PTXAS_VERBOSE="${PTXAS_VERBOSE:-1}" \
+TRANSPOSE_MODE="${TRANSPOSE_MODE:-pipeline}" \
+bash "$ONEESAN_ROOT/scripts/build/b300-directgather-colilp-fast.sh"
+
+echo "b300-rankformula-hbm-quad64 OK out=$OUT n=$N col_ilp=4 directgather64=1 pair_mlp=1 quad_mlp=1 prectx_forward=$PRECTX_FORWARD prectx_reverse=$PRECTX_REVERSE cpasync=0" >&2
