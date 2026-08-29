@@ -39,7 +39,8 @@ declare -A BIN
 for t in $THRESHOLDS; do
   tag="t${t}"; BIN[$tag]="$ONEESAN_BUILD_DIR/b300_pipe2_producer_adaptive_w${BASE_WEIGHT}_t${t}_n${N}"
   env "${COMMON[@]}" PRODUCER_ADAPTIVE_COLS="$t" OUT="${BIN[$tag]}" bash "$ONEESAN_ROOT/scripts/build/b300-directgather-orbitcta-pipe2-producer-warp.sh" >"$LOGDIR/${tag}.build.out" 2>"$LOGDIR/${tag}.build.err"
-  grep -q "pipe2_producer_worker_weight=$BASE_WEIGHT pipe2_producer_adaptive_cols=$t" "$LOGDIR/${tag}.build.err" || { echo "$tag build marker mismatch" >&2; exit 6; }
+  grep -q "pipe2_producer_worker_weight=$BASE_WEIGHT" "$LOGDIR/${tag}.build.err" || { echo "$tag worker-weight marker mismatch" >&2; exit 6; }
+  grep -q "pipe2_producer_adaptive_cols=$t" "$LOGDIR/${tag}.build.err" || { echo "$tag adaptive marker mismatch" >&2; exit 6; }
   python3 "$PARSER" "$LOGDIR/${tag}.build.err" --label "$tag" >>"$RESOURCE" || true
 done
 
