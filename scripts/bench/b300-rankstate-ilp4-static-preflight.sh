@@ -51,13 +51,20 @@ done
 for s in 'RANK_STATE_ILP4' 'BLOCK_CLOSURE_QUAD' '_rsilp4' '_closureq'; do
   grep -Fq "$s" "$run" || { echo "missing run wiring: $s" >&2; exit 3; }
 done
-for s in 'P10DC_RANKFORMULA_PRECTX_WARPCOOP' 'p10dc_apply_forward_compact_prectx_warpcoop' 'p10dc_apply_reverse_compact_prectx_warpcoop'; do
+for s in 'P10DC_RANKFORMULA_PRECTX_WARPCOOP' 'p10dc_apply_forward_compact_prectx_warpcoop' 'p10dc_apply_reverse_compact_prectx_warpcoop' 'coop_q_lane0' 'coop_meta_lane0' '__shfl_sync(active, coop_q_lane0, 0)' '__shfl_sync(active, coop_meta_lane0, 0)'; do
   grep -Fq "$s" "$chunk" || { echo "missing chunk warpcoop wiring: $s" >&2; exit 3; }
 done
-for s in 'BKCZ_MAX_LOCAL + 1 <= 32' 'p10dc_high_row_ref_resolve_unchecked'; do
-  grep -Fq "$s" "$coop" || { echo "missing warpcoop helper marker: $s" >&2; exit 3; }
+if grep -Fq 'c.cross_depth = q;' "$chunk"; then
+  echo 'stale warpcoop q handoff through cross_depth remains' >&2; exit 3
+fi
+if grep -Fq '__syncwarp();' "$chunk"; then
+  echo 'stale explicit warpcoop sync remains in chunk scheduler' >&2; exit 3
+fi
+for s in 'BKCZ_MAX_LOCAL + 1 <= 32' 'offsetof(P10DCHighClosureCompactPreCtx, local_n) % alignof(uint32_t) == 0' 'meta = __ldg(tail)' 'meta = __shfl_sync(active, meta, 0)' '__ldg(&z->local_ref[lane])' '__ldg(&z->cross_ref)' 'p10dc_high_row_ref_resolve_unchecked'; do
+  grep -Fq "$s" "$coop" || { echo "missing coalesced warpcoop helper marker: $s" >&2; exit 3; }
 done
 
 echo 'b300_rankstate_ilp4_static_preflight=OK'
 echo 'ilp2_launch_cover=2 ilp4_launch_cover=4 old_full_grid_degeneracy=removed'
+echo 'warpcoop_compact_bytes=40 warpcoop_ticket_shuffles=2 warpcoop_meta_broadcast=1 extra_syncwarp=0 cross_depth_ticket_reuse=0'
 echo 'gpu_work=0 actions_triggered=0'
