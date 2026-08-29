@@ -7,16 +7,17 @@ LOW_LUT_K="${LOW_LUT_K:-$((W / 2))}"; HIGH_LUT_K="${HIGH_LUT_K:-$((W - LOW_LUT_K
 TRANSPOSE_MODE="${TRANSPOSE_MODE:-pipeline}"
 COL_ILP="${COL_ILP:-2}"; PM_ACCUM="${PM_ACCUM:-1}"
 DEPTHMAJOR="${DEPTHMAJOR:-1}"; FORCE7="${FORCE7:-0}"; MLP_WINDOW4="${MLP_WINDOW4:-0}"
-PAIR_MLP="${PAIR_MLP:-0}"; CPASYNC_PAIR="${CPASYNC_PAIR:-0}"; SORTED="${SORTED:-0}"; PRECTX_FORWARD="${PRECTX_FORWARD:-0}"
+PAIR_MLP="${PAIR_MLP:-0}"; CPASYNC_PAIR="${CPASYNC_PAIR:-0}"; SORTED="${SORTED:-0}"
+PRECTX_FORWARD="${PRECTX_FORWARD:-0}"; PRECTX_REVERSE="${PRECTX_REVERSE:-0}"
 PREFETCH_NEXT="${PREFETCH_NEXT:-0}"; DIRECTGATHER64="${DIRECTGATHER64:-0}"; DIRECTGATHER_SPARSE64="${DIRECTGATHER_SPARSE64:-0}"
 MAXRREGCOUNT="${MAXRREGCOUNT:-0}"; PTXAS_VERBOSE="${PTXAS_VERBOSE:-1}"
-OUT="${OUT:-oneesan_cuda_gridfp_b300_directgather_colilp${COL_ILP}_pair${PAIR_MLP}_cpa${CPASYNC_PAIR}_sort${SORTED}_prectxf${PRECTX_FORWARD}_dg64${DIRECTGATHER64}_sp64${DIRECTGATHER_SPARSE64}_n${N}}"
+OUT="${OUT:-oneesan_cuda_gridfp_b300_directgather_colilp${COL_ILP}_pair${PAIR_MLP}_cpa${CPASYNC_PAIR}_sort${SORTED}_prectxf${PRECTX_FORWARD}r${PRECTX_REVERSE}_dg64${DIRECTGATHER64}_sp64${DIRECTGATHER_SPARSE64}_n${N}}"
 
 if (( LOW_LUT_K <= 0 || HIGH_LUT_K <= 0 || LOW_LUT_K + HIGH_LUT_K + 1 != W || LOW_LUT_K > 14 || HIGH_LUT_K > 14 )); then
   echo "invalid LOW/HIGH split W=$W low=$LOW_LUT_K high=$HIGH_LUT_K" >&2; exit 2
 fi
 case "$COL_ILP" in 1|2|4) ;; *) echo "COL_ILP must be 1, 2, or 4" >&2; exit 2;; esac
-for x in PM_ACCUM DEPTHMAJOR FORCE7 MLP_WINDOW4 PAIR_MLP CPASYNC_PAIR SORTED PRECTX_FORWARD PREFETCH_NEXT DIRECTGATHER64 DIRECTGATHER_SPARSE64 PTXAS_VERBOSE; do
+for x in PM_ACCUM DEPTHMAJOR FORCE7 MLP_WINDOW4 PAIR_MLP CPASYNC_PAIR SORTED PRECTX_FORWARD PRECTX_REVERSE PREFETCH_NEXT DIRECTGATHER64 DIRECTGATHER_SPARSE64 PTXAS_VERBOSE; do
   v="${!x}"; [[ "$v" == 0 || "$v" == 1 ]] || { echo "$x must be 0 or 1" >&2; exit 2; }
 done
 if [[ "$FORCE7" == 1 && "$MLP_WINDOW4" == 1 ]]; then echo "FORCE7 and MLP_WINDOW4 are mutually exclusive" >&2; exit 2; fi
@@ -37,8 +38,8 @@ if [[ "$SORTED" == 1 ]]; then
   [[ "$DEPTHMAJOR" == 1 ]] || { echo "SORTED currently targets DEPTHMAJOR=1" >&2; exit 2; }
   [[ "$DIRECTGATHER64" == 0 ]] || { echo "SORTED directgather64 combination is intentionally isolated; use DIRECTGATHER64=0" >&2; exit 2; }
 fi
-if [[ "$PRECTX_FORWARD" == 1 ]]; then
-  [[ "$DEPTHMAJOR" == 1 ]] || { echo "PRECTX_FORWARD currently targets DEPTHMAJOR=1" >&2; exit 2; }
+if [[ "$PRECTX_FORWARD" == 1 || "$PRECTX_REVERSE" == 1 ]]; then
+  [[ "$DEPTHMAJOR" == 1 ]] || { echo "PRECTX currently targets DEPTHMAJOR=1" >&2; exit 2; }
 fi
 if [[ "$DIRECTGATHER64" == 1 ]]; then
   [[ "$DEPTHMAJOR" == 1 ]] || { echo "DIRECTGATHER64 requires DEPTHMAJOR=1 for this B300 path" >&2; exit 2; }
@@ -88,6 +89,7 @@ TMPDIR="$ONEESAN_TMP_DIR" nvcc -O3 -std=c++17 -lineinfo -arch="$ARCH" \
   -DP10DC_RANKFORMULA_PAIR_MLP="$PAIR_MLP" \
   -DP10DC_RANKFORMULA_CPASYNC_PAIR="$CPASYNC_PAIR" \
   -DP10DC_RANKFORMULA_PRECTX_FORWARD="$PRECTX_FORWARD" \
+  -DP10DC_RANKFORMULA_PRECTX_REVERSE="$PRECTX_REVERSE" \
   -DP10DC_RANKFORMULA_PREFETCH_NEXT="$PREFETCH_NEXT" \
   -DP10DC_RANKFORMULA_ABSTRACT_SELECT8=1 \
   -DP10DC_RANKFORMULA_ABSTRACT_DEPTH4=1 \
@@ -100,6 +102,6 @@ TMPDIR="$ONEESAN_TMP_DIR" nvcc -O3 -std=c++17 -lineinfo -arch="$ARCH" \
   -DP10DC_RANKFORMULA_BASE_DELTA=0 -DP10DC_RANKFORMULA_SLOTMETA=0 -DP10DC_RANKFORMULA_SLOTROW32=0 \
   "$SRC" -o "$BIN"
 
-echo "built $BIN (directmap=1 directgather=1 directgather64=$DIRECTGATHER64 sparse64=$DIRECTGATHER_SPARSE64 depthmajor=$DEPTHMAJOR sorted=$SORTED prectx_forward=$PRECTX_FORWARD force7=$FORCE7 mlp_window4=$MLP_WINDOW4 pair_mlp=$PAIR_MLP cpasync_pair=$CPASYNC_PAIR prefetch_next=$PREFETCH_NEXT gather_mlp=1 group61=1 block=16 col_ilp=$COL_ILP pm_accum=$PM_ACCUM maxrregcount=$MAXRREGCOUNT transpose=$TRANSPOSE_MODE)" >&2
+echo "built $BIN (directmap=1 directgather=1 directgather64=$DIRECTGATHER64 sparse64=$DIRECTGATHER_SPARSE64 depthmajor=$DEPTHMAJOR sorted=$SORTED prectx_forward=$PRECTX_FORWARD prectx_reverse=$PRECTX_REVERSE force7=$FORCE7 mlp_window4=$MLP_WINDOW4 pair_mlp=$PAIR_MLP cpasync_pair=$CPASYNC_PAIR prefetch_next=$PREFETCH_NEXT gather_mlp=1 group61=1 block=16 col_ilp=$COL_ILP pm_accum=$PM_ACCUM maxrregcount=$MAXRREGCOUNT transpose=$TRANSPOSE_MODE)" >&2
 echo "run example:" >&2
 echo "  BUCKET_THREADS=256 BUCKET_GRID_X=32 BUCKET_GRID_Y=8 $BIN $N <target_mib> <max_window> 8 <mod>" >&2
