@@ -22,14 +22,16 @@ N=21 ARCH="${ARCH:-sm_103}" TARGET_MIB="${TARGET_MIB:-16384}" MAX_WINDOW="${MAX_
 DIRECTGATHER_SPARSE64="$ORBIT_SPARSE64" DIRECTGATHER_SORT_RANKS=0 ORBITCTA_COL_ILP="$ORBIT_COL_ILP" \
 PAIR_MLP=1 CPASYNC_PAIR="$ORBIT_CPASYNC_PAIR" RANKFORMULA_MLP_WINDOW4=1 PM_ACCUM="${PM_ACCUM:-1}" \
 PRECTX_FORWARD="$ORBIT_PRECTX_FORWARD" PRECTX_REVERSE="$ORBIT_PRECTX_REVERSE" PRECTX_COMPACT="$ORBIT_PRECTX_COMPACT" \
-FLAT_PER_SM_LIST="${FLAT_PER_SM_LIST:-1 2 4 8}" REPEATS="${REPEATS:-1}" PREFIX="$PREFIX" WINNER_ENV="$WINNER_ENV" \
+FLAT_PER_SM_LIST="${FLAT_PER_SM_LIST:-auto 1 2 4 8}" REPEATS="${REPEATS:-1}" PREFIX="$PREFIX" WINNER_ENV="$WINNER_ENV" \
   bash "$ONEESAN_ROOT/scripts/bench/b300-orbitcta-flat-ab.sh"
 
 [[ -f "$WINNER_ENV" ]] || { echo "missing scheduler winner env: $WINNER_ENV" >&2; exit 3; }
 # shellcheck disable=SC1090
 source "$WINNER_ENV"
 [[ "$ORBITCTA_FLAT" == 0 || "$ORBITCTA_FLAT" == 1 ]] || { echo 'bad ORBITCTA_FLAT winner' >&2; exit 3; }
-[[ "$BUCKET_ORBITCTA_FLAT_BLOCKS_PER_SM" =~ ^[0-9]+$ ]] && (( BUCKET_ORBITCTA_FLAT_BLOCKS_PER_SM > 0 )) || { echo 'bad flat blocks/SM winner' >&2; exit 3; }
+# 0 means leave BUCKET_ORBITCTA_FLAT_BLOCKS_PER_SM unset and let the runtime use
+# forward/reverse occupancy independently.
+[[ "$BUCKET_ORBITCTA_FLAT_BLOCKS_PER_SM" =~ ^[0-9]+$ ]] || { echo 'bad flat blocks/SM winner' >&2; exit 3; }
 
 python3 - "$PROFILE_IN" "$PROFILE_OUT" "$ORBITCTA_FLAT" "$BUCKET_ORBITCTA_FLAT_BLOCKS_PER_SM" "$ORBITCTA_SCHEDULER_PROFILE" "$ORBIT_PRECTX_COMPACT" <<'PY'
 import sys,re
@@ -56,7 +58,7 @@ with open(out,'w') as f:
   v=kv[k]
   if k=='CANDIDATES': f.write(f'{k}="{v}"\n')
   else: f.write(f'{k}={v}\n')
-print('scheduler_profile='+sched,'flat='+flat,'blocks_per_sm='+psm,'profile_file='+out)
+print('scheduler_profile='+sched,'flat='+flat,'blocks_per_sm='+psm,'pool_mode='+('occupancy' if psm=='0' else 'per_sm'),'profile_file='+out)
 PY
 cat "$PROFILE_OUT"
 echo "orbit scheduler refine OK input=$PROFILE_IN output=$PROFILE_OUT winner=$ORBITCTA_SCHEDULER_PROFILE" >&2
