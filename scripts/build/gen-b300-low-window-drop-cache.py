@@ -72,19 +72,19 @@ __device__ __forceinline__ int b300_low_cached_height_before(MateID cached,int p
 __device__ __forceinline__ Code b300_low_cached_drop_rank(Code main_rank,MateID cached,int p){
     constexpr MateID LOW_MASK=(MateID(1)<<30)-1ULL;
     const MateID low=cached&LOW_MASK;
-    long long delta=-long long((cached>>30)&((MateID(1)<<30)-1ULL));
+    long long delta=-static_cast<long long>((cached>>30)&((MateID(1)<<30)-1ULL));
     int h=int((cached>>60)&15ULL);
 #pragma unroll
     for(int pos=14;pos>=0;--pos){
         if(pos<=p)continue;
         const MateValue v=mget(low,pos);
         if(v==R){
-            delta+=long long(D_FULL_DP[pos-1][h])-long long(D_FULL_DP[pos][h]);
+            delta+=static_cast<long long>(D_FULL_DP[pos-1][h])-static_cast<long long>(D_FULL_DP[pos][h]);
             --h;
         }else if(v==L){
             const Code bm=D_FULL_DP[pos-1][h]+(h?D_FULL_DP[pos-1][h-1]:0);
             const Code am=D_FULL_DP[pos][h]+(h?D_FULL_DP[pos][h-1]:0);
-            delta+=long long(bm)-long long(am);
+            delta+=static_cast<long long>(bm)-static_cast<long long>(am);
             ++h;
         }
     }
