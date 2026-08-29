@@ -43,8 +43,6 @@ sample_run(){
   ) >"$log" 2>&1 &
   local pid=$!
   while kill -0 "$pid" 2>/dev/null; do
-    # utilization.memory is the same nvidia-smi memory-controller busy metric
-    # typically watched interactively; nounits keeps parsing stable.
     nvidia-smi --query-gpu=utilization.memory --format=csv,noheader,nounits 2>/dev/null \
       | awk -v ts="$(date +%s.%N)" '{gsub(/ /,""); if($1~/^[0-9]+$/) print ts "," $1}' >>"$util" || true
     sleep "$SAMPLE_S"
@@ -53,12 +51,11 @@ sample_run(){
   local line
   line="$(grep '^backend=gridfp-b300-hbm32-fullmate-dropN ' "$log" | tail -n1 || true)"
   [[ -n "$line" ]] || { echo "missing backend result variant=$name; see $log" >&2; return 3; }
-  local wall active
+  local wall active avg max samples
   wall="$(sed -nE 's/.* wall_s=([^ ]+).*/\1/p' <<<"$line")"
   active="$(sed -nE 's/.* active_max_s=([^ ]+).*/\1/p' <<<"$line")"
-  local stats
-  stats="$(awk -F, 'BEGIN{s=0;n=0;m=0}{v=$2+0;s+=v;n++;if(v>m)m=v}END{if(n)printf "%.3f %.0f %d",s/n,m,n;else printf "nan nan 0"}' "$util")"
-  printf '%s\t%s\t%s\t%s\n' "$name" "$wall" "$active" "$stats"
+  read -r avg max samples < <(awk -F, 'BEGIN{s=0;n=0;m=0}{v=$2+0;s+=v;n++;if(v>m)m=v}END{if(n)printf "%.3f %.0f %d\n",s/n,m,n;else print "nan nan 0"}' "$util")
+  printf '%s\t%s\t%s\t%s\t%s\t%s\n' "$name" "$wall" "$active" "$avg" "$max" "$samples"
 }
 
 printf 'variant\twall_s\tactive_max_s\tmemory_util_avg_pct\tmemory_util_max_pct\tsamples_gpu\n'
