@@ -7,6 +7,7 @@ MOD="${2:-4294967291}"
 TARGET_MIB="${TARGET_MIB:-65536}"
 MAX_WINDOW="${MAX_WINDOW:-$N}"
 NGPU="${NGPU:-8}"
+ROWS="${ROWS:-$((N+1))}"
 FAST_SHARD_ADDRESS8="${FAST_SHARD_ADDRESS8:-1}"
 MAIN_MATE_CACHE="${MAIN_MATE_CACHE:-1}"
 MAIN_PULL="${MAIN_PULL:-1}"
@@ -19,6 +20,7 @@ for name in FAST_SHARD_ADDRESS8 MAIN_MATE_CACHE MAIN_PULL BLOCK_PULL BLOCK_MATE_
   value="${!name}"
   if [[ "$value" != 0 && "$value" != 1 ]]; then echo "$name must be 0 or 1" >&2; exit 2; fi
 done
+[[ "$ROWS" =~ ^[0-9]+$ ]] && (( ROWS >= 1 && ROWS <= N + 1 )) || { echo "ROWS must be 1..$((N+1))" >&2; exit 2; }
 if [[ "$MAIN_PULL" == 1 && "$MAIN_MATE_CACHE" != 1 ]]; then echo "MAIN_PULL=1 requires MAIN_MATE_CACHE=1" >&2; exit 2; fi
 if [[ "$BLOCK_PULL" == 1 && "$MAIN_PULL" != 1 ]]; then echo "BLOCK_PULL=1 requires MAIN_PULL=1" >&2; exit 2; fi
 if [[ "$BLOCK_MATE_CACHE" == 1 && "$BLOCK_PULL" != 1 ]]; then echo "BLOCK_MATE_CACHE=1 requires BLOCK_PULL=1" >&2; exit 2; fi
@@ -48,7 +50,8 @@ nvidia-smi -L
 nvidia-smi topo -m || true
 nvidia-smi --query-gpu=index,name,memory.total,memory.free --format=csv,noheader || true
 
-echo "N=$N MOD=$MOD GPUs=$NGPU requested_scratch=${TARGET_MIB}MiB reserve=${GRIDFP_VRAM_RESERVE_MIB}MiB max_window=$MAX_WINDOW fast_shard_address8=$FAST_SHARD_ADDRESS8 main_mate_cache=$MAIN_MATE_CACHE main_pull=$MAIN_PULL block_pull=$BLOCK_PULL block_mate_cache=$BLOCK_MATE_CACHE"
+echo "N=$N MOD=$MOD GPUs=$NGPU rows=$ROWS requested_scratch=${TARGET_MIB}MiB reserve=${GRIDFP_VRAM_RESERVE_MIB}MiB max_window=$MAX_WINDOW fast_shard_address8=$FAST_SHARD_ADDRESS8 main_mate_cache=$MAIN_MATE_CACHE main_pull=$MAIN_PULL block_pull=$BLOCK_PULL block_mate_cache=$BLOCK_MATE_CACHE"
 echo "BIN=$BIN"
 export GRIDFP_VRAM_RESERVE_MIB
+export B300_ROW_LIMIT="$ROWS"
 exec "$BIN" "$N" "$MOD" "$TARGET_MIB" "$MAX_WINDOW" "$NGPU"
