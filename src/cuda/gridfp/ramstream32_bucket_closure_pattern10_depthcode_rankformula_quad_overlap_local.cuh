@@ -8,9 +8,15 @@
 #ifndef P10DC_RANKFORMULA_QUAD_OVERLAP_LOCAL
 #define P10DC_RANKFORMULA_QUAD_OVERLAP_LOCAL 0
 #endif
+#ifndef P10DC_RANKFORMULA_QUAD_SPARSE_DESC_MLP
+#define P10DC_RANKFORMULA_QUAD_SPARSE_DESC_MLP 0
+#endif
 static_assert(P10DC_RANKFORMULA_QUAD_OVERLAP_LOCAL == 0 ||
               P10DC_RANKFORMULA_QUAD_OVERLAP_LOCAL == 1,
               "P10DC_RANKFORMULA_QUAD_OVERLAP_LOCAL must be 0 or 1");
+static_assert(P10DC_RANKFORMULA_QUAD_SPARSE_DESC_MLP == 0 ||
+              P10DC_RANKFORMULA_QUAD_SPARSE_DESC_MLP == 1,
+              "P10DC_RANKFORMULA_QUAD_SPARSE_DESC_MLP must be 0 or 1");
 
 #if P10DC_RANKFORMULA_QUAD_OVERLAP_LOCAL
 static_assert(P10DC_RANKFORMULA_QUAD_MLP,
@@ -21,13 +27,17 @@ static_assert(P10DC_RANKFORMULA_DIRECTGATHER64,
               "quad overlap-local requires DIRECTGATHER64");
 static_assert(P10DC_RANKFORMULA_CPASYNC_VALUES_PER_THREAD >= 28,
               "quad overlap-local requires 28 shared source slots per thread");
+#if P10DC_RANKFORMULA_QUAD_SPARSE_DESC_MLP
+static_assert(P10DC_RANKFORMULA_DIRECTGATHER_SPARSE64,
+              "quad sparse descriptor MLP requires SPARSE64");
+#endif
 
 struct P10DCDirectGatherQuadPrimary {
     P10DCDirectGather64Word p0=0,p1=0,p2=0,p3=0;
 };
 
 __device__ __forceinline__ P10DCDirectGather64Word
-p10dc_rankformula_directgather64_primary_at(size_t gi) {
+p10dc_rankformula_qol_directgather64_primary_at(size_t gi) {
 #if P10DC_RANKFORMULA_DIRECTGATHER_SPARSE64
     const size_t wi=gi>>5;
     const uint32_t bit=uint32_t(gi)&31u;
@@ -44,26 +54,54 @@ p10dc_rankformula_directgather64_primary_at(size_t gi) {
 }
 
 __device__ __forceinline__ P10DCDirectGatherQuadPrimary
-p10dc_rankformula_directgather64_quad_primary(
+p10dc_rankformula_qol_directgather64_quad_primary(
     uint32_t h,uint32_t rank0,uint32_t rank1,
     uint32_t rank2,uint32_t rank3,uint32_t depth
 ) {
-    // Issue all four primary descriptor requests before consuming any result.
-    // Unlike the old 28-rank struct, only four packed 64-bit words stay live.
     const size_t gi0=p10dc_rankformula_directgather_index(h,rank0,depth);
     const size_t gi1=p10dc_rankformula_directgather_index(h,rank1,depth);
     const size_t gi2=p10dc_rankformula_directgather_index(h,rank2,depth);
     const size_t gi3=p10dc_rankformula_directgather_index(h,rank3,depth);
     P10DCDirectGatherQuadPrimary z{};
-    z.p0=p10dc_rankformula_directgather64_primary_at(gi0);
-    z.p1=p10dc_rankformula_directgather64_primary_at(gi1);
-    z.p2=p10dc_rankformula_directgather64_primary_at(gi2);
-    z.p3=p10dc_rankformula_directgather64_primary_at(gi3);
+#if P10DC_RANKFORMULA_DIRECTGATHER_SPARSE64 && P10DC_RANKFORMULA_QUAD_SPARSE_DESC_MLP
+    // Preserve four-column descriptor MLP without reviving the old 28-rank
+    // register footprint. First put all four sparse index words in flight.
+    const size_t wi0=gi0>>5,wi1=gi1>>5,wi2=gi2>>5,wi3=gi3>>5;
+    const uint32_t bit0=uint32_t(gi0)&31u,bit1=uint32_t(gi1)&31u;
+    const uint32_t bit2=uint32_t(gi2)&31u,bit3=uint32_t(gi3)&31u;
+    const P10DCDirectGather64Word ix0=__ldg(D_P10DC_RANKFORMULA_DIRECTGATHER_SPARSE64_INDEX+wi0);
+    const P10DCDirectGather64Word ix1=__ldg(D_P10DC_RANKFORMULA_DIRECTGATHER_SPARSE64_INDEX+wi1);
+    const P10DCDirectGather64Word ix2=__ldg(D_P10DC_RANKFORMULA_DIRECTGATHER_SPARSE64_INDEX+wi2);
+    const P10DCDirectGather64Word ix3=__ldg(D_P10DC_RANKFORMULA_DIRECTGATHER_SPARSE64_INDEX+wi3);
+
+    const uint32_t bits0=uint32_t(ix0),bits1=uint32_t(ix1);
+    const uint32_t bits2=uint32_t(ix2),bits3=uint32_t(ix3);
+    const uint32_t flag0=1u<<bit0,flag1=1u<<bit1,flag2=1u<<bit2,flag3=1u<<bit3;
+    const bool hit0=(bits0&flag0)!=0u,hit1=(bits1&flag1)!=0u;
+    const bool hit2=(bits2&flag2)!=0u,hit3=(bits3&flag3)!=0u;
+    uint32_t ci0=0,ci1=0,ci2=0,ci3=0;
+    if(hit0){const uint32_t lo=bit0?(bits0&(flag0-1u)):0u;ci0=uint32_t(ix0>>32)+uint32_t(__popc(lo));}
+    if(hit1){const uint32_t lo=bit1?(bits1&(flag1-1u)):0u;ci1=uint32_t(ix1>>32)+uint32_t(__popc(lo));}
+    if(hit2){const uint32_t lo=bit2?(bits2&(flag2-1u)):0u;ci2=uint32_t(ix2>>32)+uint32_t(__popc(lo));}
+    if(hit3){const uint32_t lo=bit3?(bits3&(flag3-1u)):0u;ci3=uint32_t(ix3>>32)+uint32_t(__popc(lo));}
+
+    // Compact primary loads are also independent. Keep them adjacent so the
+    // compiler can overlap the four memory dependencies before rank decode.
+    if(hit0) z.p0=__ldg(D_P10DC_RANKFORMULA_DIRECTGATHER_SPARSE64_PRIMARY+ci0);
+    if(hit1) z.p1=__ldg(D_P10DC_RANKFORMULA_DIRECTGATHER_SPARSE64_PRIMARY+ci1);
+    if(hit2) z.p2=__ldg(D_P10DC_RANKFORMULA_DIRECTGATHER_SPARSE64_PRIMARY+ci2);
+    if(hit3) z.p3=__ldg(D_P10DC_RANKFORMULA_DIRECTGATHER_SPARSE64_PRIMARY+ci3);
+#else
+    z.p0=p10dc_rankformula_qol_directgather64_primary_at(gi0);
+    z.p1=p10dc_rankformula_qol_directgather64_primary_at(gi1);
+    z.p2=p10dc_rankformula_qol_directgather64_primary_at(gi2);
+    z.p3=p10dc_rankformula_qol_directgather64_primary_at(gi3);
+#endif
     return z;
 }
 
 __device__ __forceinline__ uint32_t
-p10dc_rankformula_directgather64_count(P10DCDirectGather64Word p) {
+p10dc_rankformula_qol_directgather64_count(P10DCDirectGather64Word p) {
     return uint32_t((p>>45)&7u);
 }
 
@@ -71,7 +109,7 @@ __device__ __forceinline__ void
 p10dc_rankformula_quad_issue_primary_group(
     P10DCDirectGather64Word p,uint32_t slot,const Count* source_row
 ) {
-    const uint32_t n=p10dc_rankformula_directgather64_count(p);
+    const uint32_t n=p10dc_rankformula_qol_directgather64_count(p);
     uint32_t r0=uint32_t(p&0x7fffu);
     uint32_t r1=uint32_t((p>>15)&0x7fffu);
     uint32_t r2=uint32_t((p>>30)&0x7fffu);
@@ -122,13 +160,13 @@ p10dc_direct_resolved_high_plan_sum_quad_overlap_local(
 ) {
     P10DCDirectGatherQuadPrimary p{};
     if(c.cross_depth)
-        p=p10dc_rankformula_directgather64_quad_primary(
+        p=p10dc_rankformula_qol_directgather64_quad_primary(
             db.hs,lr0,lr1,lr2,lr3,c.cross_depth);
     const uint32_t any=
-        p10dc_rankformula_directgather64_count(p.p0)|
-        p10dc_rankformula_directgather64_count(p.p1)|
-        p10dc_rankformula_directgather64_count(p.p2)|
-        p10dc_rankformula_directgather64_count(p.p3);
+        p10dc_rankformula_qol_directgather64_count(p.p0)|
+        p10dc_rankformula_qol_directgather64_count(p.p1)|
+        p10dc_rankformula_qol_directgather64_count(p.p2)|
+        p10dc_rankformula_qol_directgather64_count(p.p3);
     if(any){
         // Decode one packed descriptor at a time and immediately launch its
         // source group. Rank temporaries die before the next column is decoded;
