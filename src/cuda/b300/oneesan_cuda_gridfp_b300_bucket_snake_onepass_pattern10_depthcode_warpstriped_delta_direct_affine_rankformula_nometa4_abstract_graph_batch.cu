@@ -56,10 +56,14 @@ using P10DCSelectedFusedDeviceTables = BucketFusedDirectHighRowsRankFormulaNomet
 #define BucketFusedDeviceTables BucketFusedPrecomputedHighCtxTables<P10DCSelectedFusedDeviceTables>
 #define P10DC_WARP_PRECTX_BYTES sizeof(P10DCHighClosurePreCtx)
 #endif
+// Reverse pattern10-depthcode attach replaces the legacy atomic HIGH orbit
+// vector with resident split54 NN/NR/NL streams. Count those exact streams for
+// the HBM preflight; reverse.atomic.high_orbit may already have been released.
 #define BSN_GRAPH_BATCH_EXTRA_METADATA_BYTES(borbit,reverse) \
     (P10DC_WARP_PRECTX_BYTES * \
      (size_t(P10DC_RANKFORMULA_PRECTX_FORWARD) * ((borbit).high_nn.size() + (borbit).high_nrnl.size()) + \
-      size_t(P10DC_RANKFORMULA_PRECTX_REVERSE) * (reverse).atomic.high_orbit.size()))
+      size_t(P10DC_RANKFORMULA_PRECTX_REVERSE) * \
+          (rattach.split.high.nn.size() + rattach.split.high.nr.size() + rattach.split.high.nl.size())))
 #else
 #define BucketFusedDeviceTables P10DCSelectedFusedDeviceTables
 #endif
