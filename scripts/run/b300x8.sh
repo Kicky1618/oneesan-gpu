@@ -4,12 +4,13 @@ source "$(dirname -- "${BASH_SOURCE[0]}")/../lib/common.sh"
 
 N="${1:-27}"
 MOD="${2:-4294967291}"
-# Keep the large scratch budget for mate caches, but do not let the planner
-# widen n=27 beyond the 14-row split.  With a 27-row window cap and 64GiB target
-# it chooses 27..11 / 10..1, leaving only ten fixed bits and disabling the K=13
-# LOW/HIGH rank LUT fast paths.  A 14-row cap yields 27..14 / 13..1: LOW K=13
-# is exact for the first window and HIGH K=13 for the second.
+# Deliberately separate the planner budget from the real scratch budget.
+# 64GiB is useful for main/block MateID caches, but using it for group planning
+# fixes only ~10 bits and disables the K=13 rank LUTs.  A 16GiB planner budget
+# yields the 27..14 / 13..1 split with 13 fixed bits, while process_group still
+# sees the full 64GiB scratch budget and can keep both mate caches.
 TARGET_MIB="${TARGET_MIB:-65536}"
+GRIDFP_PLAN_TARGET_MIB="${GRIDFP_PLAN_TARGET_MIB:-16384}"
 MAX_WINDOW="${MAX_WINDOW:-14}"
 NGPU="${NGPU:-8}"
 ROWS="${ROWS:-$((N+1))}"
@@ -26,6 +27,7 @@ for name in FAST_SHARD_ADDRESS8 MAIN_MATE_CACHE MAIN_PULL BLOCK_PULL BLOCK_MATE_
   if [[ "$value" != 0 && "$value" != 1 ]]; then echo "$name must be 0 or 1" >&2; exit 2; fi
 done
 [[ "$ROWS" =~ ^[0-9]+$ ]] && (( ROWS >= 1 && ROWS <= N + 1 )) || { echo "ROWS must be 1..$((N+1))" >&2; exit 2; }
+[[ "$GRIDFP_PLAN_TARGET_MIB" =~ ^[0-9]+$ ]] && (( GRIDFP_PLAN_TARGET_MIB >= 1 && GRIDFP_PLAN_TARGET_MIB <= TARGET_MIB )) || { echo "GRIDFP_PLAN_TARGET_MIB must be 1..TARGET_MIB" >&2; exit 2; }
 if [[ "$MAIN_PULL" == 1 && "$MAIN_MATE_CACHE" != 1 ]]; then echo "MAIN_PULL=1 requires MAIN_MATE_CACHE=1" >&2; exit 2; fi
 if [[ "$BLOCK_PULL" == 1 && "$MAIN_PULL" != 1 ]]; then echo "BLOCK_PULL=1 requires MAIN_PULL=1" >&2; exit 2; fi
 if [[ "$BLOCK_MATE_CACHE" == 1 && "$BLOCK_PULL" != 1 ]]; then echo "BLOCK_MATE_CACHE=1 requires BLOCK_PULL=1" >&2; exit 2; fi
@@ -55,8 +57,8 @@ nvidia-smi -L
 nvidia-smi topo -m || true
 nvidia-smi --query-gpu=index,name,memory.total,memory.free --format=csv,noheader || true
 
-echo "N=$N MOD=$MOD GPUs=$NGPU rows=$ROWS requested_scratch=${TARGET_MIB}MiB reserve=${GRIDFP_VRAM_RESERVE_MIB}MiB max_window=$MAX_WINDOW fast_shard_address8=$FAST_SHARD_ADDRESS8 main_mate_cache=$MAIN_MATE_CACHE main_pull=$MAIN_PULL block_pull=$BLOCK_PULL block_mate_cache=$BLOCK_MATE_CACHE GRIDFP_THREADS=${GRIDFP_THREADS:-256}"
+echo "N=$N MOD=$MOD GPUs=$NGPU rows=$ROWS requested_scratch=${TARGET_MIB}MiB planner_target=${GRIDFP_PLAN_TARGET_MIB}MiB reserve=${GRIDFP_VRAM_RESERVE_MIB}MiB max_window=$MAX_WINDOW fast_shard_address8=$FAST_SHARD_ADDRESS8 main_mate_cache=$MAIN_MATE_CACHE main_pull=$MAIN_PULL block_pull=$BLOCK_PULL block_mate_cache=$BLOCK_MATE_CACHE GRIDFP_THREADS=${GRIDFP_THREADS:-256}"
 echo "BIN=$BIN"
-export GRIDFP_VRAM_RESERVE_MIB
+export GRIDFP_VRAM_RESERVE_MIB GRIDFP_PLAN_TARGET_MIB
 export B300_ROW_LIMIT="$ROWS"
 exec "$BIN" "$N" "$MOD" "$TARGET_MIB" "$MAX_WINDOW" "$NGPU"
