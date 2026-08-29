@@ -43,6 +43,7 @@ FILES=(
   scripts/bench/rankformula-abstract-select8-proof.sh
   scripts/bench/rankformula-abstract-depth4-proof.sh
   scripts/bench/rankformula-abstract-srcpack10-proof.sh
+  scripts/bench/rankformula-abstract-compact-proof.sh
   scripts/bench/b300-depthcode-rankformula-nometa-coop-unroll-ab.sh
   scripts/bench/b300-depthcode-rankformula-abstract-select8-ab.sh
   scripts/bench/b300-depthcode-rankformula-abstract-srcpack10-ab.sh
