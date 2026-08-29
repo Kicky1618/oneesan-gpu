@@ -14,6 +14,36 @@ static inline int p10dc_orbitcta_grid_env(const char* name, int fallback) {
     return v;
 }
 
+static void p10dc_orbitcta_report_high_occupancy(int threads) {
+    const size_t smem = sizeof(P10DCDirectHighResolvedCtx);
+    int device = 0;
+    ck(cudaGetDevice(&device), "orbitcta occupancy get device");
+    cudaDeviceProp prop{};
+    ck(cudaGetDeviceProperties(&prop, device), "orbitcta occupancy device props");
+    int fb = 0, rb = 0;
+    ck(cudaOccupancyMaxActiveBlocksPerMultiprocessor(
+           &fb, bucket_high_orbit_closure_pattern10_depthcode_orbitcta_kernel, threads, smem),
+       "orbitcta forward occupancy");
+    ck(cudaOccupancyMaxActiveBlocksPerMultiprocessor(
+           &rb, bucket_reverse_high_pattern10_depthcode_orbitcta_kernel, threads, smem),
+       "orbitcta reverse occupancy");
+    cudaFuncAttributes fa{}, ra{};
+    ck(cudaFuncGetAttributes(&fa, bucket_high_orbit_closure_pattern10_depthcode_orbitcta_kernel),
+       "orbitcta forward attributes");
+    ck(cudaFuncGetAttributes(&ra, bucket_reverse_high_pattern10_depthcode_orbitcta_kernel),
+       "orbitcta reverse attributes");
+    const int cap = prop.maxThreadsPerMultiProcessor / prop.warpSize;
+    const int fw = fb * (threads / prop.warpSize), rw = rb * (threads / prop.warpSize);
+    std::cerr << "rankformula_orbitcta_occupancy device=" << device
+              << " threads=" << threads << " dynamic_smem_bytes=" << smem
+              << " forward_regs=" << fa.numRegs << " reverse_regs=" << ra.numRegs
+              << " forward_blocks_per_sm=" << fb << " reverse_blocks_per_sm=" << rb
+              << " forward_warps_per_sm=" << fw << " reverse_warps_per_sm=" << rw
+              << " warp_cap=" << cap
+              << " forward_warp_occupancy_pct=" << (cap ? 100.0 * double(fw) / double(cap) : 0.0)
+              << " reverse_warp_occupancy_pct=" << (cap ? 100.0 * double(rw) / double(cap) : 0.0) << '\n';
+}
+
 static void bucket_enqueue_high_orbit_closure_pattern10_depthcode_orbitcta_rankformula_nometa4_abstract(
     const StorageLayout& layout, cudaStream_t stream, int threads, int gy
 ) {
@@ -62,6 +92,7 @@ struct BucketPattern10DepthCodeOrbitCtaDirectAffineRankFormulaNometa4AbstractGra
         (void)gx;
         p10dc_warpstriped_delta_direct_affine_rankformula_nometa4_abstract_require_threads(threads);
         p10dc_install_rankformula_abstract_lut();
+        p10dc_orbitcta_report_high_occupancy(threads);
         const int low_gx = p10dc_rankformula_grid_env("BUCKET_LOW_GRID_X", 16);
         const int low_gy = p10dc_rankformula_grid_env("BUCKET_LOW_GRID_Y", 8);
         const int orbit_gy = p10dc_orbitcta_grid_env(
