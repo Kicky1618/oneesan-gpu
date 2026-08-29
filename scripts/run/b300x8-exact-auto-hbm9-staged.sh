@@ -83,7 +83,7 @@ for spec in "${SPECS[@]}";do IFS='|' read -r mode ilp high lowrec highrec mainre
 field(){ local k="$1" l="$2";sed -nE "s/(^|.*[[:space:]])${k}=([^[:space:]]+).*/\\2/p"<<<"$l"|tail -n1;}
 row_smoke(){
   local mode="$1" bin="${BINS[$1]}" so="$LOGDIR/${1}.pre.out" se="$LOGDIR/${1}.pre.err" dm="$LOGDIR/${1}.pre.dmon"
-  if [[ "${BUILD_OK[$mode]:-0}" != 1 ]];then printf '%s\t%s\tfailed:build\tNA\tNA\tNA\tNA\n' "$mode" "$bin" >>"$PRESELECT";return 0;fi
+  if [[ "${BUILD_OK[$mode]:-0}" != 1 ]];then printf '%s\t%s\tfailed:build\tNA\tNA\tNA\tNA\t0\t0\n' "$mode" "$bin" >>"$PRESELECT";return 0;fi
   echo "=== forced preselect $mode rows=$FORCED_ROWS ===" >&2
   nvidia-smi dmon -s u -d 1 >"$dm" 2>/dev/null & local dp=$!
   set +e
@@ -91,14 +91,19 @@ row_smoke(){
   local rc=$?
   set -e
   kill "$dp" 2>/dev/null||true;wait "$dp" 2>/dev/null||true
-  if ((rc));then printf '%s\t%s\tfailed:%s\tNA\tNA\tNA\tNA\n' "$mode" "$bin" "$rc" >>"$PRESELECT";return 0;fi
+  if ((rc));then printf '%s\t%s\tfailed:%s\tNA\tNA\tNA\tNA\t0\t0\n' "$mode" "$bin" "$rc" >>"$PRESELECT";return 0;fi
   local line="$(grep '^backend=gridfp-b300-hbm32-forced2window-opt-batch ' "$so"|tail -n1||true)"
-  if [[ -z "$line" ]];then printf '%s\t%s\tfailed:no_result\tNA\tNA\tNA\tNA\n' "$mode" "$bin" >>"$PRESELECT";return 0;fi
-  grep -Fq " rows=$FORCED_ROWS calibration=1 "<<<"$line"||{ printf '%s\t%s\tfailed:no_row_metadata\tNA\tNA\tNA\tNA\n' "$mode" "$bin" >>"$PRESELECT";return 0;}
+  if [[ -z "$line" ]];then printf '%s\t%s\tfailed:no_result\tNA\tNA\tNA\tNA\t0\t0\n' "$mode" "$bin" >>"$PRESELECT";return 0;fi
+  grep -Fq " rows=$FORCED_ROWS calibration=1 "<<<"$line"||{ printf '%s\t%s\tfailed:no_row_metadata\tNA\tNA\tNA\tNA\t0\t0\n' "$mode" "$bin" >>"$PRESELECT";return 0;}
+  local hg hf;hg="$(field high_rec_groups "$line")";hf="$(field high_rec_fallback_groups "$line")";[[ -n "$hg" ]]||hg=0;[[ -n "$hf" ]]||hf=0
+  case "$mode" in
+    forced_highrec*|forced_mainrec*)
+      if ! [[ "$hg" =~ ^[0-9]+$ ]] || ((hg==0)); then printf '%s\t%s\tfailed:no_rec_coverage\tNA\tNA\tNA\tNA\t%s\t%s\n' "$mode" "$bin" "$hg" "$hf" >>"$PRESELECT";return 0;fi;;
+  esac
   local avg mx;read -r avg mx < <(awk 'BEGIN{n=0;s=0;m=0} !/^#/ && NF>=3 {x=$3+0;s+=x;if(x>m)m=x;n++} END{if(n)printf "%.3f %.3f\n",s/n,m;else print "NA NA"}' "$dm")
-  printf '%s\t%s\tok\t%s\t%s\t%s\t%s\n' "$mode" "$bin" "$(field residue "$line")" "$(field wall_s "$line")" "$avg" "$mx" >>"$PRESELECT"
+  printf '%s\t%s\tok\t%s\t%s\t%s\t%s\t%s\t%s\n' "$mode" "$bin" "$(field residue "$line")" "$(field wall_s "$line")" "$avg" "$mx" "$hg" "$hf" >>"$PRESELECT"
 }
-printf 'backend\tbinary\tstatus\tresidue\twall_s\tmc_avg_pct\tmc_max_pct\n' >"$PRESELECT"
+printf 'backend\tbinary\tstatus\tresidue\twall_s\tmc_avg_pct\tmc_max_pct\thigh_rec_groups\thigh_rec_fallback_groups\n' >"$PRESELECT"
 for spec in "${SPECS[@]}";do IFS='|' read -r mode _<<<"$spec";row_smoke "$mode";done
 
 selection="$(python3 - "$PRESELECT" <<'PY'
@@ -107,7 +112,8 @@ rows=list(csv.DictReader(open(sys.argv[1]),delimiter='\t'));ok=[r for r in rows 
 if not ok:raise SystemExit('no successful forced preselection candidate')
 res={r['residue'] for r in ok}
 if len(res)!=1:raise SystemExit('FATAL forced partial-row residue mismatch '+repr({r['backend']:r['residue'] for r in ok}))
-for r in sorted(ok,key=lambda x:float(x['wall_s'])):print('FORCED_PRESELECT',r['backend'],'wall_s='+r['wall_s'],'mc_avg='+r['mc_avg_pct'],'mc_max='+r['mc_max_pct'],file=sys.stderr)
+for r in sorted(ok,key=lambda x:float(x['wall_s'])):
+ print('FORCED_PRESELECT',r['backend'],'wall_s='+r['wall_s'],'mc_avg='+r['mc_avg_pct'],'mc_max='+r['mc_max_pct'],'high_rec='+r['high_rec_groups'],'fallback='+r['high_rec_fallback_groups'],file=sys.stderr)
 b=min(ok,key=lambda x:float(x['wall_s']));print('\t'.join([b['backend'],b['binary'],b['residue'],b['wall_s']]))
 PY
 )"
