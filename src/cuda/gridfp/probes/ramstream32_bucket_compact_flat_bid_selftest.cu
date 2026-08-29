@@ -75,7 +75,7 @@ int main() {
     CpuHighDirectHost highdirect = build_cpu_high_direct(storage, layout, highdesc);
     GpuDirectGatherHost ordinary = build_gpu_direct_gather(layout, lowdesc, loworbit, highdirect);
     GpuDirectCrossGatherHost cross = build_gpu_direct_cross_gather(storage, layout, lowdesc, loworbit, highdirect);
-    GpuDirectFusedHost fused = build_gpu_direct_fused_checked(layout, ordinary, cross, fused);
+    GpuDirectFusedHost fused = build_gpu_direct_fused_checked(layout, ordinary, cross);
     CpuLowSparseHost lowsparse = build_cpu_low_sparse(storage, layout, lowdesc, loworbit);
     BucketOwnerHost owner = build_bucket_owners(G_FACTOR, storage);
     BucketPhysicalLayoutHost phy = build_bucket_physical_layout(layout, owner);
@@ -92,16 +92,16 @@ int main() {
     auto fh = build_bucket_forward_pattern10_depthcode_placeholder(layout, bo, bf);
     auto rh = build_bucket_reverse_pattern10_depthcode_zero_checked(layout, bo, bf, rb, rf);
 
-    using Tables = BucketFusedCompactPrecomputedHighCtxFlatBidTables<BucketFusedDirectHighRowsTables>;
-    Tables dt;
-    dt.install_metadata(layout, bo, bf);
     BucketForwardPattern10DepthCodeDeviceTables fdt; fdt.install(fh);
     BucketReversePattern10DepthCodeDeviceTables rdt; rdt.install(rh);
 
     CompactFlatBidCheck* dcheck = nullptr;
     ck(cudaMalloc(&dcheck, sizeof(CompactFlatBidCheck)), "compact flat bid check alloc");
     uint64_t total_checked = 0;
+    using Tables = BucketFusedCompactPrecomputedHighCtxFlatBidTables<BucketFusedDirectHighRowsTables>;
     for (uint32_t fixed = 0; fixed < BUCKET_NGPU; ++fixed) {
+        Tables dt;
+        dt.install_metadata(layout, bo, bf);
         std::array<Count*, BUCKET_NGPU> d{};
         bkft_alloc_slots(fixed, phy, d);
         dt.bind_owner(fixed, phy, d);
@@ -122,14 +122,13 @@ int main() {
         if (h.errors || !h.checked) {
             std::cerr << "compact flat bid mismatch fixed=" << fixed
                       << " checked=" << h.checked << " errors=" << h.errors << '\n';
+            dt.release();
+            bkft_free_slots(d);
             return 70;
         }
         total_checked += h.checked;
         dt.release();
         bkft_free_slots(d);
-        if (fixed + 1u < BUCKET_NGPU) {
-            dt.install_metadata(layout, bo, bf);
-        }
     }
 
     cudaFree(dcheck);
