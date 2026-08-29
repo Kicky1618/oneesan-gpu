@@ -30,12 +30,18 @@
 #ifndef P10DC_ORBITCTA_FLAT_CHUNK
 #define P10DC_ORBITCTA_FLAT_CHUNK 1
 #endif
+#ifndef P10DC_ORBITCTA_FLAT_DYNAMIC
+#define P10DC_ORBITCTA_FLAT_DYNAMIC 0
+#endif
 static_assert(P10DC_RANKFORMULA_PRECTX_COMPACT == 0 ||
               P10DC_RANKFORMULA_PRECTX_COMPACT == 1,
               "P10DC_RANKFORMULA_PRECTX_COMPACT must be 0 or 1");
 static_assert(P10DC_RANKFORMULA_PRECTX_FLAT_BID == 0 ||
               P10DC_RANKFORMULA_PRECTX_FLAT_BID == 1,
               "P10DC_RANKFORMULA_PRECTX_FLAT_BID must be 0 or 1");
+static_assert(P10DC_ORBITCTA_FLAT_DYNAMIC == 0 ||
+              P10DC_ORBITCTA_FLAT_DYNAMIC == 1,
+              "P10DC_ORBITCTA_FLAT_DYNAMIC must be 0 or 1");
 static_assert(!P10DC_RANKFORMULA_PRECTX_COMPACT ||
               P10DC_RANKFORMULA_PRECTX_FORWARD ||
               P10DC_RANKFORMULA_PRECTX_REVERSE,
@@ -47,6 +53,10 @@ static_assert(!P10DC_RANKFORMULA_PRECTX_FLAT_BID ||
               "flat-bid cache requires compact forward+reverse prectx");
 static_assert(!P10DC_RANKFORMULA_PRECTX_FLAT_BID || P10DC_ORBITCTA_FLAT_CHUNK == 1,
               "flat-bid cache and chunked bid amortization are isolated A/B paths");
+static_assert(!P10DC_ORBITCTA_FLAT_DYNAMIC || P10DC_ORBITCTA_FLAT_CHUNK == 1,
+              "dynamic flat scheduler currently uses one-orbit queue entries");
+static_assert(!P10DC_ORBITCTA_FLAT_DYNAMIC || !P10DC_RANKFORMULA_QUAD_MLP,
+              "dynamic flat scheduler is isolated from the chunked quad path");
 static_assert(P10DC_ORBITCTA_FLAT_CHUNK == 1 ||
               P10DC_ORBITCTA_FLAT_CHUNK == 2 ||
               P10DC_ORBITCTA_FLAT_CHUNK == 4 ||
@@ -138,6 +148,9 @@ static_assert(P10DC_ORBITCTA_COL_ILP == 4,
 #endif
 #if P10DC_RANKFORMULA_PRECTX_FLAT_BID
 #include "ramstream32_bucket_orbit_closure_pattern10_depthcode_orbitcta_flat_prectx_bid.cuh"
+#endif
+#if P10DC_ORBITCTA_FLAT_DYNAMIC
+#include "ramstream32_bucket_orbit_closure_pattern10_depthcode_orbitcta_flat_dynamic.cuh"
 #endif
 #endif
 
