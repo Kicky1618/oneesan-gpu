@@ -19,12 +19,13 @@ HEIGHT_CACHE="${HEIGHT_CACHE:-0}"
 RANK_DELTA_CACHE="${RANK_DELTA_CACHE:-0}"
 RANK_STATE_PACKED="${RANK_STATE_PACKED:-0}"
 RANK_STATE_ILP2="${RANK_STATE_ILP2:-0}"
+RANK_STATE_ILP4="${RANK_STATE_ILP4:-0}"
 HOT_DELTA_TABLE="${HOT_DELTA_TABLE:-0}"
 CONCURRENT_GROUP_IO="${CONCURRENT_GROUP_IO:-0}"
 MAXRREGCOUNT="${MAXRREGCOUNT:-0}"
 PTXAS_VERBOSE="${PTXAS_VERBOSE:-1}"
 
-for name in FAST_SHARD_ADDRESS8 MAIN_MATE_CACHE MAIN_PULL BLOCK_PULL BLOCK_MATE_CACHE MAIN_PULL_ILP2 HEIGHT_CACHE RANK_DELTA_CACHE RANK_STATE_PACKED RANK_STATE_ILP2 HOT_DELTA_TABLE CONCURRENT_GROUP_IO PTXAS_VERBOSE; do
+for name in FAST_SHARD_ADDRESS8 MAIN_MATE_CACHE MAIN_PULL BLOCK_PULL BLOCK_MATE_CACHE MAIN_PULL_ILP2 HEIGHT_CACHE RANK_DELTA_CACHE RANK_STATE_PACKED RANK_STATE_ILP2 RANK_STATE_ILP4 HOT_DELTA_TABLE CONCURRENT_GROUP_IO PTXAS_VERBOSE; do
   value="${!name}"
   if [[ "$value" != 0 && "$value" != 1 ]]; then echo "$name must be 0 or 1" >&2; exit 2; fi
 done
@@ -35,9 +36,11 @@ if [[ "$BLOCK_MATE_CACHE" == 1 && "$BLOCK_PULL" != 1 ]]; then echo "BLOCK_MATE_C
 for name in MAIN_PULL_ILP2 HEIGHT_CACHE RANK_DELTA_CACHE; do
   if [[ "${!name}" == 1 && ( "$MAIN_PULL" != 1 || "$BLOCK_PULL" != 1 || "$MAIN_MATE_CACHE" != 1 || "$BLOCK_MATE_CACHE" != 1 ) ]]; then echo "$name=1 requires full-pull plus both MateID caches" >&2; exit 2; fi
 done
-if (( MAIN_PULL_ILP2 + HEIGHT_CACHE + RANK_DELTA_CACHE > 1 )); then echo "MAIN_PULL_ILP2, HEIGHT_CACHE and RANK_DELTA_CACHE are separate base experiments; use RANK_STATE_ILP2 to combine ILP2 with packed rank-state" >&2; exit 2; fi
+if (( MAIN_PULL_ILP2 + HEIGHT_CACHE + RANK_DELTA_CACHE > 1 )); then echo "MAIN_PULL_ILP2, HEIGHT_CACHE and RANK_DELTA_CACHE are separate base experiments; use packed rank-state ILP2/4 to combine ILP with rank recurrence" >&2; exit 2; fi
 if [[ "$RANK_STATE_PACKED" == 1 && "$RANK_DELTA_CACHE" != 1 ]]; then echo "RANK_STATE_PACKED=1 requires RANK_DELTA_CACHE=1" >&2; exit 2; fi
 if [[ "$RANK_STATE_ILP2" == 1 && "$RANK_STATE_PACKED" != 1 ]]; then echo "RANK_STATE_ILP2=1 requires RANK_STATE_PACKED=1" >&2; exit 2; fi
+if [[ "$RANK_STATE_ILP4" == 1 && "$RANK_STATE_PACKED" != 1 ]]; then echo "RANK_STATE_ILP4=1 requires RANK_STATE_PACKED=1" >&2; exit 2; fi
+if (( RANK_STATE_ILP2 + RANK_STATE_ILP4 > 1 )); then echo "RANK_STATE_ILP2 and RANK_STATE_ILP4 are mutually exclusive" >&2; exit 2; fi
 if [[ "$HOT_DELTA_TABLE" == 1 && "$RANK_DELTA_CACHE" != 1 ]]; then echo "HOT_DELTA_TABLE=1 requires RANK_DELTA_CACHE=1" >&2; exit 2; fi
 
 if [[ -z "$LOW_LUT_K" ]]; then if (( N >= 24 )); then LOW_LUT_K=13; else LOW_LUT_K=0; fi; fi
@@ -52,6 +55,7 @@ if [[ "$BLOCK_PULL" == 1 ]]; then
   bash "$ONEESAN_ROOT/scripts/bench/b300-block-closure-rank-incremental-proof.sh"
 fi
 if [[ "$MAIN_PULL_ILP2" == 1 || "$RANK_STATE_ILP2" == 1 ]]; then bash "$ONEESAN_ROOT/scripts/bench/b300-ilp2-partition-proof.sh"; fi
+if [[ "$RANK_STATE_ILP4" == 1 ]]; then bash "$ONEESAN_ROOT/scripts/bench/b300-ilp4-partition-proof.sh"; fi
 if [[ "$HEIGHT_CACHE" == 1 ]]; then bash "$ONEESAN_ROOT/scripts/bench/b300-height-recurrence-proof.sh"; fi
 if [[ "$RANK_DELTA_CACHE" == 1 ]]; then
   bash "$ONEESAN_ROOT/scripts/bench/b300-rank-delta-recurrence-proof.sh"
@@ -78,6 +82,9 @@ if [[ "$RANK_DELTA_CACHE" == 1 ]]; then
   if [[ "$RANK_STATE_ILP2" == 1 ]]; then
     RANK_STATE_ILP2_SRC="$ONEESAN_BUILD_DIR/b300_hbm32_n${N}_rank_state_ilp2.cu";python3 "$ONEESAN_ROOT/scripts/build/gen-b300-rank-state-ilp2.py" "$BUILD_SRC" "$RANK_STATE_ILP2_SRC";BUILD_SRC="$RANK_STATE_ILP2_SRC"
     BLOCK_RANK_STATE_ILP2_SRC="$ONEESAN_BUILD_DIR/b300_hbm32_n${N}_rank_state_ilp2_block.cu";python3 "$ONEESAN_ROOT/scripts/build/gen-b300-block-rank-state-ilp2.py" "$BUILD_SRC" "$BLOCK_RANK_STATE_ILP2_SRC";BUILD_SRC="$BLOCK_RANK_STATE_ILP2_SRC"
+  elif [[ "$RANK_STATE_ILP4" == 1 ]]; then
+    RANK_STATE_ILP4_SRC="$ONEESAN_BUILD_DIR/b300_hbm32_n${N}_rank_state_ilp4.cu";python3 "$ONEESAN_ROOT/scripts/build/gen-b300-rank-state-ilp4.py" "$BUILD_SRC" "$RANK_STATE_ILP4_SRC";BUILD_SRC="$RANK_STATE_ILP4_SRC"
+    BLOCK_RANK_STATE_ILP4_SRC="$ONEESAN_BUILD_DIR/b300_hbm32_n${N}_rank_state_ilp4_block.cu";python3 "$ONEESAN_ROOT/scripts/build/gen-b300-block-rank-state-ilp4.py" "$BUILD_SRC" "$BLOCK_RANK_STATE_ILP4_SRC";BUILD_SRC="$BLOCK_RANK_STATE_ILP4_SRC"
   fi
   if [[ "$HOT_DELTA_TABLE" == 1 ]]; then
     HOT_DELTA_SRC="$ONEESAN_BUILD_DIR/b300_hbm32_n${N}_hot_delta_table.cu";python3 "$ONEESAN_ROOT/scripts/build/gen-b300-hot-delta-table.py" "$BUILD_SRC" "$HOT_DELTA_SRC";BUILD_SRC="$HOT_DELTA_SRC"
@@ -97,9 +104,10 @@ TMPDIR="$ONEESAN_TMP_DIR" nvcc -O3 -std=c++17 -lineinfo -arch="$ARCH" "${PTXAS_F
 echo "built $OUT"
 echo "  source=$SRC"
 echo "  build_source=$BUILD_SRC"
-echo "  n=$N width=$W arch=$ARCH low_lut_k=$LOW_LUT_K high_lut_k=$HIGH_LUT_K fast_shard_address8=$FAST_SHARD_ADDRESS8 main_mate_cache=$MAIN_MATE_CACHE main_pull=$MAIN_PULL block_pull=$BLOCK_PULL block_mate_cache=$BLOCK_MATE_CACHE main_pull_ilp2=$MAIN_PULL_ILP2 height_cache=$HEIGHT_CACHE rank_delta_cache=$RANK_DELTA_CACHE rank_state_packed=$RANK_STATE_PACKED rank_state_ilp2=$RANK_STATE_ILP2 hot_delta_table=$HOT_DELTA_TABLE concurrent_group_io=$CONCURRENT_GROUP_IO maxrregcount=$MAXRREGCOUNT ptxas_verbose=$PTXAS_VERBOSE"
+echo "  n=$N width=$W arch=$ARCH low_lut_k=$LOW_LUT_K high_lut_k=$HIGH_LUT_K fast_shard_address8=$FAST_SHARD_ADDRESS8 main_mate_cache=$MAIN_MATE_CACHE main_pull=$MAIN_PULL block_pull=$BLOCK_PULL block_mate_cache=$BLOCK_MATE_CACHE main_pull_ilp2=$MAIN_PULL_ILP2 height_cache=$HEIGHT_CACHE rank_delta_cache=$RANK_DELTA_CACHE rank_state_packed=$RANK_STATE_PACKED rank_state_ilp2=$RANK_STATE_ILP2 rank_state_ilp4=$RANK_STATE_ILP4 hot_delta_table=$HOT_DELTA_TABLE concurrent_group_io=$CONCURRENT_GROUP_IO maxrregcount=$MAXRREGCOUNT ptxas_verbose=$PTXAS_VERBOSE"
 echo "  row_limit_env=B300_ROW_LIMIT default_rows=$W runtime_threads_env=GRIDFP_THREADS default_threads=256 planner_target_env=GRIDFP_PLAN_TARGET_MIB scratch_target_separate=1"
 echo "  block_closure_scan=endpoint_setbits block_closure_candidate_rank=incremental_delta rank_same_calls_per_closure_candidate=0"
 if [[ "$RANK_STATE_ILP2" == 1 ]]; then echo "  rank_state_main_destinations_per_thread=2 rank_state_block_destinations_per_thread=2 rank_state_index_first=1 rank_state_hbm_request_overlap=pair,block,endpoint,closure,two_destinations register_pressure_requires_ab=1";fi
+if [[ "$RANK_STATE_ILP4" == 1 ]]; then echo "  rank_state_main_destinations_per_thread=4 rank_state_block_destinations_per_thread=4 rank_state_index_first=1 rank_state_hbm_request_overlap=pair,block,endpoint,four_destinations closure_slow_path=noinline register_pressure_requires_ab=1";fi
 if [[ "$HOT_DELTA_TABLE" == 1 ]]; then echo "  hot_delta_bits=32 hot_delta_constant_bytes_added=17400 hot_delta_step_n_stored=0 hot_delta_int32_checked_per_group=1 rank_step_constant_loads=1 pair_rank_constant_loads=1";fi
 if [[ "$CONCURRENT_GROUP_IO" == 1 ]]; then echo "  group_io_main_block_overlap=1 mate_materialize_overlap=1 rank_state_init_overlap=1 scatter_overlap=1 devicewide_group_io_sync=0";fi
