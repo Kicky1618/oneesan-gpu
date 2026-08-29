@@ -50,7 +50,7 @@ marker='echo "built $BIN backend=$BACKEND_TAG '
 i=src.find(marker)
 if i<0: raise SystemExit('build summary anchor missing')
 e=src.find('\n',i); line=src[i:e]; q=line.rfind('"')
-line=line[:q]+' pipe2_producer_warp=1 pipe2_producer_worker_weight=$PRODUCER_WORKER_WEIGHT pipe2_producer_adaptive_cols=$PRODUCER_ADAPTIVE_COLS pipe2_producer_prectx_warpcoop=$PRODUCER_PRECTX_WARPCOOP'+line[q:]
+line=line[:q]+' pipe2_producer_warp=1 pipe2_producer_worker_weight=$PRODUCER_WORKER_WEIGHT pipe2_producer_prectx_warpcoop=$PRODUCER_PRECTX_WARPCOOP pipe2_producer_adaptive_cols=$PRODUCER_ADAPTIVE_COLS'+line[q:]
 src=src[:i]+line+src[e:]
 Path(sys.argv[2]).write_text(src)
 PY
@@ -61,7 +61,7 @@ if [[ "$PATCH_ONLY" == 1 ]]; then
   grep -Fq -- '-DP10DC_ORBITCTA_FLAT_DYNAMIC_PIPE2_PRODUCER_WORKER_WEIGHT="$PRODUCER_WORKER_WEIGHT"' "$tmp" || exit 3
   grep -Fq -- '-DP10DC_ORBITCTA_FLAT_DYNAMIC_PIPE2_PRODUCER_ADAPTIVE_COLS="$PRODUCER_ADAPTIVE_COLS"' "$tmp" || exit 3
   grep -Fq 'pipe2_producer_warp=1' "$tmp" || exit 3
-  echo "b300_pipe2_producer_warp_patch=OK quad_mlp=$QUAD_MLP col_ilp=$COL_ILP producer_worker_weight=$PRODUCER_WORKER_WEIGHT producer_adaptive_cols=$PRODUCER_ADAPTIVE_COLS producer_prectx_warpcoop=$PRODUCER_PRECTX_WARPCOOP gpu_work=0"
+  echo "b300_pipe2_producer_warp_patch=OK quad_mlp=$QUAD_MLP col_ilp=$COL_ILP producer_worker_weight=$PRODUCER_WORKER_WEIGHT producer_prectx_warpcoop=$PRODUCER_PRECTX_WARPCOOP producer_adaptive_cols=$PRODUCER_ADAPTIVE_COLS gpu_work=0"
   exit 0
 fi
 exec env ORBITCTA_FLAT=1 ORBITCTA_FLAT_CHUNK=1 ORBITCTA_FLAT_DYNAMIC=1 \
