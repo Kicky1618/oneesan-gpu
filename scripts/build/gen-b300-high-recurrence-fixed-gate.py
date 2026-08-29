@@ -21,7 +21,7 @@ if s.count(prologue)!=1:raise SystemExit(f'process_group prologue expected once,
 s=s.replace(prologue,prologue+'''
     if constexpr(TARGET_W==28){
         constexpr uint32_t REC_HIGH=((uint32_t(1)<<28)-1u)^((uint32_t(1)<<13)-1u);
-        if((pg.mf&REC_HIGH)==0){
+        if(ms.size && (pg.mf&REC_HIGH)==0){
             if(__builtin_popcount(pg.mf)>=7)B300_HIGH_REC_GROUPS.fetch_add(1,std::memory_order_relaxed);
             else B300_HIGH_REC_FALLBACK_GROUPS.fetch_add(1,std::memory_order_relaxed);
         }
@@ -35,7 +35,7 @@ result='<<" prepare_s="<<prepare_s<<" wall_s="<<wall<<std::endl;'
 if s.count(result)!=1:raise SystemExit(f'backend result anchor expected once, got {s.count(result)}')
 s=s.replace(result,'<<" prepare_s="<<prepare_s<<" wall_s="<<wall<<" high_rec_groups="<<B300_HIGH_REC_GROUPS.load(std::memory_order_relaxed)<<" high_rec_fallback_groups="<<B300_HIGH_REC_FALLBACK_GROUPS.load(std::memory_order_relaxed)<<std::endl;',1)
 
-for required in ('__popc(D_MAIN_FIXED)>=7','__builtin_popcount(pg.mf)>=7','high_rec_groups=','high_rec_fallback_groups='):
+for required in ('__popc(D_MAIN_FIXED)>=7','ms.size && (pg.mf&REC_HIGH)==0','__builtin_popcount(pg.mf)>=7','high_rec_groups=','high_rec_fallback_groups='):
     if required not in s:raise SystemExit(f'fixed-bit recurrence artifact missing: {required}')
 out.parent.mkdir(parents=True,exist_ok=True);out.write_text(s)
-print(f'generated {out} from {src}: high_recurrence_min_fixed=7 fixed_lt7_fallback=raw_mate_rank signed35_gate=1 runtime_coverage_report=1 coverage_unit=process_group')
+print(f'generated {out} from {src}: high_recurrence_min_fixed=7 fixed_lt7_fallback=raw_mate_rank signed35_gate=1 runtime_coverage_report=1 coverage_unit=main_process_group')
