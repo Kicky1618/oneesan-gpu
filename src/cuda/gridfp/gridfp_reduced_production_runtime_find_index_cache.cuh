@@ -1,6 +1,7 @@
 #pragma once
 
 #include "gridfp_reduced_production_runtime_shared_key.cuh"
+#include "gridfp_reduced_production_runtime_reverse_discovery.cuh"
 
 #ifndef RP_RUNTIME_FIND_INDEX_CACHE
 #define RP_RUNTIME_FIND_INDEX_CACHE 0
@@ -43,12 +44,6 @@ static_assert(RP_RUNTIME_FIND_INDEX_HASH_BUCKETS + 6 <= 64,
 
 namespace oneesan::gridfp::reducedprod {
 
-// Each bucket keeps WAYS most-recent indices, one byte each. Bits 0..6 store
-// index+1 and bit 7 of way 0 records overflow beyond the retained ways. The
-// low HASH_BUCKETS bits of occupancy guard stale shared bytes. When fewer than
-// 64 hash buckets are used, six otherwise-unused high occupancy bits memoize
-// the bucket of the most recent miss so the immediately-following record does
-// not hash the same key twice. Hits never update the memo.
 struct RuntimeFindIndexCache {
     std::uint8_t slot[RP_RUNTIME_FIND_INDEX_HASH_BUCKETS]
                      [RP_RUNTIME_FIND_INDEX_WAYS];
@@ -247,10 +242,13 @@ __device__ __forceinline__ bool runtime_discover_inverse_direction_to_shared_ind
         source_set, &source_count, capacity, &source_occupancy, &source_cache};
     if (!reverse)
         return runtime_discover_inverse_reduced_forward(dest, W, p, base);
-
+#if RP_RUNTIME_DIRECT_REVERSE_DISCOVERY
+    return runtime_discover_inverse_reduced_reverse(dest, W, p, base);
+#else
     RuntimeIndexedMirroredKeySetSink mirrored{base, W};
     const DeviceKey md = mirror_key_device(dest, W);
     return runtime_discover_inverse_reduced_forward(md, W, W - p, mirrored);
+#endif
 }
 
 } // namespace oneesan::gridfp::reducedprod
