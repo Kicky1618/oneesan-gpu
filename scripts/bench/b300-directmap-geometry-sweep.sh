@@ -10,25 +10,26 @@ if [[ -z "${EXPECT+x}" ]]; then [[ "$N" == 21 && "$MOD" == 4294967291 ]] && EXPE
 command -v nvcc >/dev/null || exit 2
 command -v nvidia-smi >/dev/null || exit 2
 
-PREFIX="${PREFIX:-$ONEESAN_ROOT/work/b300_directmap_geometry_n${N}}"
+PREFIX="${PREFIX:-$ONEESAN_ROOT/work/b300_directgather_geometry_n${N}}"
 LOGDIR="${LOGDIR:-${PREFIX}_logs}"; RESULT="${RESULT:-${PREFIX}.tsv}"
 mkdir -p "$LOGDIR" "$(dirname "$RESULT")"
-BIN="${BIN:-$ONEESAN_BUILD_DIR/b300_directmap_geometry_n${N}}"
+BIN="${BIN:-$ONEESAN_BUILD_DIR/b300_directgather_geometry_n${N}}"
 
 N="$N" ARCH="$ARCH" OUT="$BIN" \
   RANKFORMULA_NOMETA_BLOCK=16 RANKFORMULA_NOMETA_WARPSHARE=1 \
   RANKFORMULA_NOMETA_COOPGROUP=1 RANKFORMULA_NOMETA_COOP_UNROLL=0 \
   RANKFORMULA_NOMETA_GROUP56=0 RANKFORMULA_NOMETA_GROUP61=1 \
-  RANKFORMULA_NOMETA_DIRECTMAP=1 RANKFORMULA_ABSTRACT_SELECT8=1 \
-  RANKFORMULA_ABSTRACT_DEPTH4=1 RANKFORMULA_ABSTRACT_SRCPACK10=1 \
-  RANKFORMULA_GATHER_MLP=1 DEPTHCODE_DECODE_LOAD=ldg RANKSTREAM_LUT_LOAD=ldg \
+  RANKFORMULA_NOMETA_DIRECTMAP=1 RANKFORMULA_DIRECTGATHER=1 \
+  RANKFORMULA_ABSTRACT_SELECT8=1 RANKFORMULA_ABSTRACT_DEPTH4=1 \
+  RANKFORMULA_ABSTRACT_SRCPACK10=1 RANKFORMULA_GATHER_MLP=1 \
+  DEPTHCODE_DECODE_LOAD=ldg RANKSTREAM_LUT_LOAD=ldg \
   TRANSPOSE_MODE="$TRANSPOSE_MODE" PM_ACCUM="$PM_ACCUM" TERNARY_KEY4="$TERNARY_KEY4" \
   bash "$ONEESAN_ROOT/scripts/build/b300-bucket-snake-pattern10-depthcode-rankformula-nometa4-abstract.sh" \
   >"$LOGDIR/build.out" 2>"$LOGDIR/build.err"
 
 field(){ local key="$1" line="$2"; sed -nE "s/(^|.*[[:space:]])${key}=([^[:space:]]+).*/\\2/p" <<<"$line" | tail -n1; }
 # HIGH uses x for rank columns and y for orbit operations; LOW swaps the useful
-# dimensions.  Sweep both axes rather than simply maximizing total CTA count.
+# dimensions. Sweep both axes rather than simply maximizing total CTA count.
 CASES=(
   "256 16 8"
   "256 32 8"
