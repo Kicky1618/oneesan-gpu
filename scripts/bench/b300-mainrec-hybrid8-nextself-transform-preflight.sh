@@ -11,8 +11,11 @@ for f in "$HYBRID" "$CG" "$PREFETCH" "$NEXTSELF"; do python3 -m py_compile "$f";
 
 for s in \
   'RECURRENCE_HYBRID_ILP8_NEXTSELF' \
+  'RECURRENCE_HYBRID_ILP8_NEXTSELF_WIDTH' \
   'gen-b300-mainrec-hybrid8-next-self-prefetch.py' \
   'recurrence_hybrid_ilp8_nextself=' \
+  'recurrence_hybrid_ilp8_nextself_width=' \
+  'prefetch_width=' \
   'hybrid8_nextself'; do
   grep -Fq "$s" "$BUILDER" || { echo "builder hybrid8-nextself marker missing: $s" >&2; exit 2; }
 done
@@ -75,6 +78,7 @@ test_chain(){
   grep -Fq 'b300_mainrec_hybrid8_next_self_prefetch=1' "$log"
   grep -Fq 'prefetch_before_current_reduction=1' "$log"
   grep -Fq 'next_iteration_self_prefetches_per_thread=8' "$log"
+  grep -Fq 'prefetch_width=8' "$log"
   grep -Fq 'b300_mainrec_hybrid8_prefetch_next_self_l2' "$out"
   grep -Fq 'const Code next_base=base+Code(8)*grid' "$out"
   grep -Fq 'b300_mainrec_hybrid8_prefetch_next_self_l2(ni7<n?in+ni7:in,ni7<n)' "$out"
@@ -97,11 +101,26 @@ if not (a>=0 and b>a): raise SystemExit('next-self prefetch must remain before c
 PY
 }
 
+test_width(){
+  local width="$1" out="$TMP/width${width}.cu" log="$TMP/width${width}.log" last=$((width-1))
+  python3 "$NEXTSELF" "$HYB" "$out" "$width" >"$log"
+  grep -Fq "next_iteration_self_prefetches_per_thread=$width" "$log"
+  grep -Fq "prefetch_width=$width" "$log"
+  grep -Fq "b300_mainrec_hybrid8_prefetch_next_self_l2(ni${last}<n?in+ni${last}:in,ni${last}<n)" "$out"
+  if (( width < 8 )); then
+    ! grep -Fq "const Code ni${width}=" "$out"
+    ! grep -Fq "b300_mainrec_hybrid8_prefetch_next_self_l2(ni${width}<" "$out"
+  fi
+  count="$(grep -Ec '^[[:space:]]*b300_mainrec_hybrid8_prefetch_next_self_l2\(ni[0-7]<' "$out")"
+  [[ "$count" == "$width" ]] || { echo "width=$width emitted prefetch count=$count" >&2; exit 3; }
+}
+
 test_chain plain 0 0 0
 test_chain cg 1 0 0
 test_chain cgl2 1 128 0
 test_chain generic_prefetch 0 0 1
 test_chain cgl2_generic_prefetch 1 128 1
+for width in 1 2 4 8; do test_width "$width"; done
 
 python3 "$NEXTSELF" "$HYB" "$TMP/once.cu" >/dev/null
 set +e
@@ -118,4 +137,13 @@ set -e
 ((rc!=0)) || { echo 'next-self transform unexpectedly accepted non-hybrid source' >&2; exit 3; }
 grep -Fq 'hybrid8 next-self prefetch requires artifact' "$TMP/nohybrid.err"
 
-echo 'b300-mainrec-hybrid8-nextself-transform-preflight OK python_ast=1 chains=5 ilp2_fixture=production_load_shape cg_compatible=1 cgl2_compatible=1 generic_prefetch_compatible=1 ordering=1 double_transform_rejected=1 nonhybrid_rejected=1 gpu_work=0'
+for bad in 0 3 5 16; do
+  set +e
+  python3 "$NEXTSELF" "$HYB" "$TMP/bad${bad}.cu" "$bad" >"$TMP/bad${bad}.out" 2>"$TMP/bad${bad}.err"
+  rc=$?
+  set -e
+  ((rc!=0)) || { echo "invalid width=$bad unexpectedly accepted" >&2; exit 3; }
+  grep -Fq 'WIDTH must be one of 1,2,4,8' "$TMP/bad${bad}.err"
+done
+
+echo 'b300-mainrec-hybrid8-nextself-transform-preflight OK python_ast=1 chains=5 widths=1,2,4,8 exact_prefetch_count=1 invalid_width_rejected=1 ilp2_fixture=production_load_shape cg_compatible=1 cgl2_compatible=1 generic_prefetch_compatible=1 ordering=1 double_transform_rejected=1 nonhybrid_rejected=1 gpu_work=0'
