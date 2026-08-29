@@ -22,7 +22,8 @@ HYBRID_PREPARE_ENV="${HYBRID_PREPARE_ENV:-${PREFIX}.hybrid8.prepared.env}"
 HYBRID_RACE_PREFIX="${HYBRID_RACE_PREFIX:-${PREFIX}.hybrid8.promote}"
 HYBRID_NS_PREFIX="${HYBRID_NS_PREFIX:-${PREFIX}.hybrid8-nextself}"
 HYBRID_NS_WINNER_ENV="${HYBRID_NS_WINNER_ENV:-${HYBRID_NS_PREFIX}_winner.env}"
-HYBRID_NS_MANIFEST="${HYBRID_NS_MANIFEST:-${HYBRID_NS_PREFIX}_promotion-inputs.sha256}"
+HYBRID_NS_PREPARE_ENV="${HYBRID_NS_PREPARE_ENV:-${PREFIX}.hybrid8-nextself.prepared.env}"
+HYBRID_NS_RACE_PREFIX="${HYBRID_NS_RACE_PREFIX:-${PREFIX}.hybrid8-nextself.promote}"
 RACE_PREFIX="${RACE_PREFIX:-${PREFIX}.race}"
 SELECT_ONLY="${SELECT_ONLY:-1}"
 REBUILD_BUCKETS="${REBUILD_BUCKETS:-1}"
@@ -53,13 +54,11 @@ done
 }
 [[ "$MAX_WINDOW" =~ ^[1-9][0-9]*$ ]] || { echo 'MAX_WINDOW must be positive integer' >&2; exit 2; }
 [[ -f "$PROFILE_FILE" ]] || { echo "missing profile: $PROFILE_FILE" >&2; exit 2; }
-command -v sha256sum >/dev/null || { echo 'sha256sum required' >&2; exit 2; }
 mkdir -p \
   "$(dirname "$JOINT_PREPARE_ENV")" \
   "$(dirname "$NEXTSELF_PREPARE_ENV")" \
   "$(dirname "$HYBRID_PREPARE_ENV")" \
-  "$(dirname "$HYBRID_NS_WINNER_ENV")" \
-  "$(dirname "$HYBRID_NS_MANIFEST")" \
+  "$(dirname "$HYBRID_NS_PREPARE_ENV")" \
   "$(dirname "$RACE_PREFIX")"
 
 echo '=== grand selector: prepare calibrated joint forced candidates and profiled buckets ===' >&2
@@ -133,42 +132,37 @@ else
 fi
 
 HYBRID_NS_OK=0
+HYBRID_NS_RC=0
 if (( HYBRID_OK )); then
-  echo '=== grand selector: Stage F hybrid8 + next-self composition ===' >&2
-  if [[ "$RUN_HYBRID_NS_STAGE" == 1 ]]; then
-    ARCH="$ARCH" MOD="$PRIME" TARGET_MIB="$TARGET_MIB" MAX_WINDOW="$MAX_WINDOW" \
-      RUN_HYBRID_STAGE=0 HYBRID_PREFIX="$HYBRID_PREFIX" HYBRID_WINNER_ENV="$HYBRID_WINNER_ENV" \
-      SEARCH_REPEATS="$HYBRID_NS_SEARCH_REPEATS" VALIDATE_REPEATS="$HYBRID_NS_VALIDATE_REPEATS" MIN_SPEEDUP="$HYBRID_NS_MIN_SPEEDUP" \
-      PREFIX="$HYBRID_NS_PREFIX" FINAL_ENV="$HYBRID_NS_WINNER_ENV" \
-      bash "$ONEESAN_ROOT/scripts/bench/b300-nextgen-hybrid8-nextself-staged-calibrate.sh"
-  fi
-  [[ -s "$HYBRID_NS_WINNER_ENV" ]] || { echo "hybrid8 next-self winner env missing: $HYBRID_NS_WINNER_ENV" >&2; exit 3; }
-  # shellcheck disable=SC1090
-  source "$HYBRID_NS_WINNER_ENV"
-  if [[ "${B300_HYBRID8_NEXTSELF_STAGED_VALIDATED:-0}" == 1 && "${B300_HYBRID8_NEXTSELF_FINAL_ENABLED:-0}" == 1 ]]; then
-    [[ -x "${B300_HYBRID8_NEXTSELF_FINAL_BIN:-}" && -x "${B300_HYBRID8_NEXTSELF_CONTROL_BIN:-}" ]] || { echo 'hybrid8 next-self final/control binary missing' >&2; exit 3; }
-    if [[ "$RUN_HYBRID_NS_STAGE" == 1 ]]; then
-      tmp="${HYBRID_NS_MANIFEST}.tmp"
-      sha256sum "$HYBRID_NS_WINNER_ENV" "$B300_HYBRID8_NEXTSELF_FINAL_BIN" "$B300_HYBRID8_NEXTSELF_CONTROL_BIN" >"$tmp"
-      mv "$tmp" "$HYBRID_NS_MANIFEST"
-    else
-      [[ -s "$HYBRID_NS_MANIFEST" ]] || { echo "missing hybrid8 next-self manifest=$HYBRID_NS_MANIFEST; rerun Stage F" >&2; exit 3; }
-    fi
-    if ! sha256sum -c "$HYBRID_NS_MANIFEST" >/dev/null; then
-      echo 'hybrid8 next-self staged artifact fingerprint mismatch; rerun Stage F' >&2
-      exit 3
-    fi
-    CONTROL_SHA="$(sha256sum "$B300_HYBRID8_NEXTSELF_CONTROL_BIN" | awk '{print $1}')"
-    PLAIN_SHA="$(sha256sum "$B300_HYBRID8_PREPARED_BIN" | awk '{print $1}')"
-    [[ "$CONTROL_SHA" == "$PLAIN_SHA" ]] || { echo 'Stage F control does not match prepared plain hybrid8 binary' >&2; exit 3; }
+  echo '=== grand selector: stage/prepare hybrid8 + next-self composition ===' >&2
+  set +e
+  MOD="$PRIME" PROFILE_FILE="$PROFILE_FILE" ARCH="$ARCH" TARGET_MIB="$TARGET_MIB" MAX_WINDOW="$MAX_WINDOW" \
+    RUN_STAGED="$RUN_HYBRID_NS_STAGE" RUN_HYBRID_STAGE=0 PREPARE_ONLY=1 MIN_SPEEDUP="$HYBRID_NS_MIN_SPEEDUP" \
+    SEARCH_REPEATS="$HYBRID_NS_SEARCH_REPEATS" VALIDATE_REPEATS="$HYBRID_NS_VALIDATE_REPEATS" \
+    STAGED_PREFIX="$HYBRID_NS_PREFIX" HYBRID_PREFIX="$HYBRID_PREFIX" HYBRID_WINNER_ENV="$HYBRID_WINNER_ENV" \
+    WINNER_ENV="$HYBRID_NS_WINNER_ENV" RACE_PREFIX="$HYBRID_NS_RACE_PREFIX" PREPARE_ENV="$HYBRID_NS_PREPARE_ENV" \
+    bash "$ONEESAN_ROOT/scripts/run/b300x8-nextgen-hybrid8-nextself-staged-fullprime-race.sh" 27
+  HYBRID_NS_RC=$?
+  set -e
+  if (( HYBRID_NS_RC == 0 )); then
+    [[ -s "$HYBRID_NS_PREPARE_ENV" ]] || { echo 'hybrid8 next-self prepare env missing after success' >&2; exit 3; }
+    # shellcheck disable=SC1090
+    source "$HYBRID_NS_PREPARE_ENV"
+    [[ "${B300_HYBRID8_NEXTSELF_PREPARED:-0}" == 1 ]] || { echo 'hybrid8 next-self prepared marker missing' >&2; exit 3; }
+    [[ -x "$B300_HYBRID8_NEXTSELF_PREPARED_BIN" && -x "$B300_HYBRID8_NEXTSELF_PREPARED_CONTROL_BIN" ]] || { echo 'hybrid8 next-self prepared binaries missing' >&2; exit 3; }
     HYBRID_NS_OK=1
+  elif (( HYBRID_NS_RC == 4 )); then
+    echo 'grand selector: hybrid8 next-self rejected by staged gates' >&2
+  else
+    echo "grand selector: hybrid8 next-self preparation failed rc=$HYBRID_NS_RC" >&2
+    exit "$HYBRID_NS_RC"
   fi
 fi
 
-# Candidate budget of b300x8-race-external-forced-profiled-once.sh:
-# primary + base + extra1 + extra2 + extra3, plus profiled warp/orbit.
-# A staged composition replaces lower-priority baselines; it never increases
-# the five forced-like slots, so the complete-prime budget remains seven total.
+# Candidate budget: five forced-like slots plus profiled warp/orbit = seven total.
+# If the composed transform survives, retain its direct control (plain hybrid8),
+# the A-D fallback, saturation next-self, and the joint calibrated primary.
+# Saturation next-self's own control is lower-value here and is omitted.
 P_BIN=""; P_LABEL=""; P_THREADS=256
 B_BIN=""; B_LABEL=""; B_THREADS=256
 E1_BIN=""; E1_LABEL=""; E1_THREADS=256
@@ -178,15 +172,15 @@ MODE=""
 
 if (( HYBRID_NS_OK && NEXTSELF_OK )); then
   MODE=hybrid8_nextself_composed_grand
-  P_BIN="$B300_HYBRID8_NEXTSELF_FINAL_BIN"; P_LABEL="hybrid8_nextself_t${B300_HYBRID8_NEXTSELF_THRESHOLD}"; P_THREADS="$B300_HYBRID8_NEXTSELF_FINAL_THREADS"
-  B_BIN="$B300_HYBRID8_NEXTSELF_CONTROL_BIN"; B_LABEL="hybrid8_plain_t${B300_HYBRID8_NEXTSELF_THRESHOLD}"; B_THREADS="$B300_HYBRID8_NEXTSELF_CONTROL_THREADS"
-  E1_BIN="$B300_NEXTSELF_PREPARED_BIN"; E1_LABEL="$B300_NEXTSELF_PREPARED_LABEL"; E1_THREADS="$B300_NEXTSELF_PREPARED_THREADS"
-  E2_BIN="$B300_NEXTSELF_PREPARED_CONTROL_BIN"; E2_LABEL="$B300_NEXTSELF_PREPARED_CONTROL_LABEL"; E2_THREADS="$B300_NEXTSELF_PREPARED_CONTROL_THREADS"
+  P_BIN="$B300_HYBRID8_NEXTSELF_PREPARED_BIN"; P_LABEL="$B300_HYBRID8_NEXTSELF_PREPARED_LABEL"; P_THREADS="$B300_HYBRID8_NEXTSELF_PREPARED_THREADS"
+  B_BIN="$B300_HYBRID8_NEXTSELF_PREPARED_CONTROL_BIN"; B_LABEL="$B300_HYBRID8_NEXTSELF_PREPARED_CONTROL_LABEL"; B_THREADS="$B300_HYBRID8_NEXTSELF_PREPARED_CONTROL_THREADS"
+  E1_BIN="$B300_HYBRID8_PREPARED_BASE_BIN"; E1_LABEL="$B300_HYBRID8_PREPARED_BASE_LABEL"; E1_THREADS="$B300_HYBRID8_PREPARED_BASE_THREADS"
+  E2_BIN="$B300_NEXTSELF_PREPARED_BIN"; E2_LABEL="$B300_NEXTSELF_PREPARED_LABEL"; E2_THREADS="$B300_NEXTSELF_PREPARED_THREADS"
   E3_BIN="$JOINT_PRIMARY_BIN"; E3_LABEL="$JOINT_PRIMARY_LABEL"; E3_THREADS="$JOINT_PRIMARY_THREADS"
 elif (( HYBRID_NS_OK )); then
   MODE=hybrid8_nextself_composed_joint
-  P_BIN="$B300_HYBRID8_NEXTSELF_FINAL_BIN"; P_LABEL="hybrid8_nextself_t${B300_HYBRID8_NEXTSELF_THRESHOLD}"; P_THREADS="$B300_HYBRID8_NEXTSELF_FINAL_THREADS"
-  B_BIN="$B300_HYBRID8_NEXTSELF_CONTROL_BIN"; B_LABEL="hybrid8_plain_t${B300_HYBRID8_NEXTSELF_THRESHOLD}"; B_THREADS="$B300_HYBRID8_NEXTSELF_CONTROL_THREADS"
+  P_BIN="$B300_HYBRID8_NEXTSELF_PREPARED_BIN"; P_LABEL="$B300_HYBRID8_NEXTSELF_PREPARED_LABEL"; P_THREADS="$B300_HYBRID8_NEXTSELF_PREPARED_THREADS"
+  B_BIN="$B300_HYBRID8_NEXTSELF_PREPARED_CONTROL_BIN"; B_LABEL="$B300_HYBRID8_NEXTSELF_PREPARED_CONTROL_LABEL"; B_THREADS="$B300_HYBRID8_NEXTSELF_PREPARED_CONTROL_THREADS"
   E1_BIN="$B300_HYBRID8_PREPARED_BASE_BIN"; E1_LABEL="$B300_HYBRID8_PREPARED_BASE_LABEL"; E1_THREADS="$B300_HYBRID8_PREPARED_BASE_THREADS"
   E2_BIN="$JOINT_PRIMARY_BIN"; E2_LABEL="$JOINT_PRIMARY_LABEL"; E2_THREADS="$JOINT_PRIMARY_THREADS"
   if [[ -n "$JOINT_BASE_BIN" && "$JOINT_BASE_BIN" != "$JOINT_PRIMARY_BIN" ]]; then
@@ -230,14 +224,16 @@ done
 
 SUMMARY_ENV="${RACE_PREFIX}_grand.env"
 DROP_JOINT_BASE=0
+DROP_NEXTSELF_CONTROL=0
 case "$MODE" in nextself_hybrid8_joint|hybrid8_nextself_composed_grand) DROP_JOINT_BASE=1;; esac
+[[ "$MODE" == hybrid8_nextself_composed_grand ]] && DROP_NEXTSELF_CONTROL=1
 {
   printf 'B300_GRAND_PREPARED=1\n'
   printf 'B300_GRAND_MODE=%q\n' "$MODE"
   printf 'B300_GRAND_NEXTSELF_OK=%q\n' "$NEXTSELF_OK"
   printf 'B300_GRAND_HYBRID8_OK=%q\n' "$HYBRID_OK"
   printf 'B300_GRAND_HYBRID8_NEXTSELF_OK=%q\n' "$HYBRID_NS_OK"
-  printf 'B300_GRAND_HYBRID8_NEXTSELF_MANIFEST=%q\n' "${HYBRID_NS_MANIFEST:-}"
+  printf 'B300_GRAND_HYBRID8_NEXTSELF_MANIFEST=%q\n' "${B300_HYBRID8_NEXTSELF_PREPARED_MANIFEST:-}"
   printf 'B300_GRAND_PRIMARY_BIN=%q\n' "$P_BIN"
   printf 'B300_GRAND_PRIMARY_LABEL=%q\n' "$P_LABEL"
   printf 'B300_GRAND_PRIMARY_THREADS=%q\n' "$P_THREADS"
@@ -254,6 +250,7 @@ case "$MODE" in nextself_hybrid8_joint|hybrid8_nextself_composed_grand) DROP_JOI
   printf 'B300_GRAND_EXTRA3_LABEL=%q\n' "$E3_LABEL"
   printf 'B300_GRAND_EXTRA3_THREADS=%q\n' "$E3_THREADS"
   printf 'B300_GRAND_DROPPED_JOINT_BASE_WHEN_BOTH=%q\n' "$DROP_JOINT_BASE"
+  printf 'B300_GRAND_DROPPED_NEXTSELF_CONTROL_WHEN_COMPOSED=%q\n' "$DROP_NEXTSELF_CONTROL"
   printf 'B300_GRAND_PROFILE_FILE=%q\n' "$PROFILE_FILE"
   printf 'B300_GRAND_SMOKE_PRIME=%q\n' "$PRIME"
   printf 'B300_GRAND_TARGET_MIB=%q\n' "$TARGET_MIB"
