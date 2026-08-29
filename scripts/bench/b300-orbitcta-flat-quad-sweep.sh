@@ -36,12 +36,21 @@ sample(){ local pid="$1" out="$2"; : >"$out"; while kill -0 "$pid" 2>/dev/null; 
 for chunk in $CHUNKS; do
   case "$chunk" in 2|4|8|16|32) ;; *) echo "bad chunk=$chunk" >&2; exit 2;; esac
   bin="$ONEESAN_BUILD_DIR/b300_orbitcta_flat_qol_qsd${QUAD_SPARSE_DESC_MLP}_chunk${chunk}_n${N}"
+  # Scheduler sweep is deliberately isolated from later QOL refinements.  A
+  # parent shell may contain stale experimental knobs, so force the baseline
+  # local0/group/prefetch/warpcoop values here.
   N="$N" ARCH="$ARCH" OUT="$bin" PM_ACCUM=1 DIRECTGATHER64=1 DIRECTGATHER_SPARSE64="$SPARSE64" \
     DIRECTGATHER_SORT_RANKS=0 RANKFORMULA_MLP_WINDOW4=1 PAIR_MLP=1 CPASYNC_PAIR=1 \
     QUAD_MLP=1 QUAD_OVERLAP_LOCAL=1 QUAD_LOCAL_DIRECT_MAX=0 QUAD_SPARSE_DESC_MLP="$QUAD_SPARSE_DESC_MLP" \
+    QUAD_OVERLAP_BYPASS_LOCAL0=0 QUAD_CPASYNC_PREFETCH_BYTES=0 QUAD_CPASYNC_GROUP_COLS=1 \
     ORBITCTA_FLAT=1 ORBITCTA_FLAT_CHUNK="$chunk" ORBITCTA_COL_ILP=4 \
-    PRECTX_FORWARD="$PRECTX_FORWARD" PRECTX_REVERSE="$PRECTX_REVERSE" PRECTX_COMPACT="$PRECTX_COMPACT" PTXAS_VERBOSE=1 \
+    PRECTX_FORWARD="$PRECTX_FORWARD" PRECTX_REVERSE="$PRECTX_REVERSE" PRECTX_COMPACT="$PRECTX_COMPACT" \
+    PRECTX_WARPCOOP=0 PRECTX_FLAT_BID=0 PRECTX_FLAT_BID_FUSED=0 PTXAS_VERBOSE=1 \
     bash "$ONEESAN_ROOT/scripts/build/b300-directgather-orbitcta.sh" >"$LOGDIR/chunk${chunk}.build.out" 2>"$LOGDIR/chunk${chunk}.build.err"
+  grep -q 'quad_overlap_bypass_local0=0' "$LOGDIR/chunk${chunk}.build.err" || { echo "chunk=$chunk local0 isolation failed" >&2; exit 7; }
+  grep -q 'quad_cpasync_prefetch_bytes=0' "$LOGDIR/chunk${chunk}.build.err" || { echo "chunk=$chunk prefetch isolation failed" >&2; exit 7; }
+  grep -q 'quad_cpasync_group_cols=1' "$LOGDIR/chunk${chunk}.build.err" || { echo "chunk=$chunk group isolation failed" >&2; exit 7; }
+  grep -q 'prectx_warpcoop=0' "$LOGDIR/chunk${chunk}.build.err" || { echo "chunk=$chunk warpcoop isolation failed" >&2; exit 7; }
   python3 "$ONEESAN_ROOT/scripts/bench/parse-ptxas-resources.py" "$LOGDIR/chunk${chunk}.build.err" --label "qol_qsd${QUAD_SPARSE_DESC_MLP}_chunk${chunk}" >>"$RESOURCE" || true
 
   for pool in $POOLS; do
@@ -98,6 +107,10 @@ with open(winner,'w') as f:
  f.write('ORBIT_QUAD_OVERLAP_LOCAL=1\n')
  f.write('ORBIT_QUAD_LOCAL_DIRECT_MAX=0\n')
  f.write(f'ORBIT_QUAD_SPARSE_DESC_MLP={qsd}\n')
+ f.write('ORBIT_QUAD_OVERLAP_BYPASS_LOCAL0=0\n')
+ f.write('ORBIT_QUAD_CPASYNC_GROUP_COLS=1\n')
+ f.write('ORBIT_QUAD_CPASYNC_PREFETCH_BYTES=0\n')
+ f.write('ORBIT_PRECTX_WARPCOOP=0\n')
  f.write('ORBIT_CPASYNC_PAIR=1\n')
  f.write('ORBIT_COL_ILP=4\n')
  f.write(f'ORBIT_QUAD_PROFILE=quad_qsd{qsd}_chunk{b[2]}_pool{b[3]}\n')
@@ -106,4 +119,4 @@ with open(winner,'w') as f:
 print('BEST_ORBITCTA_QUAD',f'qsd={qsd}',f'chunk={b[2]}',f'pool={b[3]}',f'wall_s={b[0]:.6f}',f'high_s={b[1]:.6f}',f'mc_avg_pct={b[4]:.3f}',f'winner_env={winner}')
 PY
 
-echo "b300-orbitcta-flat-quad-sweep OK qsd=$QUAD_SPARSE_DESC_MLP result=$RESULT resources=$RESOURCE winner_env=$WINNER_ENV" >&2
+echo "b300-orbitcta-flat-quad-sweep OK qsd=$QUAD_SPARSE_DESC_MLP result=$RESULT resources=$RESOURCE winner_env=$WINNER_ENV isolated_local0=0 group_cols=1 prefetch=0 warpcoop=0" >&2
