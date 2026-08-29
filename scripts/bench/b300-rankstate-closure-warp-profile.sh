@@ -54,7 +54,8 @@ TMPDIR="$ISO/tmp" nvcc -O3 -std=c++17 -lineinfo -arch="$ARCH" -Xptxas=-v \
 
 field(){ local k="$1" l="$2"; sed -nE "s/(^|.*[[:space:]])${k}=([^[:space:]]+).*/\\2/p" <<<"$l" | tail -n1; }
 run_one(){
-  local mode="$1" bin="$2" out="$LOGDIR/$mode.out" err="$LOGDIR/$mode.err"
+  local mode="$1" bin="$2"
+  local out="$LOGDIR/$mode.out" err="$LOGDIR/$mode.err"
   echo "=== run $mode rows=$ROWS threads=$THREADS ===" >&2
   set +e
   B300_ROW_LIMIT="$ROWS" GRIDFP_THREADS="$THREADS" GRIDFP_PLAN_TARGET_MIB="$PLAN_MIB" \
@@ -74,9 +75,6 @@ SUMMARY_LINE="$(grep '^b300_closure_warp_profile ' "$PROFILE_OUT" | tail -n1 || 
 SAMPLES="$(field samples "$SUMMARY_LINE")"; CANDIDATES="$(field candidates "$SUMMARY_LINE")"
 [[ "$SAMPLES" =~ ^[0-9]+$ ]] && ((SAMPLES>0)) || { echo "profile sampled zero closure states samples=$SAMPLES" >&2; exit 6; }
 
-# Pick the largest threshold that still retains at least the requested candidate
-# work fraction in the warp path. These are workload-derived sweep seeds, not an
-# automatic production choice.
 RECOMMEND="$(python3 - "$PROFILE_OUT" <<'PY'
 import sys
 rows=[]
@@ -95,8 +93,6 @@ def keep(frac):
     return max(ok,key=lambda r:r[0]) if ok else rows[0]
 for frac,name in ((.95,'keep95'),(.90,'keep90'),(.80,'keep80')):
     t,s,c=keep(frac);print(f'{name}={t},{s:.9f},{c:.9f}')
-# Seed a compact sweep around the candidate-work knees. Add neighbors because
-# launch/register effects can move the wall optimum away from the histogram knee.
 seeds=set()
 for frac in (.95,.90,.80):
     t,_,_=keep(frac)
