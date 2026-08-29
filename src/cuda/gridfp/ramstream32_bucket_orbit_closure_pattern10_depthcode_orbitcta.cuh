@@ -27,12 +27,16 @@
 #ifndef P10DC_ORBITCTA_EARLY_JP
 #define P10DC_ORBITCTA_EARLY_JP 0
 #endif
+#ifndef P10DC_ORBITCTA_COL_ILP
+#define P10DC_ORBITCTA_COL_ILP 1
+#endif
+static_assert(P10DC_ORBITCTA_COL_ILP == 1 || P10DC_ORBITCTA_COL_ILP == 2 ||
+              P10DC_ORBITCTA_COL_ILP == 4,
+              "P10DC_ORBITCTA_COL_ILP must be 1, 2, or 4");
 
-// Bandwidth-oriented HIGH scheduler.  Unlike warpstriped X slicing, each CTA
-// owns a whole orbit and builds its row/closure context once.  All block threads
-// then walk consecutive LOW-rank columns.  Launch with grid.x=1; grid.y controls
-// orbit concurrency.  This removes the gx-fold duplicated lane0 setup that
-// becomes dominant after DIRECTGATHER makes each column cheap.
+// Bandwidth-oriented HIGH scheduler. One CTA owns one orbit/context. Column
+// ILP batches independent LOW-rank columns per thread. An optional pair-plan
+// hook lets descriptor/source gathers for adjacent columns overlap directly.
 __global__ void bucket_high_orbit_closure_pattern10_depthcode_orbitcta_kernel(int p) {
     if (blockIdx.x) return;
     const uint32_t bid = blockIdx.z;
@@ -82,36 +86,68 @@ __global__ void bucket_high_orbit_closure_pattern10_depthcode_orbitcta_kernel(in
         __syncthreads();
 
         if (c.valid) {
+            constexpr int ILP = P10DC_ORBITCTA_COL_ILP;
             const BucketPhysicalBlock xb = c.xb;
             const BucketPhysicalBlock db = c.db;
             Count* const ip_base = c.ip_base;
             Count* const jp_base = c.jp_base;
             Count* const dp_base = c.dp_base;
             const uint32_t kind = c.kind;
-            for (uint32_t lr = uint32_t(threadIdx.x); lr < xb.cols; lr += uint32_t(blockDim.x)) {
-                Count* const ip = ip_base + lr;
-                Count* const jp = jp_base + lr;
-                Count* const dp = dp_base + lr;
-                const Count x = *ip;
-                const Count old = *dp;
+            const uint32_t lane_step = uint32_t(blockDim.x);
+            const uint32_t group_step = lane_step * uint32_t(ILP);
+            for (uint32_t base = uint32_t(threadIdx.x); base < xb.cols; base += group_step) {
+                uint32_t lr[ILP]{};
+                uint8_t valid[ILP]{};
+                Count x[ILP]{}, old[ILP]{}, y[ILP]{}, extra[ILP]{};
+#pragma unroll
+                for (int j = 0; j < ILP; ++j) {
+                    lr[j] = base + uint32_t(j) * lane_step;
+                    valid[j] = uint8_t(lr[j] < xb.cols);
+                    if (valid[j]) {
+                        x[j] = ip_base[lr[j]];
+                        old[j] = dp_base[lr[j]];
 #if P10DC_ORBITCTA_EARLY_JP
-                const Count y = *jp;
+                        y[j] = jp_base[lr[j]];
 #endif
-                const Count extra = P10DC_ORBITCTA_PLAN_SUM(c, db, lr);
-                if (kind == CPU_ORBIT_NN) {
-#if P10DC_ORBITCTA_EARLY_JP
-                    *jp = gpu_direct_add(y, x);
+                    }
+                }
+#ifdef P10DC_ORBITCTA_PLAN_SUM_PAIR
+#pragma unroll
+                for (int j = 0; j < ILP; j += 2) {
+                    if constexpr (ILP > 1) {
+                        if (valid[j] && valid[j + 1]) {
+                            P10DC_ORBITCTA_PLAN_SUM_PAIR(c, db, lr[j], lr[j + 1], extra[j], extra[j + 1]);
+                        } else {
+                            if (valid[j]) extra[j] = P10DC_ORBITCTA_PLAN_SUM(c, db, lr[j]);
+                            if (valid[j + 1]) extra[j + 1] = P10DC_ORBITCTA_PLAN_SUM(c, db, lr[j + 1]);
+                        }
+                    } else if (valid[j]) {
+                        extra[j] = P10DC_ORBITCTA_PLAN_SUM(c, db, lr[j]);
+                    }
+                }
 #else
-                    *jp = gpu_direct_add(*jp, x);
+#pragma unroll
+                for (int j = 0; j < ILP; ++j)
+                    if (valid[j]) extra[j] = P10DC_ORBITCTA_PLAN_SUM(c, db, lr[j]);
 #endif
-                    *ip = gpu_direct_add(x, old);
-                    *dp = extra;
-                } else {
+#pragma unroll
+                for (int j = 0; j < ILP; ++j) {
+                    if (!valid[j]) continue;
+                    if (kind == CPU_ORBIT_NN) {
+#if P10DC_ORBITCTA_EARLY_JP
+                        jp_base[lr[j]] = gpu_direct_add(y[j], x[j]);
+#else
+                        jp_base[lr[j]] = gpu_direct_add(jp_base[lr[j]], x[j]);
+#endif
+                        ip_base[lr[j]] = gpu_direct_add(x[j], old[j]);
+                        dp_base[lr[j]] = extra[j];
+                    } else {
 #if !P10DC_ORBITCTA_EARLY_JP
-                    const Count y = *jp;
+                        y[j] = jp_base[lr[j]];
 #endif
-                    *ip = gpu_direct_add(gpu_direct_add(x, y), old);
-                    *dp = gpu_direct_add(x, extra);
+                        ip_base[lr[j]] = gpu_direct_add(gpu_direct_add(x[j], y[j]), old[j]);
+                        dp_base[lr[j]] = gpu_direct_add(x[j], extra[j]);
+                    }
                 }
             }
         }
@@ -175,40 +211,73 @@ __global__ void bucket_reverse_high_pattern10_depthcode_orbitcta_kernel(int p) {
         __syncthreads();
 
         if (c.valid) {
+            constexpr int ILP = P10DC_ORBITCTA_COL_ILP;
             const BucketPhysicalBlock xb = c.xb;
             const BucketPhysicalBlock db = c.db;
+            const BucketPhysicalBlock sum_db = edge ? xb : db;
             Count* const ip_base = c.ip_base;
             Count* const jp_base = c.jp_base;
             Count* const dp_base = c.dp_base;
             const uint32_t kind = c.kind;
-            for (uint32_t lr = uint32_t(threadIdx.x); lr < xb.cols; lr += uint32_t(blockDim.x)) {
-                Count* const ip = ip_base + lr;
-                Count* const jp = jp_base + lr;
-                Count* const dp = dp_base + lr;
-                const Count x = *ip;
-                const Count old = *dp;
+            const uint32_t lane_step = uint32_t(blockDim.x);
+            const uint32_t group_step = lane_step * uint32_t(ILP);
+            for (uint32_t base = uint32_t(threadIdx.x); base < xb.cols; base += group_step) {
+                uint32_t lr[ILP]{};
+                uint8_t valid[ILP]{};
+                Count x[ILP]{}, old[ILP]{}, y[ILP]{}, extra[ILP]{};
+#pragma unroll
+                for (int j = 0; j < ILP; ++j) {
+                    lr[j] = base + uint32_t(j) * lane_step;
+                    valid[j] = uint8_t(lr[j] < xb.cols);
+                    if (valid[j]) {
+                        x[j] = ip_base[lr[j]];
+                        old[j] = dp_base[lr[j]];
 #if P10DC_ORBITCTA_EARLY_JP
-                const Count y = *jp;
+                        y[j] = jp_base[lr[j]];
 #endif
-                const Count extra = P10DC_ORBITCTA_PLAN_SUM(c, edge ? xb : db, lr);
-                if (kind == CPU_ORBIT_NN) {
-#if P10DC_ORBITCTA_EARLY_JP
-                    *jp = gpu_direct_add(y, x);
+                    }
+                }
+#ifdef P10DC_ORBITCTA_PLAN_SUM_PAIR
+#pragma unroll
+                for (int j = 0; j < ILP; j += 2) {
+                    if constexpr (ILP > 1) {
+                        if (valid[j] && valid[j + 1]) {
+                            P10DC_ORBITCTA_PLAN_SUM_PAIR(c, sum_db, lr[j], lr[j + 1], extra[j], extra[j + 1]);
+                        } else {
+                            if (valid[j]) extra[j] = P10DC_ORBITCTA_PLAN_SUM(c, sum_db, lr[j]);
+                            if (valid[j + 1]) extra[j + 1] = P10DC_ORBITCTA_PLAN_SUM(c, sum_db, lr[j + 1]);
+                        }
+                    } else if (valid[j]) {
+                        extra[j] = P10DC_ORBITCTA_PLAN_SUM(c, sum_db, lr[j]);
+                    }
+                }
 #else
-                    *jp = gpu_direct_add(*jp, x);
+#pragma unroll
+                for (int j = 0; j < ILP; ++j)
+                    if (valid[j]) extra[j] = P10DC_ORBITCTA_PLAN_SUM(c, sum_db, lr[j]);
 #endif
-                    *ip = gpu_direct_add(gpu_direct_add(x, old), edge ? extra : 0);
-                    *dp = edge ? 0 : extra;
-                } else {
-#if !P10DC_ORBITCTA_EARLY_JP
-                    const Count y = *jp;
+#pragma unroll
+                for (int j = 0; j < ILP; ++j) {
+                    if (!valid[j]) continue;
+                    if (kind == CPU_ORBIT_NN) {
+#if P10DC_ORBITCTA_EARLY_JP
+                        jp_base[lr[j]] = gpu_direct_add(y[j], x[j]);
+#else
+                        jp_base[lr[j]] = gpu_direct_add(jp_base[lr[j]], x[j]);
 #endif
-                    *ip = gpu_direct_add(gpu_direct_add(x, y), old);
-                    if (edge) {
-                        *jp = gpu_direct_add(x, y);
-                        *dp = 0;
+                        ip_base[lr[j]] = gpu_direct_add(gpu_direct_add(x[j], old[j]), edge ? extra[j] : 0);
+                        dp_base[lr[j]] = edge ? 0 : extra[j];
                     } else {
-                        *dp = gpu_direct_add(x, extra);
+#if !P10DC_ORBITCTA_EARLY_JP
+                        y[j] = jp_base[lr[j]];
+#endif
+                        ip_base[lr[j]] = gpu_direct_add(gpu_direct_add(x[j], y[j]), old[j]);
+                        if (edge) {
+                            jp_base[lr[j]] = gpu_direct_add(x[j], y[j]);
+                            dp_base[lr[j]] = 0;
+                        } else {
+                            dp_base[lr[j]] = gpu_direct_add(x[j], extra[j]);
+                        }
                     }
                 }
             }
