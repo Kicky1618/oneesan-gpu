@@ -7,8 +7,16 @@
 #ifndef P10DC_RANKFORMULA_GATHER_MLP
 #define P10DC_RANKFORMULA_GATHER_MLP 0
 #endif
+#ifndef P10DC_RANKFORMULA_PREFETCH_NEXT
+#define P10DC_RANKFORMULA_PREFETCH_NEXT 0
+#endif
+#ifndef P10DC_WARPSTRIPED_COL_ILP
+#define P10DC_WARPSTRIPED_COL_ILP 1
+#endif
 static_assert(P10DC_RANKFORMULA_GATHER_MLP == 0 || P10DC_RANKFORMULA_GATHER_MLP == 1,
               "P10DC_RANKFORMULA_GATHER_MLP must be 0 or 1");
+static_assert(P10DC_RANKFORMULA_PREFETCH_NEXT == 0 || P10DC_RANKFORMULA_PREFETCH_NEXT == 1,
+              "P10DC_RANKFORMULA_PREFETCH_NEXT must be 0 or 1");
 #if P10DC_RANKFORMULA_GATHER_MLP
 #include "ramstream32_bucket_closure_cross5_rankformula_nometa4_abstract_mlp.cuh"
 #else
@@ -24,15 +32,87 @@ static_assert(P10DC_RANKFORMULA_GATHER_MLP == 0 || P10DC_RANKFORMULA_GATHER_MLP 
 static inline void p10dc_install_cross5_lut() { p10dc_install_rankformula_abstract_lut(); }
 #endif
 
+#if P10DC_RANKFORMULA_PREFETCH_NEXT
+__device__ __forceinline__ void p10dc_rankformula_prefetch_l2(const void* p) {
+    const unsigned long long a = reinterpret_cast<unsigned long long>(p);
+    asm volatile("prefetch.global.L2 [%0];" :: "l"(a));
+}
+
+__device__ __forceinline__ void p10dc_rankformula_prefetch_next_cross(
+    const P10DCDirectHighResolvedCtx& c, const BucketPhysicalBlock& db, uint32_t rank
+) {
+#if P10DC_RANKFORMULA_DIRECTGATHER
+    if (!c.cross_depth || c.cross_depth > P10DC_RANKFORMULA_ABSTRACT_SELECT_DEPTHS || !c.cross_base)
+        return;
+#if P10DC_RANKFORMULA_DIRECTGATHER_DEPTHMAJOR
+    const size_t gi = size_t(D_P10DC_RANKFORMULA_DIRECTGATHER_DEPTH_OFF[
+        db.hs * P10DC_RANKFORMULA_ABSTRACT_SELECT_DEPTHS + (c.cross_depth - 1u)]) + size_t(rank);
+#else
+    const size_t gi =
+        (size_t(D_P10DC_RANKFORMULA_DIRECTGATHER_OFF[db.hs]) + size_t(rank)) *
+            P10DC_RANKFORMULA_ABSTRACT_SELECT_DEPTHS +
+        size_t(c.cross_depth - 1u);
+#endif
+    const uint4 d = __ldg(D_P10DC_RANKFORMULA_DIRECTGATHER4 + gi);
+    const uint32_t count = d.w >> 16;
+    const uint32_t r0 = d.x & 0xffffu, r1 = d.x >> 16;
+    const uint32_t r2 = d.y & 0xffffu, r3 = d.y >> 16;
+    const uint32_t r4 = d.z & 0xffffu, r5 = d.z >> 16;
+    const uint32_t r6 = d.w & 0xffffu;
+#if P10DC_RANKFORMULA_DIRECTGATHER_FORCE7
+    p10dc_rankformula_prefetch_l2(c.cross_base + r0);
+    p10dc_rankformula_prefetch_l2(c.cross_base + r1);
+    p10dc_rankformula_prefetch_l2(c.cross_base + r2);
+    p10dc_rankformula_prefetch_l2(c.cross_base + r3);
+    p10dc_rankformula_prefetch_l2(c.cross_base + r4);
+    p10dc_rankformula_prefetch_l2(c.cross_base + r5);
+    p10dc_rankformula_prefetch_l2(c.cross_base + r6);
+#else
+    if (count > 0) p10dc_rankformula_prefetch_l2(c.cross_base + r0);
+    if (count > 1) p10dc_rankformula_prefetch_l2(c.cross_base + r1);
+    if (count > 2) p10dc_rankformula_prefetch_l2(c.cross_base + r2);
+    if (count > 3) p10dc_rankformula_prefetch_l2(c.cross_base + r3);
+    if (count > 4) p10dc_rankformula_prefetch_l2(c.cross_base + r4);
+    if (count > 5) p10dc_rankformula_prefetch_l2(c.cross_base + r5);
+    if (count > 6) p10dc_rankformula_prefetch_l2(c.cross_base + r6);
+#endif
+#else
+    (void)c; (void)db; (void)rank;
+#endif
+}
+
+__device__ __forceinline__ void p10dc_rankformula_prefetch_next_high(
+    const P10DCDirectHighResolvedCtx& c, const BucketPhysicalBlock& db, uint32_t lr
+) {
+    const uint32_t step = uint32_t(gridDim.x) * 32u * uint32_t(P10DC_WARPSTRIPED_COL_ILP);
+    const uint32_t next = lr + step;
+    if (next >= c.xb.cols) return;
+    p10dc_rankformula_prefetch_l2(c.ip_base + next);
+    p10dc_rankformula_prefetch_l2(c.dp_base + next);
+    p10dc_rankformula_prefetch_l2(c.jp_base + next);
+    if constexpr (BKCZ_MAX_LOCAL > 0) if (c.local_n > 0) p10dc_rankformula_prefetch_l2(c.local_base[0] + next);
+    if constexpr (BKCZ_MAX_LOCAL > 1) if (c.local_n > 1) p10dc_rankformula_prefetch_l2(c.local_base[1] + next);
+    if constexpr (BKCZ_MAX_LOCAL > 2) if (c.local_n > 2) p10dc_rankformula_prefetch_l2(c.local_base[2] + next);
+    if constexpr (BKCZ_MAX_LOCAL > 3) if (c.local_n > 3) p10dc_rankformula_prefetch_l2(c.local_base[3] + next);
+    if constexpr (BKCZ_MAX_LOCAL > 4) if (c.local_n > 4) p10dc_rankformula_prefetch_l2(c.local_base[4] + next);
+    if constexpr (BKCZ_MAX_LOCAL > 5) if (c.local_n > 5) p10dc_rankformula_prefetch_l2(c.local_base[5] + next);
+    if constexpr (BKCZ_MAX_LOCAL > 6) if (c.local_n > 6) p10dc_rankformula_prefetch_l2(c.local_base[6] + next);
+    if constexpr (BKCZ_MAX_LOCAL > 7) if (c.local_n > 7) p10dc_rankformula_prefetch_l2(c.local_base[7] + next);
+    p10dc_rankformula_prefetch_next_cross(c, db, next);
+}
+#endif
+
 __device__ __forceinline__ Count p10dc_direct_resolved_high_plan_sum_cross5_rankformula_nometa4_abstract(
     const P10DCDirectHighResolvedCtx& c, const BucketPhysicalBlock& db, uint32_t lr
 ) {
+#if P10DC_RANKFORMULA_PREFETCH_NEXT
+    p10dc_rankformula_prefetch_next_high(c, db, lr);
+#endif
 #if P10DC_RANKFORMULA_GATHER_MLP
 #if P10DC_RANKFORMULA_MLP_WINDOW4
     // Occupancy-oriented software pipeline.  Keep four ordinary values live,
     // overlap them with the four-wide CROSS gather, then recycle registers for
-    // the remaining ordinary rows.  This gives the SM several independent
-    // memory operations without the 15-value live range of full-width MLP.
+    // the remaining ordinary rows.
     BkczCrossAccum v0 = 0, v1 = 0, v2 = 0, v3 = 0;
     if constexpr (BKCZ_MAX_LOCAL > 0) if (c.local_n > 0) v0 = BkczCrossAccum(c.local_base[0][lr]);
     if constexpr (BKCZ_MAX_LOCAL > 1) if (c.local_n > 1) v1 = BkczCrossAccum(c.local_base[1][lr]);
