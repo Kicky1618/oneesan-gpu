@@ -35,9 +35,6 @@ ONEESAN_TC_PM_HD int primitive_meta_root_ordinal(std::uint32_t meta) {
     return static_cast<int>(meta >> kPrimitiveMetaRootShift);
 }
 
-// Compute the distinguished root ordinal in a compact occupied L/R sequence.
-// The sequence starts at height one.  The first R that returns to height zero
-// is the unmatched/root endpoint used by the packed reflection convention.
 ONEESAN_TC_PM_HD int compact_root_ordinal(
     std::uint32_t compact_left,
     int occupied
@@ -52,9 +49,6 @@ ONEESAN_TC_PM_HD int compact_root_ordinal(
     return -1;
 }
 
-// Select the zero-based ordinal-th set bit of a 32-bit mask with five popcount
-// decisions rather than a loop over physical positions.  Returns -1 if the
-// ordinal is outside the mask population.
 ONEESAN_TC_PM_HD int select_nth_set32(std::uint32_t mask, int ordinal) {
     if (ordinal < 0 || ordinal >= popcount32(mask)) return -1;
     int pos = 0;
@@ -105,16 +99,12 @@ ONEESAN_TC_PM_HD std::uint32_t reverse_bits_len_meta(
 #endif
 }
 
-// Reflect a packed word when its primitive metadata is already known.  This is
-// the reverse-sweep hot-path form: primitive rank/address work supplies the LUT
-// entry, so reflection needs no root scan or mate reconstruction.
-ONEESAN_TC_PM_HD PackedWord reflect_word_with_primitive_meta(
+ONEESAN_TC_PM_HD PackedWord reflect_word_with_root_ordinal(
     PackedWord w,
-    std::uint32_t meta
+    int root_ordinal
 ) {
     const std::uint32_t active = w.support & low_mask(w.len);
-    const int root = select_nth_set32(
-        active, primitive_meta_root_ordinal(meta));
+    const int root = select_nth_set32(active, root_ordinal);
     if (root < 0) return PackedWord{};
     const std::uint32_t rbits = active & ~w.left;
     const std::uint32_t matched_r = rbits & ~(std::uint32_t(1) << root);
@@ -125,14 +115,32 @@ ONEESAN_TC_PM_HD PackedWord reflect_word_with_primitive_meta(
     };
 }
 
+ONEESAN_TC_PM_HD PackedWord reflect_word_with_primitive_meta(
+    PackedWord w,
+    std::uint32_t meta
+) {
+    return reflect_word_with_root_ordinal(
+        w, primitive_meta_root_ordinal(meta));
+}
+
+ONEESAN_TC_PM_HD PackedKey reflect_key_with_root_ordinal(
+    PackedKey key,
+    int W,
+    int root_ordinal
+) {
+    return make_state(
+        key.type,
+        reflect_word_with_root_ordinal(
+            state_word(key, W), root_ordinal));
+}
+
 ONEESAN_TC_PM_HD PackedKey reflect_key_with_primitive_meta(
     PackedKey key,
     int W,
     std::uint32_t meta
 ) {
-    return make_state(
-        key.type,
-        reflect_word_with_primitive_meta(state_word(key, W), meta));
+    return reflect_key_with_root_ordinal(
+        key, W, primitive_meta_root_ordinal(meta));
 }
 
 } // namespace oneesan::twocell
