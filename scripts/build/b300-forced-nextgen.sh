@@ -4,13 +4,15 @@ source "$(dirname -- "${BASH_SOURCE[0]}")/../lib/common.sh"
 
 N="${N:-27}"; [[ "$N" == 27 ]] || { echo 'nextgen forced builder targets n=27' >&2; exit 2; }
 ARCH="${ARCH:-native}"; OUT="$(build_path "${OUT:-b300_forced_nextgen_n27}")"
-HIGH_DROP_CHUNK="${HIGH_DROP_CHUNK:-0}"; RECURRENCE_ILP="${RECURRENCE_ILP:-2}"; RECURRENCE_HYBRID_ILP8="${RECURRENCE_HYBRID_ILP8:-0}"; RECURRENCE_HYBRID_ILP8_MIN_STATES="${RECURRENCE_HYBRID_ILP8_MIN_STATES:-1048576}"; RECURRENCE_HYBRID_ILP8_NEXTSELF="${RECURRENCE_HYBRID_ILP8_NEXTSELF:-0}"; RANDOM_CG="${RANDOM_CG:-0}"; RANDOM_CG_L2_FETCH_BYTES="${RANDOM_CG_L2_FETCH_BYTES:-0}"; PREFETCH_L2="${PREFETCH_L2:-0}"; DUALMASK="${DUALMASK:-0}"; CLOSURE_BATCH="${CLOSURE_BATCH:-0}"; MAXRREGCOUNT="${MAXRREGCOUNT:-0}"; PTXAS_VERBOSE="${PTXAS_VERBOSE:-1}"
+HIGH_DROP_CHUNK="${HIGH_DROP_CHUNK:-0}"; RECURRENCE_ILP="${RECURRENCE_ILP:-2}"; RECURRENCE_HYBRID_ILP8="${RECURRENCE_HYBRID_ILP8:-0}"; RECURRENCE_HYBRID_ILP8_MIN_STATES="${RECURRENCE_HYBRID_ILP8_MIN_STATES:-1048576}"; RECURRENCE_HYBRID_ILP8_NEXTSELF="${RECURRENCE_HYBRID_ILP8_NEXTSELF:-0}"; RECURRENCE_HYBRID_ILP8_NEXTSELF_WIDTH="${RECURRENCE_HYBRID_ILP8_NEXTSELF_WIDTH:-8}"; RANDOM_CG="${RANDOM_CG:-0}"; RANDOM_CG_L2_FETCH_BYTES="${RANDOM_CG_L2_FETCH_BYTES:-0}"; PREFETCH_L2="${PREFETCH_L2:-0}"; DUALMASK="${DUALMASK:-0}"; CLOSURE_BATCH="${CLOSURE_BATCH:-0}"; MAXRREGCOUNT="${MAXRREGCOUNT:-0}"; PTXAS_VERBOSE="${PTXAS_VERBOSE:-1}"
 [[ "$HIGH_DROP_CHUNK" == 0 || "$HIGH_DROP_CHUNK" == 1 ]] || { echo 'HIGH_DROP_CHUNK must be 0/1' >&2; exit 2; }
 case "$RECURRENCE_ILP" in 2|4|8);;*)echo 'RECURRENCE_ILP must be 2,4,8' >&2;exit 2;;esac
 for x in RECURRENCE_HYBRID_ILP8 RECURRENCE_HYBRID_ILP8_NEXTSELF; do v="${!x}"; [[ "$v" == 0 || "$v" == 1 ]] || { echo "$x must be 0/1" >&2; exit 2; }; done
+case "$RECURRENCE_HYBRID_ILP8_NEXTSELF_WIDTH" in 1|2|4|8) ;; *) echo 'RECURRENCE_HYBRID_ILP8_NEXTSELF_WIDTH must be 1,2,4,8' >&2; exit 2;; esac
 [[ "$RECURRENCE_HYBRID_ILP8_MIN_STATES" =~ ^[0-9]+$ ]] || { echo 'RECURRENCE_HYBRID_ILP8_MIN_STATES must be a non-negative integer' >&2; exit 2; }
 if [[ "$RECURRENCE_HYBRID_ILP8" == 1 && "$RECURRENCE_ILP" != 2 ]]; then echo 'RECURRENCE_HYBRID_ILP8=1 requires RECURRENCE_ILP=2 base kernel' >&2; exit 2; fi
 if [[ "$RECURRENCE_HYBRID_ILP8_NEXTSELF" == 1 && "$RECURRENCE_HYBRID_ILP8" != 1 ]]; then echo 'RECURRENCE_HYBRID_ILP8_NEXTSELF=1 requires RECURRENCE_HYBRID_ILP8=1' >&2; exit 2; fi
+if [[ "$RECURRENCE_HYBRID_ILP8_NEXTSELF" == 0 && "$RECURRENCE_HYBRID_ILP8_NEXTSELF_WIDTH" != 8 ]]; then echo 'non-default next-self width requires RECURRENCE_HYBRID_ILP8_NEXTSELF=1' >&2; exit 2; fi
 for x in RANDOM_CG PREFETCH_L2 DUALMASK; do v="${!x}"; [[ "$v" == 0 || "$v" == 1 ]] || { echo "$x must be 0/1" >&2; exit 2; }; done
 case "$RANDOM_CG_L2_FETCH_BYTES" in 0|64|128|256);;*)echo 'RANDOM_CG_L2_FETCH_BYTES must be 0,64,128,256' >&2;exit 2;;esac
 if (( RANDOM_CG_L2_FETCH_BYTES > 0 )) && [[ "$RANDOM_CG" != 1 ]]; then echo 'RANDOM_CG_L2_FETCH_BYTES>0 requires RANDOM_CG=1' >&2; exit 2; fi
@@ -19,7 +21,7 @@ case "$CLOSURE_BATCH" in 0|2|4);;*)echo 'CLOSURE_BATCH must be 0,2,4' >&2;exit 2
 [[ "$PTXAS_VERBOSE" == 0 || "$PTXAS_VERBOSE" == 1 ]] || exit 2
 command -v nvcc >/dev/null || { echo 'nvcc required' >&2; exit 2; }
 
-TAG="hd${HIGH_DROP_CHUNK}_ilp${RECURRENCE_ILP}_hyb${RECURRENCE_HYBRID_ILP8}_hybt${RECURRENCE_HYBRID_ILP8_MIN_STATES}_hns${RECURRENCE_HYBRID_ILP8_NEXTSELF}_cg${RANDOM_CG}_cgl2${RANDOM_CG_L2_FETCH_BYTES}_pre${PREFETCH_L2}_dual${DUALMASK}_cb${CLOSURE_BATCH}_r${MAXRREGCOUNT}_$$"
+TAG="hd${HIGH_DROP_CHUNK}_ilp${RECURRENCE_ILP}_hyb${RECURRENCE_HYBRID_ILP8}_hybt${RECURRENCE_HYBRID_ILP8_MIN_STATES}_hns${RECURRENCE_HYBRID_ILP8_NEXTSELF}w${RECURRENCE_HYBRID_ILP8_NEXTSELF_WIDTH}_cg${RANDOM_CG}_cgl2${RANDOM_CG_L2_FETCH_BYTES}_pre${PREFETCH_L2}_dual${DUALMASK}_cb${CLOSURE_BATCH}_r${MAXRREGCOUNT}_$$"
 ISO="${NEXTGEN_BUILD_DIR:-$ONEESAN_BUILD_DIR/nextgen/$TAG}"; mkdir -p "$ISO" "$ISO/tmp" "$(dirname "$OUT")"
 BASE_BIN="$ISO/base.bin"; BASE_OUT="$ISO/base.build.out"; BASE_ERR="$ISO/base.build.err"; FINAL_ERR="${BUILD_ERR:-${OUT}.build.err}"
 
@@ -35,7 +37,7 @@ if [[ "$RECURRENCE_ILP" != 2 ]]; then NEXT="$ISO/mainrec_ilp${RECURRENCE_ILP}.cu
 if [[ "$RECURRENCE_HYBRID_ILP8" == 1 ]]; then NEXT="$ISO/mainrec_hybrid_ilp8.cu"; python3 "$ONEESAN_ROOT/scripts/build/gen-b300-main-recurrence-hybrid-ilp8.py" "$CURRENT" "$NEXT" "$RECURRENCE_HYBRID_ILP8_MIN_STATES" >"$ISO/mainrec-hybrid-ilp8.transform.out"; grep -Fq "b300_main_recurrence_hybrid_ilp8=1" "$ISO/mainrec-hybrid-ilp8.transform.out"; grep -Fq "ilp8_min_states=$RECURRENCE_HYBRID_ILP8_MIN_STATES" "$ISO/mainrec-hybrid-ilp8.transform.out"; CURRENT="$NEXT"; fi
 if [[ "$RANDOM_CG" == 1 ]]; then NEXT="$ISO/mainrec_random_cg.cu"; python3 "$ONEESAN_ROOT/scripts/build/gen-b300-mainrec-random-cg.py" "$CURRENT" "$NEXT" "$RANDOM_CG_L2_FETCH_BYTES" >"$ISO/mainrec-cg.transform.out"; grep -Fq 'mainrec_random_cg=1' "$ISO/mainrec-cg.transform.out"; grep -Fq "l2_prefetch_bytes=$RANDOM_CG_L2_FETCH_BYTES" "$ISO/mainrec-cg.transform.out"; [[ "$RECURRENCE_HYBRID_ILP8" == 0 ]] || grep -Fq 'hybrid_policy_consistent=1' "$ISO/mainrec-cg.transform.out"; CURRENT="$NEXT"; fi
 if [[ "$PREFETCH_L2" == 1 ]]; then NEXT="$ISO/mainrec_prefetch_l2.cu"; python3 "$ONEESAN_ROOT/scripts/build/gen-b300-mainrec-prefetch-l2.py" "$CURRENT" "$NEXT" >"$ISO/mainrec-prefetch.transform.out"; grep -Fq 'mainrec_prefetch_l2=1' "$ISO/mainrec-prefetch.transform.out"; [[ "$RECURRENCE_HYBRID_ILP8" == 0 ]] || grep -Fq 'hybrid_policy_consistent=1' "$ISO/mainrec-prefetch.transform.out"; CURRENT="$NEXT"; fi
-if [[ "$RECURRENCE_HYBRID_ILP8_NEXTSELF" == 1 ]]; then NEXT="$ISO/mainrec_hybrid8_nextself.cu"; python3 "$ONEESAN_ROOT/scripts/build/gen-b300-mainrec-hybrid8-next-self-prefetch.py" "$CURRENT" "$NEXT" >"$ISO/mainrec-hybrid8-nextself.transform.out"; grep -Fq 'b300_mainrec_hybrid8_next_self_prefetch=1' "$ISO/mainrec-hybrid8-nextself.transform.out"; CURRENT="$NEXT"; fi
+if [[ "$RECURRENCE_HYBRID_ILP8_NEXTSELF" == 1 ]]; then NEXT="$ISO/mainrec_hybrid8_nextself.cu"; python3 "$ONEESAN_ROOT/scripts/build/gen-b300-mainrec-hybrid8-next-self-prefetch.py" "$CURRENT" "$NEXT" "$RECURRENCE_HYBRID_ILP8_NEXTSELF_WIDTH" >"$ISO/mainrec-hybrid8-nextself.transform.out"; grep -Fq 'b300_mainrec_hybrid8_next_self_prefetch=1' "$ISO/mainrec-hybrid8-nextself.transform.out"; grep -Fq "prefetch_width=$RECURRENCE_HYBRID_ILP8_NEXTSELF_WIDTH" "$ISO/mainrec-hybrid8-nextself.transform.out"; CURRENT="$NEXT"; fi
 if [[ "$DUALMASK" == 1 ]]; then bash "$ONEESAN_ROOT/scripts/bench/b300-block-pull-dualmask-proof.sh" >"$ISO/dualmask-proof.out" 2>"$ISO/dualmask-proof.err"; NEXT="$ISO/block_dualmask.cu"; python3 "$ONEESAN_ROOT/scripts/build/gen-b300-block-pull-dualmask.py" "$CURRENT" "$NEXT" >"$ISO/dualmask.transform.out"; grep -Fq 'block_pull_dualmask=1' "$ISO/dualmask.transform.out"; CURRENT="$NEXT"; fi
 if [[ "$CLOSURE_BATCH" != 0 ]]; then NEXT="$ISO/block_closure_batch.cu"; python3 "$ONEESAN_ROOT/scripts/build/gen-b300-block-closure-quad.py" "$CURRENT" "$NEXT" >"$ISO/closure-batch.transform.out"; grep -Fq 'batch_macro=B300_BLOCK_CLOSURE_BATCH' "$ISO/closure-batch.transform.out"; CURRENT="$NEXT"; fi
 
@@ -49,14 +51,18 @@ if [[ "$RANDOM_CG" == 1 ]]; then
   [[ "$RECURRENCE_HYBRID_ILP8" == 0 ]] || grep -Fq 'b300_mainrec_random_load_cg(in+pj7)' "$CURRENT"
 fi
 if [[ "$PREFETCH_L2" == 1 ]]; then grep -Fq 'prefetch.global.L2' "$CURRENT"; [[ "$RECURRENCE_HYBRID_ILP8" == 0 ]] || grep -Fq 'b300_mainrec_prefetch_l2(in+pj7,hp7)' "$CURRENT"; fi
-if [[ "$RECURRENCE_HYBRID_ILP8_NEXTSELF" == 1 ]]; then grep -Fq 'b300_mainrec_hybrid8_prefetch_next_self_l2(ni7<n?in+ni7:in,ni7<n)' "$CURRENT"; fi
+if [[ "$RECURRENCE_HYBRID_ILP8_NEXTSELF" == 1 ]]; then
+  last=$((RECURRENCE_HYBRID_ILP8_NEXTSELF_WIDTH-1))
+  grep -Fq "b300_mainrec_hybrid8_prefetch_next_self_l2(ni${last}<n?in+ni${last}:in,ni${last}<n)" "$CURRENT"
+  if (( RECURRENCE_HYBRID_ILP8_NEXTSELF_WIDTH < 8 )); then ! grep -Fq "const Code ni${RECURRENCE_HYBRID_ILP8_NEXTSELF_WIDTH}=" "$CURRENT"; fi
+fi
 if [[ "$DUALMASK" == 1 ]]; then grep -Fq 'b300_block_endpoint_masks(d)' "$CURRENT"; fi
 if [[ "$CLOSURE_BATCH" != 0 ]]; then grep -Fq 'B300_BLOCK_CLOSURE_BATCH' "$CURRENT"; fi
 
-if [[ "$RECURRENCE_ILP" == 2 && "$RECURRENCE_HYBRID_ILP8" == 0 && "$RECURRENCE_HYBRID_ILP8_NEXTSELF" == 0 && "$RANDOM_CG" == 0 && "$RANDOM_CG_L2_FETCH_BYTES" == 0 && "$PREFETCH_L2" == 0 && "$DUALMASK" == 0 && "$CLOSURE_BATCH" == 0 && "$MAXRREGCOUNT" == 0 ]]; then
+if [[ "$RECURRENCE_ILP" == 2 && "$RECURRENCE_HYBRID_ILP8" == 0 && "$RECURRENCE_HYBRID_ILP8_NEXTSELF" == 0 && "$RECURRENCE_HYBRID_ILP8_NEXTSELF_WIDTH" == 8 && "$RANDOM_CG" == 0 && "$RANDOM_CG_L2_FETCH_BYTES" == 0 && "$PREFETCH_L2" == 0 && "$DUALMASK" == 0 && "$CLOSURE_BATCH" == 0 && "$MAXRREGCOUNT" == 0 ]]; then
   cp "$BASE_BIN" "$OUT"; chmod +x "$OUT"
   echo "built $OUT"
-  echo "  nextgen_forced=1 high_drop_chunk=$HIGH_DROP_CHUNK recurrence_ilp=2 recurrence_hybrid_ilp8=0 recurrence_hybrid_ilp8_min_states=$RECURRENCE_HYBRID_ILP8_MIN_STATES recurrence_hybrid_ilp8_nextself=0 random_cg=0 prefetch_l2=0 random_cg_l2_fetch_bytes=0 dualmask=0 closure_batch=0 maxrregcount=0"
+  echo "  nextgen_forced=1 high_drop_chunk=$HIGH_DROP_CHUNK recurrence_ilp=2 recurrence_hybrid_ilp8=0 recurrence_hybrid_ilp8_min_states=$RECURRENCE_HYBRID_ILP8_MIN_STATES recurrence_hybrid_ilp8_nextself=0 recurrence_hybrid_ilp8_nextself_width=8 random_cg=0 prefetch_l2=0 random_cg_l2_fetch_bytes=0 dualmask=0 closure_batch=0 maxrregcount=0"
   echo "  cg_l2_detail random_cg=0 random_cg_l2_fetch_bytes=0 prefetch_l2=0"
   echo "  source_after_all=$CURRENT"
   echo "  production_chain_proof_gates=1 experimental_post_transforms=0"
@@ -70,7 +76,7 @@ DEFS=(-DTARGET_W=28 -DLOW_LUT_K=14 -DHIGH_LUT_K=13); [[ "$CLOSURE_BATCH" == 0 ]]
 TMPDIR="$ISO/tmp" nvcc -O3 -std=c++17 -lineinfo -arch="$ARCH" "${PTXAS_FLAGS[@]}" "${REG_FLAGS[@]}" "${DEFS[@]}" "$CURRENT" -o "$OUT" >"$ISO/final.compile.out" 2>>"$FINAL_ERR"
 [[ -x "$OUT" ]] || { echo 'nextgen forced binary missing' >&2; exit 5; }
 echo "built $OUT"
-echo "  nextgen_forced=1 high_drop_chunk=$HIGH_DROP_CHUNK recurrence_ilp=$RECURRENCE_ILP recurrence_hybrid_ilp8=$RECURRENCE_HYBRID_ILP8 recurrence_hybrid_ilp8_min_states=$RECURRENCE_HYBRID_ILP8_MIN_STATES recurrence_hybrid_ilp8_nextself=$RECURRENCE_HYBRID_ILP8_NEXTSELF random_cg=$RANDOM_CG prefetch_l2=$PREFETCH_L2 random_cg_l2_fetch_bytes=$RANDOM_CG_L2_FETCH_BYTES dualmask=$DUALMASK closure_batch=$CLOSURE_BATCH maxrregcount=$MAXRREGCOUNT"
+echo "  nextgen_forced=1 high_drop_chunk=$HIGH_DROP_CHUNK recurrence_ilp=$RECURRENCE_ILP recurrence_hybrid_ilp8=$RECURRENCE_HYBRID_ILP8 recurrence_hybrid_ilp8_min_states=$RECURRENCE_HYBRID_ILP8_MIN_STATES recurrence_hybrid_ilp8_nextself=$RECURRENCE_HYBRID_ILP8_NEXTSELF recurrence_hybrid_ilp8_nextself_width=$RECURRENCE_HYBRID_ILP8_NEXTSELF_WIDTH random_cg=$RANDOM_CG prefetch_l2=$PREFETCH_L2 random_cg_l2_fetch_bytes=$RANDOM_CG_L2_FETCH_BYTES dualmask=$DUALMASK closure_batch=$CLOSURE_BATCH maxrregcount=$MAXRREGCOUNT"
 echo "  cg_l2_detail random_cg=$RANDOM_CG random_cg_l2_fetch_bytes=$RANDOM_CG_L2_FETCH_BYTES prefetch_l2=$PREFETCH_L2"
 echo "  source_after_all=$CURRENT"
 echo "  production_chain_proof_gates=1 experimental_post_transforms=1 extra_state_bytes=0"
