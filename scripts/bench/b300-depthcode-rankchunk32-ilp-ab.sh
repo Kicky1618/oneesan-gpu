@@ -26,6 +26,7 @@ BUCKET_GRID_Y="${BUCKET_GRID_Y:-8}"
 REPEATS="${REPEATS:-2}"
 ILP_MODES="${ILP_MODES:-1 2 4}"
 PTXAS_VERBOSE="${PTXAS_VERBOSE:-1}"
+RUN_SELFTEST="${RUN_SELFTEST:-1}"
 
 PREFIX="${PREFIX:-$ONEESAN_ROOT/work/b300_depthcode_rankchunk32_ilp_ab_n${N}_${TRANSPOSE_MODE}}"
 RESULT="${RESULT:-${PREFIX}.tsv}"
@@ -35,7 +36,7 @@ LOGDIR="${LOGDIR:-${PREFIX}_logs}"
 case "$TRANSPOSE_MODE" in sync|events|pipeline) ;; *) echo "invalid TRANSPOSE_MODE" >&2; exit 2;; esac
 case "$DEPTHCODE_DECODE_LOAD" in global|ldg) ;; *) echo "invalid DEPTHCODE_DECODE_LOAD" >&2; exit 2;; esac
 case "$RANKSTREAM_LUT_LOAD" in constant|ldg|ldg256) ;; *) echo "invalid RANKSTREAM_LUT_LOAD" >&2; exit 2;; esac
-for x in RANKCHUNK32_BLOCK64 PM_ACCUM TERNARY_KEY4 PTXAS_VERBOSE; do
+for x in RANKCHUNK32_BLOCK64 PM_ACCUM TERNARY_KEY4 PTXAS_VERBOSE RUN_SELFTEST; do
   v="${!x}"; [[ "$v" == 0 || "$v" == 1 ]] || { echo "$x must be 0 or 1" >&2; exit 2; }
 done
 for ilp in $ILP_MODES; do case "$ilp" in 1|2|4) ;; *) echo "ILP_MODES entries must be 1, 2, or 4" >&2; exit 2;; esac; done
@@ -51,6 +52,20 @@ mkdir -p "$(dirname "$RESULT")" "$LOGDIR"
 
 bash "$ONEESAN_ROOT/scripts/bench/rankchunk32-directmask-proof.sh"
 bash "$ONEESAN_ROOT/scripts/bench/rankchunk32-warpbase-proof.sh"
+
+if [[ "$RUN_SELFTEST" == 1 ]]; then
+  for ilp in $ILP_MODES; do
+    echo "=== selftest rankchunk32 directmask ILP=$ilp ===" >&2
+    W=10 ARCH="$ARCH" RUN_LAYOUT_PROOF=0 \
+      RANKCHUNK32_DIRECTMASK=1 RANKCHUNK32_ILP="$ilp" RANKCHUNK32_ALIGN32=1 \
+      RANKCHUNK32_ONESHFL=1 RANKCHUNK32_DIRECT3=0 RANKCHUNK32_FUSED16=0 \
+      RANKCHUNK32_BYTEPACK=0 RANKCHUNK32_BLOCK64="$RANKCHUNK32_BLOCK64" \
+      RANKSTREAM_LUT_LOAD="$RANKSTREAM_LUT_LOAD" PM_ACCUM="$PM_ACCUM" \
+      DECODE_LOAD="$DEPTHCODE_DECODE_LOAD" \
+      bash "$ONEESAN_ROOT/scripts/bench/pattern10-depthcode-rankchunk32-cross5-selftest.sh" \
+      >"$LOGDIR/ilp_${ilp}.selftest.out" 2>"$LOGDIR/ilp_${ilp}.selftest.err"
+  done
+fi
 
 field() {
   local key="$1" line="$2"
@@ -127,6 +142,9 @@ if '1' in q:
             b=float(q[mode]['forward_high_s'])+float(q[mode]['reverse_high_s'])
             print(f'rankchunk32_ilp1_to_{mode}_total_high_speedup={a/b:.6f}x')
 print('ilp_model=independent_lr_chains_batched_before_consumption')
+print('directmask_runtime_path=mask8_then_offset32_then_rank16_then_source32')
+print('rankchunk_meta_runtime=0')
+print('blockbase_shuffle_runtime=0')
 print('ilp2_outstanding_chains_per_lane=2')
 print('ilp4_outstanding_chains_per_lane=4')
 print('directmask=1')
@@ -134,4 +152,4 @@ print('align32=1')
 print(f'summary={dst}')
 PY
 
-echo "b300-depthcode-rankchunk32-ilp-ab OK n=$N repeats=$REPEATS modes='$ILP_MODES' result=$RESULT logs=$LOGDIR" >&2
+echo "b300-depthcode-rankchunk32-ilp-ab OK n=$N repeats=$REPEATS modes='$ILP_MODES' selftest=$RUN_SELFTEST result=$RESULT logs=$LOGDIR" >&2
