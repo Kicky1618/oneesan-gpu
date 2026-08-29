@@ -36,6 +36,7 @@ __global__ void main_pull_kernel_ilp2(
 void production_launch(){
     if(useMate)main_pull_kernel_ilp2<<<b300_main_pull_ilp2_blocks(ms.size,threads),threads,0,c.sMain>>>(cur,c.dMate,ms.size,dcur,ds.size,nxt,p);
 }
+
 static Code rank_full(MateID m,int width){return Code(m)+Code(width);}
 CU
 
