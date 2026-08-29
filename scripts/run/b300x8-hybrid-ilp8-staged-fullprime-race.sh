@@ -47,9 +47,11 @@ run_stage(){
   echo "=== hybrid staged rows=$rows thresholds=[$thresholds] repeats=$repeats ===" >&2
   N=27 MOD="$MOD" ROWS="$rows" GRIDFP_THREADS="$THREADS" TARGET_MIB="$TARGET_MIB" GRIDFP_PLAN_TARGET_MIB="$PLAN_MIB" MAX_WINDOW="$MAX_WINDOW" \
     RANDOM_CG="$RANDOM_CG" WARP_SCAN="$WARP_SCAN" ILP8_THRESHOLDS="$thresholds" REPEATS="$repeats" SAMPLE_INTERVAL="$SAMPLE_INTERVAL" REBUILD="$REBUILD" \
-    LOGDIR="$dir" RESULT="$result" bash "$ONEESAN_ROOT/scripts/bench/b300x8-saturate-hybrid-ilp8-threshold-ab.sh"
+    LOGDIR="$dir" RESULT="$result" bash "$ONEESAN_ROOT/scripts/bench/b300x8-saturate-hybrid-ilp8-threshold-ab.sh" >"$dir/sweep.out"
+  cat "$dir/sweep.out" >&2
   python3 "$ONEESAN_ROOT/scripts/bench/b300-hybrid-ilp8-export-winner.py" "$result" "$envfile" \
-    --build-dir "$ONEESAN_BUILD_DIR" --threads "$THREADS" --random-cg "$RANDOM_CG" --warp-scan "$WARP_SCAN"
+    --build-dir "$ONEESAN_BUILD_DIR" --threads "$THREADS" --random-cg "$RANDOM_CG" --warp-scan "$WARP_SCAN" >"$dir/select.out"
+  cat "$dir/select.out" >&2
   printf '%s\n' "$envfile"
 }
 
@@ -155,7 +157,7 @@ base_args=()
 if [[ "$B300_HYBRID_WINNER_TRANSFORMED" == 1 ]]; then
   base_args=(FORCED_BASE_BIN="$BASE_ADAPTER" FORCED_BASE_LABEL=sat_ilp4_base FORCED_BASE_THREADS="$B300_HYBRID_BASE_THREADS")
 fi
-env PROFILE_FILE="$PROFILE_FILE" ARCH="$ARCH" MAX_WINDOW="$MAX_WINDOW" FORCED_TARGET_MIB="$TARGET_MIB" \
+exec env PROFILE_FILE="$PROFILE_FILE" ARCH="$ARCH" MAX_WINDOW="$MAX_WINDOW" FORCED_TARGET_MIB="$TARGET_MIB" \
   FORCED_OVERRIDE_BIN="$WIN_ADAPTER" FORCED_OVERRIDE_LABEL="$label" FORCED_OVERRIDE_THREADS="$B300_HYBRID_WINNER_THREADS" \
   "${base_args[@]}" REBUILD_BUCKETS="$REBUILD_BUCKETS" SELECT_ONLY="$SELECT_ONLY" PREFIX="$RACE_PREFIX" \
-  exec "$ONEESAN_ROOT/scripts/run/b300x8-race-external-forced-profiled-once.sh" 27 "$@"
+  "$ONEESAN_ROOT/scripts/run/b300x8-race-external-forced-profiled-once.sh" 27 "$@"
