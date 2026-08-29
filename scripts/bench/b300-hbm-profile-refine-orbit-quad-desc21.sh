@@ -16,10 +16,11 @@ PM_ACCUM="${PM_ACCUM:-1}"; REPEATS="${REPEATS:-1}"; SAMPLE_INTERVAL="${SAMPLE_IN
 LOGDIR="${LOGDIR:-${PREFIX}_logs}"; RESULT="${RESULT:-${PREFIX}.tsv}"; RESOURCE="${RESOURCE:-${PREFIX}_ptxas.tsv}"
 mkdir -p "$LOGDIR" "$(dirname "$PROFILE_OUT")"
 
+ORBIT_PRECTX_WARPCOOP="${ORBIT_PRECTX_WARPCOOP:-0}"
 for n in ORBIT_COL_ILP ORBIT_SPARSE64 ORBIT_CPASYNC_PAIR ORBIT_PRECTX_FORWARD ORBIT_PRECTX_REVERSE ORBIT_PRECTX_COMPACT ORBITCTA_FLAT ORBITCTA_FLAT_CHUNK ORBITCTA_FLAT_BLOCKS_PER_SM ORBIT_QUAD_MLP ORBIT_QUAD_OVERLAP_LOCAL ORBIT_QUAD_LOCAL_DIRECT_MAX; do
   [[ -n "${!n+x}" ]] || { echo "profile missing $n" >&2; exit 2; }
 done
-for x in ORBIT_SPARSE64 ORBIT_CPASYNC_PAIR ORBIT_PRECTX_FORWARD ORBIT_PRECTX_REVERSE ORBIT_PRECTX_COMPACT ORBITCTA_FLAT ORBIT_QUAD_MLP ORBIT_QUAD_OVERLAP_LOCAL; do
+for x in ORBIT_SPARSE64 ORBIT_CPASYNC_PAIR ORBIT_PRECTX_FORWARD ORBIT_PRECTX_REVERSE ORBIT_PRECTX_COMPACT ORBIT_PRECTX_WARPCOOP ORBITCTA_FLAT ORBIT_QUAD_MLP ORBIT_QUAD_OVERLAP_LOCAL; do
   v="${!x}"; [[ "$v" == 0 || "$v" == 1 ]] || { echo "$x must be 0 or 1" >&2; exit 2; }
 done
 [[ "$ORBIT_QUAD_MLP" == 1 && "$ORBIT_QUAD_OVERLAP_LOCAL" == 1 ]] || { echo 'descriptor refine requires quad overlap-local winner' >&2; exit 2; }
@@ -28,6 +29,9 @@ done
 [[ "$ORBITCTA_FLAT" == 1 ]] && (( ORBITCTA_FLAT_CHUNK > 1 )) || { echo 'descriptor refine requires chunked flat orbit CTA' >&2; exit 2; }
 [[ "$ORBITCTA_FLAT_BLOCKS_PER_SM" =~ ^[0-9]+$ ]] || { echo 'bad ORBITCTA_FLAT_BLOCKS_PER_SM' >&2; exit 2; }
 [[ "$ORBIT_QUAD_LOCAL_DIRECT_MAX" == 0 ]] || { echo 'descriptor refine expects QOL direct local path' >&2; exit 2; }
+if [[ "$ORBIT_PRECTX_WARPCOOP" == 1 ]]; then
+  [[ "$ORBIT_PRECTX_COMPACT" == 1 && "$ORBIT_PRECTX_FORWARD" == 1 && "$ORBIT_PRECTX_REVERSE" == 1 ]] || { echo 'warpcoop descriptor refine requires compact forward+reverse prectx' >&2; exit 2; }
+fi
 command -v nvcc >/dev/null || { echo 'nvcc required' >&2; exit 2; }
 command -v nvidia-smi >/dev/null || { echo 'nvidia-smi required' >&2; exit 2; }
 (( $(nvidia-smi --query-gpu=index --format=csv,noheader | wc -l) >= 8 )) || { echo 'need 8 visible GPUs' >&2; exit 2; }
@@ -45,13 +49,13 @@ field(){ local k="$1" l="$2"; sed -nE "s/(^|.*[[:space:]])${k}=([^[:space:]]+).*
 sample(){ local pid="$1" out="$2"; : >"$out"; while kill -0 "$pid" 2>/dev/null; do nvidia-smi --query-gpu=utilization.gpu,utilization.memory --format=csv,noheader,nounits 2>/dev/null | awk -F',' '{g=$1+0;m=$2+0;sg+=g;sm+=m;if(m>mm)mm=m;n++}END{if(n)printf "%.6f %.6f %d\n",sg/n,sm/n,mm;else print "NA NA NA"}' >>"$out" || true; sleep "$SAMPLE_INTERVAL"; done; }
 
 for qsd in 0 1; do
-  bin="$ONEESAN_BUILD_DIR/b300_orbit_quad_desc${qsd}_n21"
+  bin="$ONEESAN_BUILD_DIR/b300_orbit_quad_desc${qsd}_wc${ORBIT_PRECTX_WARPCOOP}_n21"
   N=21 ARCH="$ARCH" OUT="$bin" PM_ACCUM="$PM_ACCUM" DIRECTGATHER64=1 DIRECTGATHER_SPARSE64=1 DIRECTGATHER_SORT_RANKS=0 \
     RANKFORMULA_MLP_WINDOW4=1 PAIR_MLP=1 CPASYNC_PAIR=1 QUAD_MLP=1 QUAD_OVERLAP_LOCAL=1 QUAD_LOCAL_DIRECT_MAX=0 QUAD_SPARSE_DESC_MLP="$qsd" \
     ORBITCTA_FLAT=1 ORBITCTA_FLAT_CHUNK="$ORBITCTA_FLAT_CHUNK" ORBITCTA_COL_ILP=4 \
-    PRECTX_FORWARD="$ORBIT_PRECTX_FORWARD" PRECTX_REVERSE="$ORBIT_PRECTX_REVERSE" PRECTX_COMPACT="$ORBIT_PRECTX_COMPACT" PRECTX_FLAT_BID=0 PRECTX_FLAT_BID_FUSED=0 PTXAS_VERBOSE=1 \
+    PRECTX_FORWARD="$ORBIT_PRECTX_FORWARD" PRECTX_REVERSE="$ORBIT_PRECTX_REVERSE" PRECTX_COMPACT="$ORBIT_PRECTX_COMPACT" PRECTX_WARPCOOP="$ORBIT_PRECTX_WARPCOOP" PRECTX_FLAT_BID=0 PRECTX_FLAT_BID_FUSED=0 PTXAS_VERBOSE=1 \
     bash "$ONEESAN_ROOT/scripts/build/b300-directgather-orbitcta.sh" >"$LOGDIR/qsd${qsd}.build.out" 2>"$LOGDIR/qsd${qsd}.build.err"
-  python3 "$ONEESAN_ROOT/scripts/bench/parse-ptxas-resources.py" "$LOGDIR/qsd${qsd}.build.err" --label "qsd${qsd}" >>"$RESOURCE" || true
+  python3 "$ONEESAN_ROOT/scripts/bench/parse-ptxas-resources.py" "$LOGDIR/qsd${qsd}.build.err" --label "qsd${qsd}_wc${ORBIT_PRECTX_WARPCOOP}" >>"$RESOURCE" || true
 
   for ((r=1;r<=REPEATS;++r)); do
     so="$LOGDIR/qsd${qsd}_r${r}.out"; se="$LOGDIR/qsd${qsd}_r${r}.err"; util="$LOGDIR/qsd${qsd}_r${r}.util"
@@ -117,4 +121,4 @@ for k in (0,1): print(f'QSD{k}',f"wall_s={stats[k]['wall']:.6f}",f"high_s={stats
 print('BEST_QUAD_SPARSE_DESC_MLP='+str(winner),f"wall_speedup={stats[0]['wall']/stats[1]['wall']:.6f}",f"high_speedup={stats[0]['high']/stats[1]['high']:.6f}",f'profile_file={profile_out}')
 PY
 cat "$PROFILE_OUT"
-echo "orbit quad sparse descriptor refine OK input=$PROFILE_IN output=$PROFILE_OUT result=$RESULT resources=$RESOURCE" >&2
+echo "orbit quad sparse descriptor refine OK input=$PROFILE_IN output=$PROFILE_OUT result=$RESULT resources=$RESOURCE warpcoop=$ORBIT_PRECTX_WARPCOOP" >&2
