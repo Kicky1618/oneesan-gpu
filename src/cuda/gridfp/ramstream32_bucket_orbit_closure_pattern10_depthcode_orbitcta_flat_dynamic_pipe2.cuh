@@ -10,6 +10,9 @@
 #ifndef P10DC_ORBITCTA_FLAT_DYNAMIC_PIPE2_PRODUCER_WARP
 #define P10DC_ORBITCTA_FLAT_DYNAMIC_PIPE2_PRODUCER_WARP 0
 #endif
+#ifndef P10DC_ORBITCTA_FLAT_DYNAMIC_PIPE2_PRODUCER_PRECTX_WARPCOOP
+#define P10DC_ORBITCTA_FLAT_DYNAMIC_PIPE2_PRODUCER_PRECTX_WARPCOOP 0
+#endif
 static_assert(P10DC_ORBITCTA_FLAT_DYNAMIC_BATCH == 1 ||
               P10DC_ORBITCTA_FLAT_DYNAMIC_BATCH == 2 ||
               P10DC_ORBITCTA_FLAT_DYNAMIC_BATCH == 4 ||
@@ -19,15 +22,25 @@ static_assert(P10DC_ORBITCTA_FLAT_DYNAMIC_BATCH == 1 ||
 static_assert(P10DC_ORBITCTA_FLAT_DYNAMIC_PIPE2_PRODUCER_WARP == 0 ||
               P10DC_ORBITCTA_FLAT_DYNAMIC_PIPE2_PRODUCER_WARP == 1,
               "dynamic pipe2 producer warp must be 0/1");
+static_assert(P10DC_ORBITCTA_FLAT_DYNAMIC_PIPE2_PRODUCER_PRECTX_WARPCOOP == 0 ||
+              P10DC_ORBITCTA_FLAT_DYNAMIC_PIPE2_PRODUCER_PRECTX_WARPCOOP == 1,
+              "dynamic pipe2 producer prectx warpcoop must be 0/1");
+static_assert(!P10DC_ORBITCTA_FLAT_DYNAMIC_PIPE2_PRODUCER_PRECTX_WARPCOOP ||
+              P10DC_ORBITCTA_FLAT_DYNAMIC_PIPE2_PRODUCER_WARP,
+              "producer prectx warpcoop requires producer warp");
 #if P10DC_ORBITCTA_FLAT_DYNAMIC_PIPE2_PRODUCER_WARP
 #include "ramstream32_bucket_orbit_closure_pattern10_depthcode_orbitcta_flat_dynamic_pipe2_producer_warp.cuh"
+#endif
+#if P10DC_ORBITCTA_FLAT_DYNAMIC_PIPE2_PRODUCER_PRECTX_WARPCOOP
+#include "ramstream32_bucket_orbit_closure_pattern10_depthcode_orbitcta_flat_dynamic_pipe2_producer_prectx_warpcoop.cuh"
 #endif
 
 // The ordinary dynamic scheduler serializes
 //   lane0 prepare -> CTA barrier -> columns -> CTA barrier
 // for every orbit. Keep two resolved contexts instead. While the CTA consumes
-// current, lane0 prepares next. One CTA barrier then retires current and
-// publishes next.
+// current, the producer prepares next. One CTA barrier then retires current and
+// publishes next. With producer-prectx warpcoop, lanes 0..8 share compact row
+// expansion while the worker warps consume current.
 //
 // IMPORTANT: "has an orbit id" and "the resolved orbit is executable" are
 // different states. prepare_* may deliberately leave c.valid=0 for an orbit
@@ -76,8 +89,6 @@ __device__ __forceinline__ uint32_t p10dc_orbitcta_flat_dynamic_pipe2_next_k(
     if (lease_pos_lane0 < lease_batch) {
         const uint32_t k = lease_base_lane0 + lease_pos_lane0;
         ++lease_pos_lane0;
-        // A partial final lease implies the global queue has already crossed
-        // total; no subsequent lease can contain useful work.
         return k < total ? k : 0xffffffffu;
     }
     lease_base_lane0 = atomicAdd(&D_P10DC_ORBITCTA_FLAT_NEXT, lease_batch);
@@ -120,6 +131,7 @@ __global__ void bucket_high_orbit_closure_pattern10_depthcode_orbitcta_flat_dyna
     uint32_t lease_base_lane0 = 0u;
     uint32_t lease_pos_lane0 = 0u;
     uint32_t lease_batch_lane0 = uint32_t(P10DC_ORBITCTA_FLAT_DYNAMIC_BATCH);
+    uint32_t first_k_lane0 = 0xffffffffu;
     if (threadIdx.x == 0) {
         const uint32_t nn0 = D_BKF_HIGH_NN_OFF[base_off];
         const uint32_t nn1 = D_BKF_HIGH_NN_OFF[base_off + nblocks];
@@ -135,10 +147,18 @@ __global__ void bucket_high_orbit_closure_pattern10_depthcode_orbitcta_flat_dyna
         if (lease_base_lane0 < c0.total) {
             has_item[0] = 1u;
             lease_pos_lane0 = 1u;
+            first_k_lane0 = lease_base_lane0;
+#if !P10DC_ORBITCTA_FLAT_DYNAMIC_PIPE2_PRODUCER_PRECTX_WARPCOOP
             p10dc_orbitcta_flat_dynamic_prepare_forward(
-                c0, lease_base_lane0, base_off, nblocks, p);
+                c0, first_k_lane0, base_off, nblocks, p);
+#endif
         }
     }
+#if P10DC_ORBITCTA_FLAT_DYNAMIC_PIPE2_PRODUCER_PRECTX_WARPCOOP
+    if (threadIdx.x < 32u)
+        p10dc_orbitcta_flat_dynamic_pipe2_prepare_forward_producer_prectx_warpcoop(
+            c0, first_k_lane0, base_off, nblocks, p);
+#endif
     __syncthreads();
 
     const uint32_t total = c0.total;
@@ -150,22 +170,26 @@ __global__ void bucket_high_orbit_closure_pattern10_depthcode_orbitcta_flat_dyna
             p10dc_orbitcta_flat_dynamic_pipe2_context(storage, cur ^ 1u);
         if (!has_item[cur]) break;
 
+        uint32_t next_k_lane0 = 0xffffffffu;
         if (threadIdx.x == 0) {
             next.valid = 0;
             has_item[cur ^ 1u] = 0u;
-            const uint32_t next_k = p10dc_orbitcta_flat_dynamic_pipe2_next_k(
+            next_k_lane0 = p10dc_orbitcta_flat_dynamic_pipe2_next_k(
                 total, lease_batch_lane0, lease_base_lane0, lease_pos_lane0);
-            if (next_k != 0xffffffffu) {
+            if (next_k_lane0 != 0xffffffffu) {
                 has_item[cur ^ 1u] = 1u;
+#if !P10DC_ORBITCTA_FLAT_DYNAMIC_PIPE2_PRODUCER_PRECTX_WARPCOOP
                 p10dc_orbitcta_flat_dynamic_prepare_forward(
-                    next, next_k, base_off, nblocks, p);
+                    next, next_k_lane0, base_off, nblocks, p);
+#endif
             }
         }
+#if P10DC_ORBITCTA_FLAT_DYNAMIC_PIPE2_PRODUCER_PRECTX_WARPCOOP
+        if (threadIdx.x < 32u)
+            p10dc_orbitcta_flat_dynamic_pipe2_prepare_forward_producer_prectx_warpcoop(
+                next, next_k_lane0, base_off, nblocks, p);
+#endif
 
-        // No barrier here: resident worker warps may consume current while lane
-        // 0 resolves next. In producer-warp mode all of warp 0 is excluded from
-        // the column partition, eliminating the delayed-warp tail at the cost of
-        // redistributing the same columns over blockDim.x-32 workers.
         if (current.valid == 1)
             p10dc_orbitcta_flat_dynamic_pipe2_forward_columns(current);
         __syncthreads();
@@ -187,6 +211,7 @@ __global__ void bucket_reverse_high_pattern10_depthcode_orbitcta_flat_dynamic_pi
     uint32_t lease_base_lane0 = 0u;
     uint32_t lease_pos_lane0 = 0u;
     uint32_t lease_batch_lane0 = uint32_t(P10DC_ORBITCTA_FLAT_DYNAMIC_BATCH);
+    uint32_t first_k_lane0 = 0xffffffffu;
     if (threadIdx.x == 0) {
         const uint32_t nn0 = D_RS54_HIGH_NN_OFF[base_off];
         const uint32_t nn1 = D_RS54_HIGH_NN_OFF[base_off + nblocks];
@@ -204,10 +229,18 @@ __global__ void bucket_reverse_high_pattern10_depthcode_orbitcta_flat_dynamic_pi
         if (lease_base_lane0 < c0.total) {
             has_item[0] = 1u;
             lease_pos_lane0 = 1u;
+            first_k_lane0 = lease_base_lane0;
+#if !P10DC_ORBITCTA_FLAT_DYNAMIC_PIPE2_PRODUCER_PRECTX_WARPCOOP
             p10dc_orbitcta_flat_dynamic_prepare_reverse(
-                c0, lease_base_lane0, base_off, nblocks, p, edge);
+                c0, first_k_lane0, base_off, nblocks, p, edge);
+#endif
         }
     }
+#if P10DC_ORBITCTA_FLAT_DYNAMIC_PIPE2_PRODUCER_PRECTX_WARPCOOP
+    if (threadIdx.x < 32u)
+        p10dc_orbitcta_flat_dynamic_pipe2_prepare_reverse_producer_prectx_warpcoop(
+            c0, first_k_lane0, base_off, nblocks, p, edge);
+#endif
     __syncthreads();
 
     const uint32_t total = c0.total;
@@ -219,17 +252,25 @@ __global__ void bucket_reverse_high_pattern10_depthcode_orbitcta_flat_dynamic_pi
             p10dc_orbitcta_flat_dynamic_pipe2_context(storage, cur ^ 1u);
         if (!has_item[cur]) break;
 
+        uint32_t next_k_lane0 = 0xffffffffu;
         if (threadIdx.x == 0) {
             next.valid = 0;
             has_item[cur ^ 1u] = 0u;
-            const uint32_t next_k = p10dc_orbitcta_flat_dynamic_pipe2_next_k(
+            next_k_lane0 = p10dc_orbitcta_flat_dynamic_pipe2_next_k(
                 total, lease_batch_lane0, lease_base_lane0, lease_pos_lane0);
-            if (next_k != 0xffffffffu) {
+            if (next_k_lane0 != 0xffffffffu) {
                 has_item[cur ^ 1u] = 1u;
+#if !P10DC_ORBITCTA_FLAT_DYNAMIC_PIPE2_PRODUCER_PRECTX_WARPCOOP
                 p10dc_orbitcta_flat_dynamic_prepare_reverse(
-                    next, next_k, base_off, nblocks, p, edge);
+                    next, next_k_lane0, base_off, nblocks, p, edge);
+#endif
             }
         }
+#if P10DC_ORBITCTA_FLAT_DYNAMIC_PIPE2_PRODUCER_PRECTX_WARPCOOP
+        if (threadIdx.x < 32u)
+            p10dc_orbitcta_flat_dynamic_pipe2_prepare_reverse_producer_prectx_warpcoop(
+                next, next_k_lane0, base_off, nblocks, p, edge);
+#endif
 
         if (current.valid == 1)
             p10dc_orbitcta_flat_dynamic_pipe2_reverse_columns(current, edge);
