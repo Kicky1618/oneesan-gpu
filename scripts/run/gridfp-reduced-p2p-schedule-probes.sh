@@ -11,6 +11,7 @@ CUDA_W="${CUDA_W:-10}"
 CUDA_NGPU="${CUDA_NGPU:-2}"
 CUDA_BLOCKS="${CUDA_BLOCKS:-256}"
 CUDA_BATCHES="${CUDA_BATCHES:-4}"
+CUDA_SALT="${CUDA_SALT:-0}"
 ARCH="${ARCH:-native}"
 
 build_cpu_probe() {
@@ -52,53 +53,48 @@ if [[ "$RUN_CUDA" == 1 ]]; then
 
   MODE=tie ARCH="$ARCH" \
     "$(repo_path scripts/build/gridfp-reduced-p2p-schedule-probe.sh)"
-  tie_cuda_bin="$(build_path gridfp_reduced_p2p_tie)"
-  "$tie_cuda_bin" "$CUDA_W" "$NGPU_MODEL" "$CUDA_BLOCKS"
+  "$(build_path gridfp_reduced_p2p_tie)" "$CUDA_W" "$NGPU_MODEL" "$CUDA_BLOCKS"
 
   MODE=ownerfirst ARCH="$ARCH" \
     "$(repo_path scripts/build/gridfp-reduced-p2p-schedule-probe.sh)"
-  ownerfirst_bin="$(build_path gridfp_reduced_p2p_ownerfirst)"
-  "$ownerfirst_bin" "$CUDA_W" "$K" "$K" "$CUDA_BLOCKS" "$CUDA_NGPU"
+  "$(build_path gridfp_reduced_p2p_ownerfirst)" "$CUDA_W" "$K" "$K" "$CUDA_BLOCKS" "$CUDA_NGPU"
 
   MODE=worklist ARCH="$ARCH" \
     "$(repo_path scripts/build/gridfp-reduced-p2p-schedule-probe.sh)"
-  work_cuda_bin="$(build_path gridfp_reduced_p2p_worklist)"
-  "$work_cuda_bin" "$CUDA_W" "$K" "$CUDA_BLOCKS" "$CUDA_NGPU"
+  "$(build_path gridfp_reduced_p2p_worklist)" "$CUDA_W" "$K" "$CUDA_BLOCKS" "$CUDA_NGPU"
 
   MODE=compiled ARCH="$ARCH" \
     "$(repo_path scripts/build/gridfp-reduced-p2p-schedule-probe.sh)"
-  compiled_cuda_bin="$(build_path gridfp_reduced_p2p_compiled)"
-  "$compiled_cuda_bin" "$CUDA_W" "$K" "$CUDA_BLOCKS" "$CUDA_NGPU"
+  "$(build_path gridfp_reduced_p2p_compiled)" "$CUDA_W" "$K" "$CUDA_BLOCKS" "$CUDA_NGPU"
 
   MODE=packed ARCH="$ARCH" \
     "$(repo_path scripts/build/gridfp-reduced-p2p-schedule-probe.sh)"
-  packed_cuda_bin="$(build_path gridfp_reduced_p2p_packed)"
-  "$packed_cuda_bin" "$CUDA_W" "$K" "$CUDA_BLOCKS" "$CUDA_NGPU"
+  "$(build_path gridfp_reduced_p2p_packed)" "$CUDA_W" "$K" "$CUDA_BLOCKS" "$CUDA_NGPU"
 
   MODE=segmented ARCH="$ARCH" \
     "$(repo_path scripts/build/gridfp-reduced-p2p-schedule-probe.sh)"
-  segmented_cuda_bin="$(build_path gridfp_reduced_p2p_segmented)"
-  "$segmented_cuda_bin" "$CUDA_W" "$K" "$CUDA_BATCHES" "$CUDA_BLOCKS" "$CUDA_NGPU"
+  "$(build_path gridfp_reduced_p2p_segmented)" "$CUDA_W" "$K" "$CUDA_BATCHES" "$CUDA_BLOCKS" "$CUDA_NGPU"
 
   MODE=segment-major ARCH="$ARCH" \
     "$(repo_path scripts/build/gridfp-reduced-p2p-schedule-probe.sh)"
-  segment_major_cuda_bin="$(build_path gridfp_reduced_p2p_segment-major)"
-  "$segment_major_cuda_bin" "$CUDA_W" "$K" "$CUDA_BATCHES" "$CUDA_BLOCKS" "$CUDA_NGPU"
+  "$(build_path gridfp_reduced_p2p_segment-major)" "$CUDA_W" "$K" "$CUDA_BATCHES" "$CUDA_BLOCKS" "$CUDA_NGPU"
 
   MODE=segment-major-count ARCH="$ARCH" \
     "$(repo_path scripts/build/gridfp-reduced-p2p-schedule-probe.sh)"
-  segment_major_count_bin="$(build_path gridfp_reduced_p2p_segment-major-count)"
-  "$segment_major_count_bin" "$CUDA_W" "$K" "$CUDA_BATCHES" "$CUDA_BLOCKS" "$CUDA_NGPU"
+  "$(build_path gridfp_reduced_p2p_segment-major-count)" "$CUDA_W" "$K" "$CUDA_BATCHES" "$CUDA_BLOCKS" "$CUDA_NGPU"
 
   MODE=segment-major-fill ARCH="$ARCH" \
     "$(repo_path scripts/build/gridfp-reduced-p2p-schedule-probe.sh)"
-  segment_major_fill_bin="$(build_path gridfp_reduced_p2p_segment-major-fill)"
-  "$segment_major_fill_bin" "$CUDA_W" "$K" "$CUDA_BATCHES" "$CUDA_BLOCKS" "$CUDA_NGPU"
+  "$(build_path gridfp_reduced_p2p_segment-major-fill)" "$CUDA_W" "$K" "$CUDA_BATCHES" "$CUDA_BLOCKS" "$CUDA_NGPU"
 
   MODE=two-row-segment-major ARCH="$ARCH" \
     "$(repo_path scripts/build/gridfp-reduced-p2p-schedule-probe.sh)"
-  two_row_segment_major_bin="$(build_path gridfp_reduced_p2p_two-row-segment-major)"
-  "$two_row_segment_major_bin" "$CUDA_W" "$CUDA_NGPU" "$CUDA_BATCHES" "$CUDA_BLOCKS"
+  "$(build_path gridfp_reduced_p2p_two-row-segment-major)" "$CUDA_W" "$CUDA_NGPU" "$CUDA_BATCHES" "$CUDA_BLOCKS"
+
+  MODE=two-row-segment-major-built ARCH="$ARCH" \
+    "$(repo_path scripts/build/gridfp-reduced-p2p-schedule-probe.sh)"
+  "$(build_path gridfp_reduced_p2p_two-row-segment-major-built)" \
+    "$CUDA_W" "$CUDA_NGPU" "$CUDA_BATCHES" "$CUDA_BLOCKS" 4294967291 "$CUDA_SALT"
 fi
 
 echo "ALL_OK local_p2p_schedule_regressions=1"
