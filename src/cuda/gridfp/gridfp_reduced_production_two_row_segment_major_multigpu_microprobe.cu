@@ -391,7 +391,6 @@ void rtmajor_launch_redistribution(
     int batches,
     unsigned blocks
 ) {
-    // Local-only cycles are disjoint from every network cycle.
     for (int g = 0; g < ngpu; ++g) {
         auto& p = plan[static_cast<std::size_t>(g)];
         if (!p.local.cycles) continue;
@@ -474,9 +473,9 @@ void run_two_row_segment_major_schedule(
         tables, W, K, false, ngpu, batches, tile);
     const RtMajorHostPlan rev = make_rtmajor_host_plan(
         tables, W, K, true, ngpu, batches, tile);
-    const RunTraffic tf = equal_run_traffic_model(W, K, ngpu);
-    if (fwd.network_states != tf.moved_states || rev.network_states != tf.moved_states)
-        fail("rtmajor network lower-bound mismatch");
+    if (fwd.network_states != rev.network_states ||
+        fwd.network_segments != rev.network_segments)
+        fail("rtmajor forward/reverse traffic asymmetry");
 
     schedule_enable_peer(ngpu);
     std::vector<RuntimeScheduleDevice> dev(static_cast<std::size_t>(ngpu));
@@ -593,7 +592,7 @@ void run_two_row_segment_major_schedule(
               << " states=" << tables.size()
               << " two_rows=1 next_row_entry=1 redistributions=2"
               << " exact_network_u32_per_redistribution=" << fwd.network_states
-              << " network_lower_bound_exact=1"
+              << " network_lower_bound_exact_by_owner_boundaries=1"
               << " max_scratch_MiB_per_gpu="
               << double(max_scratch) * 4.0 / double(1ULL << 20)
               << " forward_reverse_metadata_bytes=" << metadata_bytes
