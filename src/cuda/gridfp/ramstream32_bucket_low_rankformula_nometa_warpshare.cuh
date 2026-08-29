@@ -11,6 +11,9 @@
 #ifndef P10DC_RANKFORMULA_NOMETA_COOP_UNROLL
 #define P10DC_RANKFORMULA_NOMETA_COOP_UNROLL 1
 #endif
+#ifndef P10DC_RANKFORMULA_NOMETA_DIRECTMAP
+#define P10DC_RANKFORMULA_NOMETA_DIRECTMAP 0
+#endif
 static_assert(P10DC_RANKFORMULA_NOMETA_WARPSHARE == 0 ||
               P10DC_RANKFORMULA_NOMETA_WARPSHARE == 1,
               "P10DC_RANKFORMULA_NOMETA_WARPSHARE must be 0 or 1");
@@ -20,6 +23,9 @@ static_assert(P10DC_RANKFORMULA_NOMETA_COOPGROUP == 0 ||
 static_assert(P10DC_RANKFORMULA_NOMETA_COOP_UNROLL == 0 ||
               P10DC_RANKFORMULA_NOMETA_COOP_UNROLL == 1,
               "P10DC_RANKFORMULA_NOMETA_COOP_UNROLL must be 0 or 1");
+static_assert(P10DC_RANKFORMULA_NOMETA_DIRECTMAP == 0 ||
+              P10DC_RANKFORMULA_NOMETA_DIRECTMAP == 1,
+              "P10DC_RANKFORMULA_NOMETA_DIRECTMAP must be 0 or 1");
 static_assert(!P10DC_RANKFORMULA_NOMETA_COOPGROUP ||
               P10DC_RANKFORMULA_NOMETA_WARPSHARE,
               "cooperative nometa successor loading requires warp sharing");
@@ -29,8 +35,37 @@ static_assert(!P10DC_RANKFORMULA_NOMETA_GROUP56 ||
 static_assert(!P10DC_RANKFORMULA_NOMETA_GROUP61 ||
               P10DC_RANKFORMULA_NOMETA_COOPGROUP,
               "group61 requires cooperative successor loading");
+static_assert(!P10DC_RANKFORMULA_NOMETA_DIRECTMAP ||
+              P10DC_RANKFORMULA_NOMETA_GROUP61,
+              "direct rank map currently targets GROUP61 only");
 static_assert(32u % P10DC_RANKFORMULA_NOMETA4_BLOCK == 0u,
               "warp-shared nometa locator requires block size dividing 32");
+
+#if P10DC_RANKFORMULA_NOMETA_DIRECTMAP
+// Dense rank -> resolved GROUP61 descriptor.  One entry is installed for each
+// actually reachable LOW rank of the bound owner.  The hot path performs one
+// read-only 64-bit load and bit extracts instead of block16 lookup + up to 16
+// successor comparisons/ballots/shuffles.
+__constant__ uint64_t* D_P10DC_LOW_RANKFORMULA_NOMETA_DIRECT64;
+__constant__ uint32_t D_P10DC_LOW_RANKFORMULA_NOMETA_DIRECT_OFF[MAXW + 2];
+
+__device__ __forceinline__ P10DCRankFormulaNometa4Resolved
+p10dc_low_rankformula_nometa_resolve_directmap(uint32_t h, uint32_t rank) {
+    const uint64_t e = __ldg(
+        D_P10DC_LOW_RANKFORMULA_NOMETA_DIRECT64 +
+        D_P10DC_LOW_RANKFORMULA_NOMETA_DIRECT_OFF[h] + rank);
+    const uint32_t start = uint32_t(e) & 0x7fffu;
+    const uint32_t source_base = uint32_t(e >> 15) & 0x7fffu;
+    const uint32_t lcount = uint32_t(e >> 30) & 0x07u;
+    const uint32_t abstract_off = uint32_t(e >> 33) & 0x1fffu;
+    return P10DCRankFormulaNometa4Resolved{
+        h + 2u * lcount,
+        start,
+        int(source_base) - int(start),
+        abstract_off,
+        source_base};
+}
+#endif
 
 // Warp-striped HIGH kernels enumerate lr as base32+lane, and every later stripe
 // advances by gridDim.x*32. Therefore rank/B is shared by exactly B adjacent
@@ -174,7 +209,9 @@ p10dc_low_rankformula_nometa_resolve_coopgroup(uint32_t h, uint32_t rank) {
 
 __device__ __forceinline__ P10DCRankFormulaNometa4Resolved
 p10dc_low_rankformula_nometa_resolve_active(uint32_t h, uint32_t rank) {
-#if P10DC_RANKFORMULA_NOMETA_COOPGROUP
+#if P10DC_RANKFORMULA_NOMETA_DIRECTMAP
+    return p10dc_low_rankformula_nometa_resolve_directmap(h, rank);
+#elif P10DC_RANKFORMULA_NOMETA_COOPGROUP
     return p10dc_low_rankformula_nometa_resolve_coopgroup(h, rank);
 #elif P10DC_RANKFORMULA_NOMETA_WARPSHARE
     return p10dc_low_rankformula_nometa_resolve_warpshare(h, rank);
