@@ -12,9 +12,10 @@ DIRECTGATHER_SORT_RANKS="${DIRECTGATHER_SORT_RANKS:-0}"
 PAIR_MLP="${PAIR_MLP:-0}"; CPASYNC_PAIR="${CPASYNC_PAIR:-0}"
 PRECTX_FORWARD="${PRECTX_FORWARD:-0}"; PRECTX_REVERSE="${PRECTX_REVERSE:-0}"
 PRECTX_COMPACT="${PRECTX_COMPACT:-0}"
+ORBITCTA_FLAT="${ORBITCTA_FLAT:-0}"
 ORBITCTA_COL_ILP="${ORBITCTA_COL_ILP:-1}"
 FORCE7="${RANKFORMULA_DIRECTGATHER_FORCE7:-0}"; PTXAS_VERBOSE="${PTXAS_VERBOSE:-1}"
-for x in WINDOW4 DIRECTGATHER64 DIRECTGATHER_SPARSE64 DIRECTGATHER_SORT_RANKS PAIR_MLP CPASYNC_PAIR PRECTX_FORWARD PRECTX_REVERSE PRECTX_COMPACT FORCE7 PM_ACCUM PTXAS_VERBOSE; do
+for x in WINDOW4 DIRECTGATHER64 DIRECTGATHER_SPARSE64 DIRECTGATHER_SORT_RANKS PAIR_MLP CPASYNC_PAIR PRECTX_FORWARD PRECTX_REVERSE PRECTX_COMPACT ORBITCTA_FLAT FORCE7 PM_ACCUM PTXAS_VERBOSE; do
   v="${!x}"; [[ "$v" == 0 || "$v" == 1 ]] || { echo "$x must be 0 or 1" >&2; exit 2; }
 done
 case "$ORBITCTA_COL_ILP" in 1|2|4) ;; *) echo "ORBITCTA_COL_ILP must be 1, 2, or 4" >&2; exit 2;; esac
@@ -37,7 +38,13 @@ if [[ "$CPASYNC_PAIR" == 1 ]]; then
   [[ "$WINDOW4" == 1 ]] || { echo "CPASYNC_PAIR requires RANKFORMULA_MLP_WINDOW4=1" >&2; exit 2; }
 fi
 
-SRC="$(repo_path src/cuda/b300/oneesan_cuda_gridfp_b300_bucket_snake_onepass_pattern10_depthcode_orbitcta_directgather_graph_batch_pipeline.cu)"
+if [[ "$ORBITCTA_FLAT" == 1 ]]; then
+  SRC="$(repo_path src/cuda/b300/oneesan_cuda_gridfp_b300_bucket_snake_onepass_pattern10_depthcode_orbitcta_flat_directgather_graph_batch_pipeline.cu)"
+  BACKEND_TAG="orbitcta-flat-directgather"
+else
+  SRC="$(repo_path src/cuda/b300/oneesan_cuda_gridfp_b300_bucket_snake_onepass_pattern10_depthcode_orbitcta_directgather_graph_batch_pipeline.cu)"
+  BACKEND_TAG="orbitcta-directgather"
+fi
 BIN="$(build_path "$OUT")"
 NVCC_EXTRA=(); [[ "$PTXAS_VERBOSE" == 1 ]] && NVCC_EXTRA+=("-Xptxas=-v")
 
@@ -78,5 +85,9 @@ TMPDIR="$ONEESAN_TMP_DIR" nvcc -O3 -std=c++17 -lineinfo -arch="$ARCH" \
   -DP10DC_RANKFORMULA_SLOTMETA=0 -DP10DC_RANKFORMULA_SLOTROW32=0 \
   "$SRC" -o "$BIN"
 
-echo "built $BIN backend=orbitcta-directgather depthmajor=1 directgather64=$DIRECTGATHER64 sparse64=$DIRECTGATHER_SPARSE64 sort_ranks=$DIRECTGATHER_SORT_RANKS pair_mlp=$PAIR_MLP cpasync_pair=$CPASYNC_PAIR prectx_forward=$PRECTX_FORWARD prectx_reverse=$PRECTX_REVERSE prectx_compact=$PRECTX_COMPACT orbitcta_col_ilp=$ORBITCTA_COL_ILP pm_accum=$PM_ACCUM window4=$WINDOW4 force7=$FORCE7" >&2
-echo "run: BUCKET_THREADS=${BUCKET_THREADS:-256} BUCKET_ORBITCTA_GRID_Y=${BUCKET_ORBITCTA_GRID_Y:-128} BUCKET_LOW_GRID_X=${BUCKET_LOW_GRID_X:-16} BUCKET_LOW_GRID_Y=${BUCKET_LOW_GRID_Y:-8} $BIN $N <target_mib> <max_window> 8 <mod>" >&2
+echo "built $BIN backend=$BACKEND_TAG flat=$ORBITCTA_FLAT depthmajor=1 directgather64=$DIRECTGATHER64 sparse64=$DIRECTGATHER_SPARSE64 sort_ranks=$DIRECTGATHER_SORT_RANKS pair_mlp=$PAIR_MLP cpasync_pair=$CPASYNC_PAIR prectx_forward=$PRECTX_FORWARD prectx_reverse=$PRECTX_REVERSE prectx_compact=$PRECTX_COMPACT orbitcta_col_ilp=$ORBITCTA_COL_ILP pm_accum=$PM_ACCUM window4=$WINDOW4 force7=$FORCE7" >&2
+if [[ "$ORBITCTA_FLAT" == 1 ]]; then
+  echo "run: BUCKET_THREADS=${BUCKET_THREADS:-256} BUCKET_ORBITCTA_FLAT_BLOCKS_PER_SM=${BUCKET_ORBITCTA_FLAT_BLOCKS_PER_SM:-8} BUCKET_LOW_GRID_X=${BUCKET_LOW_GRID_X:-16} BUCKET_LOW_GRID_Y=${BUCKET_LOW_GRID_Y:-8} $BIN $N <target_mib> <max_window> 8 <mod>" >&2
+else
+  echo "run: BUCKET_THREADS=${BUCKET_THREADS:-256} BUCKET_ORBITCTA_GRID_Y=${BUCKET_ORBITCTA_GRID_Y:-128} BUCKET_LOW_GRID_X=${BUCKET_LOW_GRID_X:-16} BUCKET_LOW_GRID_Y=${BUCKET_LOW_GRID_Y:-8} $BIN $N <target_mib> <max_window> 8 <mod>" >&2
+fi
