@@ -10,6 +10,7 @@ WARPCOOP_PROFILE="${WARPCOOP_PROFILE:-$ONEESAN_ROOT/work/b300_hbm_profile_warpco
 WARPCOOP_AUTO_PROFILE="${WARPCOOP_AUTO_PROFILE:-$ONEESAN_ROOT/work/b300_hbm_profile_warpcoop_auto21.env}"
 DESC_PROFILE="${DESC_PROFILE:-$ONEESAN_ROOT/work/b300_hbm_profile_desc21.env}"
 LOCAL0_PROFILE="${LOCAL0_PROFILE:-$ONEESAN_ROOT/work/b300_hbm_profile_local021.env}"
+GROUP_PROFILE="${GROUP_PROFILE:-$ONEESAN_ROOT/work/b300_hbm_profile_group21.env}"
 FINAL_PROFILE="${FINAL_PROFILE:-$ONEESAN_ROOT/work/b300_hbm_profile_refined21.env}"
 BASE_PREFIX="${BASE_PREFIX:-$ONEESAN_ROOT/work/b300_hbm_profile_tune21}"
 PRECTX_PREFIX="${PRECTX_PREFIX:-$ONEESAN_ROOT/work/b300_hbm_profile_refine_compact_prectx21}"
@@ -19,6 +20,7 @@ WARPCOOP_PREFIX="${WARPCOOP_PREFIX:-$ONEESAN_ROOT/work/b300_hbm_profile_orbit_wa
 WARPCOOP_AUTO_PREFIX="${WARPCOOP_AUTO_PREFIX:-$ONEESAN_ROOT/work/b300_hbm_profile_orbit_warpcoop_auto21}"
 QUAD_DESC_PREFIX="${QUAD_DESC_PREFIX:-$ONEESAN_ROOT/work/b300_hbm_profile_orbit_quad_desc21}"
 QUAD_LOCAL0_PREFIX="${QUAD_LOCAL0_PREFIX:-$ONEESAN_ROOT/work/b300_hbm_profile_orbit_quad_local021}"
+QUAD_GROUP_PREFIX="${QUAD_GROUP_PREFIX:-$ONEESAN_ROOT/work/b300_hbm_profile_orbit_quad_group21}"
 QUAD_PREFETCH_PREFIX="${QUAD_PREFETCH_PREFIX:-$ONEESAN_ROOT/work/b300_hbm_profile_orbit_quad_prefetch21}"
 RUN_PRECTX="${RUN_PRECTX:-1}"
 RUN_ORBIT_SCHEDULER="${RUN_ORBIT_SCHEDULER:-1}"
@@ -28,8 +30,9 @@ RUN_ORBIT_WARPCOOP="${RUN_ORBIT_WARPCOOP:-1}"
 RUN_ORBIT_WARPCOOP_AUTO="${RUN_ORBIT_WARPCOOP_AUTO:-1}"
 RUN_ORBIT_QUAD_DESC="${RUN_ORBIT_QUAD_DESC:-1}"
 RUN_ORBIT_QUAD_LOCAL0="${RUN_ORBIT_QUAD_LOCAL0:-1}"
+RUN_ORBIT_QUAD_GROUP="${RUN_ORBIT_QUAD_GROUP:-1}"
 RUN_ORBIT_QUAD_PREFETCH="${RUN_ORBIT_QUAD_PREFETCH:-1}"
-for x in RUN_PRECTX RUN_ORBIT_SCHEDULER RUN_ORBIT_ADVANCED RUN_ORBIT_WARPCOOP RUN_ORBIT_WARPCOOP_AUTO RUN_ORBIT_QUAD_DESC RUN_ORBIT_QUAD_LOCAL0 RUN_ORBIT_QUAD_PREFETCH; do
+for x in RUN_PRECTX RUN_ORBIT_SCHEDULER RUN_ORBIT_ADVANCED RUN_ORBIT_WARPCOOP RUN_ORBIT_WARPCOOP_AUTO RUN_ORBIT_QUAD_DESC RUN_ORBIT_QUAD_LOCAL0 RUN_ORBIT_QUAD_GROUP RUN_ORBIT_QUAD_PREFETCH; do
   v="${!x}"; [[ "$v" == 0 || "$v" == 1 ]] || { echo "$x must be 0 or 1" >&2; exit 2; }
 done
 
@@ -124,25 +127,44 @@ else
   cp "$DESC_PROFILE" "$LOCAL0_PROFILE"
 fi
 
-# QOL source loads are 4-byte cp.async.ca operations. The final refinement keeps
-# the selected algorithm, persistent pool, QSD, local0 and warpcoop fixed and
-# varies only the L2 prefetch-size hint. Skip the extra B300 runs for non-QOL.
-if [[ "$RUN_ORBIT_QUAD_PREFETCH" == 1 ]]; then
+# commit_group granularity changes only the number of outstanding cp.async
+# groups, not descriptors, source terms, or modular reduction. Tune 1/2/4
+# columns per group before prefetch so the final prefetch race preserves it.
+if [[ "$RUN_ORBIT_QUAD_GROUP" == 1 ]]; then
   ORBIT_QUAD_MLP=0 ORBIT_QUAD_OVERLAP_LOCAL=0
   # shellcheck disable=SC1090
   source "$LOCAL0_PROFILE"
   if [[ "${ORBIT_QUAD_MLP:-0}" == 1 && "${ORBIT_QUAD_OVERLAP_LOCAL:-0}" == 1 ]]; then
+    echo "=== HBM tune21 QOL cp.async commit-group refinement ===" >&2
+    PROFILE_IN="$LOCAL0_PROFILE" PROFILE_OUT="$GROUP_PROFILE" PREFIX="$QUAD_GROUP_PREFIX" \
+      bash "$ONEESAN_ROOT/scripts/bench/b300-hbm-profile-refine-orbit-quad-group21.sh"
+  else
+    echo "=== skip QOL cp.async group refinement: selected orbit path is not QOL ===" >&2
+    cp "$LOCAL0_PROFILE" "$GROUP_PROFILE"
+  fi
+else
+  cp "$LOCAL0_PROFILE" "$GROUP_PROFILE"
+fi
+
+# QOL source loads are 4-byte cp.async.ca operations. Keep the selected
+# algorithm, persistent pool, QSD, local0, warpcoop and commit-group width fixed
+# while varying only the L2 prefetch-size hint.
+if [[ "$RUN_ORBIT_QUAD_PREFETCH" == 1 ]]; then
+  ORBIT_QUAD_MLP=0 ORBIT_QUAD_OVERLAP_LOCAL=0
+  # shellcheck disable=SC1090
+  source "$GROUP_PROFILE"
+  if [[ "${ORBIT_QUAD_MLP:-0}" == 1 && "${ORBIT_QUAD_OVERLAP_LOCAL:-0}" == 1 ]]; then
     echo "=== HBM tune21 QOL cp.async L2 prefetch refinement ===" >&2
-    PROFILE_IN="$LOCAL0_PROFILE" PROFILE_OUT="$FINAL_PROFILE" PREFIX="$QUAD_PREFETCH_PREFIX" \
+    PROFILE_IN="$GROUP_PROFILE" PROFILE_OUT="$FINAL_PROFILE" PREFIX="$QUAD_PREFETCH_PREFIX" \
       bash "$ONEESAN_ROOT/scripts/bench/b300-hbm-profile-refine-orbit-quad-prefetch21.sh"
   else
     echo "=== skip QOL cp.async L2 prefetch: selected orbit path is not QOL ===" >&2
-    cp "$LOCAL0_PROFILE" "$FINAL_PROFILE"
+    cp "$GROUP_PROFILE" "$FINAL_PROFILE"
   fi
 else
-  cp "$LOCAL0_PROFILE" "$FINAL_PROFILE"
+  cp "$GROUP_PROFILE" "$FINAL_PROFILE"
 fi
 
 echo "=== final HBM profile ===" >&2
 cat "$FINAL_PROFILE"
-echo "b300 HBM profile auto21 OK base_profile=$BASE_PROFILE prectx_profile=$PRECTX_PROFILE sched_profile=$SCHED_PROFILE advanced_profile=$ADV_PROFILE warpcoop_profile=$WARPCOOP_PROFILE warpcoop_auto_profile=$WARPCOOP_AUTO_PROFILE desc_profile=$DESC_PROFILE local0_profile=$LOCAL0_PROFILE final_profile=$FINAL_PROFILE" >&2
+echo "b300 HBM profile auto21 OK base_profile=$BASE_PROFILE prectx_profile=$PRECTX_PROFILE sched_profile=$SCHED_PROFILE advanced_profile=$ADV_PROFILE warpcoop_profile=$WARPCOOP_PROFILE warpcoop_auto_profile=$WARPCOOP_AUTO_PROFILE desc_profile=$DESC_PROFILE local0_profile=$LOCAL0_PROFILE group_profile=$GROUP_PROFILE final_profile=$FINAL_PROFILE" >&2
