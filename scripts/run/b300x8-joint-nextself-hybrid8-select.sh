@@ -8,6 +8,7 @@ if (( $# > 0 )); then shift; fi
 
 PROFILE_FILE="${PROFILE_FILE:-$ONEESAN_ROOT/work/b300_hbm_profile_refined21.env}"
 ARCH="${ARCH:-native}"
+MAX_WINDOW="${MAX_WINDOW:-14}"
 PREFIX="${PREFIX:-$ONEESAN_ROOT/work/b300_joint_nextself_hybrid8_n27}"
 JOINT_PREFIX="${JOINT_PREFIX:-${PREFIX}.joint}"
 JOINT_PREPARE_ENV="${JOINT_PREPARE_ENV:-${PREFIX}.joint.prepared.env}"
@@ -39,6 +40,7 @@ done
 [[ "$NEXTSELF_THREADS" =~ ^[0-9]+$ ]] && (( NEXTSELF_THREADS >= 32 && NEXTSELF_THREADS <= 768 && NEXTSELF_THREADS % 32 == 0 )) || {
   echo 'NEXTSELF_THREADS must be warp multiple 32..768' >&2; exit 2;
 }
+[[ "$MAX_WINDOW" =~ ^[1-9][0-9]*$ ]] || { echo 'MAX_WINDOW must be positive integer' >&2; exit 2; }
 [[ -f "$PROFILE_FILE" ]] || { echo "missing profile: $PROFILE_FILE" >&2; exit 2; }
 mkdir -p \
   "$(dirname "$JOINT_PREPARE_ENV")" \
@@ -47,7 +49,7 @@ mkdir -p \
   "$(dirname "$RACE_PREFIX")"
 
 echo '=== grand selector: prepare calibrated joint forced candidates and profiled buckets ===' >&2
-PROFILE_FILE="$PROFILE_FILE" ARCH="$ARCH" PREFIX="$JOINT_PREFIX" PREPARE_ONLY=1 PREPARE_ENV="$JOINT_PREPARE_ENV" \
+PROFILE_FILE="$PROFILE_FILE" ARCH="$ARCH" MAX_WINDOW="$MAX_WINDOW" PREFIX="$JOINT_PREFIX" PREPARE_ONLY=1 PREPARE_ENV="$JOINT_PREPARE_ENV" \
   SELECT_ONLY=1 REBUILD_BUCKETS="$REBUILD_BUCKETS" \
   bash "$ONEESAN_ROOT/scripts/run/b300x8-joint-calibrated-select.sh" 27
 [[ -s "$JOINT_PREPARE_ENV" ]] || { echo "joint prepare env missing: $JOINT_PREPARE_ENV" >&2; exit 3; }
@@ -64,6 +66,7 @@ JOINT_BASE_LABEL="${FORCED_BASE_LABEL:-}"
 JOINT_BASE_THREADS="${FORCED_BASE_THREADS:-256}"
 TARGET_MIB="$FORCED_TARGET_MIB"
 PRIME="$SMOKE_PRIME"
+MAX_WINDOW="${MAX_WINDOW:-14}"
 
 NEXTSELF_OK=0
 NEXTSELF_RC=0
@@ -164,6 +167,8 @@ for t in "$P_THREADS" "$B_THREADS" "$E1_THREADS" "$E2_THREADS" "$E3_THREADS"; do
 done
 
 SUMMARY_ENV="${RACE_PREFIX}_grand.env"
+DROP_JOINT_BASE=0
+[[ "$MODE" == nextself_hybrid8_joint ]] && DROP_JOINT_BASE=1
 {
   printf 'B300_GRAND_PREPARED=1\n'
   printf 'B300_GRAND_MODE=%q\n' "$MODE"
@@ -184,7 +189,11 @@ SUMMARY_ENV="${RACE_PREFIX}_grand.env"
   printf 'B300_GRAND_EXTRA3_BIN=%q\n' "$E3_BIN"
   printf 'B300_GRAND_EXTRA3_LABEL=%q\n' "$E3_LABEL"
   printf 'B300_GRAND_EXTRA3_THREADS=%q\n' "$E3_THREADS"
-  printf 'B300_GRAND_DROPPED_JOINT_BASE_WHEN_BOTH=%q\n' "$([[ "$MODE" == nextself_hybrid8_joint ]] && echo 1 || echo 0)"
+  printf 'B300_GRAND_DROPPED_JOINT_BASE_WHEN_BOTH=%q\n' "$DROP_JOINT_BASE"
+  printf 'B300_GRAND_PROFILE_FILE=%q\n' "$PROFILE_FILE"
+  printf 'B300_GRAND_SMOKE_PRIME=%q\n' "$PRIME"
+  printf 'B300_GRAND_TARGET_MIB=%q\n' "$TARGET_MIB"
+  printf 'B300_GRAND_MAX_WINDOW=%q\n' "$MAX_WINDOW"
 } >"$SUMMARY_ENV"
 cat "$SUMMARY_ENV" >&2
 
