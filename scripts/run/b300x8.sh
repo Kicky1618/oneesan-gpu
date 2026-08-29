@@ -5,9 +5,10 @@ source "$(dirname -- "${BASH_SOURCE[0]}")/../lib/common.sh"
 N="${1:-27}"
 MOD="${2:-4294967291}"
 # Deliberately separate the planner budget from the real scratch budget.
-# 64GiB is useful for main/block MateID + rank-delta caches, but using it for
-# group planning fixes too few bits and weakens the K=13 rank LUTs. A 16GiB
-# planner budget keeps the useful split while process_group sees the full 64GiB.
+# 64GiB is the requested process_group scratch ceiling; actual available scratch
+# is capped by cudaMemGetInfo()-reserve.  The fixed MiB value below is only an
+# upper cap on planning, while GRIDFP_PLAN_TARGET_DIVISOR adapts group size to
+# the actual free HBM observed at startup.
 TARGET_MIB="${TARGET_MIB:-65536}"
 GRIDFP_PLAN_TARGET_MIB="${GRIDFP_PLAN_TARGET_MIB:-16384}"
 MAX_WINDOW="${MAX_WINDOW:-14}"
@@ -18,10 +19,14 @@ MAIN_MATE_CACHE="${MAIN_MATE_CACHE:-1}"
 MAIN_PULL="${MAIN_PULL:-1}"
 BLOCK_PULL="${BLOCK_PULL:-1}"
 BLOCK_MATE_CACHE="${BLOCK_MATE_CACHE:-$BLOCK_PULL}"
-# This intentionally trades integer prefix-rank walks for one 64-bit HBM stream
-# per state. On B300 x8 with MC utilization far below saturation, that is the
-# desired trade: more memory-level work, much less serial integer dependency.
-RANK_DELTA_CACHE="${RANK_DELTA_CACHE:-1}"
+# Experimental: one signed 64-bit HBM stream per main/block state replaces
+# repeated prefix rank walks. Keep production default OFF until the B300 row-1
+# exact A/B proves a wall-time win. When enabled, full scratch is 3x the Count
+# double-buffer planner footprint (Count + MateID + RankDelta), hence divisor 3.
+RANK_DELTA_CACHE="${RANK_DELTA_CACHE:-0}"
+if [[ -z "${GRIDFP_PLAN_TARGET_DIVISOR+x}" ]]; then
+  if [[ "$RANK_DELTA_CACHE" == 1 ]]; then GRIDFP_PLAN_TARGET_DIVISOR=3; else GRIDFP_PLAN_TARGET_DIVISOR=1; fi
+fi
 GRIDFP_VRAM_RESERVE_MIB="${GRIDFP_VRAM_RESERVE_MIB:-8192}"
 REBUILD="${REBUILD:-0}"
 
@@ -31,6 +36,7 @@ for name in FAST_SHARD_ADDRESS8 MAIN_MATE_CACHE MAIN_PULL BLOCK_PULL BLOCK_MATE_
 done
 [[ "$ROWS" =~ ^[0-9]+$ ]] && (( ROWS >= 1 && ROWS <= N + 1 )) || { echo "ROWS must be 1..$((N+1))" >&2; exit 2; }
 [[ "$GRIDFP_PLAN_TARGET_MIB" =~ ^[0-9]+$ ]] && (( GRIDFP_PLAN_TARGET_MIB >= 1 && GRIDFP_PLAN_TARGET_MIB <= TARGET_MIB )) || { echo "GRIDFP_PLAN_TARGET_MIB must be 1..TARGET_MIB" >&2; exit 2; }
+[[ "$GRIDFP_PLAN_TARGET_DIVISOR" =~ ^[0-9]+$ ]] && (( GRIDFP_PLAN_TARGET_DIVISOR >= 1 && GRIDFP_PLAN_TARGET_DIVISOR <= 16 )) || { echo "GRIDFP_PLAN_TARGET_DIVISOR must be 1..16" >&2; exit 2; }
 if [[ "$MAIN_PULL" == 1 && "$MAIN_MATE_CACHE" != 1 ]]; then echo "MAIN_PULL=1 requires MAIN_MATE_CACHE=1" >&2; exit 2; fi
 if [[ "$BLOCK_PULL" == 1 && "$MAIN_PULL" != 1 ]]; then echo "BLOCK_PULL=1 requires MAIN_PULL=1" >&2; exit 2; fi
 if [[ "$BLOCK_MATE_CACHE" == 1 && "$BLOCK_PULL" != 1 ]]; then echo "BLOCK_MATE_CACHE=1 requires BLOCK_PULL=1" >&2; exit 2; fi
@@ -64,8 +70,8 @@ nvidia-smi -L
 nvidia-smi topo -m || true
 nvidia-smi --query-gpu=index,name,memory.total,memory.free --format=csv,noheader || true
 
-echo "N=$N MOD=$MOD GPUs=$NGPU rows=$ROWS requested_scratch=${TARGET_MIB}MiB planner_target=${GRIDFP_PLAN_TARGET_MIB}MiB reserve=${GRIDFP_VRAM_RESERVE_MIB}MiB max_window=$MAX_WINDOW fast_shard_address8=$FAST_SHARD_ADDRESS8 main_mate_cache=$MAIN_MATE_CACHE main_pull=$MAIN_PULL block_pull=$BLOCK_PULL block_mate_cache=$BLOCK_MATE_CACHE rank_delta_cache=$RANK_DELTA_CACHE GRIDFP_THREADS=${GRIDFP_THREADS:-256}"
+echo "N=$N MOD=$MOD GPUs=$NGPU rows=$ROWS requested_scratch=${TARGET_MIB}MiB planner_target_cap=${GRIDFP_PLAN_TARGET_MIB}MiB planner_divisor=$GRIDFP_PLAN_TARGET_DIVISOR reserve=${GRIDFP_VRAM_RESERVE_MIB}MiB max_window=$MAX_WINDOW fast_shard_address8=$FAST_SHARD_ADDRESS8 main_mate_cache=$MAIN_MATE_CACHE main_pull=$MAIN_PULL block_pull=$BLOCK_PULL block_mate_cache=$BLOCK_MATE_CACHE rank_delta_cache=$RANK_DELTA_CACHE GRIDFP_THREADS=${GRIDFP_THREADS:-256}"
 echo "BIN=$BIN"
-export GRIDFP_VRAM_RESERVE_MIB GRIDFP_PLAN_TARGET_MIB
+export GRIDFP_VRAM_RESERVE_MIB GRIDFP_PLAN_TARGET_MIB GRIDFP_PLAN_TARGET_DIVISOR
 export B300_ROW_LIMIT="$ROWS"
 exec "$BIN" "$N" "$MOD" "$TARGET_MIB" "$MAX_WINDOW" "$NGPU"
