@@ -8,6 +8,12 @@
 #ifndef P10DC_RANKFORMULA_CPASYNC_PAIR
 #define P10DC_RANKFORMULA_CPASYNC_PAIR 0
 #endif
+#ifndef P10DC_RANKFORMULA_DIRECTGATHER64
+#define P10DC_RANKFORMULA_DIRECTGATHER64 0
+#endif
+#if P10DC_RANKFORMULA_DIRECTGATHER64
+#include "ramstream32_bucket_closure_cross5_rankformula_nometa4_directgather64.cuh"
+#endif
 static_assert(P10DC_RANKFORMULA_PAIR_MLP == 0 || P10DC_RANKFORMULA_PAIR_MLP == 1,
               "P10DC_RANKFORMULA_PAIR_MLP must be 0 or 1");
 static_assert(P10DC_RANKFORMULA_CPASYNC_PAIR == 0 || P10DC_RANKFORMULA_CPASYNC_PAIR == 1,
@@ -23,6 +29,8 @@ static_assert(P10DC_RANKFORMULA_MLP_WINDOW4,
 #if P10DC_RANKFORMULA_CPASYNC_PAIR
 static_assert(P10DC_RANKFORMULA_PAIR_MLP,
               "cp.async pair path requires PAIR_MLP");
+static_assert(!P10DC_RANKFORMULA_DIRECTGATHER64,
+              "cp.async pair + DIRECTGATHER64 is intentionally isolated");
 static_assert(sizeof(Count) == 4,
               "cp.async pair path assumes 32-bit Count values");
 extern __shared__ unsigned char p10dc_rankformula_dynamic_smem[];
@@ -95,23 +103,65 @@ p10dc_resolved_low_preimages_cross5_rankformula_nometa4_abstract_pair_fixed(
     if (!depth || depth > P10DC_RANKFORMULA_ABSTRACT_SELECT_DEPTHS)
         return P10DCRankFormulaPairAccum{0, 0};
 
+    uint32_t n0 = 0, n1 = 0;
+    uint32_t a0 = 0, a1 = 0, a2 = 0, a3 = 0, a4 = 0, a5 = 0, a6 = 0;
+    uint32_t b0 = 0, b1 = 0, b2 = 0, b3 = 0, b4 = 0, b5 = 0, b6 = 0;
+#if P10DC_RANKFORMULA_DIRECTGATHER64
+    // Issue both compact 8-byte primary descriptors before decoding either
+    // source list.  Only ranks with >3 sources issue an 8-byte rare descriptor.
+    // This keeps the common descriptor traffic at 16 bytes for the pair while
+    // retaining the two-column MLP schedule below.
+    const size_t gi0 = p10dc_rankformula_directgather_index(h, rank0, depth);
+    const size_t gi1 = p10dc_rankformula_directgather_index(h, rank1, depth);
+    const P10DCDirectGather64Word p0 = __ldg(D_P10DC_RANKFORMULA_DIRECTGATHER64 + gi0);
+    const P10DCDirectGather64Word p1 = __ldg(D_P10DC_RANKFORMULA_DIRECTGATHER64 + gi1);
+    n0 = uint32_t((p0 >> 45) & 7u);
+    n1 = uint32_t((p1 >> 45) & 7u);
+    if (!(n0 | n1)) return P10DCRankFormulaPairAccum{0, 0};
+
+    a0 = uint32_t(p0 & 0x7fffu);
+    a1 = uint32_t((p0 >> 15) & 0x7fffu);
+    a2 = uint32_t((p0 >> 30) & 0x7fffu);
+    b0 = uint32_t(p1 & 0x7fffu);
+    b1 = uint32_t((p1 >> 15) & 0x7fffu);
+    b2 = uint32_t((p1 >> 30) & 0x7fffu);
+
+    P10DCDirectGather64Word q0 = 0, q1 = 0;
+    if (n0 > 3)
+        q0 = __ldg(D_P10DC_RANKFORMULA_DIRECTGATHER64_RARE + uint32_t(p0 >> 48));
+    if (n1 > 3)
+        q1 = __ldg(D_P10DC_RANKFORMULA_DIRECTGATHER64_RARE + uint32_t(p1 >> 48));
+    if (n0 > 3) {
+        a3 = uint32_t(q0 & 0x7fffu);
+        a4 = uint32_t((q0 >> 15) & 0x7fffu);
+        a5 = uint32_t((q0 >> 30) & 0x7fffu);
+        a6 = uint32_t((q0 >> 45) & 0x7fffu);
+    }
+    if (n1 > 3) {
+        b3 = uint32_t(q1 & 0x7fffu);
+        b4 = uint32_t((q1 >> 15) & 0x7fffu);
+        b5 = uint32_t((q1 >> 30) & 0x7fffu);
+        b6 = uint32_t((q1 >> 45) & 0x7fffu);
+    }
+#else
     // Issue both 16-byte descriptors before consuming either one.  With the
     // depth-major table, every warp still sees contiguous descriptor accesses,
     // while each lane now has two independent descriptor requests in flight.
     const uint4 d0 = p10dc_rankformula_directgather_depth_desc(h, rank0, depth);
     const uint4 d1 = p10dc_rankformula_directgather_depth_desc(h, rank1, depth);
-    const uint32_t n0 = d0.w >> 16;
-    const uint32_t n1 = d1.w >> 16;
+    n0 = d0.w >> 16;
+    n1 = d1.w >> 16;
     if (!(n0 | n1)) return P10DCRankFormulaPairAccum{0, 0};
 
-    const uint32_t a0 = d0.x & 0xffffu, a1 = d0.x >> 16;
-    const uint32_t a2 = d0.y & 0xffffu, a3 = d0.y >> 16;
-    const uint32_t a4 = d0.z & 0xffffu, a5 = d0.z >> 16;
-    const uint32_t a6 = d0.w & 0xffffu;
-    const uint32_t b0 = d1.x & 0xffffu, b1 = d1.x >> 16;
-    const uint32_t b2 = d1.y & 0xffffu, b3 = d1.y >> 16;
-    const uint32_t b4 = d1.z & 0xffffu, b5 = d1.z >> 16;
-    const uint32_t b6 = d1.w & 0xffffu;
+    a0 = d0.x & 0xffffu; a1 = d0.x >> 16;
+    a2 = d0.y & 0xffffu; a3 = d0.y >> 16;
+    a4 = d0.z & 0xffffu; a5 = d0.z >> 16;
+    a6 = d0.w & 0xffffu;
+    b0 = d1.x & 0xffffu; b1 = d1.x >> 16;
+    b2 = d1.y & 0xffffu; b3 = d1.y >> 16;
+    b4 = d1.z & 0xffffu; b5 = d1.z >> 16;
+    b6 = d1.w & 0xffffu;
+#endif
 
 #if P10DC_RANKFORMULA_CPASYNC_PAIR
     // Stage all selected CROSS sources through shared memory.  No source value
