@@ -16,14 +16,14 @@ BLOCK_PULL="${BLOCK_PULL:-1}"
 BLOCK_MATE_CACHE="${BLOCK_MATE_CACHE:-$BLOCK_PULL}"
 MAIN_PULL_ILP2="${MAIN_PULL_ILP2:-0}"
 HEIGHT_CACHE="${HEIGHT_CACHE:-0}"
-RANK_DELTA_CACHE="${RANK_DELTA_CACHE:-0}"
-# Modifier for rank-delta: same 8B/state traffic, but packs signed int32 delta
-# plus uint8 height so prefix popcounts disappear too. Groups exceeding int32
-# local rank automatically fall back to the exact noncached path.
-RANK_STATE_PACKED="${RANK_STATE_PACKED:-0}"
-if [[ -z "${GRIDFP_PLAN_TARGET_DIVISOR+x}" ]]; then
-  if [[ "$RANK_DELTA_CACHE" == 1 ]]; then GRIDFP_PLAN_TARGET_DIVISOR=3; else GRIDFP_PLAN_TARGET_DIVISOR=1; fi
-fi
+# B300 x8 default: trade integer prefix walks for one streaming 8-byte rank
+# state per state. Packed state keeps signed 56-bit rank delta + uint8 height,
+# so both prefix-rank and prefix-height walks disappear without extra bytes.
+RANK_DELTA_CACHE="${RANK_DELTA_CACHE:-1}"
+RANK_STATE_PACKED="${RANK_STATE_PACKED:-$RANK_DELTA_CACHE}"
+# Rank-state bytes are now included directly in plan_window's scratch estimate;
+# no extra heuristic divisor is needed.
+GRIDFP_PLAN_TARGET_DIVISOR="${GRIDFP_PLAN_TARGET_DIVISOR:-1}"
 GRIDFP_VRAM_RESERVE_MIB="${GRIDFP_VRAM_RESERVE_MIB:-8192}"
 REBUILD="${REBUILD:-0}"
 
@@ -52,7 +52,7 @@ BIN_SUFFIX=""
 [[ "$MAIN_PULL_ILP2" == 1 ]] && BIN_SUFFIX="${BIN_SUFFIX}_ilp2"
 [[ "$HEIGHT_CACHE" == 1 ]] && BIN_SUFFIX="${BIN_SUFFIX}_height"
 [[ "$RANK_DELTA_CACHE" == 1 ]] && BIN_SUFFIX="${BIN_SUFFIX}_rankdelta"
-[[ "$RANK_STATE_PACKED" == 1 ]] && BIN_SUFFIX="${BIN_SUFFIX}_packedheight"
+[[ "$RANK_STATE_PACKED" == 1 ]] && BIN_SUFFIX="${BIN_SUFFIX}_packed56h"
 BIN="${BIN:-$ONEESAN_BUILD_DIR/oneesan_cuda_gridfp_b300_hbm32_n${N}${BIN_SUFFIX}}"
 
 if (( MOD < 2 || MOD > 4294967295 )); then echo "HBM32 requires 2 <= modulus <= 4294967295; got $MOD" >&2; exit 2; fi
