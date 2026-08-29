@@ -5,6 +5,18 @@
 #include "ramstream32_bucket_closure_cross5.cuh"
 #endif
 
+#ifndef P10DC_RANKFORMULA_CPASYNC_PAIR
+#define P10DC_RANKFORMULA_CPASYNC_PAIR 0
+#endif
+#ifndef P10DC_RANKFORMULA_CPASYNC_VALUES_PER_THREAD
+#define P10DC_RANKFORMULA_CPASYNC_VALUES_PER_THREAD 14
+#endif
+static_assert(P10DC_RANKFORMULA_CPASYNC_PAIR == 0 ||
+              P10DC_RANKFORMULA_CPASYNC_PAIR == 1,
+              "P10DC_RANKFORMULA_CPASYNC_PAIR must be 0 or 1");
+static_assert(P10DC_RANKFORMULA_CPASYNC_VALUES_PER_THREAD == 14,
+              "cp.async pair gather currently stages exactly fourteen values per thread");
+
 // Experimental HIGH-only direct resolver. The canonical delta builder first
 // packs every closure source into BkczPlan.local[], then p10dc_resolve_high_rows
 // immediately unpacks those descriptors to produce row pointers. This helper
@@ -24,8 +36,22 @@ struct P10DCDirectHighResolvedCtx {
 static_assert(sizeof(P10DCDirectHighResolvedCtx) < sizeof(P10DCHighResolvedCtx),
               "direct-resolved context must be smaller than canonical resolved context");
 
-static inline size_t p10dc_direct_warpctx_smem_bytes(int threads) {
+__host__ __device__ static inline size_t p10dc_direct_warpctx_bytes(int threads) {
     return size_t((threads + 31) / 32) * sizeof(P10DCDirectHighResolvedCtx);
+}
+
+__host__ __device__ static inline size_t p10dc_direct_pair_scratch_offset_bytes(int threads) {
+    const size_t n = p10dc_direct_warpctx_bytes(threads);
+    return (n + alignof(Count) - 1u) & ~(size_t(alignof(Count)) - 1u);
+}
+
+static inline size_t p10dc_direct_warpctx_smem_bytes(int threads) {
+#if P10DC_RANKFORMULA_CPASYNC_PAIR
+    return p10dc_direct_pair_scratch_offset_bytes(threads) +
+           size_t(threads) * P10DC_RANKFORMULA_CPASYNC_VALUES_PER_THREAD * sizeof(Count);
+#else
+    return p10dc_direct_warpctx_bytes(threads);
+#endif
 }
 
 __device__ __forceinline__ void p10dc_direct_resolve_high_io(
