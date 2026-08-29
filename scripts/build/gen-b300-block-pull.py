@@ -20,12 +20,38 @@ __device__ __forceinline__ void pull_add_mod(Count& acc,Count v){
     acc=(acc>=mod-v)?acc-(mod-v):acc+v;
 }
 
+__device__ __forceinline__ void block_pull_add_rank(
+    Count& acc,const Count*in_main,Code j
+){
+    pull_add_mod(acc,in_main[j]);
+}
+
 template<int WIDTH>
 __device__ __forceinline__ void block_pull_add_source(
     Count& acc,const Count*in_main,MateID x
 ){
     Code j=rank_group_t<WIDTH>(x,D_MAIN_FIXED,D_MAIN_OCC,D_MAIN_DP);
-    pull_add_mod(acc,in_main[j]);
+    block_pull_add_rank(acc,in_main,j);
+}
+
+// Exact inverse of rank_drop_n_t for a source whose removed physical symbol is
+// N. The push path already computes block_rank = main_rank + (b-a); invert the
+// same prefix delta instead of running a full rank_group_t over WIDTH symbols.
+template<int WIDTH>
+__device__ __forceinline__ Code rank_lift_n_t(Code block_rank,MateID blocked,int p){
+    MateID m=minsert(blocked,p,N);
+    Code a=0,b=0;int h=1;
+#pragma unroll
+    for(int pos=WIDTH-1;pos>p;--pos){
+        MateValue v=mget(m,pos);
+        if(v>N&&allowed(D_MAIN_FIXED,D_MAIN_OCC,pos,N))a+=D_MAIN_DP[pos][h];
+        if(v>R&&h>0&&allowed(D_MAIN_FIXED,D_MAIN_OCC,pos,R))a+=D_MAIN_DP[pos][h-1];
+        int q=pos-1;
+        if(v>N&&allowed(D_BLOCK_FIXED,D_BLOCK_OCC,q,N))b+=D_BLOCK_DP[q][h];
+        if(v>R&&h>0&&allowed(D_BLOCK_FIXED,D_BLOCK_OCC,q,R))b+=D_BLOCK_DP[q][h-1];
+        if(v==R)--h;else if(v==L)++h;
+    }
+    return a>=b?block_rank+(a-b):block_rank-(b-a);
 }
 
 __global__ void block_pull_kernel(const Count*in_main,Code n,Count*out_block,int p){
@@ -35,22 +61,27 @@ __global__ void block_pull_kernel(const Count*in_main,Code n,Count*out_block,int
         Count acc=0;
         MateValue look=mget(b,p-1);
         if(look==R||look==L){
-            // NR/NL has N at physical p. The push path's rank_drop_n_t(...,p)
-            // is exactly rank(mshrink(source,p)), so reconstruct the source by
-            // reinserting N at p while retaining the endpoint at p-1.
-            MateID x=minsert(b,p,N);
-            block_pull_add_source<TARGET_W>(acc,in_main,x);
+            // NR/NL has N at physical p. Invert rank_drop_n_t directly from the
+            // blocked destination rank; no full main rank walk is needed.
+            Code j=rank_lift_n_t<TARGET_W>(i,b,p);
+            block_pull_add_rank(acc,in_main,j);
         }else if(look==N){
             // LL/RR/RL closure removes physical p-1 after producing NN.
             MateID d=minsert(b,p-1,N);
-            MateID x=msetpair(d,p,RL);
-            block_pull_add_source<TARGET_W>(acc,in_main,x);
+
+            // RL is a valid preimage only when the height immediately before p
+            // is positive. A valid blocked word can have height zero here; in
+            // that case blindly ranking RL aliases an unrelated valid state.
+            if(height_before_rank_pos<TARGET_W>(d,p)>0){
+                MateID x=msetpair(d,p,RL);
+                block_pull_add_source<TARGET_W>(acc,in_main,x);
+            }
 
             int bal=0;
             for(int q=p-2;q>=0;--q){
                 MateValue v=mget(d,q);
                 if(bal==0&&v==L){
-                    x=msetpair(d,p,LL);x=mset(x,q,R);
+                    MateID x=msetpair(d,p,LL);x=mset(x,q,R);
                     block_pull_add_source<TARGET_W>(acc,in_main,x);
                 }
                 if(v==L)++bal;else if(v==R)--bal;
@@ -60,7 +91,7 @@ __global__ void block_pull_kernel(const Count*in_main,Code n,Count*out_block,int
             for(int q=p+1;q<TARGET_W;++q){
                 MateValue v=mget(d,q);
                 if(bal==0&&v==R){
-                    x=msetpair(d,p,RR);x=mset(x,q,L);
+                    MateID x=msetpair(d,p,RR);x=mset(x,q,L);
                     block_pull_add_source<TARGET_W>(acc,in_main,x);
                 }
                 if(v==R)++bal;else if(v==L)--bal;
@@ -99,4 +130,4 @@ s = s.replace(old, new, 1)
 
 out.parent.mkdir(parents=True, exist_ok=True)
 out.write_text(s)
-print(f'generated {out} from {src}: b300_block_pull=1 p_scope=2..Wm1 block_atomic=0 block_memset=0 deferred_insert=p')
+print(f'generated {out} from {src}: b300_block_pull=1 p_scope=2..Wm1 block_atomic=0 block_memset=0 deferred_insert=p endpoint_rank=direct_lift rl_validity_gate=1')
