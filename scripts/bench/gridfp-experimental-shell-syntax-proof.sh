@@ -13,6 +13,13 @@ FILES=(
   scripts/bench/gridfp-codec-table-consensus-gate-proof.sh
   scripts/bench/gridfp-codec-table-w28-rank-microprobe.sh
   scripts/bench/gridfp-codec-table-decision-suite.sh
+  scripts/bench/gridfp-codec-table-physical-replacement-proof.sh
+  scripts/bench/gridfp-codec-table-physical-compile-matrix.sh
+  scripts/bench/gridfp-codec-table-w28-rank-physical-ab.sh
+  scripts/bench/gridfp-reduced-runtime-codec-tables-physical-ab.sh
+  scripts/bench/gridfp-codec-table-physical-consensus-gate.sh
+  scripts/bench/gridfp-codec-table-physical-consensus-gate-proof.sh
+  scripts/bench/gridfp-codec-table-physical-decision-suite.sh
   scripts/bench/gridfp-runtime-label-hotpath-proof-suite.sh
   scripts/bench/gridfp-runtime-w28-label-hotpath-suite.sh
   scripts/bench/gridfp-codec-table-layout-suite.sh
