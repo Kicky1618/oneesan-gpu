@@ -17,6 +17,7 @@ on:
       - 'scripts/run/b300x8-nextgen-select.sh'
       - 'scripts/run/b300x8-nextgen-hybrid8-staged-fullprime-race.sh'
       - 'scripts/run/b300x8-joint-nextgen-hybrid8-select.sh'
+      - 'scripts/run/b300x8-joint-nextself-hybrid8-select.sh'
       - 'scripts/run/b300x8-joint-calibrated-select.sh'
       - 'scripts/run/b300x8-ilp8-nextself-staged-fullprime-race.sh'
       - 'scripts/run/b300x8-race-forced-profiled-once.sh'
@@ -38,6 +39,7 @@ on:
       - 'scripts/run/b300x8-nextgen-select.sh'
       - 'scripts/run/b300x8-nextgen-hybrid8-staged-fullprime-race.sh'
       - 'scripts/run/b300x8-joint-nextgen-hybrid8-select.sh'
+      - 'scripts/run/b300x8-joint-nextself-hybrid8-select.sh'
       - 'scripts/run/b300x8-joint-calibrated-select.sh'
       - 'scripts/run/b300x8-ilp8-nextself-staged-fullprime-race.sh'
       - 'scripts/run/b300x8-race-forced-profiled-once.sh'
@@ -58,3 +60,5 @@ jobs:
         run: bash scripts/bench/b300-nextgen-preflight.sh
       - name: Validate joint hybrid8 and next-self promotion chain
         run: bash scripts/bench/b300-joint-nextgen-hybrid8-preflight.sh
+      - name: Validate grand next-self + hybrid8 selector
+        run: bash scripts/bench/b300-nextgen-grand-selector-preflight.sh
