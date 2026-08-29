@@ -22,17 +22,48 @@ static_assert(P10DC_RANKCHUNK32_DIRECT3 == 0 || P10DC_RANKCHUNK32_DIRECT3 == 1,
 static_assert(P10DC_RANKCHUNK32_RANKMASK_PROFILE == 0 || P10DC_RANKCHUNK32_RANKMASK_PROFILE == 1,
               "P10DC_RANKCHUNK32_RANKMASK_PROFILE must be 0 or 1");
 
+#ifndef P10DC_RANKCHUNK32_RANKMASK_PROFILE_LOG2
+#define P10DC_RANKCHUNK32_RANKMASK_PROFILE_LOG2 0
+#endif
+static_assert(P10DC_RANKCHUNK32_RANKMASK_PROFILE_LOG2 >= 0 &&
+              P10DC_RANKCHUNK32_RANKMASK_PROFILE_LOG2 <= 16,
+              "P10DC_RANKCHUNK32_RANKMASK_PROFILE_LOG2 must be in [0,16]");
+
 #if P10DC_RANKCHUNK32_RANKMASK_PROFILE
-// Profiling-only exact rankmask histogram. The production shape proof says only
-// {0,1,2,3,5,7} are reachable, but keep 32 bins so the real traffic run also
+// Profiling-only rankmask histogram. The production shape proof says only
+// {0,1,2,3,5,7} are reachable, but keep 32 bins so sampled real traffic also
 // checks that assumption instead of baking it into the profiler.
 __device__ unsigned long long D_P10DC_RANKCHUNK32_RANKMASK_PROFILE[32];
-// Dynamic warp events at the profiler point: total, all-zero, all-nonzero,
-// mixed zero/nonzero. These expose whether an outer rankmask!=0 guard can skip
-// whole warps or merely introduce divergence.
+// Dynamic sampled warp events at the profiler point: total, all-zero,
+// all-nonzero, mixed zero/nonzero. These expose whether an outer rankmask!=0
+// guard can skip whole warps or merely introduce divergence.
 __device__ unsigned long long D_P10DC_RANKCHUNK32_RANKMASK_WARP_PROFILE[4];
 
+__device__ __forceinline__ bool p10dc_rankchunk32_profile_sample_warp() {
+#if P10DC_RANKCHUNK32_RANKMASK_PROFILE_LOG2 == 0
+    return true;
+#else
+    const unsigned linear_thread = unsigned(threadIdx.x) + unsigned(blockDim.x) *
+        (unsigned(threadIdx.y) + unsigned(blockDim.y) * unsigned(threadIdx.z));
+    const unsigned threads_per_block =
+        unsigned(blockDim.x) * unsigned(blockDim.y) * unsigned(blockDim.z);
+    const unsigned warps_per_block = (threads_per_block + 31u) >> 5;
+    const unsigned long long linear_block = unsigned long long(blockIdx.x) +
+        unsigned long long(gridDim.x) *
+        (unsigned long long(blockIdx.y) + unsigned long long(gridDim.y) * unsigned long long(blockIdx.z));
+    const unsigned long long warp_id =
+        linear_block * unsigned long long(warps_per_block) + unsigned long long(linear_thread >> 5);
+    // Multiplicative permutation scatters contiguous warp ids without using
+    // rankmask/state in the decision, so the sample predicate is data-blind.
+    const unsigned long long h = warp_id * 0x9e3779b97f4a7c15ull;
+    constexpr unsigned long long sample_mask =
+        (1ull << P10DC_RANKCHUNK32_RANKMASK_PROFILE_LOG2) - 1ull;
+    return (h & sample_mask) == 0ull;
+#endif
+}
+
 __device__ __forceinline__ void p10dc_rankchunk32_profile_rankmask(uint8_t rankmask) {
+    if (!p10dc_rankchunk32_profile_sample_warp()) return;
     const unsigned active = __activemask();
     const unsigned peers = __match_any_sync(active, unsigned(rankmask));
     const unsigned zeros = __ballot_sync(active, rankmask == 0u);
@@ -86,8 +117,11 @@ static void p10dc_rankchunk32_report_rankmask_profile_devices(int ngpu) {
     const double all_nonzero_warp_frac = warps[0] ? double(warps[2]) / double(warps[0]) : 0.0;
     const double mixed_warp_frac = warps[0] ? double(warps[3]) / double(warps[0]) : 0.0;
     const double avg_active_lanes = warps[0] ? double(calls) / double(warps[0]) : 0.0;
+    constexpr unsigned long long sample_one_in =
+        1ull << P10DC_RANKCHUNK32_RANKMASK_PROFILE_LOG2;
     std::fprintf(stderr,
-        "rankchunk32_rankmask_profile scope=process_all_gpus_all_moduli warp_aggregated=1 total=%llu m0=%llu m1=%llu m2=%llu m3=%llu m4=%llu m5=%llu m6=%llu m7=%llu other=%llu disallowed=%llu zero_frac=%.9f nonzero_frac=%.9f avg_popcount=%.9f warp_events=%llu warp_all_zero=%llu warp_all_nonzero=%llu warp_mixed=%llu warp_all_zero_frac=%.9f warp_all_nonzero_frac=%.9f warp_mixed_frac=%.9f avg_active_lanes=%.9f\n",
+        "rankchunk32_rankmask_profile scope=sampled_process_all_gpus_all_moduli warp_aggregated=1 sample_log2=%d sample_one_in=%llu total=%llu m0=%llu m1=%llu m2=%llu m3=%llu m4=%llu m5=%llu m6=%llu m7=%llu other=%llu disallowed=%llu zero_frac=%.9f nonzero_frac=%.9f avg_popcount=%.9f warp_events=%llu warp_all_zero=%llu warp_all_nonzero=%llu warp_mixed=%llu warp_all_zero_frac=%.9f warp_all_nonzero_frac=%.9f warp_mixed_frac=%.9f avg_active_lanes=%.9f\n",
+        P10DC_RANKCHUNK32_RANKMASK_PROFILE_LOG2, sample_one_in,
         calls, total[0], total[1], total[2], total[3], total[4], total[5], total[6], total[7],
         other, disallowed, zero_frac, nonzero_frac, avg_popcount,
         warps[0], warps[1], warps[2], warps[3], all_zero_warp_frac,
