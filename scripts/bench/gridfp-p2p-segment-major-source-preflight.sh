@@ -13,6 +13,7 @@ command -v bash >/dev/null || exit 2
 sh=(
   scripts/build/gridfp-reduced-p2p-schedule-probe.sh
   scripts/run/gridfp-reduced-p2p-schedule-probes.sh
+  scripts/run/gridfp-p2p-select-segment-major-batches.sh
 )
 for f in "${sh[@]}"; do
   [[ -f "$ONEESAN_ROOT/$f" ]] || { echo "missing $f" >&2; exit 3; }
@@ -45,4 +46,4 @@ build_and_run gridfp_p2p_segment_major_probe \
   src/cpp/probes/gridfp_reduced_production_p2p_segment_major_probe.cpp \
   "$MAX_W" "$NGPU_MODEL" "$BATCHES"
 
-echo "gridfp-p2p-segment-major-source-preflight OK cpu_proofs=6 shell_syntax=2 nvcc=not_required actions=not_used"
+echo "gridfp-p2p-segment-major-source-preflight OK cpu_proofs=6 shell_syntax=3 nvcc=not_required actions=not_used"
