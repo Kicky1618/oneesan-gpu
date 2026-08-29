@@ -18,10 +18,12 @@ LOW_DROP_CHUNK="${LOW_DROP_CHUNK:-1}"
 LOW_BLOCK_CACHE="${LOW_BLOCK_CACHE:-1}"
 HIGH_DROP_CHUNK="${HIGH_DROP_CHUNK:-0}"
 LOW_MAIN_RECURRENCE="${LOW_MAIN_RECURRENCE:-0}"
+HIGH_MAIN_RECURRENCE="${HIGH_MAIN_RECURRENCE:-0}"
+MAIN_RECURRENCE="${MAIN_RECURRENCE:-0}"
 REBUILD="${REBUILD:-0}"
 case "$MAIN_PULL_ILP" in 1|2|3|4) ;; *) echo "MAIN_PULL_ILP must be 1, 2, 3, or 4" >&2; exit 2;; esac
 
-for name in MAIN_MATE_CACHE MAIN_PULL BLOCK_PULL BLOCK_MATE_CACHE LOW_DROP_CACHE LOW_DROP_CHUNK LOW_BLOCK_CACHE HIGH_DROP_CHUNK LOW_MAIN_RECURRENCE REBUILD; do
+for name in MAIN_MATE_CACHE MAIN_PULL BLOCK_PULL BLOCK_MATE_CACHE LOW_DROP_CACHE LOW_DROP_CHUNK LOW_BLOCK_CACHE HIGH_DROP_CHUNK LOW_MAIN_RECURRENCE HIGH_MAIN_RECURRENCE MAIN_RECURRENCE REBUILD; do
   value="${!name}"; [[ "$value" == 0 || "$value" == 1 ]] || { echo "$name must be 0 or 1" >&2; exit 2; }
 done
 if [[ "$BLOCK_PULL" == 1 && "$MAIN_PULL" != 1 ]]; then echo "BLOCK_PULL=1 requires MAIN_PULL=1" >&2; exit 2; fi
@@ -31,17 +33,20 @@ if [[ "$LOW_DROP_CHUNK" == 1 && "$LOW_DROP_CACHE" != 1 ]]; then echo "LOW_DROP_C
 if [[ "$LOW_BLOCK_CACHE" == 1 && ( "$LOW_DROP_CHUNK" != 1 || "$BLOCK_MATE_CACHE" != 1 ) ]]; then echo "LOW_BLOCK_CACHE=1 requires LOW_DROP_CHUNK=1 BLOCK_MATE_CACHE=1" >&2; exit 2; fi
 if [[ "$HIGH_DROP_CHUNK" == 1 && ( "$LOW_DROP_CACHE" != 1 || "$BLOCK_PULL" != 1 ) ]]; then echo "HIGH_DROP_CHUNK=1 requires LOW_DROP_CACHE=1 BLOCK_PULL=1" >&2; exit 2; fi
 if [[ "$LOW_MAIN_RECURRENCE" == 1 && ( "$LOW_DROP_CACHE" != 1 || "$LOW_DROP_CHUNK" != 1 || "$MAIN_MATE_CACHE" != 1 || "$MAIN_PULL" != 1 ) ]]; then echo "LOW_MAIN_RECURRENCE=1 requires low drop cache/chunk plus main pull/cache" >&2; exit 2; fi
+if [[ "$HIGH_MAIN_RECURRENCE" == 1 && ( "$MAIN_PULL_ILP" != 2 || "$MAIN_MATE_CACHE" != 1 || "$MAIN_PULL" != 1 ) ]]; then echo "HIGH_MAIN_RECURRENCE=1 requires MAIN_PULL_ILP=2 MAIN_MATE_CACHE=MAIN_PULL=1" >&2; exit 2; fi
+if [[ "$MAIN_RECURRENCE" == 1 && ( "$MAIN_PULL_ILP" != 2 || "$LOW_DROP_CACHE" != 1 || "$LOW_DROP_CHUNK" != 1 || "$MAIN_MATE_CACHE" != 1 || "$MAIN_PULL" != 1 ) ]]; then echo "MAIN_RECURRENCE=1 requires MAIN_PULL_ILP=2 low drop cache/chunk plus main pull/cache" >&2; exit 2; fi
+if (( LOW_MAIN_RECURRENCE + HIGH_MAIN_RECURRENCE + MAIN_RECURRENCE > 1 )); then echo "LOW_MAIN_RECURRENCE, HIGH_MAIN_RECURRENCE and MAIN_RECURRENCE are mutually exclusive" >&2; exit 2; fi
 if [[ "$MAIN_PULL_ILP" != 1 && "$MAIN_PULL" != 1 ]]; then echo "MAIN_PULL_ILP=$MAIN_PULL_ILP requires MAIN_PULL=1" >&2; exit 2; fi
 
-# Preserve the established production ILP2/high0/rec0 binary and checkpoint path.
-# Every experimental configuration gets a unique binary/work directory so neither
-# REBUILD=0 nor checkpoint fingerprinting can silently mix configurations.
-if [[ "$MAIN_PULL_ILP" == 2 && "$HIGH_DROP_CHUNK" == 0 && "$LOW_MAIN_RECURRENCE" == 0 ]]; then
+# Keep the established production binary/checkpoint path untouched. Every
+# experimental recurrence/ILP/high-drop combination gets a distinct binary and
+# work directory so REBUILD=0 and CRT checkpoint fingerprints cannot mix builds.
+if [[ "$MAIN_PULL_ILP" == 2 && "$HIGH_DROP_CHUNK" == 0 && "$LOW_MAIN_RECURRENCE" == 0 && "$HIGH_MAIN_RECURRENCE" == 0 && "$MAIN_RECURRENCE" == 0 ]]; then
   CONFIG_TAG="production"
   DEFAULT_BIN="$ONEESAN_BUILD_DIR/oneesan_cuda_gridfp_b300_hbm32_batch_n${N}"
   DEFAULT_WORK="$ONEESAN_ROOT/work/b300_exact_n${N}"
 else
-  CONFIG_TAG="ilp${MAIN_PULL_ILP}_high${HIGH_DROP_CHUNK}_lowrec${LOW_MAIN_RECURRENCE}"
+  CONFIG_TAG="ilp${MAIN_PULL_ILP}_high${HIGH_DROP_CHUNK}_lowrec${LOW_MAIN_RECURRENCE}_highrec${HIGH_MAIN_RECURRENCE}_mainrec${MAIN_RECURRENCE}"
   DEFAULT_BIN="$ONEESAN_BUILD_DIR/oneesan_cuda_gridfp_b300_hbm32_batch_n${N}_${CONFIG_TAG}"
   DEFAULT_WORK="$ONEESAN_ROOT/work/b300_exact_n${N}_${CONFIG_TAG}"
 fi
@@ -53,15 +58,15 @@ visible="$(nvidia-smi --query-gpu=index --format=csv,noheader | wc -l)"
 if (( visible < NGPU )); then echo "requested $NGPU GPUs, but only $visible are visible" >&2; exit 2; fi
 
 if [[ "$REBUILD" == 1 || ! -x "$BIN" ]]; then
-  echo "building exact batch n=$N config=$CONFIG_TAG main_ilp=$MAIN_PULL_ILP lowdrop=$LOW_DROP_CACHE lowchunk=$LOW_DROP_CHUNK lowblock=$LOW_BLOCK_CACHE highchunk=$HIGH_DROP_CHUNK lowrec=$LOW_MAIN_RECURRENCE" >&2
+  echo "building exact batch n=$N config=$CONFIG_TAG main_ilp=$MAIN_PULL_ILP lowdrop=$LOW_DROP_CACHE lowchunk=$LOW_DROP_CHUNK lowblock=$LOW_BLOCK_CACHE highchunk=$HIGH_DROP_CHUNK lowrec=$LOW_MAIN_RECURRENCE highrec=$HIGH_MAIN_RECURRENCE mainrec=$MAIN_RECURRENCE" >&2
   N="$N" OUT="$BIN" MAIN_MATE_CACHE="$MAIN_MATE_CACHE" MAIN_PULL="$MAIN_PULL" MAIN_PULL_ILP="$MAIN_PULL_ILP" \
   BLOCK_PULL="$BLOCK_PULL" BLOCK_MATE_CACHE="$BLOCK_MATE_CACHE" \
   LOW_DROP_CACHE="$LOW_DROP_CACHE" LOW_DROP_CHUNK="$LOW_DROP_CHUNK" LOW_BLOCK_CACHE="$LOW_BLOCK_CACHE" \
-  HIGH_DROP_CHUNK="$HIGH_DROP_CHUNK" LOW_MAIN_RECURRENCE="$LOW_MAIN_RECURRENCE" \
+  HIGH_DROP_CHUNK="$HIGH_DROP_CHUNK" LOW_MAIN_RECURRENCE="$LOW_MAIN_RECURRENCE" HIGH_MAIN_RECURRENCE="$HIGH_MAIN_RECURRENCE" MAIN_RECURRENCE="$MAIN_RECURRENCE" \
   "$ONEESAN_ROOT/scripts/build/b300-hbm32-batch.sh"
 fi
 
 export GRIDFP_VRAM_RESERVE_MIB
 
-echo "exact batch n=$N config=$CONFIG_TAG gpus=$NGPU target_mib=$TARGET_MIB max_window=$MAX_WINDOW main_pull=$MAIN_PULL main_pull_ilp=$MAIN_PULL_ILP block_pull=$BLOCK_PULL block_mate_cache=$BLOCK_MATE_CACHE low_drop_cache=$LOW_DROP_CACHE low_drop_chunk=$LOW_DROP_CHUNK low_block_cache=$LOW_BLOCK_CACHE high_drop_chunk=$HIGH_DROP_CHUNK low_main_recurrence=$LOW_MAIN_RECURRENCE GRIDFP_THREADS=${GRIDFP_THREADS:-256} binary=$BIN work_dir=$WORK_DIR" >&2
+echo "exact batch n=$N config=$CONFIG_TAG gpus=$NGPU target_mib=$TARGET_MIB max_window=$MAX_WINDOW main_pull=$MAIN_PULL main_pull_ilp=$MAIN_PULL_ILP block_pull=$BLOCK_PULL block_mate_cache=$BLOCK_MATE_CACHE low_drop_cache=$LOW_DROP_CACHE low_drop_chunk=$LOW_DROP_CHUNK low_block_cache=$LOW_BLOCK_CACHE high_drop_chunk=$HIGH_DROP_CHUNK low_main_recurrence=$LOW_MAIN_RECURRENCE high_main_recurrence=$HIGH_MAIN_RECURRENCE main_recurrence=$MAIN_RECURRENCE GRIDFP_THREADS=${GRIDFP_THREADS:-256} binary=$BIN work_dir=$WORK_DIR" >&2
 exec python3 "$ONEESAN_ROOT/scripts/solve/solve_b300_exact_batch.py" "$N" --binary "$BIN" --target-mib "$TARGET_MIB" --max-window "$MAX_WINDOW" --gpus "$NGPU" --work-dir "$WORK_DIR" "$@"
