@@ -32,7 +32,7 @@ OUT="$(build_path "${OUT:-oneesan_cuda_gridfp_b300_hbm32_vmm_n${N}}")"
 require_nvcc_version_at_least "$NVCC" 13 0 "B300 sm_103/VMM production"
 bash "$ONEESAN_ROOT/scripts/bench/b300-vmm-production-generate-proof.sh"
 if [[ "$MAIN_PULL" == 1 ]]; then
-  bash "$ONEESAN_ROOT/scripts/bench/b300-main-pull-operator-proof.sh"
+  bash "$ONEESAN_ROOT/scripts/bench/b300-vmm-main-pull-production-generate-proof.sh"
 fi
 
 BUILD_SRC="$SRC"
@@ -78,4 +78,5 @@ if [[ "$MAIN_PULL" == 1 ]]; then
   echo "  p_gt_1_main_identity_copy=0"
   echo "  p_gt_1_main_atomic_scatter=0"
   echo "  p_gt_1_blocked_to_main_scatter_kernel=0"
+  echo "  pull_vmm_composition_preflight=1"
 fi
