@@ -5,9 +5,15 @@
 #ifndef P10DC_RANKFORMULA_CPASYNC_OVERLAP_LOCAL_PAIR
 #define P10DC_RANKFORMULA_CPASYNC_OVERLAP_LOCAL_PAIR 0
 #endif
+#ifndef P10DC_RANKFORMULA_OVERLAP_LOCAL_CG
+#define P10DC_RANKFORMULA_OVERLAP_LOCAL_CG 0
+#endif
 static_assert(P10DC_RANKFORMULA_CPASYNC_OVERLAP_LOCAL_PAIR == 0 ||
               P10DC_RANKFORMULA_CPASYNC_OVERLAP_LOCAL_PAIR == 1,
               "P10DC_RANKFORMULA_CPASYNC_OVERLAP_LOCAL_PAIR must be 0 or 1");
+static_assert(P10DC_RANKFORMULA_OVERLAP_LOCAL_CG == 0 ||
+              P10DC_RANKFORMULA_OVERLAP_LOCAL_CG == 1,
+              "P10DC_RANKFORMULA_OVERLAP_LOCAL_CG must be 0 or 1");
 #if P10DC_RANKFORMULA_CPASYNC_OVERLAP_LOCAL_PAIR
 static_assert(P10DC_RANKFORMULA_PAIR_MLP,
               "overlap-local pair requires PAIR_MLP");
@@ -17,6 +23,24 @@ static_assert(P10DC_RANKFORMULA_DIRECTGATHER64,
               "overlap-local pair currently targets DIRECTGATHER64");
 static_assert(BKCZ_MAX_LOCAL <= 8,
               "overlap-local pair assumes at most eight ordinary source rows");
+#if P10DC_RANKFORMULA_OVERLAP_LOCAL_CG
+static_assert(sizeof(Count) == 4,
+              "overlap local .cg path assumes 32-bit Count");
+#endif
+
+__device__ __forceinline__ Count p10dc_rankformula_overlap_local_load(const Count* p) {
+#if P10DC_RANKFORMULA_OVERLAP_LOCAL_CG && __CUDA_ARCH__
+    uint32_t v;
+    const unsigned long long a = reinterpret_cast<unsigned long long>(p);
+    // Bypass L1 for the large/random ordinary source rows. Descriptor/index
+    // metadata remains on the ordinary read-only path, so this isolates cache
+    // pollution from the payload stream without changing addresses or traffic.
+    asm volatile("ld.global.cg.u32 %0, [%1];" : "=r"(v) : "l"(a));
+    return Count(v);
+#else
+    return __ldg(p);
+#endif
+}
 
 struct P10DCDirectGatherPairRanks {
     uint32_t n0 = 0, n1 = 0;
@@ -129,14 +153,14 @@ p10dc_direct_resolved_high_plan_sum_pair_overlap_local(
     // the dynamic shared scratch.
     BkczCrossAccum a0=0,a1=0,a2=0,a3=0,a4=0,a5=0,a6=0,a7=0;
     BkczCrossAccum b0=0,b1=0,b2=0,b3=0,b4=0,b5=0,b6=0,b7=0;
-    if constexpr (BKCZ_MAX_LOCAL > 0) if (c.local_n > 0) { a0=__ldg(c.local_base[0]+lr0); b0=__ldg(c.local_base[0]+lr1); }
-    if constexpr (BKCZ_MAX_LOCAL > 1) if (c.local_n > 1) { a1=__ldg(c.local_base[1]+lr0); b1=__ldg(c.local_base[1]+lr1); }
-    if constexpr (BKCZ_MAX_LOCAL > 2) if (c.local_n > 2) { a2=__ldg(c.local_base[2]+lr0); b2=__ldg(c.local_base[2]+lr1); }
-    if constexpr (BKCZ_MAX_LOCAL > 3) if (c.local_n > 3) { a3=__ldg(c.local_base[3]+lr0); b3=__ldg(c.local_base[3]+lr1); }
-    if constexpr (BKCZ_MAX_LOCAL > 4) if (c.local_n > 4) { a4=__ldg(c.local_base[4]+lr0); b4=__ldg(c.local_base[4]+lr1); }
-    if constexpr (BKCZ_MAX_LOCAL > 5) if (c.local_n > 5) { a5=__ldg(c.local_base[5]+lr0); b5=__ldg(c.local_base[5]+lr1); }
-    if constexpr (BKCZ_MAX_LOCAL > 6) if (c.local_n > 6) { a6=__ldg(c.local_base[6]+lr0); b6=__ldg(c.local_base[6]+lr1); }
-    if constexpr (BKCZ_MAX_LOCAL > 7) if (c.local_n > 7) { a7=__ldg(c.local_base[7]+lr0); b7=__ldg(c.local_base[7]+lr1); }
+    if constexpr (BKCZ_MAX_LOCAL > 0) if (c.local_n > 0) { a0=p10dc_rankformula_overlap_local_load(c.local_base[0]+lr0); b0=p10dc_rankformula_overlap_local_load(c.local_base[0]+lr1); }
+    if constexpr (BKCZ_MAX_LOCAL > 1) if (c.local_n > 1) { a1=p10dc_rankformula_overlap_local_load(c.local_base[1]+lr0); b1=p10dc_rankformula_overlap_local_load(c.local_base[1]+lr1); }
+    if constexpr (BKCZ_MAX_LOCAL > 2) if (c.local_n > 2) { a2=p10dc_rankformula_overlap_local_load(c.local_base[2]+lr0); b2=p10dc_rankformula_overlap_local_load(c.local_base[2]+lr1); }
+    if constexpr (BKCZ_MAX_LOCAL > 3) if (c.local_n > 3) { a3=p10dc_rankformula_overlap_local_load(c.local_base[3]+lr0); b3=p10dc_rankformula_overlap_local_load(c.local_base[3]+lr1); }
+    if constexpr (BKCZ_MAX_LOCAL > 4) if (c.local_n > 4) { a4=p10dc_rankformula_overlap_local_load(c.local_base[4]+lr0); b4=p10dc_rankformula_overlap_local_load(c.local_base[4]+lr1); }
+    if constexpr (BKCZ_MAX_LOCAL > 5) if (c.local_n > 5) { a5=p10dc_rankformula_overlap_local_load(c.local_base[5]+lr0); b5=p10dc_rankformula_overlap_local_load(c.local_base[5]+lr1); }
+    if constexpr (BKCZ_MAX_LOCAL > 6) if (c.local_n > 6) { a6=p10dc_rankformula_overlap_local_load(c.local_base[6]+lr0); b6=p10dc_rankformula_overlap_local_load(c.local_base[6]+lr1); }
+    if constexpr (BKCZ_MAX_LOCAL > 7) if (c.local_n > 7) { a7=p10dc_rankformula_overlap_local_load(c.local_base[7]+lr0); b7=p10dc_rankformula_overlap_local_load(c.local_base[7]+lr1); }
 
     if (have_cross) p10dc_rankformula_cpasync_wait_all();
 
