@@ -232,23 +232,27 @@ def finish(
         mm *= p
         if mm > path_bound:
             break
+    checkpoint = work / "checkpoint.json"
+    if not checkpoint.is_file():
+        raise RuntimeError(f"final checkpoint missing: {checkpoint}")
+    checkpoint_sha = file_sha256(checkpoint)
+    lines = [
+        f"n={n}",
+        f"exact={x}",
+        f"bound_bits={required_bits}",
+        f"modulus_bits={m.bit_length()}",
+        f"primes_used={used}",
+        f"solver_wall_s_sum={total_wall:.9f}",
+        f"checkpoint_schema={fingerprint.get('schema', 'unknown')}",
+        f"checkpoint_sha256={checkpoint_sha}",
+        f"solver_binary_sha256={fingerprint['binary_sha256']}",
+    ]
+    if "profile_sha256" in fingerprint:
+        lines.append(f"solver_profile_sha256={fingerprint['profile_sha256']}")
     out = work / "exact.txt"
-    out.write_text(
-        f"n={n}\n"
-        f"exact={x}\n"
-        f"bound_bits={required_bits}\n"
-        f"modulus_bits={m.bit_length()}\n"
-        f"primes_used={used}\n"
-        f"solver_wall_s_sum={total_wall:.9f}\n"
-        f"solver_binary_sha256={fingerprint['binary_sha256']}\n"
-    )
-    print(f"n={n}")
-    print(f"exact={x}")
-    print(f"bound_bits={required_bits}")
-    print(f"modulus_bits={m.bit_length()}")
-    print(f"primes_used={used}")
-    print(f"solver_wall_s_sum={total_wall:.9f}")
-    print(f"solver_binary_sha256={fingerprint['binary_sha256']}")
+    out.write_text("\n".join(lines) + "\n")
+    for line in lines:
+        print(line)
     print(f"result_file={out}")
     return 0
 
