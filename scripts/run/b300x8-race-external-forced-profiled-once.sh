@@ -6,10 +6,13 @@ N="${1:-27}"; if (($#>0)); then shift; fi
 [[ "$N" == 27 ]] || { echo 'single-pass external/profiled race targets n=27' >&2; exit 2; }
 FORCED_OVERRIDE_BIN="${FORCED_OVERRIDE_BIN:-}"; FORCED_OVERRIDE_LABEL="${FORCED_OVERRIDE_LABEL:-external_forced}"; FORCED_OVERRIDE_THREADS="${FORCED_OVERRIDE_THREADS:-256}"
 FORCED_BASE_BIN="${FORCED_BASE_BIN:-}"; FORCED_BASE_LABEL="${FORCED_BASE_LABEL:-external_forced_base}"; FORCED_BASE_THREADS="${FORCED_BASE_THREADS:-256}"
+FORCED_EXTRA_BIN="${FORCED_EXTRA_BIN:-}"; FORCED_EXTRA_LABEL="${FORCED_EXTRA_LABEL:-external_forced_extra}"; FORCED_EXTRA_THREADS="${FORCED_EXTRA_THREADS:-256}"
 [[ -n "$FORCED_OVERRIDE_BIN" && -x "$FORCED_OVERRIDE_BIN" ]] || { echo 'FORCED_OVERRIDE_BIN must be executable' >&2; exit 2; }
-for v in FORCED_OVERRIDE_THREADS FORCED_BASE_THREADS; do x="${!v}"; [[ "$x" =~ ^[0-9]+$ ]] && ((x>=32&&x<=1024&&x%32==0)) || { echo "$v must be warp multiple 32..1024" >&2; exit 2; }; done
+for v in FORCED_OVERRIDE_THREADS FORCED_BASE_THREADS FORCED_EXTRA_THREADS; do x="${!v}"; [[ "$x" =~ ^[0-9]+$ ]] && ((x>=32&&x<=1024&&x%32==0)) || { echo "$v must be warp multiple 32..1024" >&2; exit 2; }; done
 HAS_FORCED_BASE=0
 if [[ -n "$FORCED_BASE_BIN" && "$FORCED_BASE_BIN" != "$FORCED_OVERRIDE_BIN" ]]; then [[ -x "$FORCED_BASE_BIN" ]] || { echo 'FORCED_BASE_BIN must be executable' >&2; exit 2; }; HAS_FORCED_BASE=1; fi
+HAS_FORCED_EXTRA=0
+if [[ -n "$FORCED_EXTRA_BIN" && "$FORCED_EXTRA_BIN" != "$FORCED_OVERRIDE_BIN" && "$FORCED_EXTRA_BIN" != "$FORCED_BASE_BIN" ]]; then [[ -x "$FORCED_EXTRA_BIN" ]] || { echo 'FORCED_EXTRA_BIN must be executable' >&2; exit 2; }; HAS_FORCED_EXTRA=1; fi
 
 PROFILE_FILE="${PROFILE_FILE:-$ONEESAN_ROOT/work/b300_hbm_profile_refined21.env}"; [[ -f "$PROFILE_FILE" ]] || { echo "missing profile $PROFILE_FILE" >&2; exit 2; }
 ARCH="${ARCH:-native}"; PRIME="${SMOKE_PRIME:-4294967291}"; MAX_WINDOW="${MAX_WINDOW:-14}"; FORCED_TARGET_MIB="${FORCED_TARGET_MIB:-65536}"; BUCKET_TARGET_MIB="${BUCKET_TARGET_MIB:-16384}"
@@ -93,9 +96,10 @@ smoke_orbit(){
 echo '=== single-pass race: one complete prime per candidate ===' >&2
 smoke_forced forced_primary "$FORCED_OVERRIDE_LABEL" "$FORCED_OVERRIDE_BIN" "$FORCED_OVERRIDE_THREADS"
 if [[ "$HAS_FORCED_BASE" == 1 ]]; then smoke_forced forced_base "$FORCED_BASE_LABEL" "$FORCED_BASE_BIN" "$FORCED_BASE_THREADS"; fi
+if [[ "$HAS_FORCED_EXTRA" == 1 ]]; then smoke_forced forced_extra "$FORCED_EXTRA_LABEL" "$FORCED_EXTRA_BIN" "$FORCED_EXTRA_THREADS"; fi
 smoke_warp
 smoke_orbit
-EXPECTED_OK=$((3+HAS_FORCED_BASE))
+EXPECTED_OK=$((3+HAS_FORCED_BASE+HAS_FORCED_EXTRA))
 WIN="$(python3 - "$RESULT" "$EXPECTED_OK" <<'PY'
 import csv,sys
 r=list(csv.DictReader(open(sys.argv[1]),delimiter='\t'));expected=int(sys.argv[2]);ok=[x for x in r if x['status']=='ok']
@@ -128,6 +132,7 @@ PY
 if [[ "$SELECT_ONLY" == 1 ]]; then echo "SELECT_ONLY=1: selected $BEST/$BEST_PROFILE; CRT not continued" >&2; exit 0; fi
 if [[ "$BEST_BIN" == "$FORCED_OVERRIDE_BIN" ]]; then export GRIDFP_THREADS="$FORCED_OVERRIDE_THREADS"; RUN_TARGET="$FORCED_TARGET_MIB"
 elif [[ "$HAS_FORCED_BASE" == 1 && "$BEST_BIN" == "$FORCED_BASE_BIN" ]]; then export GRIDFP_THREADS="$FORCED_BASE_THREADS"; RUN_TARGET="$FORCED_TARGET_MIB"
+elif [[ "$HAS_FORCED_EXTRA" == 1 && "$BEST_BIN" == "$FORCED_EXTRA_BIN" ]]; then export GRIDFP_THREADS="$FORCED_EXTRA_THREADS"; RUN_TARGET="$FORCED_TARGET_MIB"
 elif [[ "$BEST" == warp_tuned ]]; then export BUCKET_THREADS="$THREADS" BUCKET_GRID_X="$WARP_GX" BUCKET_GRID_Y="$WARP_GY" BUCKET_LOW_GRID_X="$LOW_GX" BUCKET_LOW_GRID_Y="$LOW_GY"; RUN_TARGET="$BUCKET_TARGET_MIB"
 else export BUCKET_THREADS="$THREADS" BUCKET_ORBITCTA_GRID_Y="$ORBIT_GY" BUCKET_GRID_X="$LOW_GX" BUCKET_GRID_Y="$LOW_GY" BUCKET_LOW_GRID_X="$LOW_GX" BUCKET_LOW_GRID_Y="$LOW_GY"; unset BUCKET_ORBITCTA_FLAT_BLOCKS; if [[ "$ORBITCTA_FLAT" == 1 && "$ORBITCTA_FLAT_BLOCKS_PER_SM" != 0 ]]; then export BUCKET_ORBITCTA_FLAT_BLOCKS_PER_SM="$ORBITCTA_FLAT_BLOCKS_PER_SM"; else unset BUCKET_ORBITCTA_FLAT_BLOCKS_PER_SM; fi; RUN_TARGET="$BUCKET_TARGET_MIB"; fi
 exec python3 "$ONEESAN_ROOT/scripts/solve/solve_b300_exact_batch.py" 27 --binary "$BEST_BIN" --target-mib "$RUN_TARGET" --max-window "$MAX_WINDOW" --gpus 8 --work-dir "$BEST_WORK" "$@"
