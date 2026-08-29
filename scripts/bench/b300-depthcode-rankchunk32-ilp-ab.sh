@@ -1,0 +1,137 @@
+#!/usr/bin/env bash
+set -euo pipefail
+source "$(dirname -- "${BASH_SOURCE[0]}")/../lib/common.sh"
+
+N="${N:-21}"
+MOD="${MOD:-4294967291}"
+NGPU="${NGPU:-8}"
+if [[ -z "${EXPECT+x}" ]]; then
+  if [[ "$N" == 21 && "$MOD" == 4294967291 ]]; then EXPECT=998035516
+  else echo "EXPECT must be set when N/MOD differ" >&2; exit 2
+  fi
+fi
+
+ARCH="${ARCH:-native}"
+TARGET_MIB="${TARGET_MIB:-16384}"
+MAX_WINDOW="${MAX_WINDOW:-14}"
+TRANSPOSE_MODE="${TRANSPOSE_MODE:-pipeline}"
+DEPTHCODE_DECODE_LOAD="${DEPTHCODE_DECODE_LOAD:-ldg}"
+RANKSTREAM_LUT_LOAD="${RANKSTREAM_LUT_LOAD:-ldg}"
+RANKCHUNK32_BLOCK64="${RANKCHUNK32_BLOCK64:-0}"
+PM_ACCUM="${PM_ACCUM:-0}"
+TERNARY_KEY4="${TERNARY_KEY4:-1}"
+BUCKET_THREADS="${BUCKET_THREADS:-256}"
+BUCKET_GRID_X="${BUCKET_GRID_X:-16}"
+BUCKET_GRID_Y="${BUCKET_GRID_Y:-8}"
+REPEATS="${REPEATS:-2}"
+ILP_MODES="${ILP_MODES:-1 2 4}"
+PTXAS_VERBOSE="${PTXAS_VERBOSE:-1}"
+
+PREFIX="${PREFIX:-$ONEESAN_ROOT/work/b300_depthcode_rankchunk32_ilp_ab_n${N}_${TRANSPOSE_MODE}}"
+RESULT="${RESULT:-${PREFIX}.tsv}"
+SUMMARY="${SUMMARY:-${PREFIX}_summary.tsv}"
+LOGDIR="${LOGDIR:-${PREFIX}_logs}"
+
+case "$TRANSPOSE_MODE" in sync|events|pipeline) ;; *) echo "invalid TRANSPOSE_MODE" >&2; exit 2;; esac
+case "$DEPTHCODE_DECODE_LOAD" in global|ldg) ;; *) echo "invalid DEPTHCODE_DECODE_LOAD" >&2; exit 2;; esac
+case "$RANKSTREAM_LUT_LOAD" in constant|ldg|ldg256) ;; *) echo "invalid RANKSTREAM_LUT_LOAD" >&2; exit 2;; esac
+for x in RANKCHUNK32_BLOCK64 PM_ACCUM TERNARY_KEY4 PTXAS_VERBOSE; do
+  v="${!x}"; [[ "$v" == 0 || "$v" == 1 ]] || { echo "$x must be 0 or 1" >&2; exit 2; }
+done
+for ilp in $ILP_MODES; do case "$ilp" in 1|2|4) ;; *) echo "ILP_MODES entries must be 1, 2, or 4" >&2; exit 2;; esac; done
+if (( NGPU != 8 || REPEATS < 1 || BUCKET_THREADS < 32 || BUCKET_THREADS > 1024 || BUCKET_THREADS % 32 != 0 || BUCKET_GRID_X < 1 || BUCKET_GRID_Y < 1 )); then
+  echo "invalid launch/A-B parameters" >&2; exit 2
+fi
+if ! command -v nvcc >/dev/null || ! command -v nvidia-smi >/dev/null; then
+  echo "nvcc and nvidia-smi are required" >&2; exit 2
+fi
+visible="$(nvidia-smi --query-gpu=index --format=csv,noheader | wc -l)"
+(( visible >= NGPU )) || { echo "need $NGPU GPUs, visible=$visible" >&2; exit 2; }
+mkdir -p "$(dirname "$RESULT")" "$LOGDIR"
+
+bash "$ONEESAN_ROOT/scripts/bench/rankchunk32-directmask-proof.sh"
+bash "$ONEESAN_ROOT/scripts/bench/rankchunk32-warpbase-proof.sh"
+
+field() {
+  local key="$1" line="$2"
+  sed -nE "s/(^|.*[[:space:]])${key}=([^[:space:]]+).*/\\2/p" <<<"$line" | tail -n1
+}
+
+build_one() {
+  local ilp="$1" bin="$2"
+  N="$N" ARCH="$ARCH" OUT="$bin" HIGH_CTX=warpstriped_delta_direct_affine_rankchunk32_cross5 \
+    TRANSPOSE_MODE="$TRANSPOSE_MODE" DEPTHCODE_DECODE_LOAD="$DEPTHCODE_DECODE_LOAD" \
+    RANKSTREAM_LUT_LOAD="$RANKSTREAM_LUT_LOAD" RANKCHUNK32_DIRECTMASK=1 \
+    RANKCHUNK32_ILP="$ilp" RANKCHUNK32_ALIGN32=1 RANKCHUNK32_ONESHFL=1 \
+    RANKCHUNK32_DIRECT3=0 RANKCHUNK32_FUSED16=0 RANKCHUNK32_BYTEPACK=0 \
+    RANKCHUNK32_BLOCK64="$RANKCHUNK32_BLOCK64" PM_ACCUM="$PM_ACCUM" \
+    TERNARY_KEY4="$TERNARY_KEY4" PTXAS_VERBOSE="$PTXAS_VERBOSE" \
+    bash "$ONEESAN_ROOT/scripts/build/b300-bucket-snake-pattern10-depthcode-graph-batch.sh" \
+    >"$LOGDIR/ilp_${ilp}.build.out" 2>"$LOGDIR/ilp_${ilp}.build.err"
+}
+
+printf 'ilp\trepeat\tresidue\twall_s\tforward_high_s\treverse_high_s\tforward_low_s\treverse_low_s\ttranspose_s\n' >"$RESULT"
+
+run_one() {
+  local ilp="$1" bin="$2" rep="$3"
+  local so="$LOGDIR/ilp_${ilp}_r${rep}.out" se="$LOGDIR/ilp_${ilp}_r${rep}.err"
+  BUCKET_THREADS="$BUCKET_THREADS" BUCKET_GRID_X="$BUCKET_GRID_X" BUCKET_GRID_Y="$BUCKET_GRID_Y" \
+    "$bin" "$N" "$TARGET_MIB" "$MAX_WINDOW" "$NGPU" "$MOD" >"$so" 2>"$se"
+  local line detail residue wall fh rh fl rl ts
+  line="$(grep '^residue=' "$so" | tail -n1 || true)"
+  [[ -n "$line" ]] || { echo "ilp=$ilp missing residue" >&2; exit 3; }
+  residue="$(field residue "$line")"; wall="$(field wall_s "$line")"
+  [[ "$residue" == "$EXPECT" ]] || { echo "ilp=$ilp residue mismatch got=$residue expected=$EXPECT" >&2; exit 4; }
+  detail="$(grep 'snake_onepass_graph_batch modulus=' "$se" | tail -n1 || true)"
+  fh="$(field forward_high_s "$detail")"; rh="$(field reverse_high_s "$detail")"
+  fl="$(field forward_low_s "$detail")"; rl="$(field reverse_low_s "$detail")"; ts="$(field transpose_s "$detail")"
+  printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' "$ilp" "$rep" "$residue" "$wall" \
+    "${fh:-NA}" "${rh:-NA}" "${fl:-NA}" "${rl:-NA}" "${ts:-NA}" >>"$RESULT"
+}
+
+for ilp in $ILP_MODES; do
+  bin="$ONEESAN_BUILD_DIR/ab_depthcode_rankchunk32_ilp_${ilp}_${TRANSPOSE_MODE}_n${N}"
+  echo "=== build rankchunk32 directmask ILP=$ilp ===" >&2
+  build_one "$ilp" "$bin"
+  for ((r=1; r<=REPEATS; ++r)); do
+    echo "=== run rankchunk32 directmask ILP=$ilp $r/$REPEATS ===" >&2
+    run_one "$ilp" "$bin" "$r"
+  done
+done
+
+cat "$RESULT"
+python3 - "$RESULT" "$SUMMARY" <<'PY'
+import csv, statistics, sys
+src,dst=sys.argv[1:]
+rows=list(csv.DictReader(open(src),delimiter='\t'))
+metrics=('wall_s','forward_high_s','reverse_high_s','forward_low_s','reverse_low_s','transpose_s')
+modes=[]
+for mode in sorted({r['ilp'] for r in rows}, key=int):
+    group=[r for r in rows if r['ilp']==mode]
+    z={'ilp':mode,'repeats':str(len(group))}
+    for m in metrics:
+        xs=[float(r[m]) for r in group if r[m]!='NA']
+        z[m]=f'{statistics.median(xs):.9f}' if xs else 'NA'
+    modes.append(z)
+with open(dst,'w',newline='') as f:
+    w=csv.DictWriter(f,fieldnames=('ilp','repeats',*metrics),delimiter='\t'); w.writeheader(); w.writerows(modes)
+q={r['ilp']:r for r in modes}
+if '1' in q:
+    for mode in ('2','4'):
+        if mode not in q: continue
+        for m in ('wall_s','forward_high_s','reverse_high_s'):
+            if q['1'][m]!='NA' and q[mode][m]!='NA':
+                print(f'rankchunk32_ilp1_to_{mode}_{m}_speedup={float(q["1"][m])/float(q[mode][m]):.6f}x')
+        if all(q[x][m]!='NA' for x in ('1',mode) for m in ('forward_high_s','reverse_high_s')):
+            a=float(q['1']['forward_high_s'])+float(q['1']['reverse_high_s'])
+            b=float(q[mode]['forward_high_s'])+float(q[mode]['reverse_high_s'])
+            print(f'rankchunk32_ilp1_to_{mode}_total_high_speedup={a/b:.6f}x')
+print('ilp_model=independent_lr_chains_batched_before_consumption')
+print('ilp2_outstanding_chains_per_lane=2')
+print('ilp4_outstanding_chains_per_lane=4')
+print('directmask=1')
+print('align32=1')
+print(f'summary={dst}')
+PY
+
+echo "b300-depthcode-rankchunk32-ilp-ab OK n=$N repeats=$REPEATS modes='$ILP_MODES' result=$RESULT logs=$LOGDIR" >&2
