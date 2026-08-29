@@ -63,8 +63,6 @@ static_assert(!P10DC_RANKFORMULA_PRECTX_FLAT_BID || P10DC_ORBITCTA_FLAT_CHUNK ==
               "flat-bid cache and chunked bid amortization are isolated A/B paths");
 static_assert(!P10DC_ORBITCTA_FLAT_DYNAMIC || P10DC_ORBITCTA_FLAT_CHUNK == 1,
               "dynamic flat scheduler currently uses one-orbit queue entries");
-static_assert(!P10DC_ORBITCTA_FLAT_DYNAMIC || !P10DC_RANKFORMULA_QUAD_MLP,
-              "dynamic flat scheduler is isolated from the chunked quad path");
 static_assert(P10DC_ORBITCTA_FLAT_CHUNK == 1 ||
               P10DC_ORBITCTA_FLAT_CHUNK == 2 ||
               P10DC_ORBITCTA_FLAT_CHUNK == 4 ||
@@ -74,9 +72,9 @@ static_assert(P10DC_ORBITCTA_FLAT_CHUNK == 1 ||
               "P10DC_ORBITCTA_FLAT_CHUNK must be 1,2,4,8,16,32");
 static_assert(!P10DC_RANKFORMULA_QUAD_OVERLAP_LOCAL || P10DC_RANKFORMULA_QUAD_MLP,
               "flat quad overlap-local requires QUAD_MLP");
-#if P10DC_RANKFORMULA_QUAD_MLP && P10DC_ORBITCTA_FLAT_CHUNK > 1
+#if P10DC_RANKFORMULA_QUAD_MLP
 static_assert(P10DC_ORBITCTA_COL_ILP == 4,
-              "chunked flat quad path requires ORBITCTA_COL_ILP=4");
+              "flat quad plan sum requires ORBITCTA_COL_ILP=4");
 #endif
 #if P10DC_RANKFORMULA_PRECTX_FORWARD || P10DC_RANKFORMULA_PRECTX_REVERSE
 #if P10DC_RANKFORMULA_PRECTX_COMPACT
@@ -95,8 +93,6 @@ static_assert(P10DC_ORBITCTA_COL_ILP == 4,
 #define P10DC_ORBITCTA_EARLY_JP_LOCAL 1
 #endif
 #define P10DC_ORBITCTA_CTX P10DCDirectHighResolvedCtx
-// The flat scheduler calls the global stream index q rather than qi. Keep the
-// common prectx ABI by binding the flat stream index directly here.
 #if P10DC_RANKFORMULA_PRECTX_FORWARD
 #define P10DC_ORBITCTA_PREPARE_FORWARD(c,payload,loc,p,ss,js,ds,sr,jr,dr) do { \
     (void)(payload); (void)(loc); (void)(p); \
@@ -138,17 +134,30 @@ static_assert(P10DC_ORBITCTA_COL_ILP == 4,
 #define P10DC_ORBITCTA_PLAN_SUM_QUAD_LOCAL 1
 #endif
 
-#if P10DC_RANKFORMULA_QUAD_MLP && P10DC_ORBITCTA_FLAT_CHUNK > 1
-// Preserve the ordinary flat kernel with its proven pair executor. The chunked
-// kernels are compiled after the rename is removed, so they see the quad-aware
-// executors below without changing the non-chunked flat path.
+#if P10DC_RANKFORMULA_QUAD_MLP
+// Keep the ordinary static flat kernels on the proven pair executor, but make
+// the quad column functions visible to whichever experimental worker is
+// compiled afterwards. This now covers both chunked-flat and dynamic-flat:
+// dynamic scheduling changes orbit ownership only, so it can safely reuse the
+// same four-column executor and its 28-slot cp.async scratch contract.
 #define p10dc_orbitcta_flat_forward_columns p10dc_orbitcta_flat_forward_columns_pair_base
 #define p10dc_orbitcta_flat_reverse_columns p10dc_orbitcta_flat_reverse_columns_pair_base
 #include "ramstream32_bucket_orbit_closure_pattern10_depthcode_orbitcta_flat.cuh"
 #undef p10dc_orbitcta_flat_reverse_columns
 #undef p10dc_orbitcta_flat_forward_columns
 #include "ramstream32_bucket_orbit_closure_pattern10_depthcode_orbitcta_flat_quad_columns.cuh"
+#if P10DC_ORBITCTA_FLAT_CHUNK > 1
 #include "ramstream32_bucket_orbit_closure_pattern10_depthcode_orbitcta_flat_chunked.cuh"
+#endif
+#if P10DC_RANKFORMULA_PRECTX_FLAT_BID
+#include "ramstream32_bucket_orbit_closure_pattern10_depthcode_orbitcta_flat_prectx_bid.cuh"
+#endif
+#if P10DC_ORBITCTA_FLAT_DYNAMIC
+#include "ramstream32_bucket_orbit_closure_pattern10_depthcode_orbitcta_flat_dynamic.cuh"
+#if P10DC_ORBITCTA_FLAT_DYNAMIC_PIPE2
+#include "ramstream32_bucket_orbit_closure_pattern10_depthcode_orbitcta_flat_dynamic_pipe2.cuh"
+#endif
+#endif
 #else
 #include "ramstream32_bucket_orbit_closure_pattern10_depthcode_orbitcta_flat.cuh"
 #if P10DC_ORBITCTA_FLAT_CHUNK > 1
