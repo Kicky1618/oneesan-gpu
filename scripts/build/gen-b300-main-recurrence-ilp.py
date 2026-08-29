@@ -45,14 +45,12 @@ for k in range(lanes):
 for k in range(lanes):
     a(f'        Code pj{k}=0,bj{k}=0;bool hp{k}=false,hb{k}=false;')
 for k in range(lanes):
-    if k==0:a(f'        b300_main_pull_prepare(i0,m0,p,nblock,pj0,hp0,bj0,hb0);')
+    if k==0:a('        b300_main_pull_prepare(i0,m0,p,nblock,pj0,hp0,bj0,hb0);')
     else:a(f'        if(v{k})b300_main_pull_prepare(i{k},m{k},p,nblock,pj{k},hp{k},bj{k},hb{k});')
 a('')
-# Issue all irregular requests before the contiguous self stream.
 for k in range(lanes):a(f'        const Count pair{k}=hp{k}?in[pj{k}]:Count(0);')
 for k in range(lanes):a(f'        const Count block{k}=hb{k}?in_block[bj{k}]:Count(0);')
-for k in range(lanes):
-    a(f'        const Count self{k}='+('in[i0];' if k==0 else f'v{k}?in[i{k}]:Count(0);'))
+for k in range(lanes):a(f'        const Count self{k}='+('in[i0];' if k==0 else f'v{k}?in[i{k}]:Count(0);'))
 a('        const uint64_t mod=D_MOD;')
 for k in range(lanes):
     body=f'uint64_t z=uint64_t(self{k})+pair{k}+block{k};if(z>=mod)z-=mod;if(z>=mod)z-=mod;out_main[i{k}]=Count(z);if(low)mates[i{k}]=b300_low_state_advance(m{k},p);else if(high)mates[i{k}]=b300_high_state_advance(m{k},p);'
@@ -60,15 +58,30 @@ for k in range(lanes):
     else:a(f'        if(v{k})'+'{'+body+'}')
 a('    }')
 a('}')
-new='\n'.join(A)
-s=replace_function(s,'main_pull_kernel_ilp2',new)
+s=replace_function(s,'main_pull_kernel_ilp2','\n'.join(A))
+
+marker='\n\nstatic Code rank_full(MateID m,int width)'
+if marker not in s:raise SystemExit('rank_full marker not found')
+helper=f'''\n\nstatic inline int b300_main_recurrence_ilp{lanes}_blocks(Code n,int threads){{
+    if(!n)return 1;
+    const Code cover=Code(threads)*Code({lanes});
+    const Code need=(n+cover-1)/cover;
+    return int(std::min<Code>(65535,std::max<Code>(1,need)));
+}}'''
+s=s.replace(marker,helper+marker,1)
+old='main_pull_kernel_ilp2<<<bm,threads,0,c.sMain>>>'
+new_launch=f'main_pull_kernel_ilp2<<<b300_main_recurrence_ilp{lanes}_blocks(ms.size,threads),threads,0,c.sMain>>>'
+if s.count(old)!=1:raise SystemExit(f'recurrence ILP launch anchor expected one match got {s.count(old)}')
+s=s.replace(old,new_launch,1)
 
 for req in (
     f'base+=Code({lanes})*grid',f'const Code i{lanes-1}=',
     f'const Count pair{lanes-1}=',f'const Count block{lanes-1}=',
     f'const Count self{lanes-1}=',f'mates[i{lanes-1}]=b300_high_state_advance',
-    'const bool low=b300_low_window_cache_active(),high=b300_high_main_state_active()'
+    'const bool low=b300_low_window_cache_active(),high=b300_high_main_state_active()',
+    f'b300_main_recurrence_ilp{lanes}_blocks(ms.size,threads)',
+    f'const Code cover=Code(threads)*Code({lanes})'
 ):
     if req not in s:raise SystemExit(f'missing recurrence ILP{lanes} artifact: {req}')
 out.parent.mkdir(parents=True,exist_ok=True);out.write_text(s)
-print(f'generated {out} from {src}: unified_main_recurrence_ilp={lanes} destinations_per_thread={lanes} extra_state_bytes=0 irregular_requests_first=1 recurrent_mate_updates={lanes} low_high_uniform_flags=1 register_pressure_high=1 requires_ab=1')
+print(f'generated {out} from {src}: unified_main_recurrence_ilp={lanes} destinations_per_thread={lanes} extra_state_bytes=0 irregular_requests_first=1 recurrent_mate_updates={lanes} low_high_uniform_flags=1 launch_blocks=ceil_n_over_{lanes}threads_capped65535 launch_mlp_fixed=1 register_pressure_high=1 requires_ab=1')
