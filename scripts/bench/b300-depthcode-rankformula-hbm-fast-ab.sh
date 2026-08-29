@@ -56,9 +56,9 @@ run_one(){
   local so="$LOGDIR/${label}_r${rep}.out" se="$LOGDIR/${label}_r${rep}.err" util="$LOGDIR/${label}_r${rep}.util"
   BUCKET_THREADS="$BUCKET_THREADS" BUCKET_GRID_X="$gx" BUCKET_GRID_Y="$BUCKET_GRID_Y" \
     "$bin" "$N" "$TARGET_MIB" "$MAX_WINDOW" "$NGPU" "$MOD" >"$so" 2>"$se" &
-  local pid=$! sampler=''
+  local pid=$! sampler='' rc=0
   if [[ "$SAMPLE_UTIL" == 1 ]]; then sample_process "$pid" "$util" & sampler=$!; else : >"$util"; fi
-  wait "$pid"; local rc=$?
+  if wait "$pid"; then rc=0; else rc=$?; fi
   [[ -z "$sampler" ]] || wait "$sampler" || true
   (( rc == 0 )) || return "$rc"
   local line detail residue wall fh rh avg_gpu avg_mem max_gpu max_mem
