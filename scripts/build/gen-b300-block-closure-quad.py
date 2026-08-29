@@ -8,12 +8,8 @@ src=pathlib.Path(sys.argv[1]);out=pathlib.Path(sys.argv[2]);s=src.read_text()
 for req in ('block_pull_add_rank','block_pull_kernel','else if(look==N){','out_block[i]=acc;'):
     if req not in s:raise SystemExit(f'closure-quad transform requires artifact: {req}')
 
-# Insert explicit four-rank queue before the block-pull kernel. Keeping fields
-# scalar rather than an indexed local array gives nvcc a chance to issue four
-# independent HBM loads without local-memory spills.
 marker='template<bool CACHED_BLOCK_MATE>\n__global__ void block_pull_kernel'
 if marker not in s:
-    # Support the uncached full-pull form for isolated experiments.
     marker='__global__ void block_pull_kernel(const Count*in_main,Code n,Count*out_block,int p)'
 if marker not in s:raise SystemExit('block pull kernel marker not found')
 helper=r'''
@@ -39,8 +35,7 @@ __device__ __forceinline__ void b300_block_closure_quad_emit(
 '''
 s=s.replace(marker,helper+marker,1)
 
-# Restrict modifications to block_pull_kernel so main-pull helpers and any other
-# rank consumers remain byte-for-byte unchanged.
+# Restrict changes to block_pull_kernel.
 p=s.find('block_pull_kernel')
 brace=s.find('{',p);depth=0;end=-1
 for i in range(brace,len(s)):
@@ -53,20 +48,22 @@ start=s.rfind('\n',0,p)+1
 body=s[start:end]
 cl=body.find('else if(look==N){')
 if cl<0:raise SystemExit('closure branch not found inside block pull kernel')
-outpos=body.rfind('out_block[i]=acc;')
-if outpos<0 or outpos<=cl:raise SystemExit('block output not found after closure branch')
-closure=body[cl:outpos]
+cl_brace=body.find('{',cl);depth=0;cl_end=-1
+for i in range(cl_brace,len(body)):
+    if body[i]=='{':depth+=1
+    elif body[i]=='}':
+        depth-=1
+        if depth==0:cl_end=i;break
+if cl_end<0:raise SystemExit('closure branch end not found')
+closure=body[cl:cl_end]
 adds=closure.count('block_pull_add_rank(acc,in_main,')
 if adds!=3:raise SystemExit(f'expected three closure candidate source loads, got {adds}')
 closure=closure.replace('else if(look==N){','else if(look==N){\n            B300BlockClosureQuad b300_quad{};',1)
 closure=closure.replace('block_pull_add_rank(acc,in_main,','b300_block_closure_quad_emit(acc,in_main,b300_quad,')
-# Every transformed call retains its original closing `);`, matching emit's 4th arg.
 closure+='            b300_block_closure_quad_flush(acc,in_main,b300_quad);\n'
-body=body[:cl]+closure+body[outpos:]
+body=body[:cl]+closure+body[cl_end:]
 s=s[:start]+body+s[end:]
 
-# Structural gates: the endpoint NR/NL load remains immediate, exactly three
-# closure candidate sites are queued, and every closure state flushes its tail.
 p=s.find('block_pull_kernel');wend=s.find('\n\nstatic Code rank_full',p)
 hot=s[p:wend if wend>=0 else len(s)]
 if hot.count('b300_block_closure_quad_emit(acc,in_main,b300_quad,')!=3:
@@ -75,7 +72,12 @@ if hot.count('b300_block_closure_quad_flush(acc,in_main,b300_quad);')<1:
     raise SystemExit('closure quad tail flush missing')
 if 'block_pull_add_rank(acc,in_main,' not in hot:
     raise SystemExit('endpoint immediate source load unexpectedly removed')
+# Tail flush must appear before the closure branch closes and before out_block.
+qdecl=hot.find('B300BlockClosureQuad b300_quad{};')
+qflush=hot.find('b300_block_closure_quad_flush(acc,in_main,b300_quad);',qdecl)
+qout=hot.find('out_block[i]=acc;',qdecl)
+if qdecl<0 or qflush<qdecl or qout<qflush:raise SystemExit('closure quad scope/order invalid')
 for req in ('B300BlockClosureQuad','const Count v0=','const Count v3=','q.n==4'):
     if req not in s:raise SystemExit(f'closure quad artifact missing: {req}')
 out.parent.mkdir(parents=True,exist_ok=True);out.write_text(s)
-print(f'generated {out} from {src}: b300_block_closure_quad=1 batch=4 queued_candidate_sites=3 endpoint_load_immediate=1 closure_tail_flush=1 extra_state_bytes=0 production_default=off')
+print(f'generated {out} from {src}: b300_block_closure_quad=1 batch=4 queued_candidate_sites=3 endpoint_load_immediate=1 closure_tail_flush=1 flush_scope=closure extra_state_bytes=0 production_default=off')
