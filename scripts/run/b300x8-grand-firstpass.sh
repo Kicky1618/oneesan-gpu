@@ -68,6 +68,7 @@ PROFILE_SHA="$(sha256sum "$PROFILE_FILE" | awk '{print $1}')"
   printf 'nextself_validate_repeats=%s\n' "$NEXTSELF_VALIDATE_REPEATS"
   printf 'nextself_min_speedup=%s\n' "$NEXTSELF_MIN_SPEEDUP"
   printf 'hybrid_min_speedup=%s\n' "$HYBRID_MIN_SPEEDUP"
+  printf 'hybrid8_nextself_transform_preflight=1\n'
   printf 'nvcc_version_begin=1\n'
   nvcc --version | sed 's/^/nvcc: /'
   printf 'nvcc_version_end=1\n'
@@ -82,6 +83,7 @@ fi
 
 echo '=== B300 grand first-pass: GPU-free preflight ===' >&2
 bash "$ONEESAN_ROOT/scripts/bench/b300-nextgen-preflight.sh"
+bash "$ONEESAN_ROOT/scripts/bench/b300-mainrec-hybrid8-nextself-transform-preflight.sh"
 bash "$ONEESAN_ROOT/scripts/bench/b300-joint-nextgen-hybrid8-preflight.sh"
 if [[ -f "$ONEESAN_ROOT/scripts/bench/b300-nextgen-grand-selector-preflight.sh" ]]; then
   bash "$ONEESAN_ROOT/scripts/bench/b300-nextgen-grand-selector-preflight.sh"
