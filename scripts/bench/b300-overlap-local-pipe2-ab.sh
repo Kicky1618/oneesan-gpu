@@ -13,13 +13,14 @@ EXPECT="${EXPECT:-998035516}"
 command -v nvcc >/dev/null || { echo 'nvcc required' >&2; exit 2; }
 command -v nvidia-smi >/dev/null || { echo 'nvidia-smi required' >&2; exit 2; }
 
-# Do not spend solver time until peer-global -> shared cp.async is known-good on
-# this exact 8-GPU host/driver topology.
+# Four of the five candidates use peer-global -> shared cp.async. Prove that the
+# exact 8-GPU host/driver topology supports it before spending solver time.
 GPUS="$NGPU" bash "$ONEESAN_ROOT/scripts/bench/b300-cpasync-remote-peer-microprobe.sh"
 
 PREFIX="${PREFIX:-$ONEESAN_ROOT/work/b300_overlap_local_pipe2_n${N}}"
 RESULT="${RESULT:-${PREFIX}.tsv}"; RESOURCE="${RESOURCE:-${PREFIX}_ptxas.tsv}"
 SUMMARY="${SUMMARY:-${PREFIX}_summary.tsv}"; LOGDIR="${LOGDIR:-${PREFIX}_logs}"
+WINNER_ENV="${WINNER_ENV:-${PREFIX}_winner.env}"
 PARSER="$ONEESAN_ROOT/scripts/bench/parse-ptxas-resources.py"
 mkdir -p "$LOGDIR" "$(dirname "$RESULT")"
 
@@ -36,9 +37,9 @@ sample_process(){
 }
 
 build_one(){
-  local label="$1" overlap="$2" pipe2="$3" bin="$4"
+  local label="$1" cp="$2" localcp="$3" overlap="$4" pipe2="$5" bin="$6"
   N="$N" ARCH="$ARCH" OUT="$bin" COL_ILP=2 DEPTHMAJOR=1 PAIR_MLP=1 MLP_WINDOW4=1 \
-    CPASYNC_PAIR=1 CPASYNC_LOCAL_PAIR=0 CPASYNC_OVERLAP_LOCAL_PAIR="$overlap" \
+    CPASYNC_PAIR="$cp" CPASYNC_LOCAL_PAIR="$localcp" CPASYNC_OVERLAP_LOCAL_PAIR="$overlap" \
     CPASYNC_OVERLAP_LOCAL_PIPE2="$pipe2" DIRECTGATHER64=1 DIRECTGATHER_SPARSE64="$SPARSE64" \
     SORTED="$SORTED" PRECTX_FORWARD="$PRECTX_FORWARD" PRECTX_REVERSE="$PRECTX_REVERSE" \
     FORCE7=0 PREFETCH_NEXT=0 PM_ACCUM=1 PTXAS_VERBOSE="$RUN_PTXAS" \
@@ -70,20 +71,26 @@ run_one(){
 printf 'mode\trepeat\tresidue\twall_s\tforward_high_s\treverse_high_s\tavg_gpu_util_pct\tavg_memctrl_util_pct\tmax_gpu_util_pct\tmax_memctrl_util_pct\n' >"$RESULT"
 [[ "$RUN_PTXAS" == 1 ]] && printf 'backend\tkernel\tregisters\tstack_bytes\tspill_store_bytes\tspill_load_bytes\tsmem_bytes\tcmem0_bytes\n' >"$RESOURCE"
 
-for spec in 'cross 0 0' 'overlap30 1 0' 'pipe2 1 1'; do
-  read -r label overlap pipe2 <<<"$spec"
+# label cpasync cross->local staging overlap30 pipe2
+for spec in \
+  'register 0 0 0 0' \
+  'cross 1 0 0 0' \
+  'localstage 1 1 0 0' \
+  'overlap30 1 0 1 0' \
+  'pipe2 1 0 1 1'; do
+  read -r label cp localcp overlap pipe2 <<<"$spec"
   bin="$ONEESAN_BUILD_DIR/ab_overlap_local_${label}_n${N}"
-  build_one "$label" "$overlap" "$pipe2" "$bin"
+  build_one "$label" "$cp" "$localcp" "$overlap" "$pipe2" "$bin"
   [[ "$RUN_PTXAS" == 1 ]] && python3 "$PARSER" "$LOGDIR/$label.build.err" --label "$label" >>"$RESOURCE"
   for ((r=1;r<=REPEATS;++r)); do run_one "$label" "$bin" "$r"; done
 done
 
 cat "$RESULT"
-python3 - "$RESULT" "$SUMMARY" "$RESOURCE" "$RUN_PTXAS" <<'PY'
+python3 - "$RESULT" "$SUMMARY" "$RESOURCE" "$RUN_PTXAS" "$WINNER_ENV" <<'PY'
 import csv,statistics,sys
-src,dst,resource,run_ptxas=sys.argv[1:]
+src,dst,resource,run_ptxas,winner_env=sys.argv[1:]
 rows=list(csv.DictReader(open(src),delimiter='\t'))
-modes=('cross','overlap30','pipe2'); out=[]
+modes=('register','cross','localstage','overlap30','pipe2'); out=[]
 for mode in modes:
     g=[r for r in rows if r['mode']==mode]; z={'mode':mode,'repeats':len(g)}
     for k in ('wall_s','forward_high_s','reverse_high_s','avg_gpu_util_pct','avg_memctrl_util_pct','max_memctrl_util_pct'):
@@ -95,17 +102,30 @@ with open(dst,'w') as f:
     f.write('\t'.join(keys)+'\n')
     for z in out:f.write('\t'.join(str(z.get(k)) for k in keys)+'\n')
 q={z['mode']:z for z in out}
-base=q['cross']['total_high_s']
+base=q['register']['total_high_s']
 for mode in modes:
     z=q[mode]
     if base and z['total_high_s']:
-        print(f'{mode}_high_speedup_vs_cross={base/z["total_high_s"]:.6f}x')
+        print(f'{mode}_high_speedup_vs_register={base/z["total_high_s"]:.6f}x')
     print(f'{mode}_avg_memctrl_pct={z["avg_memctrl_util_pct"]}')
     print(f'{mode}_max_memctrl_pct={z["max_memctrl_util_pct"]}')
 valid=[z for z in out if z['total_high_s']]
-if valid:
-    best=min(valid,key=lambda z:z['total_high_s'])
-    print(f'WINNER={best["mode"]}')
+if not valid: raise SystemExit('no valid candidate')
+best=min(valid,key=lambda z:z['total_high_s'])
+flags={
+ 'register':(0,0,0,0),
+ 'cross':(1,0,0,0),
+ 'localstage':(1,1,0,0),
+ 'overlap30':(1,0,1,0),
+ 'pipe2':(1,0,1,1),
+}[best['mode']]
+print(f'WINNER={best["mode"]}')
+with open(winner_env,'w') as f:
+    f.write(f'CPASYNC_PAIR={flags[0]}\n')
+    f.write(f'CPASYNC_LOCAL_PAIR={flags[1]}\n')
+    f.write(f'CPASYNC_OVERLAP_LOCAL_PAIR={flags[2]}\n')
+    f.write(f'CPASYNC_OVERLAP_LOCAL_PIPE2={flags[3]}\n')
+    f.write(f'CPASYNC_PAIR_MODE={best["mode"]}\n')
 if run_ptxas=='1':
     rr=list(csv.DictReader(open(resource),delimiter='\t'))
     for mode in modes:
@@ -118,4 +138,4 @@ if run_ptxas=='1':
         print(f'{mode}_high_spill_load_bytes={sum(sl) if sl else "NA"}')
 PY
 
-echo "b300-overlap-local-pipe2-ab OK n=$N repeats=$REPEATS result=$RESULT" >&2
+echo "b300-overlap-local-pipe2-ab OK n=$N repeats=$REPEATS result=$RESULT winner_env=$WINNER_ENV" >&2
