@@ -37,8 +37,8 @@ using P10DCSelectedFusedDeviceTables = BucketFusedDirectHighRowsRankFormulaNomet
 #else
 using P10DCSelectedFusedDeviceTables = BucketFusedDirectHighRowsRankFormulaNometa4Tables;
 #endif
-#if P10DC_RANKFORMULA_PRECTX_FORWARD
-#define BucketFusedDeviceTables BucketFusedPrecomputedForwardHighCtxTables<P10DCSelectedFusedDeviceTables>
+#if P10DC_RANKFORMULA_PRECTX_FORWARD || P10DC_RANKFORMULA_PRECTX_REVERSE
+#define BucketFusedDeviceTables BucketFusedPrecomputedHighCtxTables<P10DCSelectedFusedDeviceTables>
 #else
 #define BucketFusedDeviceTables P10DCSelectedFusedDeviceTables
 #endif
