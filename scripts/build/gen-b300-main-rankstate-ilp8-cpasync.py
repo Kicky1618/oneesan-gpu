@@ -83,15 +83,15 @@ for k in range(8): A(f'        const MateValue mv{k}=v{k}?mget(m{k},p):N;')
 for k in range(8): A(f'        const bool hb{k}=v{k}&&nblock&&mv{k}==N;')
 for k in range(8): A(f'        const Code bj{k}=hb{k}?b300_add_rank_delta(i{k},rd{k}):Code(0);')
 A('')
-A('        // Always issue all 16 copies. Invalid candidates use src-size=0,')
-A('        // which zero-fills the four-byte shared destination. Keeping the')
-A('        // instruction count uniform avoids per-thread async-group divergence.')
+A('        // Two uniform groups of eight Count copies. Invalid candidates use')
+A('        // src-size=0, zero-filling their four-byte shared destinations.')
 for k in range(8): A(f'        b300_cpasync_count_ca(my_smem+{k},hp{k}?in+pj{k}:in,hp{k});')
+A('        b300_cpasync_commit();')
 for k in range(8): A(f'        b300_cpasync_count_ca(my_smem+{8+k},(hb{k}&&bj{k}<nblock)?in_block+bj{k}:in,hb{k}&&bj{k}<nblock);')
 A('        b300_cpasync_commit();')
 A('')
-A('        // Do independent state work and coalesced self reads while random')
-A('        // global->shared transactions are outstanding.')
+A('        // Do independent state work and coalesced self reads while both')
+A('        // random global->shared async groups are outstanding.')
 A('        rank_state[i0]=b300_pack_rank_state(rd0+b300_rank_delta_step(mv0,p,h0),b300_rank_height_advance(h0,mv0));')
 for k in range(1,8): A(f'        if(v{k})rank_state[i{k}]=b300_pack_rank_state(rd{k}+b300_rank_delta_step(mv{k},p,h{k}),b300_rank_height_advance(h{k},mv{k}));')
 A('        const Count self0=in[i0];')
@@ -120,8 +120,10 @@ for req in (
     'rank_state[i7]=b300_pack_rank_state','const Count self7='
 ):
     if req not in s:raise SystemExit(f'missing ILP8 cp.async artifact: {req}')
+if s.count('b300_cpasync_commit();') != 2:
+    raise SystemExit(f'expected exactly two async groups, got {s.count("b300_cpasync_commit();")} commits')
 for stale in ('const Count pair7=hp7?', 'const Count block7=(hb7'):
     if stale in s:raise SystemExit(f'stale synchronous ILP8 gather remains: {stale}')
 
 out.parent.mkdir(parents=True,exist_ok=True);out.write_text(s)
-print(f'generated {out} from {src}: b300_main_rankstate_ilp8_cpasync=1 cp_bytes=4 cache_operator=ca async_random_copies_per_thread=16 dynamic_shared_bytes_per_thread=64 overlap=rank_state+self_load zero_fill_invalid=1 block_path_unchanged=1 closure_path_unchanged=1')
+print(f'generated {out} from {src}: b300_main_rankstate_ilp8_cpasync=1 cp_bytes=4 cache_operator=ca async_random_copies_per_thread=16 async_groups=2 copies_per_group=8 dynamic_shared_bytes_per_thread=64 overlap=rank_state+self_load zero_fill_invalid=1 block_path_unchanged=1 closure_path_unchanged=1')
