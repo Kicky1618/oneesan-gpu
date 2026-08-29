@@ -47,7 +47,9 @@ if [[ "$CPASYNC_PAIR" == 1 ]]; then
   grep -q 'cp_async_remote_peer=OK exact=OK' "$LOGDIR/cpasync-peer.out" || { echo 'cp.async peer gate failed' >&2; exit 5; }
 fi
 
-COMMON=(N="$N" ARCH="$ARCH" ORBITCTA_FLAT=1 ORBITCTA_FLAT_CHUNK=1 DIRECTGATHER64=1 DIRECTGATHER_SPARSE64="$SPARSE64" DIRECTGATHER_SORT_RANKS="$SORT_RANKS" ORBITCTA_COL_ILP="$COL_ILP" PAIR_MLP="$PAIR_MLP" CPASYNC_PAIR="$CPASYNC_PAIR" QUAD_MLP=0 QUAD_OVERLAP_LOCAL=0 QUAD_LOCAL_DIRECT_MAX=0 QUAD_SPARSE_DESC_MLP=0 QUAD_OVERLAP_BYPASS_LOCAL0=0 QUAD_CPASYNC_PREFETCH_BYTES=0 QUAD_CPASYNC_GROUP_COLS=1 RANKFORMULA_MLP_WINDOW4="$WINDOW4" PM_ACCUM="$PM_ACCUM" PRECTX_FORWARD="$PRECTX_FORWARD" PRECTX_REVERSE="$PRECTX_REVERSE" PRECTX_COMPACT="$PRECTX_COMPACT" PRECTX_FLAT_BID="$PRECTX_FLAT_BID" PRECTX_FLAT_BID_FUSED="$PRECTX_FLAT_BID_FUSED" PRECTX_WARPCOOP=0 PTXAS_VERBOSE=1)
+# This A/B answers only whether pure dynamic scheduling is worthwhile. Hold
+# the dynamic lease batch at one; batch size is swept by the dedicated runner.
+COMMON=(N="$N" ARCH="$ARCH" ORBITCTA_FLAT=1 ORBITCTA_FLAT_CHUNK=1 ORBITCTA_FLAT_DYNAMIC_BATCH=1 DIRECTGATHER64=1 DIRECTGATHER_SPARSE64="$SPARSE64" DIRECTGATHER_SORT_RANKS="$SORT_RANKS" ORBITCTA_COL_ILP="$COL_ILP" PAIR_MLP="$PAIR_MLP" CPASYNC_PAIR="$CPASYNC_PAIR" QUAD_MLP=0 QUAD_OVERLAP_LOCAL=0 QUAD_LOCAL_DIRECT_MAX=0 QUAD_SPARSE_DESC_MLP=0 QUAD_OVERLAP_BYPASS_LOCAL0=0 QUAD_CPASYNC_PREFETCH_BYTES=0 QUAD_CPASYNC_GROUP_COLS=1 RANKFORMULA_MLP_WINDOW4="$WINDOW4" PM_ACCUM="$PM_ACCUM" PRECTX_FORWARD="$PRECTX_FORWARD" PRECTX_REVERSE="$PRECTX_REVERSE" PRECTX_COMPACT="$PRECTX_COMPACT" PRECTX_FLAT_BID="$PRECTX_FLAT_BID" PRECTX_FLAT_BID_FUSED="$PRECTX_FLAT_BID_FUSED" PRECTX_WARPCOOP=0 PTXAS_VERBOSE=1)
 printf 'backend\tkernel\tregisters\tstack_bytes\tspill_store_bytes\tspill_load_bytes\tsmem_bytes\tcmem0_bytes\n' >"$RESOURCE"
 for dynamic in 0 1; do
   bin="$ONEESAN_BUILD_DIR/b300_flat_dynamic${dynamic}_bid${PRECTX_FLAT_BID}_n${N}"
@@ -57,7 +59,7 @@ done
 
 field(){ local k="$1" l="$2"; sed -nE "s/(^|.*[[:space:]])${k}=([^[:space:]]+).*/\\2/p" <<<"$l" | tail -n1; }
 sample(){ local pid="$1" out="$2"; : >"$out"; while kill -0 "$pid" 2>/dev/null; do nvidia-smi --query-gpu=utilization.gpu,utilization.memory --format=csv,noheader,nounits 2>/dev/null | awk -F',' '{g=$1+0;m=$2+0;sg+=g;sm+=m;if(g>mg)mg=g;if(m>mm)mm=m;n++}END{if(n)printf "%.6f %.6f %d %d\n",sg/n,sm/n,mg,mm}' >>"$out" || true; sleep "$SAMPLE_INTERVAL"; done; }
-printf 'dynamic\trepeat\tresidue\twall_s\tforward_high_s\treverse_high_s\thigh_s\tavg_gpu_util_pct\tavg_memctrl_util_pct\tmax_gpu_util_pct\tmax_memctrl_util_pct\tforward_regs\treverse_regs\tforward_blocks_per_sm\treverse_blocks_per_sm\tforward_flat_blocks\treverse_flat_blocks\tscheduler_mode\tflat_bid_mode\n' >"$RESULT"
+printf 'dynamic\tdynamic_batch\trepeat\tresidue\twall_s\tforward_high_s\treverse_high_s\thigh_s\tavg_gpu_util_pct\tavg_memctrl_util_pct\tmax_gpu_util_pct\tmax_memctrl_util_pct\tforward_regs\treverse_regs\tforward_blocks_per_sm\treverse_blocks_per_sm\tforward_flat_blocks\treverse_flat_blocks\tscheduler_mode\tflat_bid_mode\n' >"$RESULT"
 for dynamic in 0 1; do
   bin="$ONEESAN_BUILD_DIR/b300_flat_dynamic${dynamic}_bid${PRECTX_FLAT_BID}_n${N}"
   for ((rep=1;rep<=REPEATS;++rep)); do
@@ -82,7 +84,7 @@ print(f'{float(sys.argv[1])+float(sys.argv[2]):.9f}')
 PY
 )"
     read -r ag am mg mm < <(awk '{sg+=$1;sm+=$2;if($3>mg)mg=$3;if($4>mm)mm=$4;n++}END{if(n)printf "%.6f %.6f %d %d\n",sg/n,sm/n,mg,mm;else print "NA NA NA NA"}' "$util")
-    printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' "$dynamic" "$rep" "$residue" "$(field wall_s "$line")" "$fh" "$rh" "$high" "$ag" "$am" "$mg" "$mm" "$(field forward_regs "$o")" "$(field reverse_regs "$o")" "$(field forward_blocks_per_sm "$o")" "$(field reverse_blocks_per_sm "$o")" "$(field forward_flat_blocks "$g")" "$(field reverse_flat_blocks "$g")" "$sched" "$bidmode" >>"$RESULT"
+    printf '%s\t1\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' "$dynamic" "$rep" "$residue" "$(field wall_s "$line")" "$fh" "$rh" "$high" "$ag" "$am" "$mg" "$mm" "$(field forward_regs "$o")" "$(field reverse_regs "$o")" "$(field forward_blocks_per_sm "$o")" "$(field reverse_blocks_per_sm "$o")" "$(field forward_flat_blocks "$g")" "$(field reverse_flat_blocks "$g")" "$sched" "$bidmode" >>"$RESULT"
   done
 done
 
@@ -98,12 +100,12 @@ with open(summary,'w') as f:
  f.write('metric\tstatic\tdynamic\tspeedup_static_over_dynamic\n')
  for k in ('wall_s','forward_high_s','reverse_high_s','high_s'): f.write(f'{k}\t{z["0"][k]}\t{z["1"][k]}\t{z["0"][k]/z["1"][k]}\n')
 w='1' if z['1']['wall_s'] < z['0']['wall_s'] else '0'
-print(f"FLAT_DYNAMIC wall_speedup={z['0']['wall_s']/z['1']['wall_s']:.6f} high_speedup={z['0']['high_s']/z['1']['high_s']:.6f} gpu_util={z['0']['avg_gpu_util_pct']:.3f}->{z['1']['avg_gpu_util_pct']:.3f} memctl={z['0']['avg_memctrl_util_pct']:.3f}->{z['1']['avg_memctrl_util_pct']:.3f} regs={z['0']['fr']}/{z['0']['rr']}->{z['1']['fr']}/{z['1']['rr']} active={z['0']['fb']}/{z['0']['rb']}->{z['1']['fb']}/{z['1']['rb']} winner={w}")
+print(f"FLAT_DYNAMIC batch=1 wall_speedup={z['0']['wall_s']/z['1']['wall_s']:.6f} high_speedup={z['0']['high_s']/z['1']['high_s']:.6f} gpu_util={z['0']['avg_gpu_util_pct']:.3f}->{z['1']['avg_gpu_util_pct']:.3f} memctl={z['0']['avg_memctrl_util_pct']:.3f}->{z['1']['avg_memctrl_util_pct']:.3f} regs={z['0']['fr']}/{z['0']['rr']}->{z['1']['fr']}/{z['1']['rr']} active={z['0']['fb']}/{z['0']['rb']}->{z['1']['fb']}/{z['1']['rb']} winner={w}")
 with open(winner,'w') as f:
  f.write('ORBITCTA_FLAT=1\nORBITCTA_FLAT_CHUNK=1\n')
- f.write('ORBITCTA_FLAT_DYNAMIC='+w+'\n')
+ f.write('ORBITCTA_FLAT_DYNAMIC='+w+'\nORBITCTA_FLAT_DYNAMIC_BATCH=1\n')
  f.write('PRECTX_FLAT_BID='+bid+'\nPRECTX_FLAT_BID_FUSED='+fused+'\n')
  f.write('QUAD_MLP=0\nQUAD_OVERLAP_LOCAL=0\nQUAD_LOCAL_DIRECT_MAX=0\nPRECTX_WARPCOOP=0\n')
 PY
 cat "$RESULT"
-echo "flat dynamic A/B OK result=$RESULT summary=$SUMMARY ptxas=$RESOURCE winner_env=$WINNER_ENV" >&2
+echo "flat dynamic A/B OK batch=1 result=$RESULT summary=$SUMMARY ptxas=$RESOURCE winner_env=$WINNER_ENV" >&2
