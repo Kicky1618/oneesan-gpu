@@ -17,6 +17,13 @@ marker='\n\nstatic Code rank_full(MateID m,int width)'
 if marker not in s: raise SystemExit('rank_full marker not found')
 insert=r'''
 
+static inline int b300_rankstate_ilp4_blocks(Code n,int threads){
+    if(!n)return 1;
+    const Code cover=Code(threads)*4;
+    const Code need=(n+cover-1)/cover;
+    return int(std::min<Code>(65535,std::max<Code>(1,need)));
+}
+
 __global__ void b300_main_pull_rankstate_ilp4_kernel(
     const Count* __restrict__ in,const MateID* __restrict__ mates,Code n,
     const Count* __restrict__ in_block,Code nblock,
@@ -38,18 +45,11 @@ __global__ void b300_main_pull_rankstate_ilp4_kernel(
         const bool hb0=nblock&&mv0==N,hb1=v1&&nblock&&mv1==N,hb2=v2&&nblock&&mv2==N,hb3=v3&&nblock&&mv3==N;
         const Code bj0=hb0?b300_add_rank_delta(i0,rd0):Code(0),bj1=hb1?b300_add_rank_delta(i1,rd1):Code(0),bj2=hb2?b300_add_rank_delta(i2,rd2):Code(0),bj3=hb3?b300_add_rank_delta(i3,rd3):Code(0);
 
-        // The next packed rank state depends only on mate/rank metadata, not on
-        // any Count gather. Commit it before the long-latency source reads so
-        // mate, delta and height temporaries do not remain live across HBM wait.
         rank_state[i0]=b300_pack_rank_state(rd0+b300_rank_delta_step(mv0,p,h0),b300_rank_height_advance(h0,mv0));
         if(v1)rank_state[i1]=b300_pack_rank_state(rd1+b300_rank_delta_step(mv1,p,h1),b300_rank_height_advance(h1,mv1));
         if(v2)rank_state[i2]=b300_pack_rank_state(rd2+b300_rank_delta_step(mv2,p,h2),b300_rank_height_advance(h2,mv2));
         if(v3)rank_state[i3]=b300_pack_rank_state(rd3+b300_rank_delta_step(mv3,p,h3),b300_rank_height_advance(h3,mv3));
 
-        // All random addresses are ready. Issue up to eight independent random
-        // Count reads first, then the four coalesced self reads. The previous
-        // implementation kept self[4] and all rank metadata live while these
-        // random requests were outstanding.
         const Count pair0=hp0?in[pj0]:Count(0),pair1=hp1?in[pj1]:Count(0),pair2=hp2?in[pj2]:Count(0),pair3=hp3?in[pj3]:Count(0);
         const Count block0=(hb0&&bj0<nblock)?in_block[bj0]:Count(0),block1=(hb1&&bj1<nblock)?in_block[bj1]:Count(0),block2=(hb2&&bj2<nblock)?in_block[bj2]:Count(0),block3=(hb3&&bj3<nblock)?in_block[bj3]:Count(0);
         const Count self0=in[i0],self1=v1?in[i1]:Count(0),self2=v2?in[i2]:Count(0),self3=v3?in[i3]:Count(0);
@@ -63,14 +63,14 @@ __global__ void b300_main_pull_rankstate_ilp4_kernel(
 '''
 s=s.replace(marker,insert+marker,1)
 old='''if(useRankDelta)main_pull_kernel<true,true><<<bm,threads,0,c.sMain>>>(cur,c.dMate,ms.size,dcur,ds.size,nxt,p,c.dMainRankDelta);'''
-new='''if(useRankDelta)b300_main_pull_rankstate_ilp4_kernel<<<bm,threads,0,c.sMain>>>(cur,c.dMate,ms.size,dcur,ds.size,nxt,p,c.dMainRankDelta);'''
+new='''if(useRankDelta)b300_main_pull_rankstate_ilp4_kernel<<<b300_rankstate_ilp4_blocks(ms.size,threads),threads,0,c.sMain>>>(cur,c.dMate,ms.size,dcur,ds.size,nxt,p,c.dMainRankDelta);'''
 if s.count(old)!=1: raise SystemExit(f'rank-state ILP4 launch anchor expected one match got {s.count(old)}')
 s=s.replace(old,new,1)
 for required in (
-    'b300_main_pull_rankstate_ilp4_kernel','base+=4*grid','pair3=','block3=',
-    'rank_state[i3]=b300_pack_rank_state','Issue up to eight independent random',
-    'const Count self0=in[i0]'
+    'b300_rankstate_ilp4_blocks','Code(threads)*4','b300_main_pull_rankstate_ilp4_kernel',
+    'base+=4*grid','pair3=','block3=','rank_state[i3]=b300_pack_rank_state',
+    'b300_rankstate_ilp4_blocks(ms.size,threads)'
 ):
     if required not in s: raise SystemExit(f'missing rank-state ILP4 artifact: {required}')
 out.parent.mkdir(parents=True,exist_ok=True);out.write_text(s)
-print(f'generated {out} from {src}: b300_rank_state_ilp4=1 destinations_per_thread=4 packed_rank_state=1 index_first=1 hbm_request_overlap=pair,block,four_destinations recurrence_exact=1 rank_state_store_before_count_gather=1 self_load_after_random_addresses=1 random_count_requests_up_to=8 register_live_range_reduced=1 register_pressure_requires_ab=1')
+print(f'generated {out} from {src}: b300_rank_state_ilp4=1 destinations_per_thread=4 packed_rank_state=1 index_first=1 hbm_request_overlap=pair,block,four_destinations recurrence_exact=1 rank_state_store_before_count_gather=1 self_load_after_random_addresses=1 random_count_requests_up_to=8 launch_cover_per_thread=4 launch_blocks=ceil_n_over_4threads_capped65535 register_live_range_reduced=1 register_pressure_requires_ab=1')
