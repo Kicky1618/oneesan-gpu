@@ -42,9 +42,7 @@ for (p,cg,l2,t),g in by.items():
  regs,ss,sl=res.get(p,(-1,-1,-1))
  if regs<0 or ss or sl or l2!=0:continue
  w=statistics.median(float(x['wall_s']) for x in g);mv=[float(x['mc_avg_pct']) for x in g if x['mc_avg_pct']!='nan'];mc=statistics.median(mv) if mv else math.nan
- # If winner uses a fetch-size hint, cg0 is the direct control. Otherwise use
- # the opposite no-hint CG policy when available to avoid racing the same binary.
- direct = (wl2>0 and cg==1) or (wl2==0 and cg!=wcg)
+ direct=(wl2>0 and cg==1) or (wl2==0 and cg!=wcg)
  if p==wp:continue
  c.append((0 if direct else 1,w,-mc if not math.isnan(mc) else math.inf,p,t,bins[p]['binary']))
 if not c:print('NONE')
@@ -64,7 +62,7 @@ else
 fi
 
 echo "=== full-prime CG-L2 race winner=$B300_CGL2_WINNER_PROFILE threads=$B300_CGL2_WINNER_THREADS l2=${B300_CGL2_WINNER_L2_FETCH_BYTES}B partial_mc=${B300_CGL2_WINNER_MC_AVG_PCT:-NA}% ===" >&2
-env PROFILE_FILE="$PROFILE_FILE" ARCH="$ARCH" MAX_WINDOW="$MAX_WINDOW" FORCED_TARGET_MIB="$TARGET_MIB" \
+exec env PROFILE_FILE="$PROFILE_FILE" ARCH="$ARCH" MAX_WINDOW="$MAX_WINDOW" FORCED_TARGET_MIB="$TARGET_MIB" \
   FORCED_OVERRIDE_BIN="$B300_CGL2_WINNER_BIN" FORCED_OVERRIDE_LABEL="cgl2_${B300_CGL2_WINNER_PROFILE}" FORCED_OVERRIDE_THREADS="$B300_CGL2_WINNER_THREADS" \
   REBUILD_BUCKETS="$REBUILD_BUCKETS" SELECT_ONLY="$SELECT_ONLY" PREFIX="$RACE_PREFIX" "${BASE_ARGS[@]}" \
-  exec "$ONEESAN_ROOT/scripts/run/b300x8-race-external-forced-profiled-once.sh" 27 "$@"
+  "$ONEESAN_ROOT/scripts/run/b300x8-race-external-forced-profiled-once.sh" 27 "$@"
