@@ -1,7 +1,7 @@
 #pragma once
 
 // Reuse the proven LOW enqueue path, thread validation, environment parser and
-// shared-memory sizing from the ordinary orbit-CTA graph.  HIGH is replaced by
+// shared-memory sizing from the ordinary orbit-CTA graph. HIGH is replaced by
 // the global flat persistent pool below.
 #include "ramstream32_bucket_orbit_closure_pattern10_depthcode_orbitcta_delta_direct_affine_rankformula_nometa4_abstract_graph.cuh"
 #include "ramstream32_bucket_orbit_closure_pattern10_depthcode_orbitcta_flat_delta_direct_affine_rankformula_nometa4_abstract.cuh"
@@ -28,7 +28,13 @@ static inline int p10dc_orbitcta_flat_blocks_per_sm_env(int fallback) {
     return v;
 }
 
-static void p10dc_orbitcta_flat_report_high_occupancy(int threads) {
+struct P10DCOrbitCtaFlatOccupancy {
+    int sms = 0;
+    int forward_blocks_per_sm = 0;
+    int reverse_blocks_per_sm = 0;
+};
+
+static P10DCOrbitCtaFlatOccupancy p10dc_orbitcta_flat_report_high_occupancy(int threads) {
     const size_t smem = p10dc_orbitcta_high_smem_bytes(threads);
     int device = 0;
     ck(cudaGetDevice(&device), "flat orbitcta occupancy get device");
@@ -70,6 +76,7 @@ static void p10dc_orbitcta_flat_report_high_occupancy(int threads) {
               << " reverse_warp_occupancy_pct="
               << (cap ? 100.0 * double(rw) / double(cap) : 0.0)
               << '\n';
+    return P10DCOrbitCtaFlatOccupancy{prop.multiProcessorCount, fb, rb};
 }
 
 static void bucket_enqueue_high_orbit_closure_pattern10_depthcode_orbitcta_flat_rankformula_nometa4_abstract(
@@ -120,24 +127,49 @@ struct BucketPattern10DepthCodeFlatOrbitCtaDirectAffineRankFormulaNometa4Abstrac
         (void)gx; (void)gy;
         p10dc_warpstriped_delta_direct_affine_rankformula_nometa4_abstract_require_threads(threads);
         p10dc_install_rankformula_abstract_lut();
-        p10dc_orbitcta_flat_report_high_occupancy(threads);
+        const P10DCOrbitCtaFlatOccupancy occ =
+            p10dc_orbitcta_flat_report_high_occupancy(threads);
 
         int device = 0;
         ck(cudaGetDevice(&device), "flat orbitcta grid get device");
-        cudaDeviceProp prop{};
-        ck(cudaGetDeviceProperties(&prop, device), "flat orbitcta grid device props");
         const int low_gx = p10dc_rankformula_grid_env("BUCKET_LOW_GRID_X", 16);
         const int low_gy = p10dc_rankformula_grid_env("BUCKET_LOW_GRID_Y", 8);
-        const int per_sm = p10dc_orbitcta_flat_blocks_per_sm_env(8);
-        const int auto_blocks = std::max(1, prop.multiProcessorCount * per_sm);
-        const int flat_blocks = p10dc_orbitcta_flat_blocks_env(auto_blocks);
+
+        // A persistent static-stride grid should normally have about as many
+        // CTAs as can be resident. Oversizing the grid reserves q residues for
+        // CTAs that have not started yet and turns the persistent pass into
+        // multiple scheduling waves. Keep explicit tuning knobs, but make the
+        // no-env production default occupancy-derived and direction-specific.
+        const int explicit_blocks = p10dc_orbitcta_flat_blocks_env(0);
+        const int explicit_per_sm = p10dc_orbitcta_flat_blocks_per_sm_env(0);
+        int forward_flat_blocks = 0, reverse_flat_blocks = 0;
+        const char* pool_mode = nullptr;
+        if (explicit_blocks > 0) {
+            forward_flat_blocks = reverse_flat_blocks = explicit_blocks;
+            pool_mode = "absolute";
+        } else if (explicit_per_sm > 0) {
+            forward_flat_blocks = reverse_flat_blocks =
+                std::max(1, occ.sms * explicit_per_sm);
+            pool_mode = "per_sm";
+        } else {
+            forward_flat_blocks =
+                std::max(1, occ.sms * std::max(1, occ.forward_blocks_per_sm));
+            reverse_flat_blocks =
+                std::max(1, occ.sms * std::max(1, occ.reverse_blocks_per_sm));
+            pool_mode = "occupancy";
+        }
+        const int flat_blocks =
+            forward_flat_blocks == reverse_flat_blocks ? forward_flat_blocks : 0;
 
         std::cerr << "rankformula_orbitcta_flat_grid device=" << device
-                  << " sms=" << prop.multiProcessorCount
+                  << " sms=" << occ.sms
                   << " threads=" << threads
                   << " low_gx=" << low_gx << " low_gy=" << low_gy
                   << " flat_blocks=" << flat_blocks
-                  << " blocks_per_sm_request=" << per_sm
+                  << " forward_flat_blocks=" << forward_flat_blocks
+                  << " reverse_flat_blocks=" << reverse_flat_blocks
+                  << " blocks_per_sm_request=" << explicit_per_sm
+                  << " pool_mode=" << pool_mode
                   << " scheduler=persistent_global_orbit_pool"
                   << " bid_binary_search=1"
                   << " high_grid_y=1 high_grid_z=1"
@@ -153,7 +185,7 @@ struct BucketPattern10DepthCodeFlatOrbitCtaDirectAffineRankFormulaNometa4Abstrac
         }, "capture flat orbitcta forward LOW");
         capture_one(BKOC_GRAPH_FORWARD_HIGH, [&] {
             bucket_enqueue_high_orbit_closure_pattern10_depthcode_orbitcta_flat_rankformula_nometa4_abstract(
-                stream, threads, flat_blocks);
+                stream, threads, forward_flat_blocks);
         }, "capture flat orbitcta forward HIGH");
         capture_one(BKOC_GRAPH_REVERSE_LOW, [&] {
             bucket_enqueue_reverse_low_pattern10_depthcode_warpstriped_delta_direct_affine_rankformula_nometa4_abstract(
@@ -161,7 +193,7 @@ struct BucketPattern10DepthCodeFlatOrbitCtaDirectAffineRankFormulaNometa4Abstrac
         }, "capture flat orbitcta reverse LOW");
         capture_one(BKOC_GRAPH_REVERSE_HIGH, [&] {
             bucket_enqueue_reverse_high_pattern10_depthcode_orbitcta_flat_rankformula_nometa4_abstract(
-                stream, threads, flat_blocks);
+                stream, threads, reverse_flat_blocks);
         }, "capture flat orbitcta reverse HIGH");
     }
 
