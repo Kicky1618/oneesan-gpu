@@ -55,6 +55,13 @@ __global__ void main_pull_kernel_ilp2(
         if(v1){{uint64_t a1=uint64_t(self1)+pair1+block1;if(a1>=mod)a1-=mod;if(a1>=mod)a1-=mod;out_main[i1]=Count(a1);}}
     }}
 }}
+
+static inline int b300_main_pull_ilp2_blocks(Code n,int threads){{
+    if(!n)return 1;
+    const Code cover=Code(threads)*2;
+    const Code need=(n+cover-1)/cover;
+    return int(std::min<Code>(65535,std::max<Code>(1,need)));
+}}
 '''
 s=s.replace(marker,insert+marker,1)
 old='''if(ms.size){
@@ -62,12 +69,12 @@ old='''if(ms.size){
                 else main_pull_kernel<false><<<bm,threads,0,c.sMain>>>(cur,nullptr,ms.size,dcur,ds.size,nxt,p);
             }'''
 new='''if(ms.size){
-                if(useMate)main_pull_kernel_ilp2<<<bm,threads,0,c.sMain>>>(cur,c.dMate,ms.size,dcur,ds.size,nxt,p);
+                if(useMate)main_pull_kernel_ilp2<<<b300_main_pull_ilp2_blocks(ms.size,threads),threads,0,c.sMain>>>(cur,c.dMate,ms.size,dcur,ds.size,nxt,p);
                 else main_pull_kernel<false><<<bm,threads,0,c.sMain>>>(cur,nullptr,ms.size,dcur,ds.size,nxt,p);
             }'''
 if s.count(old)!=1:raise SystemExit(f'main pull launch anchor expected one match got {s.count(old)}')
 s=s.replace(old,new,1)
-for required in ('main_pull_kernel_ilp2','base+=2*grid','b300_low_cached_drop_rank','const Count pair0=','const Count block1='):
+for required in ('main_pull_kernel_ilp2','base+=2*grid','b300_low_cached_drop_rank','const Count pair0=','const Count block1=','b300_main_pull_ilp2_blocks(ms.size,threads)','const Code cover=Code(threads)*2'):
     if required not in s:raise SystemExit(f'missing ILP2 artifact: {required}')
 out.parent.mkdir(parents=True,exist_ok=True);out.write_text(s)
-print(f'generated {out} from {src}: b300_main_pull_ilp2=1 destinations_per_thread=2 index_first=1 low_rank=chunked high_rank={"chunked" if "b300_high_chunk_drop_rank" in s else "generic"} register_pressure_requires_b300_ab=1')
+print(f'generated {out} from {src}: b300_main_pull_ilp2=1 destinations_per_thread=2 launch_blocks=ceil_n_over_2threads_capped65535 launch_mlp_fixed=1 index_first=1 low_rank=chunked high_rank={"chunked" if "b300_high_chunk_drop_rank" in s else "generic"} register_pressure_requires_b300_ab=1')
