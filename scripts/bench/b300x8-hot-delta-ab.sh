@@ -30,8 +30,11 @@ build_one(){
     "$ONEESAN_ROOT/scripts/build/b300-hbm32.sh" >"$LOGDIR/$name.build.log" 2>&1
   [[ -x "$bin" ]] || { echo "missing binary $bin" >&2; exit 3; }
   if [[ "$hot" == 1 ]]; then
-    grep -q 'b300_hot_delta_table=1 delta_bits=32 constant_bytes_added=20880' "$LOGDIR/$name.build.log" || {
+    grep -q 'b300_hot_delta_table=1 delta_bits=32 constant_bytes_added=17400' "$LOGDIR/$name.build.log" || {
       echo "hot-delta generator marker missing" >&2; exit 4;
+    }
+    grep -q 'step_n_stored=0' "$LOGDIR/$name.build.log" || {
+      echo "compact hot-step marker missing" >&2; exit 4;
     }
   fi
   python3 "$PARSER" "$LOGDIR/$name.build.log" --label "$name" >>"$RESOURCE" || true
@@ -91,7 +94,7 @@ q={z['variant']:z for z in out}
 print(f'hotd32_wall_speedup={q["base"]["wall_s"]/q["hotd32"]["wall_s"]:.6f}x')
 print(f'hotd32_active_speedup={q["base"]["active_max_s"]/q["hotd32"]["active_max_s"]:.6f}x')
 print(f'hotd32_memctrl_delta={q["hotd32"]["avg_memctrl_pct"]-q["base"]["avg_memctrl_pct"]:.6f}pp')
-print('delta_bits=32 constant_bytes_added=20880 exact_residue_match=1')
+print('delta_bits=32 constant_bytes_added=17400 step_n_stored=0 exact_residue_match=1')
 PY
 
 echo "b300x8-hot-delta-ab OK result=$RESULT summary=$SUMMARY resource=$RESOURCE rows=$ROWS" >&2
