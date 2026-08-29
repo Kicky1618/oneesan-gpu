@@ -2,6 +2,10 @@
 
 #include "ramstream32_bucket_precomputed_high_ctx_compact.cuh"
 
+#ifndef P10DC_RANKFORMULA_PRECTX_FLAT_BID_FUSED
+#define P10DC_RANKFORMULA_PRECTX_FLAT_BID_FUSED 0
+#endif
+
 // The compact prectx already has one unused byte for alignment. Flat orbit
 // scheduling needs the source main-block id before it can build xb/jb/db, so
 // cache that id in the existing pad byte. W28 has only 45 main blocks. This
@@ -11,6 +15,9 @@ static_assert(P10DC_HIGH_ROW_AFFINE_BLOCKS <= 255u,
 static_assert(sizeof(P10DCHighClosureCompactPreCtx) ==
                   sizeof(uint32_t) * (BKCZ_MAX_LOCAL + 2u),
               "flat-bid cache must not grow compact prectx");
+static_assert(P10DC_RANKFORMULA_PRECTX_FLAT_BID_FUSED == 0 ||
+              P10DC_RANKFORMULA_PRECTX_FLAT_BID_FUSED == 1,
+              "PRECTX_FLAT_BID_FUSED must be 0 or 1");
 
 __device__ __forceinline__ void p10dc_apply_loaded_compact_prectx(
     P10DCDirectHighResolvedCtx& c,
@@ -47,6 +54,13 @@ __global__ void p10dc_annotate_forward_compact_prectx_bid_kernel(
         nrnl[q].pad = uint8_t(bid);
 }
 
+__device__ __forceinline__ uint32_t p10dc_forward_compact_prectx_flat_bid(
+    uint32_t q, bool nn
+) {
+    return uint32_t(nn ? D_P10DC_COMPACT_PRECTX_FWD_NN[q].pad
+                       : D_P10DC_COMPACT_PRECTX_FWD_NRNL[q].pad);
+}
+
 __device__ __forceinline__ P10DCHighClosureCompactPreCtx
 p10dc_load_forward_compact_prectx_flat(
     uint32_t q, bool nn
@@ -78,6 +92,14 @@ __global__ void p10dc_annotate_reverse_compact_prectx_bid_kernel(
     for (uint32_t q = D_RS54_HIGH_NL_OFF[oi] + threadIdx.x;
          q < D_RS54_HIGH_NL_OFF[oi + 1u]; q += blockDim.x)
         nl[q].pad = uint8_t(bid);
+}
+
+__device__ __forceinline__ uint32_t p10dc_reverse_compact_prectx_flat_bid(
+    uint32_t q, uint32_t kind
+) {
+    if (kind == CPU_ORBIT_NN) return uint32_t(D_P10DC_COMPACT_PRECTX_REV_NN[q].pad);
+    if (kind == CPU_ORBIT_NR) return uint32_t(D_P10DC_COMPACT_PRECTX_REV_NR[q].pad);
+    return uint32_t(D_P10DC_COMPACT_PRECTX_REV_NL[q].pad);
 }
 
 __device__ __forceinline__ P10DCHighClosureCompactPreCtx
@@ -118,7 +140,7 @@ struct BucketFusedCompactPrecomputedHighCtxFlatBidTables
         std::cerr << "p10dc_compact_flat_bid fixed_owner=" << fixed
                   << " bytes_added=0"
                   << " bid_storage=existing_pad_u8"
-                  << " fused_context_load=1"
+                  << " fused_context_load=" << P10DC_RANKFORMULA_PRECTX_FLAT_BID_FUSED
                   << " forward=" << P10DC_RANKFORMULA_PRECTX_FORWARD
                   << " reverse=" << P10DC_RANKFORMULA_PRECTX_REVERSE
                   << '\n';
