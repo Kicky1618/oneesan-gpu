@@ -9,7 +9,42 @@ static void p10dc_warpstriped_delta_direct_affine_rankformula_nometa4_abstract_r
     }
 }
 
+static void p10dc_rankformula_nometa4_abstract_configure_high_smem(int threads) {
+    const size_t smem = p10dc_direct_warpctx_smem_bytes(threads);
+    int device = 0;
+    ck(cudaGetDevice(&device), "rankformula smem get device");
+    cudaDeviceProp prop{};
+    ck(cudaGetDeviceProperties(&prop, device), "rankformula smem device props");
+    const size_t default_limit = size_t(prop.sharedMemPerBlock);
+    const size_t optin_limit = size_t(prop.sharedMemPerBlockOptin);
+    if (smem > optin_limit) {
+        std::cerr << "rankformula HIGH dynamic shared memory exceeds device opt-in limit"
+                  << " device=" << device
+                  << " threads=" << threads
+                  << " requested=" << smem
+                  << " default_limit=" << default_limit
+                  << " optin_limit=" << optin_limit << '\n';
+        std::exit(773);
+    }
+    if (smem > default_limit) {
+        ck(cudaFuncSetAttribute(
+               bucket_high_orbit_closure_pattern10_depthcode_warpstriped_delta_direct_affine_rankformula_nometa4_abstract_kernel,
+               cudaFuncAttributeMaxDynamicSharedMemorySize, int(smem)),
+           "rankformula forward HIGH opt-in smem");
+        ck(cudaFuncSetAttribute(
+               bucket_reverse_high_pattern10_depthcode_warpstriped_delta_direct_affine_rankformula_nometa4_abstract_kernel,
+               cudaFuncAttributeMaxDynamicSharedMemorySize, int(smem)),
+           "rankformula reverse HIGH opt-in smem");
+        std::cerr << "rankformula_high_smem_optin device=" << device
+                  << " threads=" << threads
+                  << " dynamic_smem_bytes=" << smem
+                  << " default_limit=" << default_limit
+                  << " optin_limit=" << optin_limit << '\n';
+    }
+}
+
 static void p10dc_rankformula_nometa4_abstract_report_high_occupancy(int threads) {
+    p10dc_rankformula_nometa4_abstract_configure_high_smem(threads);
     const size_t smem = p10dc_direct_warpctx_smem_bytes(threads);
     int device = 0;
     ck(cudaGetDevice(&device), "rankformula occupancy get device");
@@ -56,6 +91,6 @@ static void p10dc_rankformula_nometa4_abstract_report_high_occupancy(int threads
 }
 
 static void bucket_enqueue_low_orbit_closure_pattern10_depthcode_warpstriped_delta_direct_affine_rankformula_nometa4_abstract(const StorageLayout& layout,cudaStream_t stream,int threads=256,int gx=16,int gy=8){dim3 block(threads),grid(gx,gy,unsigned(layout.main_blocks.size()));for(int p=LOW_LUT_K;p>=1;--p){bucket_low_orbit_closure_pattern10_depthcode_kernel<<<grid,block,0,stream>>>(p);ck(cudaGetLastError(),"bucket low rankformula-nometa4-abstract stream");}}
-static void bucket_enqueue_high_orbit_closure_pattern10_depthcode_warpstriped_delta_direct_affine_rankformula_nometa4_abstract(const StorageLayout& layout,cudaStream_t stream,int threads=256,int gx=16,int gy=8){p10dc_warpstriped_delta_direct_affine_rankformula_nometa4_abstract_require_threads(threads);dim3 block(threads),grid(gx,gy,unsigned(layout.main_blocks.size()));const size_t smem=p10dc_direct_warpctx_smem_bytes(threads);for(int p=TARGET_W-1;p>=LOW_LUT_K+1;--p){bucket_high_orbit_closure_pattern10_depthcode_warpstriped_delta_direct_affine_rankformula_nometa4_abstract_kernel<<<grid,block,smem,stream>>>(p);ck(cudaGetLastError(),"bucket high rankformula-nometa4-abstract stream");}}
+static void bucket_enqueue_high_orbit_closure_pattern10_depthcode_warpstriped_delta_direct_affine_rankformula_nometa4_abstract(const StorageLayout& layout,cudaStream_t stream,int threads=256,int gx=16,int gy=8){p10dc_warpstriped_delta_direct_affine_rankformula_nometa4_abstract_require_threads(threads);p10dc_rankformula_nometa4_abstract_configure_high_smem(threads);dim3 block(threads),grid(gx,gy,unsigned(layout.main_blocks.size()));const size_t smem=p10dc_direct_warpctx_smem_bytes(threads);for(int p=TARGET_W-1;p>=LOW_LUT_K+1;--p){bucket_high_orbit_closure_pattern10_depthcode_warpstriped_delta_direct_affine_rankformula_nometa4_abstract_kernel<<<grid,block,smem,stream>>>(p);ck(cudaGetLastError(),"bucket high rankformula-nometa4-abstract stream");}}
 static void bucket_enqueue_reverse_low_pattern10_depthcode_warpstriped_delta_direct_affine_rankformula_nometa4_abstract(const StorageLayout& layout,cudaStream_t stream,int threads=256,int gx=16,int gy=8){dim3 block(threads),grid(gx,gy,unsigned(layout.main_blocks.size()));for(int p=1;p<=LOW_LUT_K;++p){bucket_reverse_low_pattern10_depthcode_kernel<<<grid,block,0,stream>>>(p);ck(cudaGetLastError(),"bucket reverse low rankformula-nometa4-abstract stream");}}
-static void bucket_enqueue_reverse_high_pattern10_depthcode_warpstriped_delta_direct_affine_rankformula_nometa4_abstract(const StorageLayout& layout,cudaStream_t stream,int threads=256,int gx=16,int gy=8){p10dc_warpstriped_delta_direct_affine_rankformula_nometa4_abstract_require_threads(threads);dim3 block(threads),grid(gx,gy,unsigned(layout.main_blocks.size()));const size_t smem=p10dc_direct_warpctx_smem_bytes(threads);for(int p=LOW_LUT_K+1;p<TARGET_W;++p){bucket_reverse_high_pattern10_depthcode_warpstriped_delta_direct_affine_rankformula_nometa4_abstract_kernel<<<grid,block,smem,stream>>>(p);ck(cudaGetLastError(),"bucket reverse high rankformula-nometa4-abstract stream");}}
+static void bucket_enqueue_reverse_high_pattern10_depthcode_warpstriped_delta_direct_affine_rankformula_nometa4_abstract(const StorageLayout& layout,cudaStream_t stream,int threads=256,int gx=16,int gy=8){p10dc_warpstriped_delta_direct_affine_rankformula_nometa4_abstract_require_threads(threads);p10dc_rankformula_nometa4_abstract_configure_high_smem(threads);dim3 block(threads),grid(gx,gy,unsigned(layout.main_blocks.size()));const size_t smem=p10dc_direct_warpctx_smem_bytes(threads);for(int p=LOW_LUT_K+1;p<TARGET_W;++p){bucket_reverse_high_pattern10_depthcode_warpstriped_delta_direct_affine_rankformula_nometa4_abstract_kernel<<<grid,block,smem,stream>>>(p);ck(cudaGetLastError(),"bucket reverse high rankformula-nometa4-abstract stream");}}
