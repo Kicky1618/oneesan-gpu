@@ -21,6 +21,10 @@ for s in \
   'b300-nextgen-hybrid8-staged-calibrate.sh' \
   'B300_HYBRID8_STAGED_VALIDATED' \
   'B300_HYBRID8_FINAL_ENABLED' \
+  'HYBRID_MANIFEST="${HYBRID_MANIFEST:-${HYBRID_WINNER_ENV%.env}_promotion-inputs.sha256}"' \
+  'sha256sum "$HYBRID_WINNER_ENV" "$B300_HYBRID8_FINAL_BIN" "$B300_HYBRID8_BASE_BIN"' \
+  'sha256sum -c "$HYBRID_MANIFEST"' \
+  'MANIFEST="$HYBRID_MANIFEST"' \
   'b300x8-ilp8-nextself-staged-ab.sh' \
   'B300_NEXTSELF_STAGED_VALIDATED' \
   'JOINT STAGED SUMMARY' \
@@ -49,12 +53,21 @@ for s in \
   'B300_HYBRID8_FINAL_ENABLED' \
   'B300_HYBRID8_FINAL_BIN' \
   'B300_HYBRID8_BASE_BIN' \
-  'ROWS=1/4/8 validation'; do
+  'B300_HYBRID8_FINAL_STAGE_ROWS' \
+  'B300_HYBRID8_FINAL_STAGE_RESIDUE' \
+  'MANIFEST="${MANIFEST:-${WINNER_ENV%.env}_promotion-inputs.sha256}"' \
+  'staged hybrid8 promotion fingerprint mismatch'; do
   grep -Fq "$s" "$hybrid" || { echo "hybrid promotion marker missing: $s" >&2; exit 4; }
 done
 
-grep -Fq 'b300_nextgen_cgl2_calibrate_exact_gates' "$hybrid_stage" || { echo 'nextgen A-D exact gate marker missing' >&2; exit 4; }
-grep -Fq 'b300_nextgen_hybrid8_exact_intermediate_match' "$hybrid_stage" || { echo 'hybrid exact gate marker missing' >&2; exit 4; }
+for s in \
+  'b300_nextgen_cgl2_calibrate_exact_gates' \
+  'b300_nextgen_hybrid8_exact_intermediate_match' \
+  'if [[ "$rows" == "$SEARCH_ROWS" && "$stage_res" != "$CORE_RES" ]]' \
+  'B300_HYBRID8_FINAL_STAGE_ROWS' \
+  'B300_HYBRID8_FINAL_STAGE_RESIDUE'; do
+  grep -Fq "$s" "$hybrid_stage" || { echo "hybrid staged marker missing: $s" >&2; exit 4; }
+done
 grep -Fq 'B300_NEXTSELF_STAGED_VALIDATED=1' "$next_stage" || { echo 'next-self staged exact gate marker missing' >&2; exit 4; }
 grep -Fq 'FORCED_OVERRIDE_BIN="$NEXTSELF_ADAPTER"' "$next" || { echo 'next-self full-prime promotion marker missing' >&2; exit 4; }
 
@@ -69,4 +82,4 @@ for s in \
   grep -Fq "$s" "$race" || { echo "single-pass extra marker missing: $s" >&2; exit 4; }
 done
 
-echo 'b300_joint_nextgen_hybrid8_preflight=OK prepare=OK staged_abcd=OK hybrid8_gate=OK nextself_gate=OK fallback=OK extras=3 unified_fullprime_max7=OK gpu_work=0 actions_triggered=0'
+echo 'b300_joint_nextgen_hybrid8_preflight=OK prepare=OK staged_abcd=OK hybrid8_gate=OK row_scoped_residue=OK hybrid8_fingerprint=OK nextself_gate=OK fallback=OK extras=3 unified_fullprime_max7=OK gpu_work=0 actions_triggered=0'
