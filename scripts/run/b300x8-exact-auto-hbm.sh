@@ -2,19 +2,16 @@
 set -euo pipefail
 source "$(dirname -- "${BASH_SOURCE[0]}")/../lib/common.sh"
 
-# Production entry point for the observed low-memory-controller regime. Race the
-# current full-pull stack (baseline, ILP3, ILP4, high-drop chunk and zero-extra-
-# state low-main recurrence) against warp-striped and orbit-CTA pair64 memory
-# pipelines in dense and sparse descriptor encodings. The HBM9 selector exact-
-# compares one CRT residue, records wall/MC utilization and ptxas resources,
-# keeps the winning smoke residue as a checkpoint, then continues only the
-# fastest correct backend.
+# Production entry point for the observed low-memory-controller regime. First
+# preselect the five full-pull variants with a cheap exact partial-row race, then
+# full-smoke only that winner against the four warp/orbit descriptor pipelines.
+# This preserves the complete-residue correctness gate while avoiding four
+# redundant full n=27 forced smoke runs.
 export COL_ILP="${COL_ILP:-2}"
 export PAIR_MLP="${PAIR_MLP:-1}"
 export RANKFORMULA_MLP_WINDOW4="${RANKFORMULA_MLP_WINDOW4:-1}"
 export PM_ACCUM="${PM_ACCUM:-1}"
 export CPASYNC_PAIR="${CPASYNC_PAIR:-0}"
-export CANDIDATES="${CANDIDATES:-forced forced_ilp3 forced_ilp4 forced_high forced_lowrec warp_dense warp_sparse orbit_dense orbit_sparse}"
 
 case "$COL_ILP" in 1|2|4) ;; *) echo "COL_ILP must be 1,2,4" >&2; exit 2;; esac
 for x in PAIR_MLP RANKFORMULA_MLP_WINDOW4 PM_ACCUM CPASYNC_PAIR; do
@@ -26,5 +23,5 @@ if [[ "$PAIR_MLP" == 1 ]]; then
 fi
 [[ "$CPASYNC_PAIR" == 0 || "$PAIR_MLP" == 1 ]] || { echo "CPASYNC_PAIR requires PAIR_MLP=1" >&2; exit 2; }
 
-echo "HBM auto9 profile col_ilp=$COL_ILP pair_mlp=$PAIR_MLP window4=$RANKFORMULA_MLP_WINDOW4 pm_accum=$PM_ACCUM cpasync_pair=$CPASYNC_PAIR candidates='$CANDIDATES'" >&2
-exec "$ONEESAN_ROOT/scripts/run/b300x8-exact-auto-hbm9.sh" "$@"
+echo "HBM staged-auto profile forced_preselect_rows=${FORCED_PRESELECT_ROWS:-1} col_ilp=$COL_ILP pair_mlp=$PAIR_MLP window4=$RANKFORMULA_MLP_WINDOW4 pm_accum=$PM_ACCUM cpasync_pair=$CPASYNC_PAIR" >&2
+exec "$ONEESAN_ROOT/scripts/run/b300x8-exact-auto-hbm9-staged.sh" "$@"
