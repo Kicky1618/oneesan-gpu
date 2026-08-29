@@ -6,17 +6,33 @@
 #include "ramstream32_bucket_orbit_closure_pattern10_depthcode_orbitcta_delta_direct_affine_rankformula_nometa4_abstract_graph.cuh"
 #include "ramstream32_bucket_orbit_closure_pattern10_depthcode_orbitcta_flat_delta_direct_affine_rankformula_nometa4_abstract.cuh"
 
-#if P10DC_RANKFORMULA_PRECTX_FLAT_BID
+#ifndef P10DC_RANKFORMULA_PRECTX_FLAT_BID_FUSED
+#define P10DC_RANKFORMULA_PRECTX_FLAT_BID_FUSED 0
+#endif
+
+#if P10DC_ORBITCTA_FLAT_DYNAMIC
+#define P10DC_ORBITCTA_FLAT_FORWARD_KERNEL bucket_high_orbit_closure_pattern10_depthcode_orbitcta_flat_dynamic_kernel
+#define P10DC_ORBITCTA_FLAT_REVERSE_KERNEL bucket_reverse_high_pattern10_depthcode_orbitcta_flat_dynamic_kernel
+#define P10DC_ORBITCTA_FLAT_SCHEDULER_MODE "dynamic_atomic_queue"
+#elif P10DC_RANKFORMULA_PRECTX_FLAT_BID
 #define P10DC_ORBITCTA_FLAT_FORWARD_KERNEL bucket_high_orbit_closure_pattern10_depthcode_orbitcta_flat_prectx_bid_kernel
 #define P10DC_ORBITCTA_FLAT_REVERSE_KERNEL bucket_reverse_high_pattern10_depthcode_orbitcta_flat_prectx_bid_kernel
-#define P10DC_ORBITCTA_FLAT_BID_MODE "compact_prectx"
+#define P10DC_ORBITCTA_FLAT_SCHEDULER_MODE "static_cyclic"
 #elif P10DC_ORBITCTA_FLAT_CHUNK > 1
 #define P10DC_ORBITCTA_FLAT_FORWARD_KERNEL bucket_high_orbit_closure_pattern10_depthcode_orbitcta_flat_chunked_kernel
 #define P10DC_ORBITCTA_FLAT_REVERSE_KERNEL bucket_reverse_high_pattern10_depthcode_orbitcta_flat_chunked_kernel
-#define P10DC_ORBITCTA_FLAT_BID_MODE "chunk_amortized"
+#define P10DC_ORBITCTA_FLAT_SCHEDULER_MODE "static_chunk_cyclic"
 #else
 #define P10DC_ORBITCTA_FLAT_FORWARD_KERNEL bucket_high_orbit_closure_pattern10_depthcode_orbitcta_flat_kernel
 #define P10DC_ORBITCTA_FLAT_REVERSE_KERNEL bucket_reverse_high_pattern10_depthcode_orbitcta_flat_kernel
+#define P10DC_ORBITCTA_FLAT_SCHEDULER_MODE "static_cyclic"
+#endif
+
+#if P10DC_RANKFORMULA_PRECTX_FLAT_BID
+#define P10DC_ORBITCTA_FLAT_BID_MODE "compact_prectx"
+#elif P10DC_ORBITCTA_FLAT_CHUNK > 1
+#define P10DC_ORBITCTA_FLAT_BID_MODE "chunk_amortized"
+#else
 #define P10DC_ORBITCTA_FLAT_BID_MODE "binary_search"
 #endif
 
@@ -74,7 +90,10 @@ static P10DCOrbitCtaFlatOccupancy p10dc_orbitcta_flat_report_high_occupancy(int 
               << " threads=" << threads
               << " dynamic_smem_bytes=" << smem
               << " flat_chunk=" << P10DC_ORBITCTA_FLAT_CHUNK
+              << " flat_dynamic=" << P10DC_ORBITCTA_FLAT_DYNAMIC
+              << " scheduler_mode=" << P10DC_ORBITCTA_FLAT_SCHEDULER_MODE
               << " flat_bid_mode=" << P10DC_ORBITCTA_FLAT_BID_MODE
+              << " flat_bid_fused=" << P10DC_RANKFORMULA_PRECTX_FLAT_BID_FUSED
               << " cpasync_pair=" << P10DC_RANKFORMULA_CPASYNC_PAIR
               << " forward_regs=" << fa.numRegs
               << " reverse_regs=" << ra.numRegs
@@ -91,6 +110,15 @@ static P10DCOrbitCtaFlatOccupancy p10dc_orbitcta_flat_report_high_occupancy(int 
     return P10DCOrbitCtaFlatOccupancy{prop.multiProcessorCount, fb, rb};
 }
 
+static inline void p10dc_orbitcta_flat_enqueue_reset(cudaStream_t stream) {
+#if P10DC_ORBITCTA_FLAT_DYNAMIC
+    p10dc_orbitcta_flat_dynamic_reset_kernel<<<1, 1, 0, stream>>>();
+    ck(cudaGetLastError(), "flat orbitcta dynamic queue reset");
+#else
+    (void)stream;
+#endif
+}
+
 static void bucket_enqueue_high_orbit_closure_pattern10_depthcode_orbitcta_flat_rankformula_nometa4_abstract(
     cudaStream_t stream, int threads, int blocks
 ) {
@@ -99,6 +127,7 @@ static void bucket_enqueue_high_orbit_closure_pattern10_depthcode_orbitcta_flat_
     const dim3 grid(unsigned(blocks));
     const size_t smem = p10dc_orbitcta_high_smem_bytes(threads);
     for (int p = TARGET_W - 1; p >= LOW_LUT_K + 1; --p) {
+        p10dc_orbitcta_flat_enqueue_reset(stream);
         P10DC_ORBITCTA_FLAT_FORWARD_KERNEL<<<grid, block, smem, stream>>>(p);
         ck(cudaGetLastError(), "bucket high flat orbitcta rankformula stream");
     }
@@ -112,6 +141,7 @@ static void bucket_enqueue_reverse_high_pattern10_depthcode_orbitcta_flat_rankfo
     const dim3 grid(unsigned(blocks));
     const size_t smem = p10dc_orbitcta_high_smem_bytes(threads);
     for (int p = LOW_LUT_K + 1; p < TARGET_W; ++p) {
+        p10dc_orbitcta_flat_enqueue_reset(stream);
         P10DC_ORBITCTA_FLAT_REVERSE_KERNEL<<<grid, block, smem, stream>>>(p);
         ck(cudaGetLastError(), "bucket reverse high flat orbitcta rankformula stream");
     }
@@ -178,10 +208,14 @@ struct BucketPattern10DepthCodeFlatOrbitCtaDirectAffineRankFormulaNometa4Abstrac
                   << " blocks_per_sm_request=" << explicit_per_sm
                   << " pool_mode=" << pool_mode
                   << " scheduler=persistent_global_orbit_pool"
+                  << " scheduler_mode=" << P10DC_ORBITCTA_FLAT_SCHEDULER_MODE
                   << " flat_chunk=" << P10DC_ORBITCTA_FLAT_CHUNK
+                  << " flat_dynamic=" << P10DC_ORBITCTA_FLAT_DYNAMIC
                   << " flat_bid_mode=" << P10DC_ORBITCTA_FLAT_BID_MODE
+                  << " flat_bid_fused=" << P10DC_RANKFORMULA_PRECTX_FLAT_BID_FUSED
                   << " bid_binary_search_per_chunk="
                   << (P10DC_RANKFORMULA_PRECTX_FLAT_BID ? 0 : 1)
+                  << " queue_atomic_per_orbit=" << P10DC_ORBITCTA_FLAT_DYNAMIC
                   << " high_grid_y=1 high_grid_z=1"
                   << " context_smem_bytes=" << sizeof(P10DCDirectHighResolvedCtx)
                   << " launch_smem_bytes=" << p10dc_orbitcta_high_smem_bytes(threads)
@@ -235,5 +269,6 @@ static void bucket_pattern10_depthcode_flat_orbitcta_rankformula_nometa4_abstrac
 }
 
 #undef P10DC_ORBITCTA_FLAT_BID_MODE
+#undef P10DC_ORBITCTA_FLAT_SCHEDULER_MODE
 #undef P10DC_ORBITCTA_FLAT_REVERSE_KERNEL
 #undef P10DC_ORBITCTA_FLAT_FORWARD_KERNEL
