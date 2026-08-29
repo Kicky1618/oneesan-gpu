@@ -1,5 +1,4 @@
 #include "../../common/gridfp_transition.hpp"
-#include "../../common/gridfp_closure_inverse.hpp"
 
 #include <algorithm>
 #include <cstdint>
@@ -86,7 +85,8 @@ std::map<MateID,Count> push_block(const std::vector<MateID>& main,const std::vec
 std::map<MateID,Count> pull_block(
     const std::vector<MateID>& main,const std::vector<MateID>& block,
     const std::vector<Count>& mv,int W,int p,std::size_t& max_terms,
-    std::uint64_t& rl_candidates,std::uint64_t& rl_rejected
+    std::uint64_t& rl_candidates,std::uint64_t& rl_rejected,
+    std::uint64_t& endpoint_steps,std::uint64_t& physical_steps
 ){
     std::map<MateID,std::size_t> mi;
     for(std::size_t i=0;i<main.size();++i)mi.emplace(main[i],i);
@@ -113,10 +113,31 @@ std::map<MateID,Count> pull_block(
             }
             if(gate)add_source(rl);else ++rl_rejected;
 
-            MateID cand[32]{};
-            const int n=ordinary_closure_preimages_partial(d,W,p,cand);
-            if(n<1||cand[0]!=rl)std::exit(12);
-            for(int i=1;i<n;++i)add_source(cand[i]);
+            const std::uint32_t em=mate_non_n_mask(d,W);
+            std::uint32_t left=em&((std::uint32_t(1)<<(p-1))-1u);
+            int bal=0;
+            while(left){
+                const int q=mate_msb_index32(left);const MateValue v=mget(d,q);++endpoint_steps;
+                if(bal==0&&v==L){MateID x=msetpair(d,p,LL);x=mset(x,q,R);add_source(x);}
+                if(v==L)++bal;else --bal;
+                left^=std::uint32_t(1)<<q;
+                if(bal<0)break;
+            }
+            std::uint32_t right=em&~((std::uint32_t(1)<<(p+1))-1u);
+            bal=0;
+            while(right){
+                const int q=mate_lsb_index32(right);const MateValue v=mget(d,q);++endpoint_steps;
+                if(bal==0&&v==R){MateID x=msetpair(d,p,RR);x=mset(x,q,L);add_source(x);}
+                if(v==R)++bal;else --bal;
+                right&=right-1u;
+                if(bal<0)break;
+            }
+
+            // Count the legacy physical-position work for the same destination,
+            // so the proof also verifies that the set-bit scan really removes N
+            // iterations rather than merely changing candidate order.
+            bal=0;for(int q=p-2;q>=0;--q){++physical_steps;const MateValue v=mget(d,q);if(v==L)++bal;else if(v==R)--bal;if(bal<0)break;}
+            bal=0;for(int q=p+1;q<W;++q){++physical_steps;const MateValue v=mget(d,q);if(v==R)++bal;else if(v==L)--bal;if(bal<0)break;}
         }
         max_terms=std::max(max_terms,terms);
         if(acc)out.emplace(b,acc);
@@ -129,23 +150,26 @@ std::map<MateID,Count> pull_block(
 int main(){
     std::mt19937_64 rng(0x626c6f636b70756cULL);
     std::uint64_t positions=0,destinations=0,rl_candidates=0,rl_rejected=0;
+    std::uint64_t endpoint_steps=0,physical_steps=0;
     std::size_t max_terms=0;
     for(int W=4;W<=12;++W){
         const auto main=gen_valid(W);const auto block=gen_valid(W-1);
         std::vector<Count> mv(main.size());for(auto&x:mv)x=Count(rng()%MOD);
         for(int p=2;p<W;++p){
             const auto push=push_block(main,mv,W,p);
-            const auto pull=pull_block(main,block,mv,W,p,max_terms,rl_candidates,rl_rejected);
+            const auto pull=pull_block(main,block,mv,W,p,max_terms,rl_candidates,rl_rejected,endpoint_steps,physical_steps);
             if(push!=pull){std::cerr<<"mismatch W="<<W<<" p="<<p<<" push="<<push.size()<<" pull="<<pull.size()<<'\n';return 2;}
             ++positions;destinations+=block.size();
         }
     }
-    if(!rl_candidates||!rl_rejected)return 3;
+    if(!rl_candidates||!rl_rejected||!endpoint_steps||endpoint_steps>=physical_steps)return 3;
     std::cout<<"b300-block-pull-operator-proof OK exhaustive_width_max=12 positions="<<positions
              <<" blocked_destinations="<<destinations
              <<" p_scope=2..Wm1 deferred_drop_position=p"
              <<" rl_candidates="<<rl_candidates<<" rl_rejected="<<rl_rejected
              <<" rl_gate=prefix_height_exact"
+             <<" closure_scan=endpoint_setbits endpoint_steps="<<endpoint_steps
+             <<" physical_steps="<<physical_steps
              <<" block_memset_required=0 block_atomic_updates_required=0"
              <<" pull_terms_max="<<max_terms<<" exact=1\n";
     return 0;
