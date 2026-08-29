@@ -10,10 +10,31 @@ static_assert(P10DC_RANKFORMULA_PRECTX_FORWARD == 0 ||
               "P10DC_RANKFORMULA_PRECTX_FORWARD must be 0 or 1");
 
 #if P10DC_RANKFORMULA_PRECTX_FORWARD
-__constant__ P10DCDirectHighResolvedCtx* D_P10DC_PRECTX_FWD_NN;
-__constant__ P10DCDirectHighResolvedCtx* D_P10DC_PRECTX_FWD_NRNL;
+struct P10DCForwardClosurePreCtx {
+    Count* local_base[BKCZ_MAX_LOCAL]{};
+    Count* cross_base = nullptr;
+    uint32_t cross_depth = 0;
+    uint8_t local_n = 0;
+    uint8_t pad[3]{};
+};
+static_assert(sizeof(P10DCForwardClosurePreCtx) < sizeof(P10DCDirectHighResolvedCtx),
+              "forward closure prectx must stay smaller than the runtime context");
 
-__device__ __forceinline__ P10DCDirectHighResolvedCtx
+__constant__ P10DCForwardClosurePreCtx* D_P10DC_PRECTX_FWD_NN;
+__constant__ P10DCForwardClosurePreCtx* D_P10DC_PRECTX_FWD_NRNL;
+
+__device__ __forceinline__ P10DCForwardClosurePreCtx
+p10dc_pack_forward_closure_prectx(const P10DCDirectHighResolvedCtx& c) {
+    P10DCForwardClosurePreCtx z{};
+#pragma unroll
+    for (uint32_t i = 0; i < BKCZ_MAX_LOCAL; ++i) z.local_base[i] = c.local_base[i];
+    z.cross_base = c.cross_base;
+    z.cross_depth = c.cross_depth;
+    z.local_n = c.local_n;
+    return z;
+}
+
+__device__ __forceinline__ P10DCForwardClosurePreCtx
 p10dc_make_forward_prectx(uint32_t bid, int p, BucketOrbitOp op, bool nn) {
     P10DCDirectHighResolvedCtx c{};
     const uint32_t sid = nn ? 0u : 3u;
@@ -24,7 +45,7 @@ p10dc_make_forward_prectx(uint32_t bid, int p, BucketOrbitOp op, bool nn) {
     const uint32_t js = bkf_loc_owner(jl);
     const uint32_t ds = bkf_loc_owner(dl);
     c.xb = bkf_high_main(ss, bid);
-    if (!(c.xb.valid && c.xb.rows && c.xb.cols)) return c;
+    if (!(c.xb.valid && c.xb.rows && c.xb.cols)) return {};
     uint32_t jbid = bid;
     if (p == LOW_LUT_K + 1) {
         const uint32_t center = nn ? uint32_t(R) : uint32_t(N);
@@ -37,14 +58,12 @@ p10dc_make_forward_prectx(uint32_t bid, int p, BucketOrbitOp op, bool nn) {
     p10dc_prepare_forward_high_delta_direct_affine(
         c, payload, dl, p, ss, js, ds,
         bkf_loc_rank(sl), bkf_loc_rank(jl), bkf_loc_rank(dl));
-    c.kind = uint8_t(nn ? CPU_ORBIT_NN : CPU_ORBIT_NR);
-    c.valid = 1;
-    return c;
+    return p10dc_pack_forward_closure_prectx(c);
 }
 
 __global__ void p10dc_fill_forward_prectx_kernel(
-    P10DCDirectHighResolvedCtx* nn_out,
-    P10DCDirectHighResolvedCtx* nrnl_out
+    P10DCForwardClosurePreCtx* nn_out,
+    P10DCForwardClosurePreCtx* nrnl_out
 ) {
     const uint32_t nb = D_BKF_MAIN_NBLOCKS;
     if (!nb) return;
@@ -69,29 +88,19 @@ __global__ void p10dc_fill_forward_prectx_kernel(
 __device__ __forceinline__ void p10dc_apply_forward_prectx(
     P10DCDirectHighResolvedCtx& c, uint32_t qi, bool nn
 ) {
-    const P10DCDirectHighResolvedCtx z =
+    const P10DCForwardClosurePreCtx z =
         nn ? D_P10DC_PRECTX_FWD_NN[qi] : D_P10DC_PRECTX_FWD_NRNL[qi];
-    // Preserve c.n0/c.n1/c.total: the warp-striped scheduler reuses those fields
-    // on the next k iteration.  Only the per-orbit execution context is replaced.
-    c.xb = z.xb;
-    c.jb = z.jb;
-    c.db = z.db;
-    c.ip_base = z.ip_base;
-    c.jp_base = z.jp_base;
-    c.dp_base = z.dp_base;
 #pragma unroll
     for (uint32_t i = 0; i < BKCZ_MAX_LOCAL; ++i) c.local_base[i] = z.local_base[i];
     c.cross_base = z.cross_base;
     c.cross_depth = z.cross_depth;
     c.local_n = z.local_n;
-    c.kind = z.kind;
-    c.valid = z.valid;
 }
 
 template<class BaseTables>
 struct BucketFusedPrecomputedForwardHighCtxTables : BaseTables {
-    P10DCDirectHighResolvedCtx* prectx_fwd_nn = nullptr;
-    P10DCDirectHighResolvedCtx* prectx_fwd_nrnl = nullptr;
+    P10DCForwardClosurePreCtx* prectx_fwd_nn = nullptr;
+    P10DCForwardClosurePreCtx* prectx_fwd_nrnl = nullptr;
     size_t prectx_fwd_nn_count = 0;
     size_t prectx_fwd_nrnl_count = 0;
     uint32_t prectx_main_blocks = 0;
@@ -115,12 +124,12 @@ struct BucketFusedPrecomputedForwardHighCtxTables : BaseTables {
         BaseTables::bind_owner(fixed, buckets, slot);
         if (prectx_fwd_nn_count) {
             ck(cudaMalloc(&prectx_fwd_nn,
-                          prectx_fwd_nn_count * sizeof(P10DCDirectHighResolvedCtx)),
+                          prectx_fwd_nn_count * sizeof(P10DCForwardClosurePreCtx)),
                "p10dc prectx forward NN alloc");
         }
         if (prectx_fwd_nrnl_count) {
             ck(cudaMalloc(&prectx_fwd_nrnl,
-                          prectx_fwd_nrnl_count * sizeof(P10DCDirectHighResolvedCtx)),
+                          prectx_fwd_nrnl_count * sizeof(P10DCForwardClosurePreCtx)),
                "p10dc prectx forward NRNL alloc");
         }
         ck(cudaMemcpyToSymbol(D_P10DC_PRECTX_FWD_NN,
@@ -140,12 +149,13 @@ struct BucketFusedPrecomputedForwardHighCtxTables : BaseTables {
         std::cerr << "p10dc_prectx_forward fixed_owner=" << fixed
                   << " nn_entries=" << prectx_fwd_nn_count
                   << " nrnl_entries=" << prectx_fwd_nrnl_count
-                  << " context_bytes=" << sizeof(P10DCDirectHighResolvedCtx)
+                  << " closure_context_bytes=" << sizeof(P10DCForwardClosurePreCtx)
+                  << " runtime_context_bytes=" << sizeof(P10DCDirectHighResolvedCtx)
                   << " total_mib="
                   << double((prectx_fwd_nn_count + prectx_fwd_nrnl_count) *
-                            sizeof(P10DCDirectHighResolvedCtx)) / double(1 << 20)
+                            sizeof(P10DCForwardClosurePreCtx)) / double(1 << 20)
                   << " build_once=1 reuse_across_grid_x=1 reuse_across_moduli=1"
-                  << " scheduler_metadata_preserved=1\n";
+                  << " scheduler_metadata_preserved=1 io_rows_runtime_resolve=1\n";
     }
 
     void release() {
