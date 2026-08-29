@@ -147,7 +147,7 @@ EqualCycleStats verify_equal_tile_cycles(
 }
 
 RunTraffic equal_run_traffic_model(int W, int K, int ngpu) {
-    if (ngpu != 8) fail("equal traffic matrix currently fixed to 8 GPUs");
+    if (ngpu < 2 || ngpu > 8) fail("equal traffic GPU range");
     const int common_bits = W - (2 * K + 2);
     if (common_bits < 0 || common_bits > 20) fail("equal traffic common bits");
     const int L = K + 2;
@@ -247,7 +247,7 @@ void print_w28_cycle_plan() {
 int main(int argc, char** argv) {
     const int maxW = argc > 1 ? std::atoi(argv[1]) : 11;
     const int ngpu = argc > 2 ? std::atoi(argv[2]) : 8;
-    if (maxW < 7 || maxW > 12 || ngpu != 8) return 2;
+    if (maxW < 7 || maxW > 12 || ngpu < 2 || ngpu > 8) return 2;
 
     std::vector<std::vector<MateID>> words(static_cast<std::size_t>(maxW + 1));
     for (int W = 1; W <= maxW; ++W) words[W] = gen_words(W);
