@@ -25,8 +25,10 @@ CGL2_MIN_SPEEDUP="${CGL2_MIN_SPEEDUP:-1.01}"
 PREFIX="${PREFIX:-$ONEESAN_ROOT/work/b300_nextgen_hybrid8_staged}"
 CORE_LOG="${CORE_LOG:-${PREFIX}.abcd.log}"
 FINAL_ENV="${FINAL_ENV:-${PREFIX}_winner.env}"
+CANONICAL_SWEEP="$ONEESAN_ROOT/scripts/bench/b300-nextgen-hybrid-ilp8-sweep.sh"
 mkdir -p "$(dirname "$PREFIX")" "$(dirname "$FINAL_ENV")"
 
+[[ -f "$CANONICAL_SWEEP" ]] || { echo "missing canonical hybrid sweep=$CANONICAL_SWEEP" >&2; exit 2; }
 for rows in "$SEARCH_ROWS" $VALIDATE_ROWS; do
   [[ "$rows" =~ ^[1-9][0-9]*$ ]] && ((rows<=28)) || { echo "bad stage rows=$rows" >&2; exit 2; }
 done
@@ -41,8 +43,6 @@ PY
 
 getv(){ local k="$1" f="$2"; sed -nE "s/^${k}=([^[:space:]]+).*/\\1/p" "$f" | tail -n1; }
 
-# A-D are calibrated once on the cheap search slice. Stage E then answers a
-# narrower question: does state-count-based ILP2/8 switching survive larger slices?
 echo "=== hybrid8 staged calibration A-D search rows=$SEARCH_ROWS ===" >&2
 ARCH="$ARCH" MOD="$MOD" ROWS="$SEARCH_ROWS" TARGET_MIB="$TARGET_MIB" MAX_WINDOW="$MAX_WINDOW" \
   THREADS_LIST="$THREADS_LIST" HIGHDROP_LIST="$HIGHDROP_LIST" REPEATS="$CORE_REPEATS" REGCAP_LIST="$REGCAP_LIST" L2_SIZES="$L2_SIZES" \
@@ -64,19 +64,60 @@ case "$BASE_ILP" in 2|4|8) ;; *) echo "bad A-D ILP=$BASE_ILP" >&2; exit 3;; esac
 [[ "$CG" == 0 || "$CG" == 1 ]] || exit 3
 case "$CGL2" in 0|64|128|256) ;; *) exit 3;; esac
 
+normalize_stage(){
+  local raw_env="$1" result="$2" binaries="$3" normalized="$4"
+  # shellcheck disable=SC1090
+  source "$raw_env"
+  local enabled=0
+  [[ "$B300_HYBRID8_WINNER_MODE" == hybrid ]] && enabled=1
+  [[ "$B300_HYBRID8_WINNER_SPILL_STORE_BYTES" == 0 && "$B300_HYBRID8_WINNER_SPILL_LOAD_BYTES" == 0 ]] || {
+    echo 'canonical hybrid sweep returned a spilling winner' >&2; exit 4
+  }
+  local base_bin base_threads base_wall
+  base_bin="$(awk -F $'\t' '$1=="baseline"{print $5;exit}' "$binaries")"
+  [[ -n "$base_bin" && -x "$base_bin" ]] || { echo "baseline binary missing from $binaries" >&2; exit 4; }
+  read -r base_threads base_wall < <(python3 - "$result" <<'PY'
+import csv,statistics,sys
+rows=[r for r in csv.DictReader(open(sys.argv[1]),delimiter='\t') if r['mode']=='baseline']
+if not rows: raise SystemExit('baseline rows missing')
+by={}
+for r in rows: by.setdefault(int(r['threads']),[]).append(float(r['wall_s']))
+best=min((statistics.median(v),t) for t,v in by.items())
+print(best[1],f'{best[0]:.9f}')
+PY
+)
+  {
+    printf 'B300_HYBRID8_WINNER_ENABLED=%q\n' "$enabled"
+    printf 'B300_HYBRID8_WINNER_MODE=%q\n' "$B300_HYBRID8_WINNER_MODE"
+    printf 'B300_HYBRID8_WINNER_THRESHOLD=%q\n' "$B300_HYBRID8_WINNER_THRESHOLD"
+    printf 'B300_HYBRID8_WINNER_BIN=%q\n' "$B300_HYBRID8_WINNER_BIN"
+    printf 'B300_HYBRID8_WINNER_THREADS=%q\n' "$B300_HYBRID8_WINNER_THREADS"
+    printf 'B300_HYBRID8_WINNER_WALL_S=%q\n' "$B300_HYBRID8_WINNER_WALL_S"
+    printf 'B300_HYBRID8_WINNER_SPILL_FREE=1\n'
+    printf 'B300_HYBRID8_SPEEDUP_VS_BASE=%q\n' "$B300_HYBRID8_WINNER_SPEEDUP_VS_BASELINE"
+    printf 'B300_HYBRID8_BASE_BIN=%q\n' "$base_bin"
+    printf 'B300_HYBRID8_BASE_THREADS=%q\n' "$base_threads"
+    printf 'B300_HYBRID8_BASE_WALL_S=%q\n' "$base_wall"
+    printf 'B300_HYBRID8_RESIDUE=%q\n' "$B300_HYBRID8_RESIDUE"
+  } >"$normalized"
+}
+
 run_hybrid_stage(){
   local rows="$1" thresholds="$2" threads="$3" repeats="$4" tag="$5"
-  local stage_prefix="${PREFIX}.${tag}.r${rows}" stage_log="${stage_prefix}.log" stage_env="${stage_prefix}_winner.env"
+  local stage_prefix="${PREFIX}.${tag}.r${rows}"
+  local stage_log="${stage_prefix}.log" raw_env="${stage_prefix}_raw-winner.env" stage_env="${stage_prefix}_winner.env"
+  local result="${stage_prefix}.tsv" binaries="${stage_prefix}_logs/binaries.tsv"
   echo "=== hybrid8 Stage E rows=$rows thresholds=[$thresholds] threads=[$threads] repeats=$repeats ===" >&2
   ARCH="$ARCH" MOD="$MOD" ROWS="$rows" TARGET_MIB="$TARGET_MIB" MAX_WINDOW="$MAX_WINDOW" \
     HIGH_DROP_CHUNK="$H" BASE_RECURRENCE_ILP="$BASE_ILP" RANDOM_CG="$CG" RANDOM_CG_L2_FETCH_BYTES="$CGL2" \
     PREFETCH_L2="$PRE" DUALMASK="$DUAL" CLOSURE_BATCH="$BATCH" MAXRREGCOUNT="$CAP" \
-    HYBRID_ILP8_THRESHOLDS="$thresholds" THREADS_LIST="$threads" REPEATS="$repeats" SAMPLE_INTERVAL="$SAMPLE_INTERVAL" \
-    PREFIX="$stage_prefix" WINNER_ENV="$stage_env" \
-    bash "$ONEESAN_ROOT/scripts/bench/b300-nextgen-hybrid-ilp8-threshold-sweep.sh" | tee "$stage_log" >&2
+    ILP8_THRESHOLDS="$thresholds" THREADS_LIST="$threads" REPEATS="$repeats" SAMPLE_INTERVAL="$SAMPLE_INTERVAL" \
+    PREFIX="$stage_prefix" RESULT="$result" WINNER_ENV="$raw_env" \
+    bash "$CANONICAL_SWEEP" | tee "$stage_log" >&2
   [[ "$(getv b300_nextgen_hybrid8_exact_intermediate_match "$stage_log")" == 1 ]] || { echo "Stage E exact gate missing rows=$rows" >&2; exit 4; }
   [[ "$(getv b300_nextgen_hybrid8_residue "$stage_log")" == "$CORE_RES" ]] || { echo "FATAL A-D/E residue mismatch rows=$rows" >&2; exit 4; }
-  [[ -s "$stage_env" ]] || { echo "Stage E winner env missing rows=$rows" >&2; exit 4; }
+  [[ -s "$raw_env" && -s "$result" && -s "$binaries" ]] || { echo "Stage E artifacts missing rows=$rows" >&2; exit 4; }
+  normalize_stage "$raw_env" "$result" "$binaries" "$stage_env"
   printf '%s\n' "$stage_env"
 }
 
@@ -105,7 +146,7 @@ if [[ "$B300_HYBRID8_WINNER_ENABLED" == 1 && "$(passes_margin "$B300_HYBRID8_SPE
     CURRENT_ENV="$(run_hybrid_stage "$rows" "$threshold" "$validation_threads" "$VALIDATE_REPEATS" "validate${stage}")"
     # shellcheck disable=SC1090
     source "$CURRENT_ENV"
-    if [[ "$B300_HYBRID8_WINNER_ENABLED" != 1 || "$B300_HYBRID8_WINNER_THRESHOLD" != "$threshold" || "$(passes_margin "$B300_HYBRID8_SPEEDUP_VS_BASE")" != 1 ]]; then
+    if [[ "$B300_HYBRID8_WINNER_ENABLED" != 1 || "$B300_HYBRID8_WINNER_THRESHOLD" != "$threshold" || "$B300_HYBRID8_WINNER_SPILL_FREE" != 1 || "$(passes_margin "$B300_HYBRID8_SPEEDUP_VS_BASE")" != 1 ]]; then
       VALIDATED=0
       break
     fi
@@ -116,8 +157,6 @@ if [[ "$B300_HYBRID8_WINNER_ENABLED" == 1 && "$(passes_margin "$B300_HYBRID8_SPE
   done
 fi
 
-# CURRENT_ENV always describes the largest slice actually measured. If the
-# hybrid lost its margin, retain that slice's base binary rather than a row-1 artifact.
 # shellcheck disable=SC1090
 source "$CURRENT_ENV"
 if [[ "$VALIDATED" == 1 ]]; then
@@ -127,6 +166,7 @@ if [[ "$VALIDATED" == 1 ]]; then
   FINAL_THREADS="$B300_HYBRID8_WINNER_THREADS"
   FINAL_WALL="$B300_HYBRID8_WINNER_WALL_S"
   FINAL_SPEED="$B300_HYBRID8_SPEEDUP_VS_BASE"
+  FINAL_SPILL_FREE="$B300_HYBRID8_WINNER_SPILL_FREE"
 else
   FINAL_ENABLED=0
   FINAL_THRESHOLD=0
@@ -134,6 +174,7 @@ else
   FINAL_THREADS="$B300_HYBRID8_BASE_THREADS"
   FINAL_WALL="$B300_HYBRID8_BASE_WALL_S"
   FINAL_SPEED=1.000000000
+  FINAL_SPILL_FREE=1
 fi
 
 {
@@ -144,6 +185,7 @@ fi
   printf 'B300_HYBRID8_FINAL_THREADS=%q\n' "$FINAL_THREADS"
   printf 'B300_HYBRID8_FINAL_WALL_S=%q\n' "$FINAL_WALL"
   printf 'B300_HYBRID8_FINAL_SPEEDUP_VS_BASE=%q\n' "$FINAL_SPEED"
+  printf 'B300_HYBRID8_FINAL_SPILL_FREE=%q\n' "$FINAL_SPILL_FREE"
   printf 'B300_HYBRID8_BASE_BIN=%q\n' "$B300_HYBRID8_BASE_BIN"
   printf 'B300_HYBRID8_BASE_THREADS=%q\n' "$B300_HYBRID8_BASE_THREADS"
   printf 'B300_HYBRID8_BASE_WALL_S=%q\n' "$B300_HYBRID8_BASE_WALL_S"
@@ -163,4 +205,4 @@ fi
 } >"$FINAL_ENV"
 
 cat "$FINAL_ENV"
-echo "b300-nextgen-hybrid8-staged-calibrate OK validated=$VALIDATED final_enabled=$FINAL_ENABLED final_threshold=$FINAL_THRESHOLD winner_env=$FINAL_ENV" >&2
+echo "b300-nextgen-hybrid8-staged-calibrate OK validated=$VALIDATED final_enabled=$FINAL_ENABLED final_threshold=$FINAL_THRESHOLD winner_env=$FINAL_ENV canonical_sweep=1" >&2
