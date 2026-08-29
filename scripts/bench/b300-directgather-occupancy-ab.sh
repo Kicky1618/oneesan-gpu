@@ -20,28 +20,30 @@ mkdir -p "$LOGDIR" "$(dirname "$RESULT")"
 
 field(){ local key="$1" line="$2"; sed -nE "s/(^|.*[[:space:]])${key}=([^[:space:]]+).*/\\2/p" <<<"$line" | tail -n1; }
 
-# mode pm window4 force7 maxrregcount
+# mode depthmajor pm window4 force7 maxrregcount
 CASES=(
-  "full_pm0 0 0 0 0"
-  "window4_pm0 0 1 0 0"
-  "force7_pm0 0 0 1 0"
-  "full_pm1 1 0 0 0"
-  "window4_pm1 1 1 0 0"
-  "window4_r96_pm0 0 1 0 96"
-  "window4_r128_pm0 0 1 0 128"
+  "rankmajor_full_pm0 0 0 0 0 0"
+  "depthmajor_full_pm0 1 0 0 0 0"
+  "depthmajor_window4_pm0 1 0 1 0 0"
+  "depthmajor_force7_pm0 1 0 0 1 0"
+  "depthmajor_full_pm1 1 1 0 0 0"
+  "depthmajor_window4_pm1 1 1 1 0 0"
+  "depthmajor_window4_r96_pm0 1 0 1 0 96"
+  "depthmajor_window4_r128_pm0 1 0 1 0 128"
 )
 
-printf 'mode\tpm_accum\twindow4\tforce7\tmaxrregcount\trepeat\tresidue\twall_s\tforward_high_s\tforward_low_s\treverse_low_s\treverse_high_s\ttranspose_s\n' >"$RESULT"
+printf 'mode\tdepthmajor\tpm_accum\twindow4\tforce7\tmaxrregcount\trepeat\tresidue\twall_s\tforward_high_s\tforward_low_s\treverse_low_s\treverse_high_s\ttranspose_s\n' >"$RESULT"
 printf 'backend\tkernel\tregisters\tstack_bytes\tspill_store_bytes\tspill_load_bytes\tsmem_bytes\tcmem0_bytes\n' >"$RESOURCE"
 
 for spec in "${CASES[@]}"; do
-  read -r mode pm window4 force7 rcap <<<"$spec"
+  read -r mode depthmajor pm window4 force7 rcap <<<"$spec"
   bin="$ONEESAN_BUILD_DIR/directgather_occ_${mode}_n${N}"
   N="$N" ARCH="$ARCH" OUT="$bin" \
     RANKFORMULA_NOMETA_BLOCK=16 RANKFORMULA_NOMETA_WARPSHARE=1 \
     RANKFORMULA_NOMETA_COOPGROUP=1 RANKFORMULA_NOMETA_COOP_UNROLL=0 \
     RANKFORMULA_NOMETA_GROUP56=0 RANKFORMULA_NOMETA_GROUP61=1 \
     RANKFORMULA_NOMETA_DIRECTMAP=1 RANKFORMULA_DIRECTGATHER=1 \
+    RANKFORMULA_DIRECTGATHER_DEPTHMAJOR="$depthmajor" \
     RANKFORMULA_DIRECTGATHER_FORCE7="$force7" RANKFORMULA_MLP_WINDOW4="$window4" \
     RANKFORMULA_ABSTRACT_SELECT8=1 RANKFORMULA_ABSTRACT_DEPTH4=1 \
     RANKFORMULA_ABSTRACT_SRCPACK10=1 RANKFORMULA_GATHER_MLP=1 \
@@ -61,8 +63,8 @@ for spec in "${CASES[@]}"; do
     line="$(grep '^residue=' "$so" | tail -n1 || true)"; [[ -n "$line" ]] || { echo "$mode missing residue" >&2; exit 3; }
     residue="$(field residue "$line")"; [[ "$residue" == "$EXPECT" ]] || { echo "$mode residue mismatch got=$residue expected=$EXPECT" >&2; exit 4; }
     detail="$(grep 'snake_onepass_graph_batch modulus=' "$se" | tail -n1 || true)"
-    printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
-      "$mode" "$pm" "$window4" "$force7" "$rcap" "$rep" "$residue" \
+    printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
+      "$mode" "$depthmajor" "$pm" "$window4" "$force7" "$rcap" "$rep" "$residue" \
       "$(field wall_s "$line")" "$(field forward_high_s "$detail")" \
       "$(field forward_low_s "$detail")" "$(field reverse_low_s "$detail")" \
       "$(field reverse_high_s "$detail")" "$(field transpose_s "$detail")" >>"$RESULT"
@@ -87,6 +89,10 @@ for _,mode,z in sorted(out):
           f"rh={z['reverse_high_s']:.6f}",
           f"low={z['forward_low_s']+z['reverse_low_s']:.6f}",
           f"transpose={z['transpose_s']:.6f}")
+q={mode:z for _,mode,z in out}
+if 'rankmajor_full_pm0' in q and 'depthmajor_full_pm0' in q:
+    a=q['rankmajor_full_pm0']; b=q['depthmajor_full_pm0']
+    print(f"DEPTHMAJOR wall_speedup={a['wall_s']/b['wall_s']:.6f} high_speedup={a['high_total_s']/b['high_total_s']:.6f}")
 print('BEST',sorted(out)[0][1],f"wall={sorted(out)[0][0]:.6f}")
 PY
 
