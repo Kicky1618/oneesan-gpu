@@ -2,6 +2,7 @@
 
 #include "ramstream32_bucket_closure_cross5_rankstream.cuh"
 #include "ramstream32_bucket_low_rankchunk32.cuh"
+#include <cstdio>
 
 #ifndef P10DC_RANKCHUNK32_FUSED16
 #define P10DC_RANKCHUNK32_FUSED16 0
