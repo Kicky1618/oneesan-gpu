@@ -10,6 +10,7 @@ mkdir -p "$(dirname "$BIN")"
 out="$($BIN)"
 printf '%s\n' "$out"
 grep -Fq 'b300-high-main-recurrence-proof OK' <<<"$out"
+grep -Fq 'min_fixed=7 fallback_fixed_lt=7' <<<"$out"
 grep -Fq 'signed35=1 trit_positions=14 trit_chunks=5 trit_bits=25 height_bits=4 total_bits=64' <<<"$out"
 grep -Fq 'exact=1' <<<"$out"
-echo 'b300-high-main-recurrence-proof OK exact=1' >&2
+echo 'b300-high-main-recurrence-proof OK gated_fixed_bits=7 exact=1' >&2
