@@ -10,11 +10,21 @@
 #error "directgather64 table requires DIRECTGATHER=1"
 #endif
 
-static constexpr uint32_t P10DC_RANKFORMULA_DIRECTGATHER64_RARE_CAP = 65536u;
+__global__ void p10dc_rankformula_directgather64_count_rare_kernel(
+    const uint4* in, uint32_t n, uint32_t* rare_count, uint32_t* error
+) {
+    for (uint32_t i = uint32_t(blockIdx.x) * blockDim.x + threadIdx.x;
+         i < n; i += uint32_t(gridDim.x) * blockDim.x) {
+        const uint32_t count = in[i].w >> 16;
+        if (count > 7u) atomicOr(error, 1u);
+        else if (count > 3u) atomicAdd(rare_count, 1u);
+    }
+}
 
 __global__ void p10dc_rankformula_directgather64_compress_kernel(
     const uint4* in, uint64_t* primary, uint64_t* rare,
-    uint32_t n, uint32_t* rare_count, uint32_t* error
+    uint32_t n, uint32_t rare_capacity,
+    uint32_t* rare_count, uint32_t* error
 ) {
     for (uint32_t i = uint32_t(blockIdx.x) * blockDim.x + threadIdx.x;
          i < n; i += uint32_t(gridDim.x) * blockDim.x) {
@@ -34,7 +44,7 @@ __global__ void p10dc_rankformula_directgather64_compress_kernel(
         uint32_t rare_ix = 0;
         if (count > 3u) {
             rare_ix = atomicAdd(rare_count, 1u);
-            if (rare_ix >= P10DC_RANKFORMULA_DIRECTGATHER64_RARE_CAP) {
+            if (rare_ix >= rare_capacity || rare_ix >= 65536u) {
                 atomicOr(error, 4u); continue;
             }
             rare[rare_ix] = uint64_t(r3) |
@@ -56,6 +66,7 @@ struct BucketFusedDirectHighRowsRankFormulaNometa4DirectGather64Tables
     uint64_t* low_rankformula_directgather64_rare = nullptr;
     size_t low_rankformula_directgather64_count = 0;
     size_t low_rankformula_directgather64_capacity = 0;
+    size_t low_rankformula_directgather64_rare_capacity = 0;
     uint32_t low_rankformula_directgather64_rare_count = 0;
 
     void bind_owner(
@@ -77,42 +88,69 @@ struct BucketFusedDirectHighRowsRankFormulaNometa4DirectGather64Tables
             if (n) ck(cudaMalloc(&low_rankformula_directgather64, n * sizeof(uint64_t)),
                       "p10dc directgather64 primary alloc");
         }
-        if (!low_rankformula_directgather64_rare && n) {
-            ck(cudaMalloc(&low_rankformula_directgather64_rare,
-                          size_t(P10DC_RANKFORMULA_DIRECTGATHER64_RARE_CAP) * sizeof(uint64_t)),
-               "p10dc directgather64 rare alloc");
-        }
 
         uint32_t *d_rare_count = nullptr, *d_error = nullptr;
         ck(cudaMalloc(&d_rare_count, sizeof(uint32_t)), "p10dc directgather64 count alloc");
         ck(cudaMalloc(&d_error, sizeof(uint32_t)), "p10dc directgather64 error alloc");
         ck(cudaMemset(d_rare_count, 0, sizeof(uint32_t)), "p10dc directgather64 count zero");
         ck(cudaMemset(d_error, 0, sizeof(uint32_t)), "p10dc directgather64 error zero");
+
+        const uint32_t threads = 256;
+        const uint32_t blocks = n ? std::min<uint32_t>(4096u,
+            (uint32_t(n) + threads - 1u) / threads) : 0u;
         if (n) {
-            const uint32_t threads = 256;
-            const uint32_t blocks = std::min<uint32_t>(4096u,
-                (uint32_t(n) + threads - 1u) / threads);
+            p10dc_rankformula_directgather64_count_rare_kernel<<<blocks, threads>>>(
+                low_rankformula_directgather4, uint32_t(n), d_rare_count, d_error);
+            ck(cudaGetLastError(), "p10dc directgather64 rare count launch");
+            ck(cudaDeviceSynchronize(), "p10dc directgather64 rare count sync");
+        }
+        uint32_t count_error = 0;
+        ck(cudaMemcpy(&low_rankformula_directgather64_rare_count, d_rare_count,
+                      sizeof(uint32_t), cudaMemcpyDeviceToHost),
+           "p10dc directgather64 rare count copy");
+        ck(cudaMemcpy(&count_error, d_error, sizeof(uint32_t), cudaMemcpyDeviceToHost),
+           "p10dc directgather64 count error copy");
+        if (count_error || low_rankformula_directgather64_rare_count >= 65536u) {
+            std::cerr << "p10dc directgather64 rare count failure owner=" << fixed
+                      << " error=" << count_error
+                      << " rare=" << low_rankformula_directgather64_rare_count << '\n';
+            std::exit(811);
+        }
+
+        const size_t rare_needed = low_rankformula_directgather64_rare_count;
+        if (rare_needed > low_rankformula_directgather64_rare_capacity) {
+            if (low_rankformula_directgather64_rare) cudaFree(low_rankformula_directgather64_rare);
+            low_rankformula_directgather64_rare = nullptr;
+            low_rankformula_directgather64_rare_capacity = rare_needed;
+            if (rare_needed)
+                ck(cudaMalloc(&low_rankformula_directgather64_rare,
+                              rare_needed * sizeof(uint64_t)),
+                   "p10dc directgather64 exact rare alloc");
+        }
+
+        ck(cudaMemset(d_rare_count, 0, sizeof(uint32_t)), "p10dc directgather64 write count zero");
+        ck(cudaMemset(d_error, 0, sizeof(uint32_t)), "p10dc directgather64 write error zero");
+        if (n) {
             p10dc_rankformula_directgather64_compress_kernel<<<blocks, threads>>>(
                 low_rankformula_directgather4,
                 low_rankformula_directgather64,
                 low_rankformula_directgather64_rare,
-                uint32_t(n), d_rare_count, d_error);
+                uint32_t(n), uint32_t(rare_needed), d_rare_count, d_error);
             ck(cudaGetLastError(), "p10dc directgather64 compress launch");
             ck(cudaDeviceSynchronize(), "p10dc directgather64 compress sync");
         }
-        uint32_t error = 0;
-        ck(cudaMemcpy(&low_rankformula_directgather64_rare_count, d_rare_count,
-                      sizeof(uint32_t), cudaMemcpyDeviceToHost),
-           "p10dc directgather64 count copy");
+        uint32_t written_rare = 0, error = 0;
+        ck(cudaMemcpy(&written_rare, d_rare_count, sizeof(uint32_t), cudaMemcpyDeviceToHost),
+           "p10dc directgather64 written count copy");
         ck(cudaMemcpy(&error, d_error, sizeof(uint32_t), cudaMemcpyDeviceToHost),
            "p10dc directgather64 error copy");
         cudaFree(d_rare_count); cudaFree(d_error);
-        if (error || low_rankformula_directgather64_rare_count >
-                         P10DC_RANKFORMULA_DIRECTGATHER64_RARE_CAP) {
+        if (error || written_rare != low_rankformula_directgather64_rare_count) {
             std::cerr << "p10dc directgather64 compress failure owner=" << fixed
                       << " error=" << error
-                      << " rare=" << low_rankformula_directgather64_rare_count << '\n';
-            std::exit(811);
+                      << " expected_rare=" << low_rankformula_directgather64_rare_count
+                      << " written_rare=" << written_rare << '\n';
+            std::exit(812);
         }
 
         ck(cudaMemcpyToSymbol(D_P10DC_RANKFORMULA_DIRECTGATHER64,
@@ -143,8 +181,10 @@ struct BucketFusedDirectHighRowsRankFormulaNometa4DirectGather64Tables
                   << " rare_entries=" << low_rankformula_directgather64_rare_count
                   << " rare_bytes=" << rare_bytes
                   << " resident_bytes=" << (primary_bytes + rare_bytes)
+                  << " rare_capacity_entries=" << low_rankformula_directgather64_rare_capacity
                   << " primary_descriptor_bytes=8"
                   << " source_rank_bits=15 rare_index_bits=16"
+                  << " exact_rare_allocation=1"
                   << " parent_uint4_freed=1\n";
     }
 
@@ -155,6 +195,7 @@ struct BucketFusedDirectHighRowsRankFormulaNometa4DirectGather64Tables
         low_rankformula_directgather64_rare = nullptr;
         low_rankformula_directgather64_count = 0;
         low_rankformula_directgather64_capacity = 0;
+        low_rankformula_directgather64_rare_capacity = 0;
         low_rankformula_directgather64_rare_count = 0;
         BucketFusedDirectHighRowsRankFormulaNometa4DirectMapTables::release();
     }
