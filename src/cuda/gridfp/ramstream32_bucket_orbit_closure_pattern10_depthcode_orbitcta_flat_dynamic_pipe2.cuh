@@ -125,6 +125,7 @@ __global__ void bucket_high_orbit_closure_pattern10_depthcode_orbitcta_flat_dyna
     const uint32_t base_off = pi * D_BKF_HIGH_PITCH;
     extern __shared__ unsigned long long storage[];
     __shared__ uint32_t has_item[2];
+    __shared__ uint32_t stream_base[3];
     P10DC_ORBITCTA_CTX& c0 = p10dc_orbitcta_flat_dynamic_pipe2_context(storage, 0u);
     P10DC_ORBITCTA_CTX& c1 = p10dc_orbitcta_flat_dynamic_pipe2_context(storage, 1u);
 
@@ -137,6 +138,9 @@ __global__ void bucket_high_orbit_closure_pattern10_depthcode_orbitcta_flat_dyna
         const uint32_t nn1 = D_BKF_HIGH_NN_OFF[base_off + nblocks];
         const uint32_t nr0 = D_BKF_HIGH_NRNL_OFF[base_off];
         const uint32_t nr1 = D_BKF_HIGH_NRNL_OFF[base_off + nblocks];
+        stream_base[0] = nn0;
+        stream_base[1] = nr0;
+        stream_base[2] = 0u;
         c0.n0 = c1.n0 = nn1 - nn0;
         c0.n1 = c1.n1 = nr0;
         c0.total = c1.total = c0.n0 + (nr1 - nr0);
@@ -157,7 +161,7 @@ __global__ void bucket_high_orbit_closure_pattern10_depthcode_orbitcta_flat_dyna
 #if P10DC_ORBITCTA_FLAT_DYNAMIC_PIPE2_PRODUCER_PRECTX_WARPCOOP
     if (threadIdx.x < 32u)
         p10dc_orbitcta_flat_dynamic_pipe2_prepare_forward_producer_prectx_warpcoop(
-            c0, first_k_lane0, base_off, nblocks, p);
+            c0, first_k_lane0, base_off, stream_base, nblocks, p);
 #endif
     __syncthreads();
 
@@ -187,7 +191,7 @@ __global__ void bucket_high_orbit_closure_pattern10_depthcode_orbitcta_flat_dyna
 #if P10DC_ORBITCTA_FLAT_DYNAMIC_PIPE2_PRODUCER_PRECTX_WARPCOOP
         if (threadIdx.x < 32u)
             p10dc_orbitcta_flat_dynamic_pipe2_prepare_forward_producer_prectx_warpcoop(
-                next, next_k_lane0, base_off, nblocks, p);
+                next, next_k_lane0, base_off, stream_base, nblocks, p);
 #endif
 
         if (current.valid == 1)
@@ -205,6 +209,7 @@ __global__ void bucket_reverse_high_pattern10_depthcode_orbitcta_flat_dynamic_pi
     const bool edge = p == TARGET_W - 1;
     extern __shared__ unsigned long long storage[];
     __shared__ uint32_t has_item[2];
+    __shared__ uint32_t stream_base[3];
     P10DC_ORBITCTA_CTX& c0 = p10dc_orbitcta_flat_dynamic_pipe2_context(storage, 0u);
     P10DC_ORBITCTA_CTX& c1 = p10dc_orbitcta_flat_dynamic_pipe2_context(storage, 1u);
 
@@ -219,6 +224,9 @@ __global__ void bucket_reverse_high_pattern10_depthcode_orbitcta_flat_dynamic_pi
         const uint32_t nr1 = D_RS54_HIGH_NR_OFF[base_off + nblocks];
         const uint32_t nl0 = D_RS54_HIGH_NL_OFF[base_off];
         const uint32_t nl1 = D_RS54_HIGH_NL_OFF[base_off + nblocks];
+        stream_base[0] = nn0;
+        stream_base[1] = nr0;
+        stream_base[2] = nl0;
         c0.n0 = c1.n0 = nn1 - nn0;
         c0.n1 = c1.n1 = nr1 - nr0;
         c0.total = c1.total = c0.n0 + c0.n1 + (nl1 - nl0);
@@ -239,7 +247,7 @@ __global__ void bucket_reverse_high_pattern10_depthcode_orbitcta_flat_dynamic_pi
 #if P10DC_ORBITCTA_FLAT_DYNAMIC_PIPE2_PRODUCER_PRECTX_WARPCOOP
     if (threadIdx.x < 32u)
         p10dc_orbitcta_flat_dynamic_pipe2_prepare_reverse_producer_prectx_warpcoop(
-            c0, first_k_lane0, base_off, nblocks, p, edge);
+            c0, first_k_lane0, base_off, stream_base, nblocks, p, edge);
 #endif
     __syncthreads();
 
@@ -269,7 +277,7 @@ __global__ void bucket_reverse_high_pattern10_depthcode_orbitcta_flat_dynamic_pi
 #if P10DC_ORBITCTA_FLAT_DYNAMIC_PIPE2_PRODUCER_PRECTX_WARPCOOP
         if (threadIdx.x < 32u)
             p10dc_orbitcta_flat_dynamic_pipe2_prepare_reverse_producer_prectx_warpcoop(
-                next, next_k_lane0, base_off, nblocks, p, edge);
+                next, next_k_lane0, base_off, stream_base, nblocks, p, edge);
 #endif
 
         if (current.valid == 1)
