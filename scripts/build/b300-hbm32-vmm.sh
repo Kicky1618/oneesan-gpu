@@ -12,7 +12,7 @@ NVCC="${NVCC:-nvcc}"
 ARCH="${ARCH:-native}"
 LOW_LUT_K="${LOW_LUT_K:-13}"
 HIGH_LUT_K="${HIGH_LUT_K:-13}"
-MAIN_MATE_CACHE="${MAIN_MATE_CACHE:-1}"
+MAIN_MATE_CACHE="${MAIN_MATE_CACHE:-0}"
 MAIN_PULL="${MAIN_PULL:-0}"
 for name in MAIN_MATE_CACHE MAIN_PULL; do
   value="${!name}"
