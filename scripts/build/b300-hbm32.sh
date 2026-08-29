@@ -101,5 +101,5 @@ echo "  n=$N width=$W arch=$ARCH low_lut_k=$LOW_LUT_K high_lut_k=$HIGH_LUT_K fas
 echo "  row_limit_env=B300_ROW_LIMIT default_rows=$W runtime_threads_env=GRIDFP_THREADS default_threads=256 planner_target_env=GRIDFP_PLAN_TARGET_MIB scratch_target_separate=1"
 echo "  block_closure_scan=endpoint_setbits block_closure_candidate_rank=incremental_delta rank_same_calls_per_closure_candidate=0"
 if [[ "$RANK_STATE_ILP2" == 1 ]]; then echo "  rank_state_main_destinations_per_thread=2 rank_state_block_destinations_per_thread=2 rank_state_index_first=1 rank_state_hbm_request_overlap=pair,block,endpoint,closure,two_destinations register_pressure_requires_ab=1";fi
-if [[ "$HOT_DELTA_TABLE" == 1 ]]; then echo "  hot_delta_bits=32 hot_delta_constant_bytes_added=20880 hot_delta_int32_checked_per_group=1 rank_step_constant_loads=1 pair_rank_constant_loads=1";fi
+if [[ "$HOT_DELTA_TABLE" == 1 ]]; then echo "  hot_delta_bits=32 hot_delta_constant_bytes_added=17400 hot_delta_step_n_stored=0 hot_delta_int32_checked_per_group=1 rank_step_constant_loads=1 pair_rank_constant_loads=1";fi
 if [[ "$CONCURRENT_GROUP_IO" == 1 ]]; then echo "  group_io_main_block_overlap=1 mate_materialize_overlap=1 rank_state_init_overlap=1 scatter_overlap=1 devicewide_group_io_sync=0";fi
