@@ -27,7 +27,7 @@ ARCH="$ARCH" PM_ACCUM="$PM_ACCUM" bash "$ONEESAN_ROOT/scripts/bench/compact-prec
 ARCH="$ARCH" PM_ACCUM="$PM_ACCUM" bash "$ONEESAN_ROOT/scripts/bench/compact-flat-bid-selftest.sh" >"$LOGDIR/compact-flat-bid.out" 2>"$LOGDIR/compact-flat-bid.err"
 grep -q 'bucket-compact-flat-bid-selftest OK' "$LOGDIR/compact-flat-bid.out" || { echo 'compact flat-bid metadata gate failed' >&2; exit 5; }
 
-COMMON=(N="$N" ARCH="$ARCH" ORBITCTA_FLAT=1 ORBITCTA_FLAT_CHUNK=1 DIRECTGATHER64=1 DIRECTGATHER_SPARSE64="$SPARSE64" DIRECTGATHER_SORT_RANKS=0 ORBITCTA_COL_ILP="$COL_ILP" PAIR_MLP="$PAIR_MLP" CPASYNC_PAIR="$CPASYNC_PAIR" QUAD_MLP=0 QUAD_OVERLAP_LOCAL=0 QUAD_LOCAL_DIRECT_MAX=0 RANKFORMULA_MLP_WINDOW4="$WINDOW4" PM_ACCUM="$PM_ACCUM" PRECTX_FORWARD=1 PRECTX_REVERSE=1 PRECTX_COMPACT=1 PRECTX_FLAT_BID=1 PTXAS_VERBOSE=1)
+COMMON=(N="$N" ARCH="$ARCH" ORBITCTA_FLAT=1 ORBITCTA_FLAT_CHUNK=1 ORBITCTA_FLAT_DYNAMIC=0 DIRECTGATHER64=1 DIRECTGATHER_SPARSE64="$SPARSE64" DIRECTGATHER_SORT_RANKS=0 ORBITCTA_COL_ILP="$COL_ILP" PAIR_MLP="$PAIR_MLP" CPASYNC_PAIR="$CPASYNC_PAIR" QUAD_MLP=0 QUAD_OVERLAP_LOCAL=0 QUAD_LOCAL_DIRECT_MAX=0 QUAD_SPARSE_DESC_MLP=0 QUAD_OVERLAP_BYPASS_LOCAL0=0 QUAD_CPASYNC_PREFETCH_BYTES=0 QUAD_CPASYNC_GROUP_COLS=1 RANKFORMULA_MLP_WINDOW4="$WINDOW4" PM_ACCUM="$PM_ACCUM" PRECTX_FORWARD=1 PRECTX_REVERSE=1 PRECTX_COMPACT=1 PRECTX_FLAT_BID=1 PRECTX_WARPCOOP=0 PTXAS_VERBOSE=1)
 printf 'backend\tkernel\tregisters\tstack_bytes\tspill_store_bytes\tspill_load_bytes\tsmem_bytes\tcmem0_bytes\n' >"$RESOURCE"
 for fused in 0 1; do
   bin="$ONEESAN_BUILD_DIR/b300_flat_prectx_fused${fused}_cpa${CPASYNC_PAIR}_n${N}"
@@ -35,7 +35,7 @@ for fused in 0 1; do
   python3 "$PARSER" "$LOGDIR/fused${fused}.build.err" --label "fused${fused}" >>"$RESOURCE" || true
 done
 field(){ local k="$1" l="$2"; sed -nE "s/(^|.*[[:space:]])${k}=([^[:space:]]+).*/\\2/p" <<<"$l" | tail -n1; }
-printf 'fused\tcpasync_pair\trepeat\tresidue\twall_s\tforward_high_s\treverse_high_s\thigh_s\tforward_regs\treverse_regs\tforward_blocks_per_sm\treverse_blocks_per_sm\tforward_flat_blocks\treverse_flat_blocks\n' >"$RESULT"
+printf 'fused\tcpasync_pair\trepeat\tresidue\twall_s\tforward_high_s\treverse_high_s\thigh_s\tforward_regs\treverse_regs\tforward_blocks_per_sm\treverse_blocks_per_sm\tforward_flat_blocks\treverse_flat_blocks\tflat_bid_fused\tscheduler_mode\n' >"$RESULT"
 for fused in 0 1; do
   bin="$ONEESAN_BUILD_DIR/b300_flat_prectx_fused${fused}_cpa${CPASYNC_PAIR}_n${N}"
   for ((rep=1;rep<=REPEATS;++rep)); do
@@ -46,13 +46,16 @@ for fused in 0 1; do
     env "${runenv[@]}" "$bin" "$N" "$TARGET_MIB" "$MAX_WINDOW" "$NGPU" "$MOD" >"$so" 2>"$se"
     line="$(grep '^residue=' "$so"|tail -n1||true)";[[ -n "$line" ]]||exit 3;residue="$(field residue "$line")";[[ "$residue" == "$EXPECT" ]]||exit 4
     d="$(grep 'snake_onepass_graph_batch modulus=' "$se"|tail -n1||true)";g="$(grep 'rankformula_orbitcta_flat_grid device=0 ' "$se"|head -n1||true)";o="$(grep 'rankformula_orbitcta_flat_occupancy device=0 ' "$se"|head -n1||true)"
+    [[ "$(field flat_bid_mode "$g")" == compact_prectx ]] || { echo "fused=$fused flat_bid_mode mismatch" >&2; exit 6; }
+    [[ "$(field scheduler_mode "$g")" == static_cyclic ]] || { echo "fused=$fused scheduler_mode mismatch" >&2; exit 6; }
+    [[ "$(field flat_bid_fused "$g")" == "$fused" ]] || { echo "fused=$fused runtime flat_bid_fused=$(field flat_bid_fused "$g")" >&2; exit 6; }
     fh="$(field forward_high_s "$d")";rh="$(field reverse_high_s "$d")"; [[ -n "$fh" && -n "$rh" ]] || { echo 'missing HIGH timing' >&2; exit 6; }
     high="$(python3 - "$fh" "$rh" <<'PY'
 import sys
 print(float(sys.argv[1])+float(sys.argv[2]))
 PY
 )"
-    printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' "$fused" "$CPASYNC_PAIR" "$rep" "$residue" "$(field wall_s "$line")" "$fh" "$rh" "$high" "$(field forward_regs "$o")" "$(field reverse_regs "$o")" "$(field forward_blocks_per_sm "$o")" "$(field reverse_blocks_per_sm "$o")" "$(field forward_flat_blocks "$g")" "$(field reverse_flat_blocks "$g")" >>"$RESULT"
+    printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' "$fused" "$CPASYNC_PAIR" "$rep" "$residue" "$(field wall_s "$line")" "$fh" "$rh" "$high" "$(field forward_regs "$o")" "$(field reverse_regs "$o")" "$(field forward_blocks_per_sm "$o")" "$(field reverse_blocks_per_sm "$o")" "$(field forward_flat_blocks "$g")" "$(field reverse_flat_blocks "$g")" "$fused" static_cyclic >>"$RESULT"
   done
 done
 python3 - "$RESULT" "$WINNER_ENV" "$CPASYNC_PAIR" <<'PY'
@@ -63,7 +66,7 @@ for f in ('0','1'):
 w='1' if z['1']['wall_s']<z['0']['wall_s'] else '0'
 print(f"PRECTX_FUSED wall_speedup={z['0']['wall_s']/z['1']['wall_s']:.6f} high_speedup={z['0']['high_s']/z['1']['high_s']:.6f} regs0={z['0']['fr']}/{z['0']['rr']} regs1={z['1']['fr']}/{z['1']['rr']} active0={z['0']['fb']}/{z['0']['rb']} active1={z['1']['fb']}/{z['1']['rb']} cpasync_pair={sys.argv[3]} winner={w}")
 with open(sys.argv[2],'w') as f:
- f.write('ORBITCTA_FLAT=1\nORBITCTA_FLAT_CHUNK=1\nPRECTX_FORWARD=1\nPRECTX_REVERSE=1\nPRECTX_COMPACT=1\nPRECTX_FLAT_BID=1\n')
+ f.write('ORBITCTA_FLAT=1\nORBITCTA_FLAT_CHUNK=1\nORBITCTA_FLAT_DYNAMIC=0\nPRECTX_FORWARD=1\nPRECTX_REVERSE=1\nPRECTX_COMPACT=1\nPRECTX_FLAT_BID=1\nPRECTX_WARPCOOP=0\n')
  f.write('PRECTX_FLAT_BID_FUSED='+w+'\n')
  f.write('CPASYNC_PAIR='+sys.argv[3]+'\n')
  f.write('QUAD_MLP=0\nQUAD_OVERLAP_LOCAL=0\nQUAD_LOCAL_DIRECT_MAX=0\n')
