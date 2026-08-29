@@ -20,9 +20,12 @@ def replace_function(text:str,name:str,new:str)->str:
     if end<0:raise SystemExit(f'function end not found: {name}')
     return text[:start]+new+text[end:]
 
-# One uint64 contribution for R and L at each (position,height). N is always
-# zero. 29*30*2*8 = 13,920 bytes for MAXW=28, well below the 64-KiB constant
-# budget when the separate HOT_DELTA_TABLE experiment is disabled.
+# block_pull_rank_contrib(v,pos,h) is the lexicographic rank mass of symbols
+# strictly before v at this position, not the weight of v itself:
+#   N -> 0
+#   R -> N branch
+#   L -> N branch + R branch
+# Cache the R/L values once per group. 29*30*2*8 = 13,920 bytes at MAXW=28.
 decl='__constant__ Code D_FULL_DP[MAXW+1][MAXW+2];\n'
 if s.count(decl)!=1:raise SystemExit(f'D_FULL_DP declaration expected once got {s.count(decl)}')
 s=s.replace(decl,decl+'__constant__ Code D_BLOCK_CLOSURE_CONTRIB[MAXW+1][MAXW+2][2];\n',1)
@@ -36,28 +39,21 @@ anchor='''    ck(cudaMemcpyToSymbol(D_MAIN_DP,ms.dp,sizeof(ms.dp)),"main dp");ck
 if s.count(anchor)!=1:raise SystemExit(f'group DP upload anchor expected once got {s.count(anchor)}')
 prep=r'''    Code closureContrib[MAXW+1][MAXW+2][2]{};
     for(int pp=0;pp<W;++pp)for(int hh=0;hh<=MAXW+1;++hh){
-        Code zr=0,zl=0;
-        if(allowed_host(ms.fixed,ms.occ,pp,R)){
-            if(hh>0)zr=ms.dp[pp][hh-1];
-        }
-        if(allowed_host(ms.fixed,ms.occ,pp,L)){
-            zl=ms.dp[pp][hh];
-            if(hh>0)zl+=ms.dp[pp][hh-1];
-        }
-        closureContrib[pp][hh][0]=zr;
-        closureContrib[pp][hh][1]=zl;
+        Code nbranch=0,rbranch=0;
+        if(allowed_host(ms.fixed,ms.occ,pp,N))nbranch=ms.dp[pp][hh];
+        if(hh>0&&allowed_host(ms.fixed,ms.occ,pp,R))rbranch=ms.dp[pp][hh-1];
+        closureContrib[pp][hh][0]=nbranch;          // contribution before R
+        closureContrib[pp][hh][1]=nbranch+rbranch; // contribution before L
     }
     ck(cudaMemcpyToSymbol(D_BLOCK_CLOSURE_CONTRIB,closureContrib,sizeof(closureContrib)),"block closure contrib");
 '''
 s=s.replace(anchor,prep+anchor,1)
 
-for req in ('D_BLOCK_CLOSURE_CONTRIB','block closure contrib','return D_BLOCK_CLOSURE_CONTRIB[pos][h][v==R?0:1]'):
+for req in ('D_BLOCK_CLOSURE_CONTRIB','block closure contrib','contribution before R','contribution before L','return D_BLOCK_CLOSURE_CONTRIB[pos][h][v==R?0:1]'):
     if req not in s:raise SystemExit(f'missing closure-contrib artifact: {req}')
 for stale in ('if(v>N&&allowed(D_MAIN_FIXED,D_MAIN_OCC,pos,N))','if(v>R&&h>0&&allowed(D_MAIN_FIXED,D_MAIN_OCC,pos,R))'):
-    # Those expressions may occur elsewhere in the source; only reject if they
-    # survived inside block_pull_rank_contrib itself.
     p=s.find('block_pull_rank_contrib(');q=s.find('\n}',p)
     if stale in s[p:q]:raise SystemExit(f'stale closure contrib arithmetic: {stale}')
 
 out.parent.mkdir(parents=True,exist_ok=True);out.write_text(s)
-print(f'generated {out} from {src}: b300_closure_contrib_table=1 constant_bytes_added=13920 values=R,L N_zero_fastpath=1 per_group_upload=1 closure_allowed_checks=0 closure_dp_sum_ops=0')
+print(f'generated {out} from {src}: b300_closure_contrib_table=1 constant_bytes_added=13920 values=rank_mass_before_R,rank_mass_before_L N_zero_fastpath=1 per_group_upload=1 closure_allowed_checks=0 closure_dp_sum_ops=0 exact_semantics=lexicographic_prefix_mass')
