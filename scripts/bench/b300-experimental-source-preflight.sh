@@ -19,6 +19,8 @@ py=(
  scripts/build/lower-b300-static-worker-device-binding.py
  scripts/build/lower-b300-static-persistent-workers.py
  scripts/build/lower-b300-concurrent-staged-io.py
+ scripts/build/lower-b300-async-staged-io-hostsync.py
+ scripts/build/lower-b300-window-batched-groups.py
 )
 sh=(
  scripts/bench/b300-staged-group-meta-plan-proof.sh
@@ -32,6 +34,8 @@ sh=(
  scripts/bench/b300-vmm-static-lpt-control-bundle-production-generate-proof.sh
  scripts/bench/b300-vmm-static-lpt-persistent-workers-production-generate-proof.sh
  scripts/bench/b300-vmm-static-lpt-persistent-concurrent-production-generate-proof.sh
+ scripts/bench/b300-vmm-static-lpt-persistent-async-production-generate-proof.sh
+ scripts/bench/b300-vmm-static-lpt-windowbatch-production-generate-proof.sh
  scripts/bench/b300-vmm-static-lpt-control-bundle-integration-ptx-proof.sh
  scripts/bench/b300-vmm-static-lpt-stagedmeta-production-ab.sh
  scripts/bench/b300-vmm-static-lpt-meta-source-production-ab.sh
@@ -47,6 +51,8 @@ sh=(
  scripts/build/b300-hbm32-vmm-static-lpt-control-bundle.sh
  scripts/build/b300-hbm32-vmm-static-lpt-persistent-workers.sh
  scripts/build/b300-hbm32-vmm-static-lpt-persistent-concurrent.sh
+ scripts/build/b300-hbm32-vmm-static-lpt-persistent-async.sh
+ scripts/build/b300-hbm32-vmm-static-lpt-windowbatch.sh
 )
 for f in "${py[@]}";do [[ -f "$ONEESAN_ROOT/$f" ]]||{ echo "missing $f" >&2;exit 3; };done
 for f in "${sh[@]}";do [[ -f "$ONEESAN_ROOT/$f" ]]||{ echo "missing $f" >&2;exit 3; };done
@@ -66,5 +72,7 @@ bash "$ONEESAN_ROOT/scripts/bench/b300-vmm-static-lpt-workerbind-production-gene
 bash "$ONEESAN_ROOT/scripts/bench/b300-vmm-static-lpt-control-bundle-production-generate-proof.sh"
 bash "$ONEESAN_ROOT/scripts/bench/b300-vmm-static-lpt-persistent-workers-production-generate-proof.sh"
 bash "$ONEESAN_ROOT/scripts/bench/b300-vmm-static-lpt-persistent-concurrent-production-generate-proof.sh"
+bash "$ONEESAN_ROOT/scripts/bench/b300-vmm-static-lpt-persistent-async-production-generate-proof.sh"
+bash "$ONEESAN_ROOT/scripts/bench/b300-vmm-static-lpt-windowbatch-production-generate-proof.sh"
 
-echo "b300-experimental-source-preflight OK python_lowerers=${#py[@]} bash_scripts=${#sh[@]} cpu_proofs=3 generated_variants=8 nvcc=not_required actions=not_used"
+echo "b300-experimental-source-preflight OK python_lowerers=${#py[@]} bash_scripts=${#sh[@]} cpu_proofs=3 generated_variants=10 nvcc=not_required actions=not_used"
