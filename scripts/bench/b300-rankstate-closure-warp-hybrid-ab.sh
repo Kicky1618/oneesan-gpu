@@ -85,7 +85,8 @@ PY
 
 printf 'mode\tthreshold\tthreads\trepeat\tresidue\twall_s\tactive_max_s\tmem_avg_pct\tmem_max_pct\tmem_busy_avg_pct\tsm_avg_pct\tpower_avg_w\tsamples\n' >"$RESULT"
 run_one(){
-  local mode="$1" threshold="$2" bin="$3" threads="$4" rep="$5" tag="${mode}_t${threads}_r${rep}"
+  local mode="$1" threshold="$2" bin="$3" threads="$4" rep="$5"
+  local tag="${mode}_t${threads}_r${rep}"
   local out="$LOGDIR/$tag.out" err="$LOGDIR/$tag.err" tele="$LOGDIR/$tag.gpu.csv"
   nvidia-smi --query-gpu=timestamp,index,utilization.gpu,utilization.memory,power.draw --format=csv,noheader,nounits -lms 200 >"$tele" 2>/dev/null & local mon=$!
   sleep 1; set +e
@@ -102,7 +103,6 @@ run_one(){
 for threads in $THREADS_LIST; do
   [[ "$threads" =~ ^[0-9]+$ ]] && ((threads>=32&&threads<=1024&&threads%32==0)) || { echo "bad threads=$threads" >&2; exit 2; }
   for ((r=1;r<=REPEATS;++r)); do
-    # Rotate baseline position to reduce order bias.
     if ((r&1)); then run_one base 0 "$BASE_BIN" "$threads" "$r"; fi
     for th in $THRESHOLDS; do
       bin="$(awk -F '\t' -v m="t$th" '$1==m{print $2}' "$LOGDIR/binaries.tsv")"
