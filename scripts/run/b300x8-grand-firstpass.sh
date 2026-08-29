@@ -12,6 +12,7 @@ MAX_WINDOW="${MAX_WINDOW:-14}"
 REBUILD_BUCKETS="${REBUILD_BUCKETS:-1}"
 RUN_NEXTSELF_STAGE="${RUN_NEXTSELF_STAGE:-1}"
 RUN_HYBRID_STAGE="${RUN_HYBRID_STAGE:-1}"
+RUN_HYBRID_NS_STAGE="${RUN_HYBRID_NS_STAGE:-1}"
 NEXTSELF_THREADS="${NEXTSELF_THREADS:-256}"
 NEXTSELF_SEARCH_ROWS="${NEXTSELF_SEARCH_ROWS:-1}"
 NEXTSELF_VALIDATE_ROWS="${NEXTSELF_VALIDATE_ROWS:-4 8}"
@@ -19,11 +20,14 @@ NEXTSELF_SEARCH_REPEATS="${NEXTSELF_SEARCH_REPEATS:-1}"
 NEXTSELF_VALIDATE_REPEATS="${NEXTSELF_VALIDATE_REPEATS:-1}"
 NEXTSELF_MIN_SPEEDUP="${NEXTSELF_MIN_SPEEDUP:-1.01}"
 HYBRID_MIN_SPEEDUP="${HYBRID_MIN_SPEEDUP:-1.01}"
+HYBRID_NS_MIN_SPEEDUP="${HYBRID_NS_MIN_SPEEDUP:-1.01}"
+HYBRID_NS_SEARCH_REPEATS="${HYBRID_NS_SEARCH_REPEATS:-1}"
+HYBRID_NS_VALIDATE_REPEATS="${HYBRID_NS_VALIDATE_REPEATS:-1}"
 PREFIX="${PREFIX:-$ONEESAN_ROOT/work/b300_grand_firstpass_n27}"
 LOG="${LOG:-${PREFIX}.log}"
 META="${META:-${PREFIX}.meta}"
 
-for x in REBUILD_BUCKETS RUN_NEXTSELF_STAGE RUN_HYBRID_STAGE; do
+for x in REBUILD_BUCKETS RUN_NEXTSELF_STAGE RUN_HYBRID_STAGE RUN_HYBRID_NS_STAGE; do
   v="${!x}"
   [[ "$v" == 0 || "$v" == 1 ]] || { echo "$x must be 0/1" >&2; exit 2; }
 done
@@ -31,9 +35,14 @@ done
 [[ "$NEXTSELF_THREADS" =~ ^[0-9]+$ ]] && ((NEXTSELF_THREADS>=32 && NEXTSELF_THREADS<=768 && NEXTSELF_THREADS%32==0)) || {
   echo 'NEXTSELF_THREADS must be warp multiple 32..768' >&2; exit 2;
 }
-for x in NEXTSELF_SEARCH_REPEATS NEXTSELF_VALIDATE_REPEATS; do
+for x in NEXTSELF_SEARCH_REPEATS NEXTSELF_VALIDATE_REPEATS HYBRID_NS_SEARCH_REPEATS HYBRID_NS_VALIDATE_REPEATS; do
   v="${!x}"; [[ "$v" =~ ^[1-9][0-9]*$ ]] || { echo "$x must be >=1" >&2; exit 2; }
 done
+python3 - "$NEXTSELF_MIN_SPEEDUP" "$HYBRID_MIN_SPEEDUP" "$HYBRID_NS_MIN_SPEEDUP" <<'PY'
+import sys
+for name,v in zip(('NEXTSELF_MIN_SPEEDUP','HYBRID_MIN_SPEEDUP','HYBRID_NS_MIN_SPEEDUP'),map(float,sys.argv[1:])):
+    if v < 1.0: raise SystemExit(f'{name} must be >=1')
+PY
 [[ -f "$PROFILE_FILE" ]] || { echo "missing PROFILE_FILE=$PROFILE_FILE" >&2; exit 2; }
 command -v nvidia-smi >/dev/null || { echo 'nvidia-smi required' >&2; exit 2; }
 command -v nvcc >/dev/null || { echo 'nvcc required' >&2; exit 2; }
@@ -61,6 +70,7 @@ PROFILE_SHA="$(sha256sum "$PROFILE_FILE" | awk '{print $1}')"
   printf 'rebuild_buckets=%s\n' "$REBUILD_BUCKETS"
   printf 'run_nextself_stage=%s\n' "$RUN_NEXTSELF_STAGE"
   printf 'run_hybrid_stage=%s\n' "$RUN_HYBRID_STAGE"
+  printf 'run_hybrid_ns_stage=%s\n' "$RUN_HYBRID_NS_STAGE"
   printf 'nextself_threads=%s\n' "$NEXTSELF_THREADS"
   printf 'nextself_search_rows=%s\n' "$NEXTSELF_SEARCH_ROWS"
   printf 'nextself_validate_rows=%s\n' "$NEXTSELF_VALIDATE_ROWS"
@@ -68,6 +78,9 @@ PROFILE_SHA="$(sha256sum "$PROFILE_FILE" | awk '{print $1}')"
   printf 'nextself_validate_repeats=%s\n' "$NEXTSELF_VALIDATE_REPEATS"
   printf 'nextself_min_speedup=%s\n' "$NEXTSELF_MIN_SPEEDUP"
   printf 'hybrid_min_speedup=%s\n' "$HYBRID_MIN_SPEEDUP"
+  printf 'hybrid_ns_min_speedup=%s\n' "$HYBRID_NS_MIN_SPEEDUP"
+  printf 'hybrid_ns_search_repeats=%s\n' "$HYBRID_NS_SEARCH_REPEATS"
+  printf 'hybrid_ns_validate_repeats=%s\n' "$HYBRID_NS_VALIDATE_REPEATS"
   printf 'hybrid8_nextself_transform_preflight=1\n'
   printf 'nvcc_version_begin=1\n'
   nvcc --version | sed 's/^/nvcc: /'
@@ -93,12 +106,13 @@ echo "=== B300 grand first-pass: n=27 head=${HEAD_SHA:0:12} GPUs=$GPU_COUNT SELE
 set +e
 PROFILE_FILE="$PROFILE_FILE" ARCH="$ARCH" MAX_WINDOW="$MAX_WINDOW" \
   SELECT_ONLY=1 REBUILD_BUCKETS="$REBUILD_BUCKETS" \
-  RUN_NEXTSELF_STAGE="$RUN_NEXTSELF_STAGE" RUN_HYBRID_STAGE="$RUN_HYBRID_STAGE" \
+  RUN_NEXTSELF_STAGE="$RUN_NEXTSELF_STAGE" RUN_HYBRID_STAGE="$RUN_HYBRID_STAGE" RUN_HYBRID_NS_STAGE="$RUN_HYBRID_NS_STAGE" \
   NEXTSELF_THREADS="$NEXTSELF_THREADS" NEXTSELF_SEARCH_ROWS="$NEXTSELF_SEARCH_ROWS" \
   NEXTSELF_VALIDATE_ROWS="$NEXTSELF_VALIDATE_ROWS" NEXTSELF_SEARCH_REPEATS="$NEXTSELF_SEARCH_REPEATS" \
   NEXTSELF_VALIDATE_REPEATS="$NEXTSELF_VALIDATE_REPEATS" NEXTSELF_MIN_SPEEDUP="$NEXTSELF_MIN_SPEEDUP" \
-  HYBRID_MIN_SPEEDUP="$HYBRID_MIN_SPEEDUP" PREFIX="$PREFIX" \
-  bash "$ONEESAN_ROOT/scripts/run/b300x8-joint-nextself-hybrid8-select.sh" 27 "$@" \
+  HYBRID_MIN_SPEEDUP="$HYBRID_MIN_SPEEDUP" HYBRID_NS_MIN_SPEEDUP="$HYBRID_NS_MIN_SPEEDUP" \
+  HYBRID_NS_SEARCH_REPEATS="$HYBRID_NS_SEARCH_REPEATS" HYBRID_NS_VALIDATE_REPEATS="$HYBRID_NS_VALIDATE_REPEATS" \
+  PREFIX="$PREFIX" bash "$ONEESAN_ROOT/scripts/run/b300x8-joint-nextself-hybrid8-select.sh" 27 "$@" \
   2>&1 | tee "$LOG"
 rc=${PIPESTATUS[0]}
 set -e
