@@ -19,8 +19,13 @@ mkdir -p "$LOGDIR"
 
 command -v nvidia-smi >/dev/null || { echo 'nvidia-smi required' >&2; exit 2; }
 
-printf 'profile\twall_s\tactive_max_s\tactive_sum_s\tmc_avg_pct\tmc_max_pct\tregs_max\tspill_store_max_bytes\tspill_load_max_bytes\n' >"$SUMMARY"
+printf 'profile\tresidue\twall_s\tactive_max_s\tactive_sum_s\tmc_avg_pct\tmc_max_pct\tregs_max\tspill_store_max_bytes\tspill_load_max_bytes\n' >"$SUMMARY"
 cat "$SUMMARY"
+
+field(){
+  local key="$1" line="$2"
+  sed -nE "s/(^|.*[[:space:]])${key}=([^[:space:]]+).*/\\2/p" <<<"$line" | tail -n1
+}
 
 run_one(){
   local name="$1";shift
@@ -37,12 +42,15 @@ run_one(){
   wait "$mpid" 2>/dev/null || true
   (( rc==0 )) || return "$rc"
 
-  local line wall active_max active_sum mem_avg mem_max regs_max spill_store spill_load row
+  local line residue wall active_max active_sum mem_avg mem_max regs_max spill_store spill_load row
   line="$(grep '^backend=gridfp-b300-hbm32-fullmate-dropN ' "$log" | tail -n1 || true)"
   [[ -n "$line" ]] || line="$(grep '^backend=gridfp-b300-hbm32' "$log" | tail -n1 || true)"
-  wall="$(sed -nE 's/.* wall_s=([^ ]+).*/\1/p' <<<"$line")"
-  active_max="$(sed -nE 's/.* active_max_s=([^ ]+).*/\1/p' <<<"$line")"
-  active_sum="$(sed -nE 's/.* active_sum_s=([^ ]+).*/\1/p' <<<"$line")"
+  [[ -n "$line" ]] || { echo "$name missing backend result line" >&2; return 4; }
+  residue="$(field residue "$line")"
+  wall="$(field wall_s "$line")"
+  active_max="$(field active_max_s "$line")"
+  active_sum="$(field active_sum_s "$line")"
+  [[ -n "$residue" && -n "$wall" ]] || { echo "$name missing residue/wall_s" >&2; return 4; }
   read -r mem_avg mem_max < <(awk '
     $1 ~ /^[0-9]+$/ && $3 ~ /^[0-9]+$/ {s+=$3;n++;if($3>m)m=$3}
     END{if(n)printf "%.3f %d\n",s/n,m;else print "nan nan"}
@@ -55,7 +63,7 @@ spill=[(int(a),int(b)) for a,b in re.findall(r'(\d+)\s+bytes spill stores,\s*(\d
 print(max(regs) if regs else 'nan', max((x for x,_ in spill),default='nan'), max((y for _,y in spill),default='nan'))
 PY
 )
-  row="$(printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s' "$name" "${wall:-nan}" "${active_max:-nan}" "${active_sum:-nan}" "$mem_avg" "$mem_max" "$regs_max" "$spill_store" "$spill_load")"
+  row="$(printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s' "$name" "$residue" "$wall" "${active_max:-nan}" "${active_sum:-nan}" "$mem_avg" "$mem_max" "$regs_max" "$spill_store" "$spill_load")"
   printf '%s\n' "$row" | tee -a "$SUMMARY"
 }
 
@@ -74,6 +82,11 @@ done
 python3 - "$SUMMARY" <<'PY'
 import csv,math,sys
 rows=list(csv.DictReader(open(sys.argv[1]),delimiter='\t'))
+if not rows:
+    raise SystemExit('no ILP saturation rows')
+res={r['residue'] for r in rows}
+if len(res)!=1:
+    raise SystemExit('FATAL ILP4/ILP8 residue mismatch '+repr({r['profile']:r['residue'] for r in rows}))
 ilp8=[r for r in rows if r['profile'].startswith('ilp8_') and r['wall_s'] not in ('','nan')]
 if not ilp8:
     raise SystemExit('no successful ILP8 candidate')
@@ -86,10 +99,11 @@ clean=[r for r in ilp8 if spill_free(r)]
 pool=clean or ilp8
 best=min(pool,key=lambda r:(num(r,'wall_s'),-num(r,'mc_avg_pct',-math.inf)))
 base=next((r for r in rows if r['profile']=='ilp4' and r['wall_s'] not in ('','nan')),None)
+common=next(iter(res))
 if base:
-    print(f"ILP8_SELECTED profile={best['profile']} wall_s={best['wall_s']} speedup={num(base,'wall_s')/num(best,'wall_s'):.6f}x mc_avg_pct={best['mc_avg_pct']} regs_max={best['regs_max']} spill_store_max={best['spill_store_max_bytes']} spill_load_max={best['spill_load_max_bytes']} spill_free_pool={int(bool(clean))}",file=sys.stderr)
+    print(f"ILP8_SELECTED profile={best['profile']} residue={common} wall_s={best['wall_s']} speedup={num(base,'wall_s')/num(best,'wall_s'):.6f}x mc_avg_pct={best['mc_avg_pct']} regs_max={best['regs_max']} spill_store_max={best['spill_store_max_bytes']} spill_load_max={best['spill_load_max_bytes']} spill_free_pool={int(bool(clean))} exact_gate=1",file=sys.stderr)
 else:
-    print(f"ILP8_SELECTED profile={best['profile']} wall_s={best['wall_s']} mc_avg_pct={best['mc_avg_pct']} regs_max={best['regs_max']} spill_store_max={best['spill_store_max_bytes']} spill_load_max={best['spill_load_max_bytes']} spill_free_pool={int(bool(clean))}",file=sys.stderr)
+    print(f"ILP8_SELECTED profile={best['profile']} residue={common} wall_s={best['wall_s']} mc_avg_pct={best['mc_avg_pct']} regs_max={best['regs_max']} spill_store_max={best['spill_store_max_bytes']} spill_load_max={best['spill_load_max_bytes']} spill_free_pool={int(bool(clean))} exact_gate=1",file=sys.stderr)
 PY
 
 echo "summary=$SUMMARY logs=$LOGDIR" >&2
