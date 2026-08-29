@@ -13,8 +13,10 @@ static_assert(P10DC_RANKFORMULA_DIRECTGATHER64,
               "QUAD_MLP currently requires DIRECTGATHER64");
 static_assert(P10DC_RANKFORMULA_PAIR_MLP,
               "QUAD_MLP uses the pair-MLP runtime contract");
-static_assert(!P10DC_RANKFORMULA_CPASYNC_PAIR,
-              "register QUAD_MLP is isolated from cp.async until 28-slot staging is enabled");
+#if P10DC_RANKFORMULA_CPASYNC_PAIR
+static_assert(P10DC_RANKFORMULA_CPASYNC_VALUES_PER_THREAD >= 28,
+              "cp.async QUAD_MLP requires 28 source slots per thread");
+#endif
 
 struct P10DCRankFormulaQuadAccum {
     BkczCrossAccum a, b, c, d;
@@ -89,6 +91,30 @@ p10dc_resolved_low_preimages_cross5_rankformula_nometa4_directgather64_quad_fixe
     if(n2>3){c3=uint32_t(q2&0x7fffu);c4=uint32_t((q2>>15)&0x7fffu);c5=uint32_t((q2>>30)&0x7fffu);c6=uint32_t((q2>>45)&0x7fffu);}
     if(n3>3){d3=uint32_t(q3&0x7fffu);d4=uint32_t((q3>>15)&0x7fffu);d5=uint32_t((q3>>30)&0x7fffu);d6=uint32_t((q3>>45)&0x7fffu);}
 
+#if P10DC_RANKFORMULA_CPASYNC_PAIR
+#define P10DC_QUAD_CPASYNC(slot,rank,count,need) \
+    p10dc_rankformula_cpasync_u32( \
+        p10dc_rankformula_cpasync_slot(slot), source_row + (rank), (count) > (need))
+    P10DC_QUAD_CPASYNC(0,a0,n0,0); P10DC_QUAD_CPASYNC(1,a1,n0,1); P10DC_QUAD_CPASYNC(2,a2,n0,2); P10DC_QUAD_CPASYNC(3,a3,n0,3); P10DC_QUAD_CPASYNC(4,a4,n0,4); P10DC_QUAD_CPASYNC(5,a5,n0,5); P10DC_QUAD_CPASYNC(6,a6,n0,6); p10dc_rankformula_cpasync_commit();
+    P10DC_QUAD_CPASYNC(7,b0,n1,0); P10DC_QUAD_CPASYNC(8,b1,n1,1); P10DC_QUAD_CPASYNC(9,b2,n1,2); P10DC_QUAD_CPASYNC(10,b3,n1,3); P10DC_QUAD_CPASYNC(11,b4,n1,4); P10DC_QUAD_CPASYNC(12,b5,n1,5); P10DC_QUAD_CPASYNC(13,b6,n1,6); p10dc_rankformula_cpasync_commit();
+    P10DC_QUAD_CPASYNC(14,c0,n2,0); P10DC_QUAD_CPASYNC(15,c1,n2,1); P10DC_QUAD_CPASYNC(16,c2,n2,2); P10DC_QUAD_CPASYNC(17,c3,n2,3); P10DC_QUAD_CPASYNC(18,c4,n2,4); P10DC_QUAD_CPASYNC(19,c5,n2,5); P10DC_QUAD_CPASYNC(20,c6,n2,6); p10dc_rankformula_cpasync_commit();
+    P10DC_QUAD_CPASYNC(21,d0,n3,0); P10DC_QUAD_CPASYNC(22,d1,n3,1); P10DC_QUAD_CPASYNC(23,d2,n3,2); P10DC_QUAD_CPASYNC(24,d3,n3,3); P10DC_QUAD_CPASYNC(25,d4,n3,4); P10DC_QUAD_CPASYNC(26,d5,n3,5); P10DC_QUAD_CPASYNC(27,d6,n3,6); p10dc_rankformula_cpasync_commit();
+#undef P10DC_QUAD_CPASYNC
+    p10dc_rankformula_cpasync_wait_all();
+#define P10DC_QUAD_SLOT(i) BkczCrossAccum(*p10dc_rankformula_cpasync_slot(i))
+    const BkczCrossAccum as03=p10dc_rankformula_accum_add(p10dc_rankformula_accum_add(P10DC_QUAD_SLOT(0),P10DC_QUAD_SLOT(1)),p10dc_rankformula_accum_add(P10DC_QUAD_SLOT(2),P10DC_QUAD_SLOT(3)));
+    const BkczCrossAccum bs03=p10dc_rankformula_accum_add(p10dc_rankformula_accum_add(P10DC_QUAD_SLOT(7),P10DC_QUAD_SLOT(8)),p10dc_rankformula_accum_add(P10DC_QUAD_SLOT(9),P10DC_QUAD_SLOT(10)));
+    const BkczCrossAccum cs03=p10dc_rankformula_accum_add(p10dc_rankformula_accum_add(P10DC_QUAD_SLOT(14),P10DC_QUAD_SLOT(15)),p10dc_rankformula_accum_add(P10DC_QUAD_SLOT(16),P10DC_QUAD_SLOT(17)));
+    const BkczCrossAccum ds03=p10dc_rankformula_accum_add(p10dc_rankformula_accum_add(P10DC_QUAD_SLOT(21),P10DC_QUAD_SLOT(22)),p10dc_rankformula_accum_add(P10DC_QUAD_SLOT(23),P10DC_QUAD_SLOT(24)));
+    const BkczCrossAccum as46=p10dc_rankformula_accum_add(p10dc_rankformula_accum_add(P10DC_QUAD_SLOT(4),P10DC_QUAD_SLOT(5)),P10DC_QUAD_SLOT(6));
+    const BkczCrossAccum bs46=p10dc_rankformula_accum_add(p10dc_rankformula_accum_add(P10DC_QUAD_SLOT(11),P10DC_QUAD_SLOT(12)),P10DC_QUAD_SLOT(13));
+    const BkczCrossAccum cs46=p10dc_rankformula_accum_add(p10dc_rankformula_accum_add(P10DC_QUAD_SLOT(18),P10DC_QUAD_SLOT(19)),P10DC_QUAD_SLOT(20));
+    const BkczCrossAccum ds46=p10dc_rankformula_accum_add(p10dc_rankformula_accum_add(P10DC_QUAD_SLOT(25),P10DC_QUAD_SLOT(26)),P10DC_QUAD_SLOT(27));
+#undef P10DC_QUAD_SLOT
+    return P10DCRankFormulaQuadAccum{
+        p10dc_rankformula_accum_add(as03,as46),p10dc_rankformula_accum_add(bs03,bs46),
+        p10dc_rankformula_accum_add(cs03,cs46),p10dc_rankformula_accum_add(ds03,ds46)};
+#else
     BkczCrossAccum av0=0,av1=0,av2=0,av3=0,bv0=0,bv1=0,bv2=0,bv3=0;
     BkczCrossAccum cv0=0,cv1=0,cv2=0,cv3=0,dv0=0,dv1=0,dv2=0,dv3=0;
     if(n0>0)av0=BkczCrossAccum(__ldg(source_row+a0)); if(n0>1)av1=BkczCrossAccum(__ldg(source_row+a1)); if(n0>2)av2=BkczCrossAccum(__ldg(source_row+a2)); if(n0>3)av3=BkczCrossAccum(__ldg(source_row+a3));
@@ -112,5 +138,6 @@ p10dc_resolved_low_preimages_cross5_rankformula_nometa4_directgather64_quad_fixe
     return P10DCRankFormulaQuadAccum{
         p10dc_rankformula_accum_add(as03,as46),p10dc_rankformula_accum_add(bs03,bs46),
         p10dc_rankformula_accum_add(cs03,cs46),p10dc_rankformula_accum_add(ds03,ds46)};
+#endif
 }
 #endif
