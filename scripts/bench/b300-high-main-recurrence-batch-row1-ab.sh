@@ -20,7 +20,9 @@ build_one(){
     bash "$ONEESAN_ROOT/scripts/build/b300-hbm32-batch.sh" >"${PREFIX}.${mode}.build.out" 2>"${PREFIX}.${mode}.build.err"
   grep -Fq "main_pull_ilp=2" "${PREFIX}.${mode}.build.out"
   grep -Fq "high_main_recurrence=$rec" "${PREFIX}.${mode}.build.out"
-  if [[ "$rec" == 1 ]]; then grep -Fq 'high_main_state_bits=64 extra_state_bytes=0' "${PREFIX}.${mode}.build.out";fi
+  if [[ "$rec" == 1 ]]; then
+    grep -Fq 'high_main_state_bits=64 extra_state_bytes=0 high_p_lo=14 high_symbol_range=13..27 high_trit_positions=15 high_min_fixed=7' "${PREFIX}.${mode}.build.out"
+  fi
 }
 BASE_BIN="$ONEESAN_BUILD_DIR/b300_batch_n27_highmainrec0_high${HIGH_DROP_CHUNK}"
 CAND_BIN="$ONEESAN_BUILD_DIR/b300_batch_n27_highmainrec1_high${HIGH_DROP_CHUNK}"
@@ -77,4 +79,5 @@ printf 'b300_high_main_recurrence_threads=%s\n' "$THREADS"
 printf 'b300_high_main_recurrence_high_drop_chunk=%s\n' "$HIGH_DROP_CHUNK"
 printf 'b300_high_main_recurrence_rows=%s\n' "$ROWS"
 printf 'b300_high_main_recurrence_residue=%s\n' "$BR"
+printf 'b300_high_main_recurrence_layout=p27..14_symbols13..27_trits15_fixed_gate7\n'
 printf 'b300_high_main_recurrence_note=8B/state/p Mate streaming store replaces high-prefix address work; adopt only on wall-time win\n'
