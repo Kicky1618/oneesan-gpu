@@ -2,6 +2,26 @@
 
 #include "ramstream32_bucket_closure_cross5_rankformula_nometa4_abstract.cuh"
 
+#ifndef P10DC_RANKFORMULA_DIRECTGATHER
+#define P10DC_RANKFORMULA_DIRECTGATHER 0
+#endif
+static_assert(P10DC_RANKFORMULA_DIRECTGATHER == 0 ||
+              P10DC_RANKFORMULA_DIRECTGATHER == 1,
+              "P10DC_RANKFORMULA_DIRECTGATHER must be 0 or 1");
+#if P10DC_RANKFORMULA_DIRECTGATHER
+static_assert(P10DC_RANKFORMULA_NOMETA_GROUP61,
+              "direct gather currently targets GROUP61");
+static_assert(P10DC_RANKFORMULA_ABSTRACT_SELECT8 &&
+              P10DC_RANKFORMULA_ABSTRACT_SRCPACK10,
+              "direct gather requires SELECT8+SRCPACK10");
+// One uint4 per (reachable LOW rank, depth 1..13).  Words hold seven absolute
+// uint16 source ranks and a uint16 count.  The table is built once per bound
+// owner and replaces locator + depth/select + source-offset decoding in the hot
+// CROSS gather.
+__constant__ uint4* D_P10DC_RANKFORMULA_DIRECTGATHER4;
+__constant__ uint32_t D_P10DC_RANKFORMULA_DIRECTGATHER_OFF[MAXW + 2];
+#endif
+
 // B300-oriented memory-level parallelism for the compact abstract CROSS path.
 // The legacy walker reduces one source load before issuing the next one.  This
 // helper computes all selected source addresses first, issues up to seven
@@ -28,6 +48,36 @@ p10dc_resolved_low_preimages_cross5_rankformula_nometa4_abstract_mlp_fixed(
 #else
     if (!depth || depth > P10DC_RANKFORMULA_ABSTRACT_SELECT_DEPTHS)
         return BkczCrossAccum(0);
+#if P10DC_RANKFORMULA_DIRECTGATHER
+    const size_t gi =
+        (size_t(D_P10DC_RANKFORMULA_DIRECTGATHER_OFF[h]) + size_t(rank)) *
+            P10DC_RANKFORMULA_ABSTRACT_SELECT_DEPTHS +
+        size_t(depth - 1u);
+    const uint4 d = __ldg(D_P10DC_RANKFORMULA_DIRECTGATHER4 + gi);
+    const uint32_t count = d.w >> 16;
+    if (!count) return BkczCrossAccum(0);
+    const uint32_t r0 = d.x & 0xffffu, r1 = d.x >> 16;
+    const uint32_t r2 = d.y & 0xffffu, r3 = d.y >> 16;
+    const uint32_t r4 = d.z & 0xffffu, r5 = d.z >> 16;
+    const uint32_t r6 = d.w & 0xffffu;
+
+    BkczCrossAccum v0 = 0, v1 = 0, v2 = 0, v3 = 0;
+    BkczCrossAccum v4 = 0, v5 = 0, v6 = 0;
+    if (count > 0) v0 = BkczCrossAccum(source_row[r0]);
+    if (count > 1) v1 = BkczCrossAccum(source_row[r1]);
+    if (count > 2) v2 = BkczCrossAccum(source_row[r2]);
+    if (count > 3) v3 = BkczCrossAccum(source_row[r3]);
+    if (count > 4) v4 = BkczCrossAccum(source_row[r4]);
+    if (count > 5) v5 = BkczCrossAccum(source_row[r5]);
+    if (count > 6) v6 = BkczCrossAccum(source_row[r6]);
+
+    const BkczCrossAccum a01 = p10dc_rankformula_accum_add(v0, v1);
+    const BkczCrossAccum a23 = p10dc_rankformula_accum_add(v2, v3);
+    const BkczCrossAccum a45 = p10dc_rankformula_accum_add(v4, v5);
+    return p10dc_rankformula_accum_add(
+        p10dc_rankformula_accum_add(a01, a23),
+        p10dc_rankformula_accum_add(a45, v6));
+#else
     const auto z = p10dc_low_rankformula_nometa_resolve_active(h, rank);
     if (z.n <= h) return BkczCrossAccum(0);
 
@@ -81,5 +131,6 @@ p10dc_resolved_low_preimages_cross5_rankformula_nometa4_abstract_mlp_fixed(
     const BkczCrossAccum a0123 = p10dc_rankformula_accum_add(a01, a23);
     const BkczCrossAccum a456 = p10dc_rankformula_accum_add(a45, v6);
     return p10dc_rankformula_accum_add(a0123, a456);
+#endif
 #endif
 }
