@@ -12,6 +12,7 @@ MAX_WINDOW="${MAX_WINDOW:-14}"
 RANDOM_CG="${RANDOM_CG:-1}"
 WARP_SCAN="${WARP_SCAN:-1}"
 ILP8_REGS="${ILP8_REGS:-0 96 128 160}"
+ILP8_CPASYNC_REGS="${ILP8_CPASYNC_REGS:-0 96 128 160}"
 REBUILD="${REBUILD:-0}"
 LOGDIR="${LOGDIR:-$ONEESAN_ROOT/work/b300x8_saturate_ilp8_ab_n${N}}"
 SUMMARY="${SUMMARY:-$LOGDIR/summary.tsv}"
@@ -73,9 +74,16 @@ run_one ilp4 \
   "$ONEESAN_ROOT/scripts/run/b300x8-saturate-dualmask.sh" "$N" "$MOD"
 
 for r in $ILP8_REGS; do
-  run_one "ilp8_r${r}" \
+  run_one "ilp8_sync_r${r}" \
     env ROWS="$ROWS" GRIDFP_THREADS="$THREADS" TARGET_MIB="$TARGET_MIB" GRIDFP_PLAN_TARGET_MIB="$PLAN_MIB" MAX_WINDOW="$MAX_WINDOW" \
-        RANDOM_CG="$RANDOM_CG" WARP_SCAN="$WARP_SCAN" MAXRREGCOUNT="$r" REBUILD="$REBUILD" \
+        RANDOM_CG="$RANDOM_CG" WARP_SCAN="$WARP_SCAN" CPASYNC=0 MAXRREGCOUNT="$r" REBUILD="$REBUILD" \
+    "$ONEESAN_ROOT/scripts/run/b300x8-saturate-ilp8.sh" "$N" "$MOD"
+done
+
+for r in $ILP8_CPASYNC_REGS; do
+  run_one "ilp8_cpasync_r${r}" \
+    env ROWS="$ROWS" GRIDFP_THREADS="$THREADS" TARGET_MIB="$TARGET_MIB" GRIDFP_PLAN_TARGET_MIB="$PLAN_MIB" MAX_WINDOW="$MAX_WINDOW" \
+        RANDOM_CG="$RANDOM_CG" WARP_SCAN="$WARP_SCAN" CPASYNC=1 MAXRREGCOUNT="$r" REBUILD="$REBUILD" \
     "$ONEESAN_ROOT/scripts/run/b300x8-saturate-ilp8.sh" "$N" "$MOD"
 done
 
@@ -100,6 +108,14 @@ pool=clean or ilp8
 best=min(pool,key=lambda r:(num(r,'wall_s'),-num(r,'mc_avg_pct',-math.inf)))
 base=next((r for r in rows if r['profile']=='ilp4' and r['wall_s'] not in ('','nan')),None)
 common=next(iter(res))
+sync=[r for r in ilp8 if r['profile'].startswith('ilp8_sync_')]
+asyncs=[r for r in ilp8 if r['profile'].startswith('ilp8_cpasync_')]
+def bestof(xs):
+    ys=[r for r in xs if spill_free(r)] or xs
+    return min(ys,key=lambda r:(num(r,'wall_s'),-num(r,'mc_avg_pct',-math.inf))) if ys else None
+bs,ba=bestof(sync),bestof(asyncs)
+if bs and ba:
+    print(f"ILP8_ASYNC_COMPARE sync={bs['profile']} sync_wall={bs['wall_s']} sync_mc={bs['mc_avg_pct']} async={ba['profile']} async_wall={ba['wall_s']} async_mc={ba['mc_avg_pct']} async_speedup={num(bs,'wall_s')/num(ba,'wall_s'):.6f}x exact_gate=1",file=sys.stderr)
 if base:
     print(f"ILP8_SELECTED profile={best['profile']} residue={common} wall_s={best['wall_s']} speedup={num(base,'wall_s')/num(best,'wall_s'):.6f}x mc_avg_pct={best['mc_avg_pct']} regs_max={best['regs_max']} spill_store_max={best['spill_store_max_bytes']} spill_load_max={best['spill_load_max_bytes']} spill_free_pool={int(bool(clean))} exact_gate=1",file=sys.stderr)
 else:
