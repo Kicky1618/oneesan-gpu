@@ -73,7 +73,9 @@ PY
 }
 printf 'mode\tbatch\tthreads\trepeat\tresidue\twall_s\tmem_avg_pct\tmem_max_pct\tmem_busy_avg_pct\tsm_avg_pct\tpower_avg_w\tsamples\n' >"$RESULT"
 run_one(){
- local mode="$1" batch="$2" bin="$3" threads="$4" rep="$5" tag="${mode}_t${threads}_r${rep}" out="$LOGDIR/$tag.out" err="$LOGDIR/$tag.err" tele="$LOGDIR/$tag.gpu.csv"
+ local mode="$1" batch="$2" bin="$3" threads="$4" rep="$5"
+ local tag="${mode}_t${threads}_r${rep}"
+ local out="$LOGDIR/$tag.out" err="$LOGDIR/$tag.err" tele="$LOGDIR/$tag.gpu.csv"
  nvidia-smi --query-gpu=timestamp,index,utilization.gpu,utilization.memory,power.draw --format=csv,noheader,nounits -lms 200 >"$tele" 2>/dev/null & local mon=$!;sleep 1;set +e
  B300_ROW_LIMIT="$ROWS" GRIDFP_THREADS="$threads" "$bin" 27 "$TARGET_MIB" "$MAX_WINDOW" 8 "$MOD" >"$out" 2>"$err";local rc=$?;set -e
  kill "$mon" 2>/dev/null||true;wait "$mon" 2>/dev/null||true
