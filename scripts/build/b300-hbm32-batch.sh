@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 set -euo pipefail
-source "$(dirname -- "${BASH_SOURCE[0]}\")/../lib/common.sh"
+source "$(dirname -- "${BASH_SOURCE[0]}")/../lib/common.sh"
 
 N="${N:-27}"
 W=$((N + 1))
