@@ -77,6 +77,7 @@ int main(int argc, char** argv) {
             const int final_active = start;
             const int first_pair = source_active + 1;
             const int second_pair = middle_active + 1;
+            const int final_pair = final_active + 1;
             const int outer_bits = W - steps - 3;
 
             std::map<std::uint32_t, Rank> source_blocks;
@@ -122,10 +123,7 @@ int main(int argc, char** argv) {
                 ++middle_blocks[oneesan::twocell::fusion_outer_mask_at(
                     p, start, steps, middle_active)];
             }
-            // reverse_q_basis pair=1 is not part of the reverse-channel helper;
-            // at active zero the stationary coordinate set equals forward Q_0.
-            const auto final_basis = q_basis(W, 0, words);
-            for (const Key& dst : final_basis) {
+            for (const Key& dst : reverse_q_basis(W, final_pair, words)) {
                 const auto p = pack_reverse_key(dst);
                 ++final_blocks[oneesan::twocell::fusion_outer_mask_at(
                     p, start, steps, final_active)];
