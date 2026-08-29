@@ -15,6 +15,62 @@ static_assert(P10DC_RANKCHUNK32_FUSED16 == 0 || P10DC_RANKCHUNK32_FUSED16 == 1,
 static_assert(P10DC_RANKCHUNK32_DIRECT3 == 0 || P10DC_RANKCHUNK32_DIRECT3 == 1,
               "P10DC_RANKCHUNK32_DIRECT3 must be 0 or 1");
 
+#ifndef P10DC_RANKCHUNK32_RANKMASK_PROFILE
+#define P10DC_RANKCHUNK32_RANKMASK_PROFILE 0
+#endif
+static_assert(P10DC_RANKCHUNK32_RANKMASK_PROFILE == 0 || P10DC_RANKCHUNK32_RANKMASK_PROFILE == 1,
+              "P10DC_RANKCHUNK32_RANKMASK_PROFILE must be 0 or 1");
+
+#if P10DC_RANKCHUNK32_RANKMASK_PROFILE
+// Profiling-only exact rankmask histogram. The production shape proof says only
+// {0,1,2,3,5,7} are reachable, but keep 32 bins so the real traffic run also
+// checks that assumption instead of baking it into the profiler.
+__device__ unsigned long long D_P10DC_RANKCHUNK32_RANKMASK_PROFILE[32];
+
+__device__ __forceinline__ void p10dc_rankchunk32_profile_rankmask(uint8_t rankmask) {
+    const unsigned active = __activemask();
+    const unsigned peers = __match_any_sync(active, unsigned(rankmask));
+    const unsigned lane = unsigned(threadIdx.x) & 31u;
+    const unsigned leader = unsigned(__ffs(int(peers)) - 1);
+    if (lane == leader) {
+        atomicAdd(&D_P10DC_RANKCHUNK32_RANKMASK_PROFILE[unsigned(rankmask)],
+                  static_cast<unsigned long long>(__popc(peers)));
+    }
+}
+
+static void p10dc_rankchunk32_report_rankmask_profile_devices(int ngpu) {
+    std::array<unsigned long long, 32> total{};
+    int restore = 0;
+    ck(cudaGetDevice(&restore), "rankchunk32 profile get device");
+    for (int g = 0; g < ngpu; ++g) {
+        ck(cudaSetDevice(g), "rankchunk32 profile set device");
+        std::array<unsigned long long, 32> one{};
+        ck(cudaMemcpyFromSymbol(one.data(), D_P10DC_RANKCHUNK32_RANKMASK_PROFILE,
+                                one.size() * sizeof(unsigned long long)),
+           "rankchunk32 profile D2H");
+        for (size_t i = 0; i < one.size(); ++i) total[i] += one[i];
+    }
+    ck(cudaSetDevice(restore), "rankchunk32 profile restore device");
+
+    unsigned long long calls = 0, selected = 0, other = 0;
+    for (unsigned i = 0; i < total.size(); ++i) {
+        calls += total[i];
+        unsigned bits = i, pc = 0;
+        while (bits) { pc += bits & 1u; bits >>= 1; }
+        selected += total[i] * static_cast<unsigned long long>(pc);
+        if (i >= 8u) other += total[i];
+    }
+    const unsigned long long disallowed = total[4] + total[6] + other;
+    const double zero_frac = calls ? double(total[0]) / double(calls) : 0.0;
+    const double nonzero_frac = calls ? 1.0 - zero_frac : 0.0;
+    const double avg_popcount = calls ? double(selected) / double(calls) : 0.0;
+    std::fprintf(stderr,
+        "rankchunk32_rankmask_profile scope=process_all_gpus_all_moduli warp_aggregated=1 total=%llu m0=%llu m1=%llu m2=%llu m3=%llu m4=%llu m5=%llu m6=%llu m7=%llu other=%llu disallowed=%llu zero_frac=%.9f nonzero_frac=%.9f avg_popcount=%.9f\n",
+        calls, total[0], total[1], total[2], total[3], total[4], total[5], total[6], total[7],
+        other, disallowed, zero_frac, nonzero_frac, avg_popcount);
+}
+#endif
+
 #if P10DC_RANKCHUNK32_FUSED16
 #if P10DC_RANKSTREAM_LUT_LDG
 __device__ __align__(128) uint16_t
@@ -83,6 +139,9 @@ __device__ __forceinline__ uint32_t p10dc_cross5_apply_rankchunk32(
         size_t(state) * P10DC_RANKSTREAM_LUT_STRIDE + chunk);
 #endif
     const uint8_t rankmask = uint8_t(e & P10DC_CROSS5_MASK_MASK);
+#if P10DC_RANKCHUNK32_RANKMASK_PROFILE
+    p10dc_rankchunk32_profile_rankmask(rankmask);
+#endif
 #if P10DC_RANKCHUNK32_DIRECT3
     // Exhaustive CROSS5 shape proof over all 25*243 production table inputs:
     // rankmask is always one of {0,1,2,3,5,7}; bits 3 and 4 are unreachable.
