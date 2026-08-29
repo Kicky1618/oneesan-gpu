@@ -48,7 +48,9 @@ bool forced_block_dest(MateID m,int W,int p,MateID& b){
     MateID t=m;
     switch(mpair(m,p)){
     case NR:case NL:
-        b=mshrink(m,p-1);return true;
+        // NR/NL has N at physical p. rank_drop_n_t(...,p) is exactly the
+        // group rank of mshrink(source,p).
+        b=mshrink(m,p);return true;
     case LL:{
         t=msetpair(m,p,NN);const int q=closure_match_left(t,p);if(q<0)return false;
         t=mset(t,q,L);b=mshrink(t,p-1);return true;
@@ -87,10 +89,10 @@ std::map<MateID,Count> pull_block(const std::vector<MateID>& main,const std::vec
             acc=add_mod(acc,mv[it->second]);++terms;
         };
         if(is_endpoint(mget(b,p-1))){
-            // Old forced2window NR/NL channel removes physical p-1.
-            add_source(minsert(b,p-1,N));
+            // Reinsert the dropped high N at physical p.
+            add_source(minsert(b,p,N));
         }else if(mget(b,p-1)==N){
-            // Closure channel also removes physical p-1 after producing NN.
+            // LL/RR/RL closure removes physical p-1 after producing NN.
             const MateID closure_dest=minsert(b,p-1,N);
             MateID cand[32]{};
             const int n=ordinary_closure_preimages_partial(closure_dest,W,p,cand);
@@ -119,7 +121,8 @@ int main(){
     }
     std::cout<<"b300-block-pull-operator-proof OK exhaustive_width_max=11 positions="<<positions
              <<" blocked_destinations="<<destinations
-             <<" p_scope=2..Wm1 block_memset_required=0 block_atomic_updates_required=0"
+             <<" p_scope=2..Wm1 deferred_drop_position=p"
+             <<" block_memset_required=0 block_atomic_updates_required=0"
              <<" pull_terms_max="<<max_terms<<" exact=1\n";
     return 0;
 }
