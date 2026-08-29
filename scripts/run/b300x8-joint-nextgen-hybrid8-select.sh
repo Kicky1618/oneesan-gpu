@@ -13,6 +13,7 @@ JOINT_PREFIX="${JOINT_PREFIX:-${PREFIX}.joint}"
 PREPARE_ENV="${PREPARE_ENV:-${PREFIX}.joint.prepared.env}"
 HYBRID_PREFIX="${HYBRID_PREFIX:-${PREFIX}.hybrid8}"
 HYBRID_WINNER_ENV="${HYBRID_WINNER_ENV:-${HYBRID_PREFIX}_winner.env}"
+HYBRID_MANIFEST="${HYBRID_MANIFEST:-${HYBRID_WINNER_ENV%.env}_promotion-inputs.sha256}"
 NEXTSELF_PREFIX="${NEXTSELF_PREFIX:-${PREFIX}.nextself}"
 NEXTSELF_WINNER_ENV="${NEXTSELF_WINNER_ENV:-${NEXTSELF_PREFIX}_winner.env}"
 RACE_PREFIX="${RACE_PREFIX:-${PREFIX}.race}"
@@ -36,7 +37,8 @@ done
   echo 'NEXTSELF_THREADS must be warp multiple 32..768' >&2; exit 2;
 }
 [[ -f "$PROFILE_FILE" ]] || { echo "missing profile: $PROFILE_FILE" >&2; exit 2; }
-mkdir -p "$(dirname "$PREPARE_ENV")" "$(dirname "$HYBRID_WINNER_ENV")" "$(dirname "$NEXTSELF_WINNER_ENV")" "$(dirname "$RACE_PREFIX")"
+command -v sha256sum >/dev/null || { echo 'sha256sum required' >&2; exit 2; }
+mkdir -p "$(dirname "$PREPARE_ENV")" "$(dirname "$HYBRID_WINNER_ENV")" "$(dirname "$HYBRID_MANIFEST")" "$(dirname "$NEXTSELF_WINNER_ENV")" "$(dirname "$RACE_PREFIX")"
 
 echo '=== joint nextgen hybrid8: prepare calibrated forced candidates and bucket profile ===' >&2
 PROFILE_FILE="$PROFILE_FILE" ARCH="$ARCH" PREFIX="$JOINT_PREFIX" PREPARE_ONLY=1 PREPARE_ENV="$PREPARE_ENV" \
@@ -70,7 +72,25 @@ source "$HYBRID_WINNER_ENV"
 HYBRID_VALID=0
 if [[ "${B300_HYBRID8_STAGED_VALIDATED:-0}" == 1 && "${B300_HYBRID8_FINAL_ENABLED:-0}" == 1 ]]; then
   [[ -x "${B300_HYBRID8_FINAL_BIN:-}" && -x "${B300_HYBRID8_BASE_BIN:-}" ]] || { echo 'validated hybrid8 final/base binary missing' >&2; exit 3; }
+  [[ "${B300_HYBRID8_FINAL_SPILL_FREE:-0}" == 1 ]] || { echo 'validated hybrid8 is not spill-free' >&2; exit 3; }
   HYBRID_VALID=1
+fi
+
+# Freeze the exact staged env + winner/base executables as one promotion unit.
+# When staged work is reused, require the prior manifest instead of blessing
+# whatever bytes happen to exist at the same paths now.
+if [[ "$HYBRID_VALID" == 1 ]]; then
+  if [[ "$RUN_HYBRID_STAGE" == 1 ]]; then
+    tmp="${HYBRID_MANIFEST}.tmp"
+    sha256sum "$HYBRID_WINNER_ENV" "$B300_HYBRID8_FINAL_BIN" "$B300_HYBRID8_BASE_BIN" >"$tmp"
+    mv "$tmp" "$HYBRID_MANIFEST"
+  else
+    [[ -s "$HYBRID_MANIFEST" ]] || { echo "missing reused hybrid8 manifest=$HYBRID_MANIFEST; rerun with RUN_HYBRID_STAGE=1" >&2; exit 3; }
+  fi
+  if ! sha256sum -c "$HYBRID_MANIFEST" >/dev/null; then
+    echo 'joint hybrid8 staged artifact fingerprint mismatch; rerun hybrid stage' >&2
+    exit 3
+  fi
 fi
 
 NEXTSELF_VALID=0
@@ -135,7 +155,7 @@ EOF
   fi
 
   exec env PROFILE_FILE="$PROFILE_FILE" ARCH="$ARCH" SMOKE_PRIME="$PRIME" TARGET_MIB="$TARGET_MIB" MAX_WINDOW="$MAX_WINDOW" \
-    RUN_STAGED=0 WINNER_ENV="$HYBRID_WINNER_ENV" SELECT_ONLY="$SELECT_ONLY" REBUILD_BUCKETS="$REBUILD_BUCKETS" \
+    RUN_STAGED=0 WINNER_ENV="$HYBRID_WINNER_ENV" MANIFEST="$HYBRID_MANIFEST" SELECT_ONLY="$SELECT_ONLY" REBUILD_BUCKETS="$REBUILD_BUCKETS" \
     RACE_PREFIX="$RACE_PREFIX" \
     "$ONEESAN_ROOT/scripts/run/b300x8-nextgen-hybrid8-staged-fullprime-race.sh" 27 "$@"
 fi
