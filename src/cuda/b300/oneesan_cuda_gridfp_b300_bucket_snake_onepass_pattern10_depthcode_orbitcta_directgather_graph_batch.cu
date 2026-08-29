@@ -5,10 +5,12 @@
 #include "../gridfp/ramstream32_bucket_orbit_closure_pattern10_depthcode_orbitcta_delta_direct_affine_rankformula_nometa4_abstract_graph.cuh"
 #include "../gridfp/ramstream32_reverse_build_release.hpp"
 #if P10DC_RANKFORMULA_DIRECTGATHER64
+// sparse64 is an extension of the directgather64 ABI/runtime helpers, not a
+// replacement header. Keep the base definitions visible before the sparse
+// table/runtime extension is instantiated.
+#include "../gridfp/ramstream32_bucket_low_rankformula_directgather64.cuh"
 #if P10DC_RANKFORMULA_DIRECTGATHER_SPARSE64
 #include "../gridfp/ramstream32_bucket_low_rankformula_directgather_sparse64.cuh"
-#else
-#include "../gridfp/ramstream32_bucket_low_rankformula_directgather64.cuh"
 #endif
 #else
 #include "../gridfp/ramstream32_bucket_low_rankformula_nometa_directmap_depthmajor.cuh"
