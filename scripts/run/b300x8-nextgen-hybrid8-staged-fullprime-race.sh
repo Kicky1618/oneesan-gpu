@@ -16,10 +16,12 @@ SELECT_ONLY="${SELECT_ONLY:-1}"
 REBUILD_BUCKETS="${REBUILD_BUCKETS:-1}"
 STAGED_PREFIX="${STAGED_PREFIX:-$ONEESAN_ROOT/work/b300_nextgen_hybrid8_staged}"
 WINNER_ENV="${WINNER_ENV:-${STAGED_PREFIX}_winner.env}"
+MANIFEST="${MANIFEST:-${STAGED_PREFIX}_promotion-inputs.sha256}"
 RACE_PREFIX="${RACE_PREFIX:-$ONEESAN_ROOT/work/b300_nextgen_hybrid8_staged_fullprime_n27}"
 for x in RUN_STAGED SELECT_ONLY REBUILD_BUCKETS; do
   v="${!x}"; [[ "$v" == 0 || "$v" == 1 ]] || { echo "$x must be 0/1" >&2; exit 2; }
 done
+command -v sha256sum >/dev/null || { echo 'sha256sum required' >&2; exit 2; }
 
 if [[ "$RUN_STAGED" == 1 ]]; then
   echo '=== nextgen hybrid8 staged calibration ===' >&2
@@ -33,11 +35,12 @@ source "$WINNER_ENV"
 for key in \
   B300_HYBRID8_STAGED_VALIDATED B300_HYBRID8_FINAL_ENABLED B300_HYBRID8_FINAL_THRESHOLD \
   B300_HYBRID8_FINAL_BIN B300_HYBRID8_FINAL_THREADS B300_HYBRID8_FINAL_SPEEDUP_VS_BASE B300_HYBRID8_FINAL_SPILL_FREE \
+  B300_HYBRID8_FINAL_STAGE_ROWS B300_HYBRID8_FINAL_STAGE_RESIDUE B300_HYBRID8_CORE_ROWS \
   B300_HYBRID8_BASE_BIN B300_HYBRID8_BASE_THREADS B300_HYBRID8_RESIDUE; do
   [[ -n "${!key+x}" ]] || { echo "winner env missing $key" >&2; exit 3; }
 done
 [[ "$B300_HYBRID8_STAGED_VALIDATED" == 1 && "$B300_HYBRID8_FINAL_ENABLED" == 1 ]] || {
-  echo 'hybrid8 did not survive ROWS=1/4/8 validation; refusing transformed full-prime promotion' >&2
+  echo 'hybrid8 did not survive staged validation; refusing transformed full-prime promotion' >&2
   exit 4
 }
 [[ "$B300_HYBRID8_FINAL_SPILL_FREE" == 1 ]] || {
@@ -45,6 +48,9 @@ done
   exit 4
 }
 [[ "$B300_HYBRID8_FINAL_THRESHOLD" =~ ^[0-9]+$ ]] || exit 3
+[[ "$B300_HYBRID8_FINAL_STAGE_ROWS" =~ ^[1-9][0-9]*$ ]] && ((B300_HYBRID8_FINAL_STAGE_ROWS<=28)) || { echo 'bad final staged row count' >&2; exit 3; }
+[[ "$B300_HYBRID8_CORE_ROWS" =~ ^[1-9][0-9]*$ ]] && ((B300_HYBRID8_CORE_ROWS<=28)) || { echo 'bad core row count' >&2; exit 3; }
+[[ -n "$B300_HYBRID8_FINAL_STAGE_RESIDUE" && -n "$B300_HYBRID8_RESIDUE" ]] || { echo 'staged residue proof missing' >&2; exit 3; }
 for key in B300_HYBRID8_FINAL_THREADS B300_HYBRID8_BASE_THREADS; do
   v="${!key}"; [[ "$v" =~ ^[0-9]+$ ]] && ((v>=32 && v<=1024 && v%32==0)) || { echo "bad $key=$v" >&2; exit 3; }
 done
@@ -55,9 +61,26 @@ speed,need=map(float,sys.argv[1:])
 if speed<need: raise SystemExit(f'staged hybrid8 speedup {speed:.9f}x below {need:.9f}x')
 PY
 
+# Reusing an old staged winner is allowed only when the env and both executable
+# byte streams are exactly the artifacts that were calibrated together. This
+# prevents a same-path rebuild from silently invalidating the promotion proof.
+if [[ "$RUN_STAGED" == 1 ]]; then
+  tmp="${MANIFEST}.tmp"
+  mkdir -p "$(dirname "$MANIFEST")"
+  sha256sum "$WINNER_ENV" "$B300_HYBRID8_FINAL_BIN" "$B300_HYBRID8_BASE_BIN" >"$tmp"
+  mv "$tmp" "$MANIFEST"
+else
+  [[ -s "$MANIFEST" ]] || { echo "missing staged promotion manifest=$MANIFEST; rerun with RUN_STAGED=1" >&2; exit 3; }
+fi
+if ! sha256sum -c "$MANIFEST" >/dev/null; then
+  echo 'staged hybrid8 promotion fingerprint mismatch; rerun staged calibration' >&2
+  exit 3
+fi
+
 FINAL_SHA="$(sha256sum "$B300_HYBRID8_FINAL_BIN" | awk '{print $1}')"
 BASE_SHA="$(sha256sum "$B300_HYBRID8_BASE_BIN" | awk '{print $1}')"
 ENV_SHA="$(sha256sum "$WINNER_ENV" | awk '{print $1}')"
+MANIFEST_SHA="$(sha256sum "$MANIFEST" | awk '{print $1}')"
 cat >"${RACE_PREFIX}_promotion.env" <<EOF
 B300_HYBRID8_PROMOTION_VALIDATED=1
 B300_HYBRID8_PROMOTION_SPILL_FREE=1
@@ -69,13 +92,18 @@ B300_HYBRID8_PROMOTION_BASE_BIN=$(printf '%q' "$B300_HYBRID8_BASE_BIN")
 B300_HYBRID8_PROMOTION_BASE_THREADS=$B300_HYBRID8_BASE_THREADS
 B300_HYBRID8_PROMOTION_BASE_SHA256=$BASE_SHA
 B300_HYBRID8_PROMOTION_WINNER_ENV_SHA256=$ENV_SHA
-B300_HYBRID8_PROMOTION_PARTIAL_RESIDUE=$B300_HYBRID8_RESIDUE
+B300_HYBRID8_PROMOTION_MANIFEST=$(printf '%q' "$MANIFEST")
+B300_HYBRID8_PROMOTION_MANIFEST_SHA256=$MANIFEST_SHA
+B300_HYBRID8_PROMOTION_CORE_ROWS=$B300_HYBRID8_CORE_ROWS
+B300_HYBRID8_PROMOTION_CORE_RESIDUE=$B300_HYBRID8_RESIDUE
+B300_HYBRID8_PROMOTION_FINAL_STAGE_ROWS=$B300_HYBRID8_FINAL_STAGE_ROWS
+B300_HYBRID8_PROMOTION_FINAL_STAGE_RESIDUE=$B300_HYBRID8_FINAL_STAGE_RESIDUE
 B300_HYBRID8_PROMOTION_STAGED_SPEEDUP=$B300_HYBRID8_FINAL_SPEEDUP_VS_BASE
 EOF
 
 label="nextgen_hybrid8_t${B300_HYBRID8_FINAL_THRESHOLD}"
 echo "=== full-prime race: $label vs nextgen A-D base vs profiled warp/orbit ===" >&2
-echo "staged_speedup=${B300_HYBRID8_FINAL_SPEEDUP_VS_BASE}x hybrid_sha=${FINAL_SHA:0:12} base_sha=${BASE_SHA:0:12}" >&2
+echo "staged_speedup=${B300_HYBRID8_FINAL_SPEEDUP_VS_BASE}x final_stage_rows=$B300_HYBRID8_FINAL_STAGE_ROWS hybrid_sha=${FINAL_SHA:0:12} base_sha=${BASE_SHA:0:12} manifest_sha=${MANIFEST_SHA:0:12}" >&2
 
 exec env \
   PROFILE_FILE="$PROFILE_FILE" ARCH="$ARCH" MAX_WINDOW="$MAX_WINDOW" FORCED_TARGET_MIB="$TARGET_MIB" \
