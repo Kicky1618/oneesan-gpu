@@ -18,10 +18,10 @@ LOW_DROP_CHUNK="${LOW_DROP_CHUNK:-1}"
 LOW_BLOCK_CACHE="${LOW_BLOCK_CACHE:-1}"
 HIGH_DROP_CHUNK="${HIGH_DROP_CHUNK:-0}"
 REBUILD="${REBUILD:-0}"
-case "$MAIN_PULL_ILP" in 1|2|4) ;; *) echo "MAIN_PULL_ILP must be 1, 2, or 4" >&2; exit 2;; esac
+case "$MAIN_PULL_ILP" in 1|2|3|4) ;; *) echo "MAIN_PULL_ILP must be 1, 2, 3, or 4" >&2; exit 2;; esac
 # Preserve the established production ILP2 binary path/checkpoints. Experimental
-# ILP1/ILP4 get distinct binary names so REBUILD=0 can never silently reuse an
-# ILP2 executable.
+# ILP1/ILP3/ILP4 get distinct binary names so REBUILD=0 can never silently reuse
+# an ILP2 executable.
 if [[ "$MAIN_PULL_ILP" == 2 ]]; then DEFAULT_BIN="$ONEESAN_BUILD_DIR/oneesan_cuda_gridfp_b300_hbm32_batch_n${N}"; else DEFAULT_BIN="$ONEESAN_BUILD_DIR/oneesan_cuda_gridfp_b300_hbm32_batch_n${N}_ilp${MAIN_PULL_ILP}"; fi
 BIN="${BIN:-$DEFAULT_BIN}"
 
