@@ -45,11 +45,18 @@ __device__ __forceinline__ Code rank_lift_n_t(Code block_rank,MateID blocked,int
     return a>=b?block_rank+(a-b):block_rank-(b-a);
 }
 
-__device__ __forceinline__ void block_pull_add_same_rank(
-    Count& acc,const Count*in_main,Code base_rank,MateID base,MateID x
-){
-    Code j=rank_same_t<TARGET_W>(base_rank,base,x,D_MAIN_FIXED,D_MAIN_OCC,D_MAIN_DP);
-    pull_add_mod(acc,in_main[j]);
+using BlockClosureDelta = long long;
+__device__ __forceinline__ Code block_pull_rank_contrib(MateValue v,int pos,int h){
+    Code z=0;
+    if(v>N&&allowed(D_MAIN_FIXED,D_MAIN_OCC,pos,N))z+=D_MAIN_DP[pos][h];
+    if(v>R&&h>0&&allowed(D_MAIN_FIXED,D_MAIN_OCC,pos,R))z+=D_MAIN_DP[pos][h-1];
+    return z;
+}
+__device__ __forceinline__ int block_pull_advance_height(int h,MateValue v){
+    return h+(v==L)-(v==R);
+}
+__device__ __forceinline__ Code block_pull_apply_delta(Code base,BlockClosureDelta d){
+    return d>=0?base+Code(d):base-Code(-d);
 }
 
 __device__ __forceinline__ uint32_t block_pull_endpoint_mask(MateID mate){
@@ -76,41 +83,66 @@ __global__ void block_pull_kernel(const Count*in_main,Code n,Count*out_block,int
             Code j=rank_lift_n_t<TARGET_W>(i,b,p);
             block_pull_add_rank(acc,in_main,j);
         }else if(look==N){
-            // Closure removes physical p-1. Lift the NN destination rank once;
-            // all RL/LL/RR preimages differ only on a local span and therefore
-            // use rank_same_t rather than complete rank_group_t walks.
+            // Closure removes physical p-1. Lift the NN destination rank once.
+            // Candidate ranks are then maintained incrementally while scanning
+            // endpoints, so no candidate performs a second rank_same_t span walk.
             MateID d=minsert(b,p-1,N);
             Code base_rank=rank_lift_n_t<TARGET_W>(i,b,p-1);
+            const int H=height_before_rank_pos<TARGET_W>(d,p);
 
-            if(height_before_rank_pos<TARGET_W>(d,p)>0){
-                MateID x=msetpair(d,p,RL);
-                block_pull_add_same_rank(acc,in_main,base_rank,d,x);
+            if(H>0){
+                const BlockClosureDelta rd=
+                    BlockClosureDelta(block_pull_rank_contrib(R,p,H))+
+                    BlockClosureDelta(block_pull_rank_contrib(L,p-1,H-1));
+                block_pull_add_rank(acc,in_main,block_pull_apply_delta(base_rank,rd));
             }
 
-            // N contributes zero to the closure balance. Compress the MateID to
-            // a one-bit endpoint mask and scan only L/R positions. This preserves
-            // the exact legacy stopping condition while removing all N iterations.
             const uint32_t endpoints=block_pull_endpoint_mask(d);
+
+            // LL: candidate height is base+2 from p down to its matching q.
+            // Each scanned endpoint extends one running rank delta; at a valid
+            // L candidate, replacing that L by R closes the +2 height offset.
+            BlockClosureDelta ldelta=
+                BlockClosureDelta(block_pull_rank_contrib(L,p,H))+
+                BlockClosureDelta(block_pull_rank_contrib(L,p-1,H+1));
+            int hb=H,bal=0;
             uint32_t left=endpoints&((uint32_t(1)<<(p-1))-1u);
-            int bal=0;
             while(left){
-                int q=31-__clz(left);MateValue v=mget(d,q);
+                const int q=31-__clz(left);const MateValue v=mget(d,q);
                 if(bal==0&&v==L){
-                    MateID x=msetpair(d,p,LL);x=mset(x,q,R);
-                    block_pull_add_same_rank(acc,in_main,base_rank,d,x);
+                    const BlockClosureDelta xd=ldelta+
+                        BlockClosureDelta(block_pull_rank_contrib(R,q,hb+2))-
+                        BlockClosureDelta(block_pull_rank_contrib(L,q,hb));
+                    block_pull_add_rank(acc,in_main,block_pull_apply_delta(base_rank,xd));
                 }
+                ldelta+=BlockClosureDelta(block_pull_rank_contrib(v,q,hb+2))-
+                        BlockClosureDelta(block_pull_rank_contrib(v,q,hb));
+                hb=block_pull_advance_height(hb,v);
                 if(v==L)++bal;else --bal;
                 left^=uint32_t(1)<<q;
                 if(bal<0)break;
             }
+
+            // RR is symmetric. A higher R->L correction creates +2 height;
+            // the already-accumulated suffix down to p is evaluated at that
+            // shifted height and the RR pair closes the offset at p,p-1.
+            BlockClosureDelta rsuffix=
+                BlockClosureDelta(block_pull_rank_contrib(R,p,H+2))+
+                BlockClosureDelta(block_pull_rank_contrib(R,p-1,H+1));
+            int hbelow=H;bal=0;
             uint32_t right=endpoints&~((uint32_t(1)<<(p+1))-1u);
-            bal=0;
             while(right){
-                int q=__ffs(right)-1;MateValue v=mget(d,q);
+                const int q=__ffs(right)-1;const MateValue v=mget(d,q);
+                const int hq=hbelow+(v==R)-(v==L);
                 if(bal==0&&v==R){
-                    MateID x=msetpair(d,p,RR);x=mset(x,q,L);
-                    block_pull_add_same_rank(acc,in_main,base_rank,d,x);
+                    const BlockClosureDelta xd=
+                        BlockClosureDelta(block_pull_rank_contrib(L,q,hq))-
+                        BlockClosureDelta(block_pull_rank_contrib(R,q,hq))+rsuffix;
+                    block_pull_add_rank(acc,in_main,block_pull_apply_delta(base_rank,xd));
                 }
+                rsuffix+=BlockClosureDelta(block_pull_rank_contrib(v,q,hq+2))-
+                         BlockClosureDelta(block_pull_rank_contrib(v,q,hq));
+                hbelow=hq;
                 if(v==R)++bal;else --bal;
                 right&=right-1u;
                 if(bal<0)break;
@@ -123,6 +155,11 @@ __global__ void block_pull_kernel(const Count*in_main,Code n,Count*out_block,int
 s = s.replace(marker, insert + marker, 1)
 
 old = '''        if(p>1){
+            if(ds.size)ck(cudaMemsetAsync(dnext,0,size_t(ds.size)*sizeof(Count),cudaMemcpyDeviceToDevice,c.sBlock),"clear next D pull");
+'''
+# Older generated sources used cudaMemsetAsync directly (no memcpy-kind arg).
+# Keep the actual transform anchor below independent of this comment.
+start_old = '''        if(p>1){
             if(ds.size)ck(cudaMemsetAsync(dnext,0,size_t(ds.size)*sizeof(Count),c.sBlock),"clear next D pull");
             if(ms.size){
                 if(useMate)main_pull_kernel<true><<<bm,threads,0,c.sMain>>>(cur,c.dMate,ms.size,dcur,ds.size,nxt,p);
@@ -142,10 +179,10 @@ new = '''        if(p>1){
             if(ds.size)block_pull_kernel<<<bd,threads,0,c.sBlock>>>(cur,ds.size,dnext,p);
             ck(cudaGetLastError(),"doubleD full pull transition");
 '''
-if old not in s:
+if start_old not in s:
     raise SystemExit('main-pull p>1 loop anchor not found')
-s = s.replace(old, new, 1)
+s = s.replace(start_old, new, 1)
 
 out.parent.mkdir(parents=True, exist_ok=True)
 out.write_text(s)
-print(f'generated {out} from {src}: b300_block_pull=1 p_scope=2..Wm1 block_atomic=0 block_memset=0 deferred_insert=p endpoint_rank=direct_lift closure_base_rank=direct_lift closure_candidate_rank=local_delta rl_validity_gate=1 closure_scan=endpoint_setbits full_group_rank_calls=0')
+print(f'generated {out} from {src}: b300_block_pull=1 p_scope=2..Wm1 block_atomic=0 block_memset=0 deferred_insert=p endpoint_rank=direct_lift closure_base_rank=direct_lift closure_candidate_rank=incremental_delta closure_rank_same_calls=0 rl_validity_gate=prefix_height closure_scan=endpoint_setbits full_group_rank_calls=0')
