@@ -54,9 +54,9 @@ RUNENV=(BUCKET_THREADS="$THREADS" BUCKET_GRID_X="$LOW_GX" BUCKET_GRID_Y="$LOW_GY
 [[ -z "$FLAT_PER_SM" ]] || RUNENV+=(BUCKET_ORBITCTA_FLAT_BLOCKS_PER_SM="$FLAT_PER_SM")
 [[ -z "$FLAT_BLOCKS" ]] || RUNENV+=(BUCKET_ORBITCTA_FLAT_BLOCKS="$FLAT_BLOCKS")
 
-# Match both static flat and dynamic flat HIGH kernels; reset kernels do not
-# contain the orbitcta_flat_*_kernel naming pattern selected below.
-KREGEX='regex:.*orbitcta_flat_(dynamic_)?kernel.*'
+# Select forward/reverse HIGH worker kernels only. This catches static,
+# compact-prectx and dynamic variants while excluding the dynamic reset kernel.
+KREGEX='regex:.*bucket_.*high.*orbitcta_flat.*kernel.*'
 
 env "${RUNENV[@]}" \
   ncu --devices "$DEVICE" --filter-mode per-gpu \
