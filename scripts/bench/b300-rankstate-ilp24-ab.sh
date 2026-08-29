@@ -6,7 +6,7 @@ N="${N:-27}"; [[ "$N" == 27 ]] || { echo 'rank-state MLP sweep currently targets
 MOD="${MOD:-4294967291}"; ARCH="${ARCH:-native}"; NGPU=8
 TARGET_MIB="${TARGET_MIB:-65536}"; PLAN_MIB="${GRIDFP_PLAN_TARGET_MIB:-16384}"; MAX_WINDOW="${MAX_WINDOW:-14}"
 ROWS="${ROWS:-1}"; THREADS_LIST="${THREADS_LIST:-128 256 512}"; REPEATS="${REPEATS:-1}"
-MODES="${MODES:-ilp2 ilp4 ilp4q ilp4qhot}"
+MODES="${MODES:-ilp2 ilp3 ilp4 ilp4q ilp4qhot}"
 PREFIX="${PREFIX:-$ONEESAN_ROOT/work/b300_rankstate_mlp_row${ROWS}}"; LOGDIR="${LOGDIR:-${PREFIX}_logs}"
 RESULT="${RESULT:-${PREFIX}.tsv}"; RESOURCE="${RESOURCE:-${PREFIX}_ptxas.tsv}"
 mkdir -p "$LOGDIR" "$(dirname "$RESULT")" "$ONEESAN_BUILD_DIR"
@@ -17,12 +17,14 @@ command -v nvidia-smi >/dev/null || { echo 'nvidia-smi required' >&2; exit 2; }
 (( $(nvidia-smi --query-gpu=index --format=csv,noheader | wc -l) >= 8 )) || { echo 'need 8 visible GPUs' >&2; exit 2; }
 
 bash "$ONEESAN_ROOT/scripts/bench/b300-ilp2-partition-proof.sh"
+bash "$ONEESAN_ROOT/scripts/bench/b300-main-pull-ilp3-partition-proof.sh"
 bash "$ONEESAN_ROOT/scripts/bench/b300-ilp4-partition-proof.sh"
 
 build_one(){
-  local mode="$1" i2=0 i4=0 cq=0 hot=0
+  local mode="$1" i2=0 i3=0 i4=0 cq=0 hot=0
   case "$mode" in
     ilp2) i2=1 ;;
+    ilp3) i3=1 ;;
     ilp4) i4=1 ;;
     ilp4q) i4=1; cq=1 ;;
     ilp4qhot) i4=1; cq=1; hot=1 ;;
@@ -33,7 +35,7 @@ build_one(){
   N=27 ARCH="$ARCH" OUT="$bin" FAST_SHARD_ADDRESS8=1 \
     MAIN_MATE_CACHE=1 MAIN_PULL=1 BLOCK_PULL=1 BLOCK_MATE_CACHE=1 \
     MAIN_PULL_ILP2=0 HEIGHT_CACHE=0 RANK_DELTA_CACHE=1 RANK_STATE_PACKED=1 \
-    RANK_STATE_ILP2="$i2" RANK_STATE_ILP4="$i4" BLOCK_CLOSURE_QUAD="$cq" \
+    RANK_STATE_ILP2="$i2" RANK_STATE_ILP3="$i3" RANK_STATE_ILP4="$i4" BLOCK_CLOSURE_QUAD="$cq" \
     HOT_DELTA_TABLE="$hot" CONCURRENT_GROUP_IO=1 MAXRREGCOUNT=0 PTXAS_VERBOSE=1 \
     bash "$ONEESAN_ROOT/scripts/build/b300-hbm32.sh" >"$LOGDIR/$mode.build.out" 2>"$LOGDIR/$mode.build.err"
   [[ -x "$bin" ]] || { echo "missing binary $bin" >&2; return 3; }
@@ -42,6 +44,7 @@ build_one(){
 
 PARSER="$ONEESAN_ROOT/scripts/bench/parse-ptxas-resources.py"
 printf 'mode\tkernel\tregisters\tstack_bytes\tspill_store_bytes\tspill_load_bytes\tsmem_bytes\tcmem0_bytes\n' >"$RESOURCE"
+: >"$LOGDIR/binaries.tsv"
 for mode in $MODES; do
   bin="$(build_one "$mode")"
   printf '%s\t%s\n' "$mode" "$bin" >>"$LOGDIR/binaries.tsv"
