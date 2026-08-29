@@ -5,7 +5,6 @@ on:
     paths:
       - 'scripts/build/b300-forced-nextgen.sh'
       - 'scripts/build/gen-b300-main-recurrence-ilp.py'
-      - 'scripts/build/gen-b300-main-recurrence-hybrid-ilp8.py'
       - 'scripts/build/gen-b300-mainrec-random-cg.py'
       - 'scripts/build/gen-b300-mainrec-prefetch-l2.py'
       - 'scripts/bench/b300-nextgen-*.sh'
@@ -22,12 +21,12 @@ on:
       - 'scripts/run/b300x8-ilp8-nextself-staged-fullprime-race.sh'
       - 'scripts/run/b300x8-race-forced-profiled-once.sh'
       - 'scripts/run/b300x8-race-external-forced-profiled-once.sh'
+      - 'scripts/run/b300x8-grand-firstpass.sh'
       - '.github/workflows/b300-nextgen-preflight.yml'
   pull_request:
     paths:
       - 'scripts/build/b300-forced-nextgen.sh'
       - 'scripts/build/gen-b300-main-recurrence-ilp.py'
-      - 'scripts/build/gen-b300-main-recurrence-hybrid-ilp8.py'
       - 'scripts/build/gen-b300-mainrec-random-cg.py'
       - 'scripts/build/gen-b300-mainrec-prefetch-l2.py'
       - 'scripts/bench/b300-nextgen-*.sh'
@@ -44,6 +43,7 @@ on:
       - 'scripts/run/b300x8-ilp8-nextself-staged-fullprime-race.sh'
       - 'scripts/run/b300x8-race-forced-profiled-once.sh'
       - 'scripts/run/b300x8-race-external-forced-profiled-once.sh'
+      - 'scripts/run/b300x8-grand-firstpass.sh'
       - '.github/workflows/b300-nextgen-preflight.yml'
   workflow_dispatch:
 
