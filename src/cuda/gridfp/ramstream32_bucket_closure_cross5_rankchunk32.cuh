@@ -48,17 +48,19 @@ __device__ __forceinline__ bool p10dc_rankchunk32_profile_sample_warp() {
     const unsigned threads_per_block =
         unsigned(blockDim.x) * unsigned(blockDim.y) * unsigned(blockDim.z);
     const unsigned warps_per_block = (threads_per_block + 31u) >> 5;
-    const unsigned long long linear_block = unsigned long long(blockIdx.x) +
-        unsigned long long(gridDim.x) *
-        (unsigned long long(blockIdx.y) + unsigned long long(gridDim.y) * unsigned long long(blockIdx.z));
+    const unsigned long long linear_block = static_cast<unsigned long long>(blockIdx.x) +
+        static_cast<unsigned long long>(gridDim.x) *
+        (static_cast<unsigned long long>(blockIdx.y) +
+         static_cast<unsigned long long>(gridDim.y) * static_cast<unsigned long long>(blockIdx.z));
     const unsigned long long warp_id =
-        linear_block * unsigned long long(warps_per_block) + unsigned long long(linear_thread >> 5);
-    // Multiplicative permutation scatters contiguous warp ids without using
-    // rankmask/state in the decision, so the sample predicate is data-blind.
+        linear_block * static_cast<unsigned long long>(warps_per_block) +
+        static_cast<unsigned long long>(linear_thread >> 5);
+    // Use high bits of the multiplicative hash. Low bits of an odd multiply are
+    // only a permutation modulo 2^k and would reduce to periodic stride sampling.
     const unsigned long long h = warp_id * 0x9e3779b97f4a7c15ull;
-    constexpr unsigned long long sample_mask =
-        (1ull << P10DC_RANKCHUNK32_RANKMASK_PROFILE_LOG2) - 1ull;
-    return (h & sample_mask) == 0ull;
+    constexpr unsigned sample_shift =
+        64u - unsigned(P10DC_RANKCHUNK32_RANKMASK_PROFILE_LOG2);
+    return (h >> sample_shift) == 0ull;
 #endif
 }
 
