@@ -5,9 +5,18 @@
 #ifndef P10DC_RANKFORMULA_DIRECTGATHER
 #define P10DC_RANKFORMULA_DIRECTGATHER 0
 #endif
+#ifndef P10DC_RANKFORMULA_DIRECTGATHER_FORCE7
+#define P10DC_RANKFORMULA_DIRECTGATHER_FORCE7 0
+#endif
 static_assert(P10DC_RANKFORMULA_DIRECTGATHER == 0 ||
               P10DC_RANKFORMULA_DIRECTGATHER == 1,
               "P10DC_RANKFORMULA_DIRECTGATHER must be 0 or 1");
+static_assert(P10DC_RANKFORMULA_DIRECTGATHER_FORCE7 == 0 ||
+              P10DC_RANKFORMULA_DIRECTGATHER_FORCE7 == 1,
+              "P10DC_RANKFORMULA_DIRECTGATHER_FORCE7 must be 0 or 1");
+static_assert(!P10DC_RANKFORMULA_DIRECTGATHER_FORCE7 ||
+              P10DC_RANKFORMULA_DIRECTGATHER,
+              "FORCE7 requires direct gather");
 #if P10DC_RANKFORMULA_DIRECTGATHER
 static_assert(P10DC_RANKFORMULA_NOMETA_GROUP61,
               "direct gather currently targets GROUP61");
@@ -22,12 +31,6 @@ __constant__ uint4* D_P10DC_RANKFORMULA_DIRECTGATHER4;
 __constant__ uint32_t D_P10DC_RANKFORMULA_DIRECTGATHER_OFF[MAXW + 2];
 #endif
 
-// B300-oriented memory-level parallelism for the compact abstract CROSS path.
-// The legacy walker reduces one source load before issuing the next one.  This
-// helper computes all selected source addresses first, issues up to seven
-// independent reads, then combines them as a balanced tree.  The arithmetic is
-// exactly associative in both modes: modulo Count when PM accumulation is off,
-// and uint64 accumulation when it is on.
 __device__ __forceinline__ BkczCrossAccum p10dc_rankformula_accum_add(
     BkczCrossAccum a, BkczCrossAccum b
 ) {
@@ -55,7 +58,9 @@ p10dc_resolved_low_preimages_cross5_rankformula_nometa4_abstract_mlp_fixed(
         size_t(depth - 1u);
     const uint4 d = __ldg(D_P10DC_RANKFORMULA_DIRECTGATHER4 + gi);
     const uint32_t count = d.w >> 16;
+#if !P10DC_RANKFORMULA_DIRECTGATHER_FORCE7
     if (!count) return BkczCrossAccum(0);
+#endif
     const uint32_t r0 = d.x & 0xffffu, r1 = d.x >> 16;
     const uint32_t r2 = d.y & 0xffffu, r3 = d.y >> 16;
     const uint32_t r4 = d.z & 0xffffu, r5 = d.z >> 16;
@@ -63,6 +68,26 @@ p10dc_resolved_low_preimages_cross5_rankformula_nometa4_abstract_mlp_fixed(
 
     BkczCrossAccum v0 = 0, v1 = 0, v2 = 0, v3 = 0;
     BkczCrossAccum v4 = 0, v5 = 0, v6 = 0;
+#if P10DC_RANKFORMULA_DIRECTGATHER_FORCE7
+    // B300 bandwidth-for-latency mode.  Unused descriptor ranks are zero-filled
+    // by the host builder, so all seven addresses are valid.  Issue every read
+    // first to maximize outstanding requests; mask the unused values only after
+    // the loads have been requested.
+    const BkczCrossAccum l0 = BkczCrossAccum(__ldg(source_row + r0));
+    const BkczCrossAccum l1 = BkczCrossAccum(__ldg(source_row + r1));
+    const BkczCrossAccum l2 = BkczCrossAccum(__ldg(source_row + r2));
+    const BkczCrossAccum l3 = BkczCrossAccum(__ldg(source_row + r3));
+    const BkczCrossAccum l4 = BkczCrossAccum(__ldg(source_row + r4));
+    const BkczCrossAccum l5 = BkczCrossAccum(__ldg(source_row + r5));
+    const BkczCrossAccum l6 = BkczCrossAccum(__ldg(source_row + r6));
+    if (count > 0) v0 = l0;
+    if (count > 1) v1 = l1;
+    if (count > 2) v2 = l2;
+    if (count > 3) v3 = l3;
+    if (count > 4) v4 = l4;
+    if (count > 5) v5 = l5;
+    if (count > 6) v6 = l6;
+#else
     if (count > 0) v0 = BkczCrossAccum(source_row[r0]);
     if (count > 1) v1 = BkczCrossAccum(source_row[r1]);
     if (count > 2) v2 = BkczCrossAccum(source_row[r2]);
@@ -70,6 +95,7 @@ p10dc_resolved_low_preimages_cross5_rankformula_nometa4_abstract_mlp_fixed(
     if (count > 4) v4 = BkczCrossAccum(source_row[r4]);
     if (count > 5) v5 = BkczCrossAccum(source_row[r5]);
     if (count > 6) v6 = BkczCrossAccum(source_row[r6]);
+#endif
 
     const BkczCrossAccum a01 = p10dc_rankformula_accum_add(v0, v1);
     const BkczCrossAccum a23 = p10dc_rankformula_accum_add(v2, v3);
