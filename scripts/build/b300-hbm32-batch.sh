@@ -23,7 +23,6 @@ LOW_DROP_CACHE="${LOW_DROP_CACHE:-$DEFAULT_LOW_DROP_CACHE}"
 LOW_DROP_CHUNK="${LOW_DROP_CHUNK:-$DEFAULT_LOW_DROP_CHUNK}"
 LOW_BLOCK_CACHE="${LOW_BLOCK_CACHE:-$DEFAULT_LOW_BLOCK_CACHE}"
 MAIN_PULL_ILP="${MAIN_PULL_ILP:-$DEFAULT_MAIN_PULL_ILP}"
-# Experimental A/B axes. Keep OFF until actual B300 residue+wall validation.
 HIGH_DROP_CHUNK="${HIGH_DROP_CHUNK:-0}"
 LOW_MAIN_RECURRENCE="${LOW_MAIN_RECURRENCE:-0}"
 HIGH_MAIN_RECURRENCE="${HIGH_MAIN_RECURRENCE:-0}"
@@ -77,8 +76,8 @@ if [[ "$LOW_BLOCK_CACHE" == 1 ]]; then LOW_BLOCK_SRC="$ONEESAN_BUILD_DIR/b300_hb
 if [[ "$MAIN_PULL_ILP" == 2 ]]; then ILP_SRC="$ONEESAN_BUILD_DIR/b300_hbm32_batch_n${N}_main_pull_ilp2.cu"; python3 "$ONEESAN_ROOT/scripts/build/gen-b300-main-pull-ilp2.py" "$BUILD_SRC" "$ILP_SRC"; BUILD_SRC="$ILP_SRC"; fi
 if [[ "$MAIN_PULL_ILP" == 3 ]]; then ILP_SRC="$ONEESAN_BUILD_DIR/b300_hbm32_batch_n${N}_main_pull_ilp3.cu"; python3 "$ONEESAN_ROOT/scripts/build/gen-b300-main-pull-ilp3.py" "$BUILD_SRC" "$ILP_SRC"; BUILD_SRC="$ILP_SRC"; fi
 if [[ "$MAIN_PULL_ILP" == 4 ]]; then ILP_SRC="$ONEESAN_BUILD_DIR/b300_hbm32_batch_n${N}_main_pull_ilp4.cu"; python3 "$ONEESAN_ROOT/scripts/build/gen-b300-main-pull-ilp4.py" "$BUILD_SRC" "$ILP_SRC"; BUILD_SRC="$ILP_SRC"; fi
-if [[ "$MAIN_RECURRENCE" == 1 ]]; then REC_SRC="$ONEESAN_BUILD_DIR/b300_hbm32_batch_n${N}_main_recurrence.cu"; python3 "$ONEESAN_ROOT/scripts/build/gen-b300-main-recurrence.py" "$BUILD_SRC" "$REC_SRC"; BUILD_SRC="$REC_SRC"; fi
-if [[ "$HIGH_MAIN_RECURRENCE" == 1 ]]; then HIGH_REC_SRC="$ONEESAN_BUILD_DIR/b300_hbm32_batch_n${N}_high_main_recurrence.cu"; python3 "$ONEESAN_ROOT/scripts/build/gen-b300-high-main-recurrence.py" "$BUILD_SRC" "$HIGH_REC_SRC"; BUILD_SRC="$HIGH_REC_SRC"; fi
+if [[ "$MAIN_RECURRENCE" == 1 ]]; then RAW_REC="$ONEESAN_BUILD_DIR/b300_hbm32_batch_n${N}_main_recurrence_raw.cu"; REC_SRC="$ONEESAN_BUILD_DIR/b300_hbm32_batch_n${N}_main_recurrence.cu"; python3 "$ONEESAN_ROOT/scripts/build/gen-b300-main-recurrence.py" "$BUILD_SRC" "$RAW_REC"; python3 "$ONEESAN_ROOT/scripts/build/gen-b300-high-recurrence-fixed-gate.py" "$RAW_REC" "$REC_SRC"; BUILD_SRC="$REC_SRC"; fi
+if [[ "$HIGH_MAIN_RECURRENCE" == 1 ]]; then RAW_HIGH_REC="$ONEESAN_BUILD_DIR/b300_hbm32_batch_n${N}_high_main_recurrence_raw.cu"; HIGH_REC_SRC="$ONEESAN_BUILD_DIR/b300_hbm32_batch_n${N}_high_main_recurrence.cu"; python3 "$ONEESAN_ROOT/scripts/build/gen-b300-high-main-recurrence.py" "$BUILD_SRC" "$RAW_HIGH_REC"; python3 "$ONEESAN_ROOT/scripts/build/gen-b300-high-recurrence-fixed-gate.py" "$RAW_HIGH_REC" "$HIGH_REC_SRC"; BUILD_SRC="$HIGH_REC_SRC"; fi
 if [[ "$LOW_MAIN_RECURRENCE" == 1 ]]; then LOW_REC_SRC="$ONEESAN_BUILD_DIR/b300_hbm32_batch_n${N}_low_main_recurrence.cu"; python3 "$ONEESAN_ROOT/scripts/build/gen-b300-low-main-recurrence.py" "$BUILD_SRC" "$LOW_REC_SRC"; BUILD_SRC="$LOW_REC_SRC"; fi
 if [[ "$FAST_SHARD_ADDRESS8" == 1 ]]; then SHARD_SRC="$ONEESAN_BUILD_DIR/b300_hbm32_batch_n${N}_shard8.cu"; python3 "$ONEESAN_ROOT/scripts/build/gen-b300-batch-shard-address8.py" "$BUILD_SRC" "$SHARD_SRC"; BUILD_SRC="$SHARD_SRC"; fi
 ROW_SRC="$ONEESAN_BUILD_DIR/b300_hbm32_batch_n${N}_rowlimit.cu"; python3 "$ONEESAN_ROOT/scripts/build/lower-b300-batch-row-limit.py" "$BUILD_SRC" "$ROW_SRC"; BUILD_SRC="$ROW_SRC"
@@ -94,5 +93,5 @@ echo "  batch_row_limit_env=B300_ROW_LIMIT default_rows=$W calibration_default=0
 if [[ "$MAIN_PULL_ILP" != 1 ]]; then echo "  main_pull_destinations_per_thread=$MAIN_PULL_ILP memory_request_phases=mate,self,pair,block register_pressure_requires_ab=1"; fi
 if [[ "$HIGH_DROP_CHUNK" == 1 ]]; then echo "  high_drop_chunk_table_bytes_per_gpu=184320 max_table_loads=3 max_scalar_tail=3 proof_gate=1"; fi
 if [[ "$LOW_MAIN_RECURRENCE" == 1 ]]; then echo "  low_main_state_bits=60 extra_state_bytes=0 mate_hbm_store_per_state_step=8 low_drop_table_loads_per_state_step=0 low_height_popcounts_per_state_step=0 proof_gate=1"; fi
-if [[ "$HIGH_MAIN_RECURRENCE" == 1 ]]; then echo "  high_main_state_bits=64 extra_state_bytes=0 mate_hbm_store_per_state_step=8 high_drop_walk_or_table_loads_per_state_step=0 high_height_walk_per_state_step=0 proof_gate=1"; fi
-if [[ "$MAIN_RECURRENCE" == 1 ]]; then echo "  unified_main_state_extra_bytes=0 low_delta_bits=31 high_delta_bits=35 trit_bits=25 height_bits=4 mate_hbm_store_per_state_step=8 main_drop_walk_or_table_loads_per_state_step=0 main_height_walk_or_popcount_per_state_step=0 proof_gate=2"; fi
+if [[ "$HIGH_MAIN_RECURRENCE" == 1 ]]; then echo "  high_main_state_bits=64 extra_state_bytes=0 high_min_fixed=7 high_fixed_lt7_fallback=raw_mate_rank mate_hbm_store_per_state_step=8 high_drop_walk_or_table_loads_per_state_step=0 high_height_walk_per_state_step=0 proof_gate=1"; fi
+if [[ "$MAIN_RECURRENCE" == 1 ]]; then echo "  unified_main_state_extra_bytes=0 low_delta_bits=31 high_delta_bits=35 high_min_fixed=7 high_fixed_lt7_fallback=raw_mate_rank trit_bits=25 height_bits=4 mate_hbm_store_per_state_step=8 main_drop_walk_or_table_loads_per_state_step=0 main_height_walk_or_popcount_per_state_step=0 proof_gate=2"; fi
