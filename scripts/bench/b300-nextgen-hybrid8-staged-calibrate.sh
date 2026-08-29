@@ -63,9 +63,10 @@ CORE_WALL="$(getv b300_nextgen_cgl2_calibrate_final_wall_s "$CORE_LOG")"
 case "$BASE_ILP" in 2|4|8) ;; *) echo "bad A-D ILP=$BASE_ILP" >&2; exit 3;; esac
 [[ "$CG" == 0 || "$CG" == 1 ]] || exit 3
 case "$CGL2" in 0|64|128|256) ;; *) exit 3;; esac
+[[ -n "$CORE_RES" ]] || { echo 'A-D residue missing' >&2; exit 3; }
 
 normalize_stage(){
-  local raw_env="$1" result="$2" binaries="$3" normalized="$4"
+  local raw_env="$1" result="$2" binaries="$3" normalized="$4" rows="$5"
   # shellcheck disable=SC1090
   source "$raw_env"
   local enabled=0
@@ -73,6 +74,7 @@ normalize_stage(){
   [[ "$B300_HYBRID8_WINNER_SPILL_STORE_BYTES" == 0 && "$B300_HYBRID8_WINNER_SPILL_LOAD_BYTES" == 0 ]] || {
     echo 'canonical hybrid sweep returned a spilling winner' >&2; exit 4
   }
+  [[ -n "${B300_HYBRID8_RESIDUE:-}" ]] || { echo "canonical hybrid sweep residue missing rows=$rows" >&2; exit 4; }
   local base_bin base_threads base_wall
   base_bin="$(awk -F $'\t' '$1=="baseline"{print $5;exit}' "$binaries")"
   [[ -n "$base_bin" && -x "$base_bin" ]] || { echo "baseline binary missing from $binaries" >&2; exit 4; }
@@ -99,6 +101,8 @@ PY
     printf 'B300_HYBRID8_BASE_THREADS=%q\n' "$base_threads"
     printf 'B300_HYBRID8_BASE_WALL_S=%q\n' "$base_wall"
     printf 'B300_HYBRID8_RESIDUE=%q\n' "$B300_HYBRID8_RESIDUE"
+    printf 'B300_HYBRID8_STAGE_ROWS=%q\n' "$rows"
+    printf 'B300_HYBRID8_STAGE_RESIDUE=%q\n' "$B300_HYBRID8_RESIDUE"
   } >"$normalized"
 }
 
@@ -115,9 +119,18 @@ run_hybrid_stage(){
     PREFIX="$stage_prefix" RESULT="$result" WINNER_ENV="$raw_env" \
     bash "$CANONICAL_SWEEP" | tee "$stage_log" >&2
   [[ "$(getv b300_nextgen_hybrid8_exact_intermediate_match "$stage_log")" == 1 ]] || { echo "Stage E exact gate missing rows=$rows" >&2; exit 4; }
-  [[ "$(getv b300_nextgen_hybrid8_residue "$stage_log")" == "$CORE_RES" ]] || { echo "FATAL A-D/E residue mismatch rows=$rows" >&2; exit 4; }
+  local stage_res
+  stage_res="$(getv b300_nextgen_hybrid8_residue "$stage_log")"
+  [[ -n "$stage_res" ]] || { echo "Stage E residue missing rows=$rows" >&2; exit 4; }
+  # Cross-pipeline residue comparison is valid only when both pipelines stop at
+  # the same B300_ROW_LIMIT. Larger validation slices intentionally have a
+  # different intermediate state and therefore a different residue.
+  if [[ "$rows" == "$SEARCH_ROWS" && "$stage_res" != "$CORE_RES" ]]; then
+    echo "FATAL A-D/E same-row residue mismatch rows=$rows core=$CORE_RES stage=$stage_res" >&2
+    exit 4
+  fi
   [[ -s "$raw_env" && -s "$result" && -s "$binaries" ]] || { echo "Stage E artifacts missing rows=$rows" >&2; exit 4; }
-  normalize_stage "$raw_env" "$result" "$binaries" "$stage_env"
+  normalize_stage "$raw_env" "$result" "$binaries" "$stage_env" "$rows"
   printf '%s\n' "$stage_env"
 }
 
@@ -159,6 +172,8 @@ fi
 
 # shellcheck disable=SC1090
 source "$CURRENT_ENV"
+FINAL_STAGE_ROWS="$B300_HYBRID8_STAGE_ROWS"
+FINAL_STAGE_RES="$B300_HYBRID8_STAGE_RESIDUE"
 if [[ "$VALIDATED" == 1 ]]; then
   FINAL_ENABLED=1
   FINAL_THRESHOLD="$B300_HYBRID8_WINNER_THRESHOLD"
@@ -186,10 +201,14 @@ fi
   printf 'B300_HYBRID8_FINAL_WALL_S=%q\n' "$FINAL_WALL"
   printf 'B300_HYBRID8_FINAL_SPEEDUP_VS_BASE=%q\n' "$FINAL_SPEED"
   printf 'B300_HYBRID8_FINAL_SPILL_FREE=%q\n' "$FINAL_SPILL_FREE"
+  printf 'B300_HYBRID8_FINAL_STAGE_ROWS=%q\n' "$FINAL_STAGE_ROWS"
+  printf 'B300_HYBRID8_FINAL_STAGE_RESIDUE=%q\n' "$FINAL_STAGE_RES"
   printf 'B300_HYBRID8_BASE_BIN=%q\n' "$B300_HYBRID8_BASE_BIN"
   printf 'B300_HYBRID8_BASE_THREADS=%q\n' "$B300_HYBRID8_BASE_THREADS"
   printf 'B300_HYBRID8_BASE_WALL_S=%q\n' "$B300_HYBRID8_BASE_WALL_S"
+  # Compatibility: B300_HYBRID8_RESIDUE remains the A-D/search-slice residue.
   printf 'B300_HYBRID8_RESIDUE=%q\n' "$CORE_RES"
+  printf 'B300_HYBRID8_CORE_ROWS=%q\n' "$SEARCH_ROWS"
   printf 'B300_HYBRID8_HIGH_DROP_CHUNK=%q\n' "$H"
   printf 'B300_HYBRID8_BASE_RECURRENCE_ILP=%q\n' "$BASE_ILP"
   printf 'B300_HYBRID8_RANDOM_CG=%q\n' "$CG"
@@ -205,4 +224,4 @@ fi
 } >"$FINAL_ENV"
 
 cat "$FINAL_ENV"
-echo "b300-nextgen-hybrid8-staged-calibrate OK validated=$VALIDATED final_enabled=$FINAL_ENABLED final_threshold=$FINAL_THRESHOLD winner_env=$FINAL_ENV canonical_sweep=1" >&2
+echo "b300-nextgen-hybrid8-staged-calibrate OK validated=$VALIDATED final_enabled=$FINAL_ENABLED final_threshold=$FINAL_THRESHOLD final_stage_rows=$FINAL_STAGE_ROWS final_stage_residue=$FINAL_STAGE_RES winner_env=$FINAL_ENV canonical_sweep=1 row_scoped_residue_gate=1" >&2
