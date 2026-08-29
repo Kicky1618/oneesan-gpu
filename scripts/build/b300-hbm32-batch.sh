@@ -72,6 +72,9 @@ if [[ "$LOW_BLOCK_CACHE" == 1 ]]; then LOW_BLOCK_SRC="$ONEESAN_BUILD_DIR/b300_hb
 if [[ "$MAIN_PULL_ILP" == 2 ]]; then ILP_SRC="$ONEESAN_BUILD_DIR/b300_hbm32_batch_n${N}_main_pull_ilp2.cu"; python3 "$ONEESAN_ROOT/scripts/build/gen-b300-main-pull-ilp2.py" "$BUILD_SRC" "$ILP_SRC"; BUILD_SRC="$ILP_SRC"; fi
 if [[ "$MAIN_PULL_ILP" == 4 ]]; then ILP_SRC="$ONEESAN_BUILD_DIR/b300_hbm32_batch_n${N}_main_pull_ilp4.cu"; python3 "$ONEESAN_ROOT/scripts/build/gen-b300-main-pull-ilp4.py" "$BUILD_SRC" "$ILP_SRC"; BUILD_SRC="$ILP_SRC"; fi
 if [[ "$FAST_SHARD_ADDRESS8" == 1 ]]; then SHARD_SRC="$ONEESAN_BUILD_DIR/b300_hbm32_batch_n${N}_shard8.cu"; python3 "$ONEESAN_ROOT/scripts/build/gen-b300-batch-shard-address8.py" "$BUILD_SRC" "$SHARD_SRC"; BUILD_SRC="$SHARD_SRC"; fi
+# Calibration-only row cap. Default remains all W rows, so production semantics
+# are unchanged unless B300_ROW_LIMIT is explicitly set.
+ROW_SRC="$ONEESAN_BUILD_DIR/b300_hbm32_batch_n${N}_rowlimit.cu"; python3 "$ONEESAN_ROOT/scripts/build/lower-b300-batch-row-limit.py" "$BUILD_SRC" "$ROW_SRC"; BUILD_SRC="$ROW_SRC"
 if [[ "$RUNTIME_THREADS" == 1 ]]; then THREAD_SRC="$ONEESAN_BUILD_DIR/b300_hbm32_batch_n${N}_runtime_threads.cu"; python3 "$ONEESAN_ROOT/scripts/build/gen-b300-runtime-threads.py" "$BUILD_SRC" "$THREAD_SRC"; BUILD_SRC="$THREAD_SRC"; fi
 
 PTXAS_FLAGS=(); [[ "$PTXAS_VERBOSE" == 1 ]] && PTXAS_FLAGS+=("-Xptxas=-v")
@@ -80,4 +83,5 @@ echo "built $OUT"
 echo "  source=$SRC"
 echo "  build_source=$BUILD_SRC"
 echo "  n=$N width=$W arch=$ARCH low_lut_k=$LOW_LUT_K high_lut_k=$HIGH_LUT_K main_mate_cache=$MAIN_MATE_CACHE main_pull=$MAIN_PULL main_pull_ilp=$MAIN_PULL_ILP block_pull=$BLOCK_PULL block_mate_cache=$BLOCK_MATE_CACHE low_drop_cache=$LOW_DROP_CACHE low_drop_chunk=$LOW_DROP_CHUNK low_block_cache=$LOW_BLOCK_CACHE high_drop_chunk=$HIGH_DROP_CHUNK fast_shard_address8=$FAST_SHARD_ADDRESS8 runtime_threads=$RUNTIME_THREADS"
+echo "  batch_row_limit_env=B300_ROW_LIMIT default_rows=$W calibration_default=0"
 if [[ "$MAIN_PULL_ILP" == 4 ]]; then echo "  main_pull_destinations_per_thread=4 memory_request_phases=mate,self,pair,block register_pressure_requires_ab=1"; fi
