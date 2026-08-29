@@ -8,6 +8,7 @@ TARGET_MIB="${TARGET_MIB:-65536}"
 MAX_WINDOW="${MAX_WINDOW:-14}"
 THREADS_LIST="${THREADS_LIST:-128 256 512}"
 WIDTH_LIST="${WIDTH_LIST:-1 2 4 8}"
+DISTANCE_LIST="${DISTANCE_LIST:-1 2 4}"
 SEARCH_ROWS="${SEARCH_ROWS:-1}"
 VALIDATE_ROWS="${VALIDATE_ROWS:-4 8}"
 SEARCH_REPEATS="${SEARCH_REPEATS:-1}"
@@ -29,6 +30,7 @@ for n in SEARCH_REPEATS VALIDATE_REPEATS; do
   v="${!n}"; [[ "$v" =~ ^[1-9][0-9]*$ ]] || { echo "$n must be >=1" >&2; exit 2; }
 done
 for w in $WIDTH_LIST; do case "$w" in 1|2|4|8) ;; *) echo "bad WIDTH_LIST entry=$w" >&2; exit 2;; esac; done
+for d in $DISTANCE_LIST; do case "$d" in 1|2|4) ;; *) echo "bad DISTANCE_LIST entry=$d" >&2; exit 2;; esac; done
 python3 - "$MIN_SPEEDUP" "$SAMPLE_INTERVAL" <<'PY'
 import sys
 if float(sys.argv[1])<1.0: raise SystemExit('MIN_SPEEDUP must be >=1')
@@ -69,8 +71,6 @@ DUAL="$B300_HYBRID8_DUALMASK"
 BATCH="$B300_HYBRID8_CLOSURE_BATCH"
 CAP="$B300_HYBRID8_MAXRREGCOUNT"
 
-# Never let a custom validation list accidentally omit the largest Stage-E
-# slice that justified promotion of the plain hybrid control.
 stage_validate_rows=()
 for rows in $VALIDATE_ROWS "$B300_HYBRID8_FINAL_STAGE_ROWS"; do
   [[ "$rows" == "$SEARCH_ROWS" ]] && continue
@@ -92,16 +92,16 @@ check_stage_e_residue(){
 }
 
 run_stage(){
-  local rows="$1" threads="$2" repeats="$3" tag="$4" widths="$5"
+  local rows="$1" threads="$2" repeats="$3" tag="$4" widths="$5" distances="$6"
   local p="${PREFIX}.${tag}.r${rows}" log="${p}.log" env="${p}_winner.env"
-  echo "=== Stage F hybrid8 next-self rows=$rows widths=[$widths] threads=[$threads] repeats=$repeats threshold=$THRESHOLD ===" >&2
+  echo "=== Stage F geometry rows=$rows widths=[$widths] distances=[$distances] threads=[$threads] repeats=$repeats threshold=$THRESHOLD ===" >&2
   ARCH="$ARCH" MOD="$MOD" ROWS="$rows" TARGET_MIB="$TARGET_MIB" MAX_WINDOW="$MAX_WINDOW" \
     HIGH_DROP_CHUNK="$H" HYBRID_THRESHOLD="$THRESHOLD" RANDOM_CG="$CG" RANDOM_CG_L2_FETCH_BYTES="$CGL2" \
     PREFETCH_L2="$PRE" DUALMASK="$DUAL" CLOSURE_BATCH="$BATCH" MAXRREGCOUNT="$CAP" \
-    THREADS_LIST="$threads" WIDTH_LIST="$widths" REPEATS="$repeats" SAMPLE_INTERVAL="$SAMPLE_INTERVAL" PREFIX="$p" WINNER_ENV="$env" \
-    bash "$ONEESAN_ROOT/scripts/bench/b300-nextgen-hybrid8-nextself-width-sweep.sh" | tee "$log" >&2
+    THREADS_LIST="$threads" WIDTH_LIST="$widths" DISTANCE_LIST="$distances" REPEATS="$repeats" SAMPLE_INTERVAL="$SAMPLE_INTERVAL" PREFIX="$p" WINNER_ENV="$env" \
+    bash "$ONEESAN_ROOT/scripts/bench/b300-nextgen-hybrid8-nextself-geometry-sweep.sh" | tee "$log" >&2
   grep -Fq 'b300_nextgen_hybrid8_nextself_exact_intermediate_match=1' "$log" || { echo "Stage F exact gate missing rows=$rows" >&2; exit 4; }
-  grep -Fq 'b300_nextgen_hybrid8_nextself_width_sweep=1' "$log" || { echo "Stage F width-sweep marker missing rows=$rows" >&2; exit 4; }
+  grep -Fq 'b300_nextgen_hybrid8_nextself_geometry_sweep=1' "$log" || { echo "Stage F geometry marker missing rows=$rows" >&2; exit 4; }
   [[ -s "$env" ]] || { echo "Stage F env missing rows=$rows" >&2; exit 4; }
   printf '%s\n' "$env"
 }
@@ -112,15 +112,17 @@ print(1 if float(sys.argv[1])>=float(sys.argv[2]) else 0)
 PY
 }
 
-SEARCH_ENV="$(run_stage "$SEARCH_ROWS" "$THREADS_LIST" "$SEARCH_REPEATS" search "$WIDTH_LIST")"
+SEARCH_ENV="$(run_stage "$SEARCH_ROWS" "$THREADS_LIST" "$SEARCH_REPEATS" search "$WIDTH_LIST" "$DISTANCE_LIST")"
 # shellcheck disable=SC1090
 source "$SEARCH_ENV"
 check_stage_e_residue "$SEARCH_ROWS" "$B300_HYBRID8_NEXTSELF_RESIDUE"
 VALIDATED=0
 CURRENT_ENV="$SEARCH_ENV"
 SELECTED_WIDTH=0
+SELECTED_DISTANCE=0
 if [[ "$B300_HYBRID8_NEXTSELF_BEST_ENABLED" == 1 && "$B300_HYBRID8_NEXTSELF_CONTROL_SPILL_FREE" == 1 && "$B300_HYBRID8_NEXTSELF_SPILL_FREE" == 1 && "$(passes "$B300_HYBRID8_NEXTSELF_SPEEDUP")" == 1 ]]; then
   case "$B300_HYBRID8_NEXTSELF_WIDTH" in 1|2|4|8) SELECTED_WIDTH="$B300_HYBRID8_NEXTSELF_WIDTH";; *) echo 'Stage F search selected invalid width' >&2; exit 4;; esac
+  case "$B300_HYBRID8_NEXTSELF_DISTANCE" in 1|2|4) SELECTED_DISTANCE="$B300_HYBRID8_NEXTSELF_DISTANCE";; *) echo 'Stage F search selected invalid distance' >&2; exit 4;; esac
   VALIDATED=1
   control_threads="$B300_HYBRID8_NEXTSELF_CONTROL_THREADS"
   test_threads="$B300_HYBRID8_NEXTSELF_THREADS"
@@ -129,12 +131,12 @@ if [[ "$B300_HYBRID8_NEXTSELF_BEST_ENABLED" == 1 && "$B300_HYBRID8_NEXTSELF_CONT
   stage=0
   for rows in "${stage_validate_rows[@]}"; do
     ((stage+=1))
-    CURRENT_ENV="$(run_stage "$rows" "$validation_threads" "$VALIDATE_REPEATS" "validate${stage}" "$SELECTED_WIDTH")"
+    CURRENT_ENV="$(run_stage "$rows" "$validation_threads" "$VALIDATE_REPEATS" "validate${stage}" "$SELECTED_WIDTH" "$SELECTED_DISTANCE")"
     # shellcheck disable=SC1090
     source "$CURRENT_ENV"
     check_stage_e_residue "$rows" "$B300_HYBRID8_NEXTSELF_RESIDUE"
-    if [[ "$B300_HYBRID8_NEXTSELF_WIDTH" != "$SELECTED_WIDTH" ]]; then
-      echo "FATAL Stage-F width changed during validation selected=$SELECTED_WIDTH got=$B300_HYBRID8_NEXTSELF_WIDTH rows=$rows" >&2
+    if [[ "$B300_HYBRID8_NEXTSELF_WIDTH" != "$SELECTED_WIDTH" || "$B300_HYBRID8_NEXTSELF_DISTANCE" != "$SELECTED_DISTANCE" ]]; then
+      echo "FATAL Stage-F geometry changed during validation selected=w${SELECTED_WIDTH}d${SELECTED_DISTANCE} got=w${B300_HYBRID8_NEXTSELF_WIDTH}d${B300_HYBRID8_NEXTSELF_DISTANCE} rows=$rows" >&2
       exit 4
     fi
     if [[ "$B300_HYBRID8_NEXTSELF_BEST_ENABLED" != 1 || "$B300_HYBRID8_NEXTSELF_CONTROL_SPILL_FREE" != 1 || "$B300_HYBRID8_NEXTSELF_SPILL_FREE" != 1 || "$(passes "$B300_HYBRID8_NEXTSELF_SPEEDUP")" != 1 ]]; then
@@ -153,6 +155,7 @@ source "$CURRENT_ENV"
 if [[ "$VALIDATED" == 1 ]]; then
   FINAL_ENABLED=1
   FINAL_WIDTH="$SELECTED_WIDTH"
+  FINAL_DISTANCE="$SELECTED_DISTANCE"
   FINAL_BIN="$B300_HYBRID8_NEXTSELF_BIN"
   FINAL_THREADS="$B300_HYBRID8_NEXTSELF_THREADS"
   FINAL_WALL="$B300_HYBRID8_NEXTSELF_WALL_S"
@@ -160,6 +163,7 @@ if [[ "$VALIDATED" == 1 ]]; then
 else
   FINAL_ENABLED=0
   FINAL_WIDTH=0
+  FINAL_DISTANCE=0
   FINAL_BIN="$B300_HYBRID8_NEXTSELF_CONTROL_BIN"
   FINAL_THREADS="$B300_HYBRID8_NEXTSELF_CONTROL_THREADS"
   FINAL_WALL="$B300_HYBRID8_NEXTSELF_CONTROL_WALL_S"
@@ -170,6 +174,7 @@ fi
   printf 'B300_HYBRID8_NEXTSELF_STAGED_VALIDATED=%q\n' "$VALIDATED"
   printf 'B300_HYBRID8_NEXTSELF_FINAL_ENABLED=%q\n' "$FINAL_ENABLED"
   printf 'B300_HYBRID8_NEXTSELF_FINAL_WIDTH=%q\n' "$FINAL_WIDTH"
+  printf 'B300_HYBRID8_NEXTSELF_FINAL_DISTANCE=%q\n' "$FINAL_DISTANCE"
   printf 'B300_HYBRID8_NEXTSELF_FINAL_BIN=%q\n' "$FINAL_BIN"
   printf 'B300_HYBRID8_NEXTSELF_FINAL_THREADS=%q\n' "$FINAL_THREADS"
   printf 'B300_HYBRID8_NEXTSELF_FINAL_WALL_S=%q\n' "$FINAL_WALL"
@@ -195,8 +200,9 @@ fi
   printf 'B300_HYBRID8_NEXTSELF_MAXRREGCOUNT=%q\n' "$CAP"
   printf 'B300_HYBRID8_NEXTSELF_MIN_SPEEDUP=%q\n' "$MIN_SPEEDUP"
   printf 'B300_HYBRID8_NEXTSELF_SEARCH_WIDTHS=%q\n' "$WIDTH_LIST"
+  printf 'B300_HYBRID8_NEXTSELF_SEARCH_DISTANCES=%q\n' "$DISTANCE_LIST"
   printf 'B300_HYBRID8_NEXTSELF_STAGE_E_ENV=%q\n' "$HYBRID_WINNER_ENV"
 } >"$FINAL_ENV"
 
 cat "$FINAL_ENV"
-echo "b300-nextgen-hybrid8-nextself-staged-calibrate OK validated=$VALIDATED width=$FINAL_WIDTH threshold=$THRESHOLD final_rows=$B300_HYBRID8_NEXTSELF_ROWS winner_env=$FINAL_ENV spill_proof=1 stage_e_crosscheck=1 width_locked=1" >&2
+echo "b300-nextgen-hybrid8-nextself-staged-calibrate OK validated=$VALIDATED width=$FINAL_WIDTH distance=$FINAL_DISTANCE threshold=$THRESHOLD final_rows=$B300_HYBRID8_NEXTSELF_ROWS winner_env=$FINAL_ENV spill_proof=1 stage_e_crosscheck=1 geometry_locked=1" >&2
