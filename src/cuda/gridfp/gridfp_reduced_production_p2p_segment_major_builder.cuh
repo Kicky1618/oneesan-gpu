@@ -27,7 +27,7 @@ __device__ __forceinline__ std::uint32_t p2p_major_batch_hash_device(
     return x;
 }
 
-__device__ __forceinline__ int p2p_major_group_index_device(
+__host__ __device__ __forceinline__ int p2p_major_group_index_device(
     int gpu,
     int batch,
     int cls,
@@ -47,9 +47,6 @@ __device__ __forceinline__ void p2p_major_pack_run39_device(
     high = static_cast<std::uint8_t>((local >> 29) & 0x7fu);
 }
 
-// Setup-only pass. It sees physical support only; no MateID materialization and
-// no grouped local rank calculation is needed to size every destination-owned
-// metadata group and scratch class exactly.
 __global__ void p2p_major_count_kernel(
     Rank64 base_supports,
     int W,
@@ -176,10 +173,6 @@ __device__ __forceinline__ bool p2p_major_rank_cycle_device(
     return true;
 }
 
-// Fill pass uses one paired 64-bit cursor per group. High 32 bits allocate the
-// segment/cycle header index and low 32 bits allocate its concatenated run
-// interval atomically, so arbitrary block scheduling cannot detach run_begin
-// from its corresponding run sequence.
 __global__ void p2p_major_fill_kernel(
     Rank64 base_supports,
     int W,
