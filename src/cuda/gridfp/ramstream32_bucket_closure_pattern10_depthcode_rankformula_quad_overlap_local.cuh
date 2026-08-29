@@ -11,12 +11,18 @@
 #ifndef P10DC_RANKFORMULA_QUAD_SPARSE_DESC_MLP
 #define P10DC_RANKFORMULA_QUAD_SPARSE_DESC_MLP 0
 #endif
+#ifndef P10DC_RANKFORMULA_QUAD_OVERLAP_BYPASS_LOCAL0
+#define P10DC_RANKFORMULA_QUAD_OVERLAP_BYPASS_LOCAL0 0
+#endif
 static_assert(P10DC_RANKFORMULA_QUAD_OVERLAP_LOCAL == 0 ||
               P10DC_RANKFORMULA_QUAD_OVERLAP_LOCAL == 1,
               "P10DC_RANKFORMULA_QUAD_OVERLAP_LOCAL must be 0 or 1");
 static_assert(P10DC_RANKFORMULA_QUAD_SPARSE_DESC_MLP == 0 ||
               P10DC_RANKFORMULA_QUAD_SPARSE_DESC_MLP == 1,
               "P10DC_RANKFORMULA_QUAD_SPARSE_DESC_MLP must be 0 or 1");
+static_assert(P10DC_RANKFORMULA_QUAD_OVERLAP_BYPASS_LOCAL0 == 0 ||
+              P10DC_RANKFORMULA_QUAD_OVERLAP_BYPASS_LOCAL0 == 1,
+              "P10DC_RANKFORMULA_QUAD_OVERLAP_BYPASS_LOCAL0 must be 0 or 1");
 
 #if P10DC_RANKFORMULA_QUAD_OVERLAP_LOCAL
 static_assert(P10DC_RANKFORMULA_QUAD_MLP,
@@ -72,9 +78,6 @@ p10dc_rankformula_qol_directgather64_quad_primary(
     const size_t gi3=p10dc_rankformula_directgather_index(h,rank3,depth);
     P10DCDirectGatherQuadPrimary z{};
 #if P10DC_RANKFORMULA_DIRECTGATHER_SPARSE64 && P10DC_RANKFORMULA_QUAD_SPARSE_DESC_MLP
-    // Four sparse index words are independent. Put them all in flight before
-    // computing compact descriptor indices; this restores descriptor MLP while
-    // keeping only packed words rather than 28 decoded ranks live.
     const size_t wi0=gi0>>5,wi1=gi1>>5,wi2=gi2>>5,wi3=gi3>>5;
     const uint32_t bit0=uint32_t(gi0)&31u,bit1=uint32_t(gi1)&31u;
     const uint32_t bit2=uint32_t(gi2)&31u,bit3=uint32_t(gi3)&31u;
@@ -113,8 +116,6 @@ p10dc_rankformula_qol_directgather64_quad_rare(
     const P10DCDirectGatherQuadPrimary& p
 ) {
     P10DCDirectGatherQuadRare z{};
-    // Rare descriptor requests have no dependency on one another once the four
-    // primary words have arrived. Issue them as a quartet before source decode.
     if(p10dc_rankformula_qol_directgather64_count(p.p0)>3u)
         z.q0=__ldg(D_P10DC_RANKFORMULA_DIRECTGATHER_SPARSE64_RARE+uint32_t(p.p0>>48));
     if(p10dc_rankformula_qol_directgather64_count(p.p1)>3u)
@@ -189,6 +190,25 @@ p10dc_direct_resolved_high_plan_sum_quad_overlap_local(
     uint32_t lr0,uint32_t lr1,uint32_t lr2,uint32_t lr3,
     Count& out0,Count& out1,Count& out2,Count& out3
 ) {
+#if P10DC_RANKFORMULA_QUAD_OVERLAP_BYPASS_LOCAL0
+    if(uint32_t(c.local_n)==0u){
+        BkczCrossAccum s0=0,s1=0,s2=0,s3=0;
+        if(c.cross_depth){
+            const auto cross=
+                p10dc_resolved_low_preimages_cross5_rankformula_nometa4_directgather64_quad_fixed(
+                    db.hs,lr0,lr1,lr2,lr3,c.cross_depth,c.cross_base);
+            s0=cross.a;s1=cross.b;s2=cross.c;s3=cross.d;
+        }
+#if GPU_DIRECT_PM_ACCUM
+        out0=gpu_direct_pm_reduce_u64(s0);out1=gpu_direct_pm_reduce_u64(s1);
+        out2=gpu_direct_pm_reduce_u64(s2);out3=gpu_direct_pm_reduce_u64(s3);
+#else
+        out0=Count(s0);out1=Count(s1);out2=Count(s2);out3=Count(s3);
+#endif
+        return;
+    }
+#endif
+
     P10DCDirectGatherQuadPrimary p{};
     if(c.cross_depth)
         p=p10dc_rankformula_qol_directgather64_quad_primary(
@@ -206,7 +226,6 @@ p10dc_direct_resolved_high_plan_sum_quad_overlap_local(
         p10dc_rankformula_quad_issue_group_preloaded(p.p2,q.q2,14,c.cross_base);
         p10dc_rankformula_quad_issue_group_preloaded(p.p3,q.q3,21,c.cross_base);
 #else
-        // Baseline keeps rare-descriptor fetch and rank decode column-local.
         p10dc_rankformula_quad_issue_primary_group(p.p0,0,c.cross_base);
         p10dc_rankformula_quad_issue_primary_group(p.p1,7,c.cross_base);
         p10dc_rankformula_quad_issue_primary_group(p.p2,14,c.cross_base);
@@ -214,8 +233,6 @@ p10dc_direct_resolved_high_plan_sum_quad_overlap_local(
 #endif
     }
 
-    // Hide CROSS latency with ordinary local-source work. The register helper
-    // keeps only four values live per source row.
     BkczCrossAccum s0=0,s1=0,s2=0,s3=0;
     p10dc_rankformula_quad_local_register(c,lr0,lr1,lr2,lr3,s0,s1,s2,s3);
 
