@@ -123,27 +123,32 @@ static void p10dc_verify_directmask_tables(
     const BucketFusedDirectHighRowsRankChunk32DirectMaskTables& dt,
     uint32_t fixed
 ) {
-    const size_t stride = dt.low_rankchunkmeta32_count;
-    if (dt.low_rankdirectoff_count != stride ||
-        dt.low_rankdirectmask_count != size_t(16) * stride) {
-        std::cerr << "p10dc directmask table count mismatch owner=" << fixed
-                  << " stride=" << stride << " offsets=" << dt.low_rankdirectoff_count
+    const size_t compact_count = dt.low_rankchunkmeta32_count;
+    const size_t direct_stride = dt.low_rankdirect_stride;
+    if (dt.low_rankdirectoff_count != compact_count ||
+        direct_stride < compact_count ||
+        (direct_stride & (P10DC_RANKDIRECT_STRIDE_ALIGN - 1u)) != 0u ||
+        dt.low_rankdirectmask_count != size_t(16) * direct_stride) {
+        std::cerr << "p10dc directmask table count/stride mismatch owner=" << fixed
+                  << " compact_count=" << compact_count
+                  << " direct_stride=" << direct_stride
+                  << " offsets=" << dt.low_rankdirectoff_count
                   << " masks=" << dt.low_rankdirectmask_count << '\n';
         std::exit(676);
     }
 #if P10DC_RANKCHUNK32_RANKPLANE
     constexpr size_t NRANK = size_t(P10DC_RANKCHUNK32_MAX_L_PER_LEGAL_CODE);
     constexpr size_t RANK_STORAGE = NRANK ? NRANK : 1u;
-    if (dt.low_rankdirectplane_count != RANK_STORAGE * stride) {
+    if (dt.low_rankdirectplane_count != RANK_STORAGE * direct_stride) {
         std::cerr << "p10dc directplane count mismatch owner=" << fixed
                   << " got=" << dt.low_rankdirectplane_count
-                  << " expected=" << RANK_STORAGE * stride << '\n';
+                  << " expected=" << RANK_STORAGE * direct_stride << '\n';
         std::exit(680);
     }
 #endif
 
-    std::vector<uint32_t> got_off(stride);
-    std::vector<uint8_t> got_mask(size_t(16) * stride);
+    std::vector<uint32_t> got_off(compact_count);
+    std::vector<uint8_t> got_mask(size_t(16) * direct_stride);
     if (!got_off.empty()) ck(cudaMemcpy(got_off.data(), dt.low_rankdirectoff,
         got_off.size()*sizeof(uint32_t), cudaMemcpyDeviceToHost), "p10dc directoff verify D2H");
     if (!got_mask.empty()) ck(cudaMemcpy(got_mask.data(), dt.low_rankdirectmask,
@@ -170,10 +175,10 @@ static void p10dc_verify_directmask_tables(
         const uint32_t b = h + 1u < uint32_t(MAXW + 2)
             ? bf.low_code_off[owner_base + h + 1u] : owner_end;
         for (uint32_t i = a; i < b; ++i, ++compact, ++actual) {
-            if (compact >= stride || got_off[compact] != stream_ix) {
+            if (compact >= compact_count || got_off[compact] != stream_ix) {
                 std::cerr << "p10dc directoff mismatch owner=" << fixed
                           << " h=" << h << " compact=" << compact
-                          << " got=" << (compact < stride ? got_off[compact] : 0xffffffffu)
+                          << " got=" << (compact < compact_count ? got_off[compact] : 0xffffffffu)
                           << " expected=" << stream_ix << '\n';
                 std::exit(677);
             }
@@ -182,7 +187,7 @@ static void p10dc_verify_directmask_tables(
             const uint32_t packed = p10dc_rankchunk32_pack_host(key);
             for (uint32_t depth = 1; depth <= 15u; ++depth) {
                 const uint8_t expected = p10dc_rankchunk32_directmask_host(packed, depth);
-                const uint8_t got = got_mask[size_t(depth) * stride + compact];
+                const uint8_t got = got_mask[size_t(depth) * direct_stride + compact];
                 if (got != expected) {
                     std::cerr << "p10dc directmask mismatch owner=" << fixed
                               << " h=" << h << " compact=" << compact
@@ -198,16 +203,22 @@ static void p10dc_verify_directmask_tables(
                 if (((code >> (2 * pos)) & 3u) == uint32_t(::L)) {
 #if P10DC_RANKCHUNK32_RANKPLANE
                     const uint32_t x = bf.low_direct[key - weight];
+                    if (x == BKF_DIRECT_INVALID) {
+                        std::cerr << "p10dc directplane invalid source owner=" << fixed
+                                  << " h=" << h << " compact=" << compact
+                                  << " ordinal=" << ordinal << '\n';
+                        std::exit(681);
+                    }
                     const uint32_t loc = x & BKF_LOC_MASK;
                     const uint16_t expected_rank = uint16_t(bkf_loc_rank(loc));
-                    const uint16_t got_rank = got_plane[size_t(ordinal) * stride + compact];
-                    if (x == BKF_DIRECT_INVALID || bkf_loc_owner(loc) != fixed ||
-                        got_rank != expected_rank) {
+                    const uint16_t got_rank =
+                        got_plane[size_t(ordinal) * direct_stride + compact];
+                    if (bkf_loc_owner(loc) != fixed || got_rank != expected_rank) {
                         std::cerr << "p10dc directplane mismatch owner=" << fixed
                                   << " h=" << h << " compact=" << compact
                                   << " ordinal=" << ordinal << " got=" << got_rank
                                   << " expected=" << expected_rank << '\n';
-                        std::exit(681);
+                        std::exit(682);
                     }
 #endif
                     ++ordinal;
@@ -217,10 +228,10 @@ static void p10dc_verify_directmask_tables(
             }
         }
     }
-    if (compact != stride || stream_ix != dt.low_rankstream_count ||
+    if (compact != compact_count || stream_ix != dt.low_rankstream_count ||
         actual != dt.low_prekey_count) {
         std::cerr << "p10dc directmask walk mismatch owner=" << fixed
-                  << " compact=" << compact << '/' << stride
+                  << " compact=" << compact << '/' << compact_count
                   << " stream=" << stream_ix << '/' << dt.low_rankstream_count
                   << " codes=" << actual << '/' << dt.low_prekey_count << '\n';
         std::exit(679);
@@ -321,7 +332,7 @@ int main() {
               << " rankplane=" << P10DC_RANKCHUNK32_RANKPLANE
               << " ilp=" << P10DC_WARPSTRIPED_ILP
 #if P10DC_RANKCHUNK32_DIRECTMASK
-              << " directmask_table_exact=1 directoff_table_exact=1"
+              << " directmask_table_exact=1 directoff_table_exact=1 direct_stride_aligned=1"
 #if P10DC_RANKCHUNK32_RANKPLANE
               << " directrankplane_exact=1 offset_runtime=0"
 #endif
