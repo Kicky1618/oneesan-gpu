@@ -30,7 +30,10 @@ if (( LOW_LUT_K > W || HIGH_LUT_K > W - 1 )); then echo "LUT K exceeds width: n=
 
 if [[ "$FAST_SHARD_ADDRESS8" == 1 ]]; then bash "$ONEESAN_ROOT/scripts/bench/b300-shard-address8-proof.sh"; fi
 if [[ "$MAIN_PULL" == 1 ]]; then bash "$ONEESAN_ROOT/scripts/bench/b300-main-pull-operator-proof.sh"; fi
-if [[ "$BLOCK_PULL" == 1 ]]; then bash "$ONEESAN_ROOT/scripts/bench/b300-block-pull-operator-proof.sh"; fi
+if [[ "$BLOCK_PULL" == 1 ]]; then
+  bash "$ONEESAN_ROOT/scripts/bench/b300-block-pull-operator-proof.sh"
+  bash "$ONEESAN_ROOT/scripts/bench/b300-group-rank-drop-insert-proof.sh"
+fi
 
 BUILD_SRC="$SRC"
 if [[ "$MAIN_MATE_CACHE" == 1 ]]; then BUILD_SRC="$ONEESAN_BUILD_DIR/b300_hbm32_n${N}_main_mate_cache.cu";python3 "$ONEESAN_ROOT/scripts/build/gen-b300-main-mate-cache.py" "$SRC" "$BUILD_SRC";fi
