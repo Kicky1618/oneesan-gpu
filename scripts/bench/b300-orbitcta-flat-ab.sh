@@ -40,7 +40,7 @@ fi
 # This runner measures only ordinary-vs-flat scheduling and flat pool size.
 # Force all later flat scheduler experiments off even if inherited from the
 # parent shell, so a saved benchmark command remains reproducible.
-COMMON=(N="$N" ARCH="$ARCH" DIRECTGATHER64=1 DIRECTGATHER_SPARSE64="$SPARSE64" DIRECTGATHER_SORT_RANKS="$SORT_RANKS" ORBITCTA_COL_ILP="$COL_ILP" PAIR_MLP="$PAIR_MLP" CPASYNC_PAIR="$CPASYNC_PAIR" QUAD_MLP=0 QUAD_OVERLAP_LOCAL=0 QUAD_LOCAL_DIRECT_MAX=0 RANKFORMULA_MLP_WINDOW4="$WINDOW4" PM_ACCUM="$PM_ACCUM" PRECTX_FORWARD="$PRECTX_FORWARD" PRECTX_REVERSE="$PRECTX_REVERSE" PRECTX_COMPACT="$PRECTX_COMPACT" PRECTX_FLAT_BID=0 PRECTX_FLAT_BID_FUSED=0 PTXAS_VERBOSE="$PTXAS_VERBOSE")
+COMMON=(N="$N" ARCH="$ARCH" DIRECTGATHER64=1 DIRECTGATHER_SPARSE64="$SPARSE64" DIRECTGATHER_SORT_RANKS="$SORT_RANKS" ORBITCTA_COL_ILP="$COL_ILP" PAIR_MLP="$PAIR_MLP" CPASYNC_PAIR="$CPASYNC_PAIR" QUAD_MLP=0 QUAD_OVERLAP_LOCAL=0 QUAD_LOCAL_DIRECT_MAX=0 QUAD_SPARSE_DESC_MLP=0 QUAD_OVERLAP_BYPASS_LOCAL0=0 QUAD_CPASYNC_PREFETCH_BYTES=0 QUAD_CPASYNC_GROUP_COLS=1 RANKFORMULA_MLP_WINDOW4="$WINDOW4" PM_ACCUM="$PM_ACCUM" PRECTX_FORWARD="$PRECTX_FORWARD" PRECTX_REVERSE="$PRECTX_REVERSE" PRECTX_COMPACT="$PRECTX_COMPACT" PRECTX_FLAT_BID=0 PRECTX_FLAT_BID_FUSED=0 PRECTX_WARPCOOP=0 ORBITCTA_FLAT_DYNAMIC=0 PTXAS_VERBOSE="$PTXAS_VERBOSE")
 ORD_BIN="$ONEESAN_BUILD_DIR/b300_orbitcta_flat_ab_ordinary_n${N}"
 FLAT_BIN="$ONEESAN_BUILD_DIR/b300_orbitcta_flat_ab_flat_n${N}"
 env "${COMMON[@]}" ORBITCTA_FLAT=0 ORBITCTA_FLAT_CHUNK=1 OUT="$ORD_BIN" bash "$ONEESAN_ROOT/scripts/build/b300-directgather-orbitcta.sh" >"$LOGDIR/ordinary.build.out" 2>"$LOGDIR/ordinary.build.err"
@@ -49,7 +49,7 @@ env "${COMMON[@]}" ORBITCTA_FLAT=1 ORBITCTA_FLAT_CHUNK=1 OUT="$FLAT_BIN" bash "$
 field(){ local k="$1" l="$2"; sed -nE "s/(^|.*[[:space:]])${k}=([^[:space:]]+).*/\\2/p" <<<"$l" | tail -n1; }
 sample(){ local pid="$1" out="$2"; : >"$out"; while kill -0 "$pid" 2>/dev/null; do nvidia-smi --query-gpu=utilization.gpu,utilization.memory --format=csv,noheader,nounits 2>/dev/null | awk -F',' '{g=$1+0;m=$2+0;sg+=g;sm+=m;if(g>mg)mg=g;if(m>mm)mm=m;n++}END{if(n)printf "%.6f %.6f %d %d\n",sg/n,sm/n,mg,mm}' >>"$out" || true; sleep "$SAMPLE_INTERVAL"; done; }
 
-printf 'mode\tflat\tblocks_per_sm\trepeat\tresidue\twall_s\tforward_high_s\treverse_high_s\thigh_s\tavg_gpu_util_pct\tavg_memctrl_util_pct\tmax_gpu_util_pct\tmax_memctrl_util_pct\tforward_flat_blocks\treverse_flat_blocks\tflat_bid_mode\tpool_mode\n' >"$RESULT"
+printf 'mode\tflat\tblocks_per_sm\trepeat\tresidue\twall_s\tforward_high_s\treverse_high_s\thigh_s\tavg_gpu_util_pct\tavg_memctrl_util_pct\tmax_gpu_util_pct\tmax_memctrl_util_pct\tforward_flat_blocks\treverse_flat_blocks\tflat_bid_mode\tpool_mode\tscheduler_mode\n' >"$RESULT"
 run_one(){
   local label="$1" flat="$2" psm="$3" bin="$4" rep="$5"
   local so="$LOGDIR/${label}_r${rep}.out" se="$LOGDIR/${label}_r${rep}.err" util="$LOGDIR/${label}_r${rep}.util"
@@ -77,17 +77,18 @@ import sys
 print(f'{float(sys.argv[1])+float(sys.argv[2]):.9f}')
 PY
 )"
-  local fblocks='' rblocks='' bidmode='' poolmode='ordinary'
+  local fblocks='' rblocks='' bidmode='' poolmode='ordinary' schedmode='ordinary'
   if [[ "$flat" == 1 ]]; then
     local grid="$(grep 'rankformula_orbitcta_flat_grid device=0 ' "$se" | head -n1 || true)"
     [[ -n "$grid" ]] || { echo "$label missing flat grid log" >&2; exit 7; }
-    bidmode="$(field flat_bid_mode "$grid")"; poolmode="$(field pool_mode "$grid")"
+    bidmode="$(field flat_bid_mode "$grid")"; poolmode="$(field pool_mode "$grid")"; schedmode="$(field scheduler_mode "$grid")"
     [[ "$bidmode" == binary_search ]] || { echo "$label unexpected flat_bid_mode=$bidmode" >&2; exit 7; }
+    [[ "$schedmode" == static_cyclic ]] || { echo "$label unexpected scheduler_mode=$schedmode" >&2; exit 7; }
     if [[ "$psm" == auto ]]; then [[ "$poolmode" == occupancy ]] || { echo "$label expected occupancy pool_mode got=$poolmode" >&2; exit 7; }; else [[ "$poolmode" == per_sm ]] || { echo "$label expected per_sm pool_mode got=$poolmode" >&2; exit 7; }; fi
     fblocks="$(field forward_flat_blocks "$grid")"; rblocks="$(field reverse_flat_blocks "$grid")"
   fi
   local ag am mg mm; read -r ag am mg mm < <(awk '{sg+=$1;sm+=$2;if($3>mg)mg=$3;if($4>mm)mm=$4;n++}END{if(n)printf "%.6f %.6f %d %d\n",sg/n,sm/n,mg,mm;else print "NA NA NA NA"}' "$util")
-  printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' "$label" "$flat" "$psm" "$rep" "$residue" "$(field wall_s "$line")" "$fh" "$rh" "$high" "$ag" "$am" "$mg" "$mm" "$fblocks" "$rblocks" "$bidmode" "$poolmode" >>"$RESULT"
+  printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' "$label" "$flat" "$psm" "$rep" "$residue" "$(field wall_s "$line")" "$fh" "$rh" "$high" "$ag" "$am" "$mg" "$mm" "$fblocks" "$rblocks" "$bidmode" "$poolmode" "$schedmode" >>"$RESULT"
 }
 
 for ((r=1;r<=REPEATS;++r)); do run_one ordinary 0 0 "$ORD_BIN" "$r"; done
@@ -116,7 +117,7 @@ for z in sorted(out,key=lambda z:z['high_s']):
 b=min(out,key=lambda z:z['wall_s'])
 with open(winner,'w') as f:
  f.write(f'ORBITCTA_FLAT={b["flat"]}\n')
- f.write('ORBITCTA_FLAT_CHUNK=1\nPRECTX_FLAT_BID=0\nPRECTX_FLAT_BID_FUSED=0\nQUAD_MLP=0\nQUAD_OVERLAP_LOCAL=0\nQUAD_LOCAL_DIRECT_MAX=0\n')
+ f.write('ORBITCTA_FLAT_CHUNK=1\nORBITCTA_FLAT_DYNAMIC=0\nPRECTX_FLAT_BID=0\nPRECTX_FLAT_BID_FUSED=0\nPRECTX_WARPCOOP=0\nQUAD_MLP=0\nQUAD_OVERLAP_LOCAL=0\nQUAD_LOCAL_DIRECT_MAX=0\n')
  if b['flat']=='1' and b['blocks_per_sm']!='auto': f.write(f'BUCKET_ORBITCTA_FLAT_BLOCKS_PER_SM={b["blocks_per_sm"]}\n')
  else: f.write('BUCKET_ORBITCTA_FLAT_BLOCKS_PER_SM=\n')
  f.write(f'ORBITCTA_SCHEDULER_PROFILE={b["mode"]}\n')
