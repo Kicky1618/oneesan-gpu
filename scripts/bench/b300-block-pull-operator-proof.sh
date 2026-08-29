@@ -10,8 +10,9 @@ mkdir -p "$(dirname "$BIN")"
 out="$($BIN)"
 printf '%s\n' "$out"
 grep -Fq 'b300-block-pull-operator-proof OK' <<<"$out"
-grep -Fq 'p_scope=2..Wm1' <<<"$out"
+grep -Fq 'exhaustive_width_max=12' <<<"$out"
+grep -Fq 'p_scope=2..Wm1 deferred_drop_position=p' <<<"$out"
 grep -Fq 'block_memset_required=0' <<<"$out"
 grep -Fq 'block_atomic_updates_required=0' <<<"$out"
-grep -Fq 'exact=1' <<<"$out"
-echo 'b300-block-pull-operator-proof OK exact=1' >&2
+grep -Fq 'pull_terms_max=5 exact=1' <<<"$out"
+echo 'b300-block-pull-operator-proof OK exact=1 deferred_drop_position=p' >&2
