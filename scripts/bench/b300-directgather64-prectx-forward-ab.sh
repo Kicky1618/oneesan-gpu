@@ -42,20 +42,22 @@ sample_process(){
   done
 }
 
-printf 'mode\tcpasync\tprectx\trepeat\tresidue\twall_s\tforward_high_s\treverse_high_s\thigh_s\tavg_memctrl_util_pct\tmax_memctrl_util_pct\tforward_occupancy_pct\treverse_occupancy_pct\tprectx_mib\n' >"$RESULT"
+printf 'mode\tcpasync\tpre_fwd\tpre_rev\trepeat\tresidue\twall_s\tforward_high_s\treverse_high_s\thigh_s\tavg_memctrl_util_pct\tmax_memctrl_util_pct\tforward_occupancy_pct\treverse_occupancy_pct\tprectx_entries_per_gpu\tprectx_mib_per_gpu\n' >"$RESULT"
 printf 'backend\tkernel\tregisters\tstack_bytes\tspill_store_bytes\tspill_load_bytes\tsmem_bytes\tcmem0_bytes\n' >"$RESOURCE"
 
 for cp in 0 1; do
-  for pre in 0 1; do
-    mode="reg64"; [[ "$cp" == 1 ]] && mode="cpa64"; [[ "$pre" == 1 ]] && mode="${mode}_prectx"
+  for spec in 'runtime 0 0' 'forward 1 0' 'both 1 1'; do
+    read -r ctx pf pr <<<"$spec"
+    base="reg64"; [[ "$cp" == 1 ]] && base="cpa64"
+    mode="$base"; [[ "$ctx" != runtime ]] && mode="${base}_${ctx}"
     bin="$ONEESAN_BUILD_DIR/b300_${mode}_ab_n${N}"
     N="$N" ARCH="$ARCH" OUT="$bin" COL_ILP="$COL_ILP" PM_ACCUM="$PM_ACCUM" \
       DEPTHMAJOR=1 PAIR_MLP=1 MLP_WINDOW4=1 DIRECTGATHER64=1 CPASYNC_PAIR="$cp" \
-      PRECTX_FORWARD="$pre" FORCE7=0 PREFETCH_NEXT=0 SORTED=0 \
+      PRECTX_FORWARD="$pf" PRECTX_REVERSE="$pr" FORCE7=0 PREFETCH_NEXT=0 SORTED=0 \
       PTXAS_VERBOSE=1 TRANSPOSE_MODE=pipeline \
       bash "$ONEESAN_ROOT/scripts/build/b300-directgather-colilp-fast.sh" \
       >"$LOGDIR/$mode.build.out" 2>"$LOGDIR/$mode.build.err"
-    python3 "$PARSER" "$LOGDIR/$mode.build.err" --label "$mode" >>"$RESOURCE"
+    python3 "$PARSER" "$LOGDIR/$mode.build.err" --label "$mode" >>"$RESOURCE" || true
 
     for ((r=1;r<=REPEATS;++r)); do
       so="$LOGDIR/${mode}_r${r}.out"; se="$LOGDIR/${mode}_r${r}.err"; util="$LOGDIR/${mode}_r${r}.util"
@@ -77,10 +79,22 @@ PY
       read -r ag am mg mm < <(awk '{sg+=$1;sm+=$2;if($3>mg)mg=$3;if($4>mm)mm=$4;n++} END{if(n)printf "%.6f %.6f %d %d\n",sg/n,sm/n,mg,mm;else print "NA NA NA NA"}' "$util")
       occ="$(grep 'rankformula_high_occupancy ' "$se" | head -n1 || true)"
       fo="$(field forward_warp_occupancy_pct "$occ")"; ro="$(field reverse_warp_occupancy_pct "$occ")"
-      preline="$(grep 'p10dc_prectx_forward ' "$se" | head -n1 || true)"
-      pmib="$(field total_mib "$preline")"; [[ -n "$pmib" ]] || pmib=0
-      printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
-        "$mode" "$cp" "$pre" "$r" "$residue" "$wall" "$fh" "$rh" "$high" "$am" "$mm" "${fo:-NA}" "${ro:-NA}" "$pmib" >>"$RESULT"
+      preline="$(grep 'p10dc_prectx_high fixed_owner=' "$se" | head -n1 || true)"
+      if [[ -n "$preline" ]]; then
+        cbytes="$(field closure_context_bytes "$preline")"
+        f0="$(field fwd_nn "$preline")"; f1="$(field fwd_nrnl "$preline")"
+        r0="$(field rev_nn "$preline")"; r1="$(field rev_nr "$preline")"; r2="$(field rev_nl "$preline")"
+        entries=$(( ${f0:-0} + ${f1:-0} + ${r0:-0} + ${r1:-0} + ${r2:-0} ))
+        pmib="$(python3 - "${cbytes:-0}" "$entries" <<'PY'
+import sys
+print(f'{int(sys.argv[1])*int(sys.argv[2])/(1<<20):.6f}')
+PY
+)"
+      else
+        entries=0; pmib=0
+      fi
+      printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
+        "$mode" "$cp" "$pf" "$pr" "$r" "$residue" "$wall" "$fh" "$rh" "$high" "$am" "$mm" "${fo:-NA}" "${ro:-NA}" "$entries" "$pmib" >>"$RESULT"
     done
   done
 done
@@ -94,18 +108,27 @@ def stat(mode,key):
     x=[float(r[key]) for r in rows if r['mode']==mode and r[key]!='NA']
     return statistics.median(x) if x else None
 for base in ('reg64','cpa64'):
-    pre=base+'_prectx'
-    bf,bp=stat(base,'forward_high_s'),stat(pre,'forward_high_s')
-    br,rp=stat(base,'reverse_high_s'),stat(pre,'reverse_high_s')
-    bh,ph=stat(base,'high_s'),stat(pre,'high_s')
-    if bf and bp: print(f'{pre}_forward_speedup={bf/bp:.6f}x')
-    if br and rp: print(f'{pre}_reverse_speedup={br/rp:.6f}x')
-    if bh and ph: print(f'{pre}_high_speedup={bh/ph:.6f}x')
-for mode in ('reg64','reg64_prectx','cpa64','cpa64_prectx'):
-    print(mode, 'forward=',stat(mode,'forward_high_s'),'reverse=',stat(mode,'reverse_high_s'),'high=',stat(mode,'high_s'),'memctrl=',stat(mode,'avg_memctrl_util_pct'))
+    fwd=base+'_forward'; both=base+'_both'
+    bf,ff=stat(base,'forward_high_s'),stat(fwd,'forward_high_s')
+    br,fr=stat(base,'reverse_high_s'),stat(fwd,'reverse_high_s')
+    bh,fh=stat(base,'high_s'),stat(fwd,'high_s')
+    bb=stat(both,'high_s'); rr=stat(both,'reverse_high_s')
+    if bf and ff: print(f'{base}_forward_prectx_forward_speedup={bf/ff:.6f}x')
+    if br and fr: print(f'{base}_forward_prectx_reverse_control={br/fr:.6f}x')
+    if bh and fh: print(f'{base}_forward_prectx_high_speedup={bh/fh:.6f}x')
+    if bh and bb: print(f'{base}_both_prectx_high_speedup={bh/bb:.6f}x')
+    if fr and rr: print(f'{base}_reverse_prectx_incremental_reverse_speedup={fr/rr:.6f}x')
+    print(f'{base}_forward_prectx_mib={stat(fwd,"prectx_mib_per_gpu"):.3f}')
+    print(f'{base}_both_prectx_mib={stat(both,"prectx_mib_per_gpu"):.3f}')
+for ctx in ('','_forward','_both'):
+    r='reg64'+ctx; c='cpa64'+ctx
+    rh,ch=stat(r,'high_s'),stat(c,'high_s')
+    if rh and ch: print(f'cpasync64{ctx or "_runtime"}_high_speedup={rh/ch:.6f}x')
+for mode in ('reg64','reg64_forward','reg64_both','cpa64','cpa64_forward','cpa64_both'):
+    print(mode, 'forward=',stat(mode,'forward_high_s'),'reverse=',stat(mode,'reverse_high_s'),'high=',stat(mode,'high_s'),'memctrl=',stat(mode,'avg_memctrl_util_pct'),'prectx_mib=',stat(mode,'prectx_mib_per_gpu'))
 best=min({r['mode'] for r in rows},key=lambda m:stat(m,'high_s'))
 print(f'BEST_HIGH={best} high_s={stat(best,"high_s"):.6f}')
-print('prectx_expected_scope=forward_only selection_metric=high_s')
+print('prectx_scope=forward_and_reverse cpasync_interaction=isolated selection_metric=high_s correctness_gate=residue metadata_cost_reported=1')
 PY
 
-echo "b300-directgather64-prectx-forward-ab OK result=$RESULT" >&2
+echo "b300-directgather64-prectx-forward-ab OK bidirectional=1 result=$RESULT" >&2
