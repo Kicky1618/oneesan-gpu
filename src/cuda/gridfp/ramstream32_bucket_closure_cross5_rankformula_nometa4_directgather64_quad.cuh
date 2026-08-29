@@ -59,10 +59,10 @@ p10dc_resolved_low_preimages_cross5_rankformula_nometa4_directgather64_quad_fixe
     const size_t wi0 = gi0 >> 5, wi1 = gi1 >> 5, wi2 = gi2 >> 5, wi3 = gi3 >> 5;
     const uint32_t bit0 = uint32_t(gi0) & 31u, bit1 = uint32_t(gi1) & 31u;
     const uint32_t bit2 = uint32_t(gi2) & 31u, bit3 = uint32_t(gi3) & 31u;
-    const P10DCDirectGather64Word ix0 = __ldg(D_P10DC_RANKFORMULA_DIRECTGATHER_SPARSE64_INDEX + wi0);
-    const P10DCDirectGather64Word ix1 = __ldg(D_P10DC_RANKFORMULA_DIRECTGATHER_SPARSE64_INDEX + wi1);
-    const P10DCDirectGather64Word ix2 = __ldg(D_P10DC_RANKFORMULA_DIRECTGATHER_SPARSE64_INDEX + wi2);
-    const P10DCDirectGather64Word ix3 = __ldg(D_P10DC_RANKFORMULA_DIRECTGATHER_SPARSE64_INDEX + wi3);
+    const P10DCDirectGather64Word ix0 = p10dc_rankformula_sparse64_index_word(wi0);
+    const P10DCDirectGather64Word ix1 = p10dc_rankformula_sparse64_index_word(wi1);
+    const P10DCDirectGather64Word ix2 = p10dc_rankformula_sparse64_index_word(wi2);
+    const P10DCDirectGather64Word ix3 = p10dc_rankformula_sparse64_index_word(wi3);
     const uint32_t bits0 = uint32_t(ix0), bits1 = uint32_t(ix1), bits2 = uint32_t(ix2), bits3 = uint32_t(ix3);
     const uint32_t flag0 = 1u << bit0, flag1 = 1u << bit1, flag2 = 1u << bit2, flag3 = 1u << bit3;
     const bool live0 = (bits0 & flag0) != 0u, live1 = (bits1 & flag1) != 0u;
