@@ -47,7 +47,11 @@ run_family(){
    else BUCKET_THREADS="$THREADS" BUCKET_ORBITCTA_GRID_Y="$ORBIT_GY" BUCKET_GRID_X="$LOW_GX" BUCKET_GRID_Y="$LOW_GY" BUCKET_LOW_GRID_X="$LOW_GX" BUCKET_LOW_GRID_Y="$LOW_GY" "$bin" 21 "$TARGET_MIB" "$MAX_WINDOW" 8 "$MOD" >"$so" 2>"$se" & fi
    local pid=$!; sample "$pid" "$util" & local sp=$!; set +e; wait "$pid"; local rc=$?; set -e; wait "$sp" || true; ((rc==0)) || exit "$rc"
    local line="$(grep '^residue=' "$so" | tail -n1 || true)"; [[ -n "$line" ]] || exit 3; local residue="$(field residue "$line")"; [[ "$residue" == "$EXPECT" ]] || { echo "$fam/$mode residue=$residue" >&2; exit 4; }
-   local detail="$(grep 'snake_onepass_graph_batch modulus=' "$se" | tail -n1 || true)" fh="$(field forward_high_s "$detail")" rh="$(field reverse_high_s "$detail")"
+   local detail fh rh
+   detail="$(grep 'snake_onepass_graph_batch modulus=' "$se" | tail -n1 || true)"
+   fh="$(field forward_high_s "$detail")"
+   rh="$(field reverse_high_s "$detail")"
+   [[ -n "$fh" && -n "$rh" ]] || { echo "$fam/$mode missing HIGH phase timing" >&2; exit 6; }
    local high="$(python3 - "$fh" "$rh" <<'PY'
 import sys;print(f'{float(sys.argv[1])+float(sys.argv[2]):.9f}')
 PY
