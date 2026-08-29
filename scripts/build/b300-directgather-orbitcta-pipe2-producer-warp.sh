@@ -10,9 +10,12 @@ PRECTX_FORWARD="${PRECTX_FORWARD:-0}"
 PRECTX_REVERSE="${PRECTX_REVERSE:-0}"
 PRECTX_COMPACT="${PRECTX_COMPACT:-0}"
 PRECTX_FLAT_BID="${PRECTX_FLAT_BID:-0}"
+PRECTX_FLAT_BID_FUSED="${PRECTX_FLAT_BID_FUSED:-0}"
 [[ "$PATCH_ONLY" == 0 || "$PATCH_ONLY" == 1 ]] || { echo 'PIPE2_PRODUCER_PATCH_ONLY must be 0/1' >&2; exit 2; }
 [[ "$QUAD_MLP" == 0 || "$QUAD_MLP" == 1 ]] || { echo 'QUAD_MLP must be 0/1' >&2; exit 2; }
 [[ "$PRODUCER_PRECTX_WARPCOOP" == 0 || "$PRODUCER_PRECTX_WARPCOOP" == 1 ]] || { echo 'PRODUCER_PRECTX_WARPCOOP must be 0/1' >&2; exit 2; }
+[[ "$PRECTX_FLAT_BID" == 0 || "$PRECTX_FLAT_BID" == 1 ]] || { echo 'PRECTX_FLAT_BID must be 0/1' >&2; exit 2; }
+[[ "$PRECTX_FLAT_BID_FUSED" == 0 || "$PRECTX_FLAT_BID_FUSED" == 1 ]] || { echo 'PRECTX_FLAT_BID_FUSED must be 0/1' >&2; exit 2; }
 [[ "${ORBITCTA_FLAT:-1}" == 1 && "${ORBITCTA_FLAT_DYNAMIC:-1}" == 1 && "${ORBITCTA_FLAT_DYNAMIC_PIPE2:-1}" == 1 ]] || {
   echo 'producer-warp requires flat dynamic pipe2' >&2; exit 2;
 }
@@ -25,8 +28,8 @@ if [[ "$PRODUCER_PRECTX_WARPCOOP" == 1 ]]; then
   [[ "$PRECTX_FORWARD" == 1 && "$PRECTX_REVERSE" == 1 && "$PRECTX_COMPACT" == 1 ]] || {
     echo 'PRODUCER_PRECTX_WARPCOOP=1 requires PRECTX_FORWARD=1 PRECTX_REVERSE=1 PRECTX_COMPACT=1' >&2; exit 2;
   }
-  [[ "$PRECTX_FLAT_BID" == 0 ]] || {
-    echo 'PRODUCER_PRECTX_WARPCOOP=1 currently requires PRECTX_FLAT_BID=0' >&2; exit 2;
+  [[ "$PRECTX_FLAT_BID_FUSED" == 0 ]] || {
+    echo 'PRODUCER_PRECTX_WARPCOOP=1 currently requires PRECTX_FLAT_BID_FUSED=0' >&2; exit 2;
   }
 fi
 
@@ -60,11 +63,12 @@ if [[ "$PATCH_ONLY" == 1 ]]; then
   grep -Fq -- '-DP10DC_ORBITCTA_FLAT_DYNAMIC_PIPE2_PRODUCER_WARP=1' "$tmp" || exit 3
   grep -Fq -- '-DP10DC_ORBITCTA_FLAT_DYNAMIC_PIPE2_PRODUCER_PRECTX_WARPCOOP="$PRODUCER_PRECTX_WARPCOOP"' "$tmp" || exit 3
   grep -Fq 'pipe2_producer_warp=1' "$tmp" || exit 3
-  echo "b300_pipe2_producer_warp_patch=OK quad_mlp=$QUAD_MLP col_ilp=$COL_ILP producer_prectx_warpcoop=$PRODUCER_PRECTX_WARPCOOP gpu_work=0"
+  echo "b300_pipe2_producer_warp_patch=OK quad_mlp=$QUAD_MLP col_ilp=$COL_ILP producer_prectx_warpcoop=$PRODUCER_PRECTX_WARPCOOP prectx_flat_bid=$PRECTX_FLAT_BID prectx_flat_bid_fused=$PRECTX_FLAT_BID_FUSED gpu_work=0"
   exit 0
 fi
 exec env ORBITCTA_FLAT=1 ORBITCTA_FLAT_CHUNK=1 ORBITCTA_FLAT_DYNAMIC=1 \
   ORBITCTA_COL_ILP="$COL_ILP" QUAD_MLP="$QUAD_MLP" \
-  PRECTX_FORWARD="$PRECTX_FORWARD" PRECTX_REVERSE="$PRECTX_REVERSE" PRECTX_COMPACT="$PRECTX_COMPACT" PRECTX_FLAT_BID="$PRECTX_FLAT_BID" \
+  PRECTX_FORWARD="$PRECTX_FORWARD" PRECTX_REVERSE="$PRECTX_REVERSE" PRECTX_COMPACT="$PRECTX_COMPACT" \
+  PRECTX_FLAT_BID="$PRECTX_FLAT_BID" PRECTX_FLAT_BID_FUSED="$PRECTX_FLAT_BID_FUSED" \
   PRODUCER_PRECTX_WARPCOOP="$PRODUCER_PRECTX_WARPCOOP" \
   ORBITCTA_FLAT_DYNAMIC_PIPE2=1 ORBITCTA_FLAT_DYNAMIC_FUSE_LEASE_PREP=0 bash "$tmp"
