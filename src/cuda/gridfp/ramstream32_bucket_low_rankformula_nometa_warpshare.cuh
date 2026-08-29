@@ -26,19 +26,19 @@ static_assert(!P10DC_RANKFORMULA_NOMETA_COOPGROUP ||
 static_assert(!P10DC_RANKFORMULA_NOMETA_GROUP56 ||
               P10DC_RANKFORMULA_NOMETA_COOPGROUP,
               "group56 requires cooperative successor loading");
+static_assert(!P10DC_RANKFORMULA_NOMETA_GROUP61 ||
+              P10DC_RANKFORMULA_NOMETA_COOPGROUP,
+              "group61 requires cooperative successor loading");
 static_assert(32u % P10DC_RANKFORMULA_NOMETA4_BLOCK == 0u,
               "warp-shared nometa locator requires block size dividing 32");
 
 // Warp-striped HIGH kernels enumerate lr as base32+lane, and every later stripe
 // advances by gridDim.x*32. Therefore rank/B is shared by exactly B adjacent
-// lanes for B in {4,8,16}. The 59-bit layout embeds its own group index, while
-// GROUP56 is cooperative-only and keeps the leader's group index in a register.
+// lanes for B in {4,8,16}. GROUP56/GROUP61 spend the former self-index bits on
+// direct closure metadata and are therefore cooperative-only.
 __device__ __forceinline__ P10DCRankFormulaNometa4Resolved
 p10dc_low_rankformula_nometa_resolve_warpshare(uint32_t h, uint32_t rank) {
-#if P10DC_RANKFORMULA_NOMETA_GROUP56
-    // GROUP56 intentionally spends the former self-index bits on abstract_off.
-    // The active dispatcher requires COOPGROUP for this layout; keep this helper
-    // compilable as a scalar fallback without referring to the absent self index.
+#if P10DC_RANKFORMULA_NOMETA_GROUP56 || P10DC_RANKFORMULA_NOMETA_GROUP61
     return p10dc_low_rankformula_nometa4_resolve(h, rank);
 #else
     constexpr uint32_t B = P10DC_RANKFORMULA_NOMETA4_BLOCK;
@@ -66,19 +66,22 @@ p10dc_low_rankformula_nometa_resolve_warpshare(uint32_t h, uint32_t rank) {
         const uint32_t next = p10dc_rankformula_nometa4_group_index(e) + 1u;
         e = D_P10DC_LOW_RANKFORMULA_NOMETA4_GROUP64[next];
     }
+    const uint32_t start = p10dc_rankformula_nometa4_group_start(e);
+    const int delta = p10dc_rankformula_nometa4_group_delta(e);
     return P10DCRankFormulaNometa4Resolved{
         p10dc_rankformula_nometa4_group_n(e),
-        p10dc_rankformula_nometa4_group_start(e),
-        p10dc_rankformula_nometa4_group_delta(e), 0u};
+        start,
+        delta,
+        0u,
+        uint32_t(int(start) + delta)};
 #endif
 }
 
-// Successor groups are also shared. All active lanes execute each ballot. When
-// the warp-wide ballot is zero, every subgroup has resolved every active lane,
-// so the loop can terminate warp-uniformly without violating sync-mask rules.
-// GROUP56 removes the self group index from every group entry. Its subgroup
-// leader keeps the initial block16 group index in a register and increments that
-// register only when the subgroup advances to a successor.
+// Successor groups are shared by each B-lane subgroup. GROUP56/GROUP61 keep the
+// block16 initial group index in the subgroup leader and advance it with ++gi.
+// GROUP61 also compares rank against the packed group end directly and returns
+// the packed absolute source base, avoiding count addition and signed-delta work
+// on the abstract closure hot path.
 __device__ __forceinline__ P10DCRankFormulaNometa4Resolved
 p10dc_low_rankformula_nometa_resolve_coopgroup(uint32_t h, uint32_t rank) {
     constexpr uint32_t B = P10DC_RANKFORMULA_NOMETA4_BLOCK;
@@ -102,6 +105,7 @@ p10dc_low_rankformula_nometa_resolve_coopgroup(uint32_t h, uint32_t rank) {
     uint64_t cursor = uint64_t(elo) | (uint64_t(ehi) << 32);
 
     uint32_t result_n = 0u, result_start = 0u, result_abstract_off = 0u;
+    uint32_t result_source_base = 0u;
     int result_delta = 0;
     bool resolved = false;
 #if P10DC_RANKFORMULA_NOMETA_COOP_UNROLL
@@ -111,18 +115,31 @@ p10dc_low_rankformula_nometa_resolve_coopgroup(uint32_t h, uint32_t rank) {
 #endif
     for (int k = 0; k < int(B); ++k) {
         const uint32_t start = p10dc_rankformula_nometa4_group_start(cursor);
+#if P10DC_RANKFORMULA_NOMETA_GROUP61
+        const bool need = rank >= p10dc_rankformula_nometa4_group_end(cursor);
+#else
         const uint32_t count = p10dc_rankformula_nometa4_group_count(cursor);
         const bool need = rank >= start + count;
+#endif
         if (!resolved && !need) {
-#if P10DC_RANKFORMULA_NOMETA_GROUP56
+#if P10DC_RANKFORMULA_NOMETA_GROUP61
             const uint32_t lcount = p10dc_rankformula_nometa4_group_lcount(cursor);
             result_n = h + 2u * lcount;
             result_abstract_off = p10dc_rankformula_nometa4_group_abstract_off(cursor);
+            result_source_base = p10dc_rankformula_nometa4_group_source_base(cursor);
+            result_delta = int(result_source_base) - int(start);
+#elif P10DC_RANKFORMULA_NOMETA_GROUP56
+            const uint32_t lcount = p10dc_rankformula_nometa4_group_lcount(cursor);
+            result_n = h + 2u * lcount;
+            result_abstract_off = p10dc_rankformula_nometa4_group_abstract_off(cursor);
+            result_delta = p10dc_rankformula_nometa4_group_delta(cursor);
+            result_source_base = uint32_t(int(start) + result_delta);
 #else
             result_n = p10dc_rankformula_nometa4_group_n(cursor);
+            result_delta = p10dc_rankformula_nometa4_group_delta(cursor);
+            result_source_base = uint32_t(int(start) + result_delta);
 #endif
             result_start = start;
-            result_delta = p10dc_rankformula_nometa4_group_delta(cursor);
             resolved = true;
         }
         if (k + 1 < int(B)) {
@@ -132,7 +149,7 @@ p10dc_low_rankformula_nometa_resolve_coopgroup(uint32_t h, uint32_t rank) {
             if (needs) {
                 uint32_t nlo = 0u, nhi = 0u;
                 if (lane == src_lane) {
-#if P10DC_RANKFORMULA_NOMETA_GROUP56
+#if P10DC_RANKFORMULA_NOMETA_GROUP56 || P10DC_RANKFORMULA_NOMETA_GROUP61
                     const uint64_t en =
                         D_P10DC_LOW_RANKFORMULA_NOMETA4_GROUP64[++leader_gi];
 #else
@@ -151,7 +168,8 @@ p10dc_low_rankformula_nometa_resolve_coopgroup(uint32_t h, uint32_t rank) {
         }
     }
     return P10DCRankFormulaNometa4Resolved{
-        result_n, result_start, result_delta, result_abstract_off};
+        result_n, result_start, result_delta, result_abstract_off,
+        result_source_base};
 }
 
 __device__ __forceinline__ P10DCRankFormulaNometa4Resolved
