@@ -7,8 +7,8 @@ ARCH="${ARCH:-sm_103}"; TARGET_MIB="${TARGET_MIB:-16384}"; MAX_WINDOW="${MAX_WIN
 THREADS="${BUCKET_THREADS:-256}"; LOW_GX="${BUCKET_LOW_GRID_X:-16}"; LOW_GY="${BUCKET_LOW_GRID_Y:-8}"
 REPEATS="${REPEATS:-1}"; SAMPLE_INTERVAL="${SAMPLE_INTERVAL:-0.15}"
 BATCH="${ORBITCTA_FLAT_DYNAMIC_BATCH:-1}"; ADAPTIVE_WAVES="${ORBITCTA_FLAT_DYNAMIC_ADAPTIVE_WAVES:-0}"
-SPARSE64="${DIRECTGATHER_SPARSE64:-1}"; PM_ACCUM="${PM_ACCUM:-1}"
-PREFIX="${PREFIX:-$ONEESAN_ROOT/work/b300_pipe2_producer_quad_overlap_ab_n${N}_t${THREADS}_b${BATCH}}"
+SPARSE64="${DIRECTGATHER_SPARSE64:-1}"; PM_ACCUM="${PM_ACCUM:-1}"; PRECTX_FLAT_BID="${PRECTX_FLAT_BID:-1}"
+PREFIX="${PREFIX:-$ONEESAN_ROOT/work/b300_pipe2_producer_quad_overlap_ab_n${N}_t${THREADS}_b${BATCH}_bid${PRECTX_FLAT_BID}}"
 LOGDIR="${LOGDIR:-${PREFIX}_logs}"; RESULT="${RESULT:-${PREFIX}.tsv}"; RESOURCE="${RESOURCE:-${PREFIX}_ptxas.tsv}"
 PARSER="$ONEESAN_ROOT/scripts/bench/parse-ptxas-resources.py"
 mkdir -p "$LOGDIR" "$(dirname "$RESULT")"
@@ -18,7 +18,7 @@ mkdir -p "$LOGDIR" "$(dirname "$RESULT")"
 case "$BATCH" in 1|2|4|8|16) ;; *) exit 2;; esac
 case "$ADAPTIVE_WAVES" in 0|1|2|4) ;; *) exit 2;; esac
 (( ADAPTIVE_WAVES == 0 || BATCH > 1 )) || exit 2
-for x in SPARSE64 PM_ACCUM; do v="${!x}"; [[ "$v" == 0 || "$v" == 1 ]] || exit 2; done
+for x in SPARSE64 PM_ACCUM PRECTX_FLAT_BID; do v="${!x}"; [[ "$v" == 0 || "$v" == 1 ]] || exit 2; done
 command -v nvcc >/dev/null || exit 2; command -v nvidia-smi >/dev/null || exit 2
 (( $(nvidia-smi --query-gpu=index --format=csv,noheader | wc -l) >= NGPU )) || exit 2
 
@@ -26,6 +26,10 @@ bash "$ONEESAN_ROOT/scripts/bench/b300-pipe2-producer-warp-coverage-proof.sh" >"
 bash "$ONEESAN_ROOT/scripts/bench/b300-compact-prectx-meta-proof.sh" >"$LOGDIR/meta.out"
 grep -q 'b300_pipe2_producer_warp_coverage=OK' "$LOGDIR/coverage.out" || exit 5
 grep -q 'b300_compact_prectx_meta_proof=OK' "$LOGDIR/meta.out" || exit 5
+if [[ "$PRECTX_FLAT_BID" == 1 ]]; then
+  ARCH="$ARCH" PM_ACCUM="$PM_ACCUM" bash "$ONEESAN_ROOT/scripts/bench/compact-flat-bid-selftest.sh" >"$LOGDIR/flatbid.out" 2>"$LOGDIR/flatbid.err"
+  grep -q 'bucket-compact-flat-bid-selftest OK' "$LOGDIR/flatbid.out" || exit 5
+fi
 
 COMMON=(N="$N" ARCH="$ARCH" PM_ACCUM="$PM_ACCUM" DIRECTGATHER64=1 DIRECTGATHER_SPARSE64="$SPARSE64" DIRECTGATHER_SORT_RANKS=0
   RANKFORMULA_MLP_WINDOW4=1 PAIR_MLP=1 CPASYNC_PAIR=1 ORBITCTA_FLAT=1 ORBITCTA_FLAT_CHUNK=1
@@ -33,19 +37,20 @@ COMMON=(N="$N" ARCH="$ARCH" PM_ACCUM="$PM_ACCUM" DIRECTGATHER64=1 DIRECTGATHER_S
   ORBITCTA_FLAT_DYNAMIC_FUSE_LEASE_PREP=0 ORBITCTA_FLAT_DYNAMIC_PIPE2=1 ORBITCTA_COL_ILP=4
   QUAD_MLP=1 QUAD_LOCAL_DIRECT_MAX=0 QUAD_SPARSE_DESC_MLP=0 QUAD_OVERLAP_BYPASS_LOCAL0=0
   QUAD_CPASYNC_PREFETCH_BYTES=0 QUAD_CPASYNC_GROUP_COLS=1
-  PRECTX_FORWARD=1 PRECTX_REVERSE=1 PRECTX_COMPACT=1 PRECTX_FLAT_BID=1 PRECTX_FLAT_BID_FUSED=0 PRECTX_WARPCOOP=0
+  PRECTX_FORWARD=1 PRECTX_REVERSE=1 PRECTX_COMPACT=1 PRECTX_FLAT_BID="$PRECTX_FLAT_BID" PRECTX_FLAT_BID_FUSED=0 PRECTX_WARPCOOP=0
   PRODUCER_PRECTX_WARPCOOP=1 PTXAS_VERBOSE=1)
 
 printf 'backend\tkernel\tregisters\tstack_bytes\tspill_store_bytes\tspill_load_bytes\tsmem_bytes\tcmem0_bytes\n' >"$RESOURCE"
 build_one(){
-  local overlap="$1" name="$2" bin="$ONEESAN_BUILD_DIR/b300_pipe2_producer_quad_overlap_${name}_t${THREADS}_b${BATCH}_n${N}"
+  local overlap="$1" name="$2" bin="$ONEESAN_BUILD_DIR/b300_pipe2_producer_quad_overlap_${name}_t${THREADS}_b${BATCH}_bid${PRECTX_FLAT_BID}_n${N}"
   env "${COMMON[@]}" QUAD_OVERLAP_LOCAL="$overlap" OUT="$bin" \
     bash "$ONEESAN_ROOT/scripts/build/b300-directgather-orbitcta-pipe2-producer-warp.sh" \
     >"$LOGDIR/${name}.build.out" 2>"$LOGDIR/${name}.build.err"
   [[ -x "$bin" ]] || { echo "$name binary missing" >&2; exit 6; }
-  for marker in 'pipe2_producer_warp=1' 'pipe2_producer_prectx_warpcoop=1' 'quad_mlp=1' 'prectx_flat_bid=1' 'prectx_flat_bid_fused=0'; do
+  for marker in 'pipe2_producer_warp=1' 'pipe2_producer_prectx_warpcoop=1' 'quad_mlp=1' 'prectx_flat_bid_fused=0'; do
     grep -q "$marker" "$LOGDIR/${name}.build.err" || { echo "$name missing marker $marker" >&2; exit 6; }
   done
+  grep -q "prectx_flat_bid=$PRECTX_FLAT_BID" "$LOGDIR/${name}.build.err" || { echo "$name flat-bid marker mismatch" >&2; exit 6; }
   grep -q "quad_overlap_local=$overlap" "$LOGDIR/${name}.build.err" || { echo "$name overlap marker mismatch" >&2; exit 6; }
   python3 "$PARSER" "$LOGDIR/${name}.build.err" --label "$name" >>"$RESOURCE" || true
   printf '%s' "$bin"
@@ -86,4 +91,4 @@ print(f'producer_quad_overlap_wall_speedup={m("base","wall_s")/m("overlap","wall
 print(f'producer_quad_overlap_high_speedup={m("base","high_s")/m("overlap","high_s"):.6f}x')
 print(f'producer_quad_overlap_memctrl_delta={m("overlap","avg_memctrl_pct")-m("base","avg_memctrl_pct"):.6f}pp')
 PY
-echo "producer quad overlap-local A/B OK result=$RESULT resources=$RESOURCE" >&2
+echo "producer quad overlap-local A/B OK result=$RESULT resources=$RESOURCE cached_bid=$PRECTX_FLAT_BID" >&2
