@@ -49,9 +49,15 @@ using P10DCSelectedFusedDeviceTables = BucketFusedDirectHighRowsRankFormulaNomet
 using P10DCSelectedFusedDeviceTables = BucketFusedDirectHighRowsRankFormulaNometa4Tables;
 #endif
 #if P10DC_RANKFORMULA_PRECTX_FORWARD || P10DC_RANKFORMULA_PRECTX_REVERSE
+#if P10DC_RANKFORMULA_PRECTX_COMPACT
+#define BucketFusedDeviceTables BucketFusedCompactPrecomputedHighCtxTables<P10DCSelectedFusedDeviceTables>
+#define P10DC_WARP_PRECTX_BYTES sizeof(P10DCHighClosureCompactPreCtx)
+#else
 #define BucketFusedDeviceTables BucketFusedPrecomputedHighCtxTables<P10DCSelectedFusedDeviceTables>
+#define P10DC_WARP_PRECTX_BYTES sizeof(P10DCHighClosurePreCtx)
+#endif
 #define BSN_GRAPH_BATCH_EXTRA_METADATA_BYTES(borbit,reverse) \
-    (sizeof(P10DCHighClosurePreCtx) * \
+    (P10DC_WARP_PRECTX_BYTES * \
      (size_t(P10DC_RANKFORMULA_PRECTX_FORWARD) * ((borbit).high_nn.size() + (borbit).high_nrnl.size()) + \
       size_t(P10DC_RANKFORMULA_PRECTX_REVERSE) * (reverse).atomic.high_orbit.size()))
 #else
