@@ -14,4 +14,8 @@ grep -Fq 'source_scope=main_only forward_p=Wm1' <<<"$out"
 grep -Fq 'include_result_dispatch=0' <<<"$out"
 grep -Fq 'generic_project_forward_calls=0' <<<"$out"
 grep -Fq 'full_mirror_passes=0 step_exact=1' <<<"$out"
-echo 'gridfp-runtime-turn-direct-high-expand-step-proof OK exact=1' >&2
+# The cumulative runtime stack already gates this step proof. Keep the matching
+# p=W-1 inverse specialization under the same boundary gate so stack runs cannot
+# enable one side without proving the other.
+bash "$ONEESAN_ROOT/scripts/bench/gridfp-runtime-turn-direct-high-expand-inverse-proof.sh"
+echo 'gridfp-runtime-turn-direct-high-expand-step-proof OK exact=1 inverse_gate=1' >&2
