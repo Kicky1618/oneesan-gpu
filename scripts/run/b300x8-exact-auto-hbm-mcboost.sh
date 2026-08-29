@@ -9,6 +9,7 @@ AUTO_CPASYNC_PAIR_MODE="${AUTO_CPASYNC_PAIR_MODE:-1}"
 CPASYNC_PAIR_RETUNE="${CPASYNC_PAIR_RETUNE:-0}"
 CPASYNC_PAIR_REPEATS="${CPASYNC_PAIR_REPEATS:-1}"
 CPASYNC_PAIR_PROFILE="${CPASYNC_PAIR_PROFILE:-$ONEESAN_ROOT/work/b300_overlap_local_pipe2_n21_winner.env}"
+CPASYNC_PAIR_PROFILE_REV_EXPECT="pipe2-wait1-ignore-src-v2"
 COL_ILP="${COL_ILP:-2}"
 PAIR_MLP="${PAIR_MLP:-1}"
 
@@ -24,14 +25,24 @@ for x in CPASYNC_PAIR CPASYNC_LOCAL_PAIR CPASYNC_OVERLAP_LOCAL_PAIR CPASYNC_OVER
   [[ -v "$x" ]] && MANUAL=1
 done
 
+profile_current(){
+  [[ -s "$CPASYNC_PAIR_PROFILE" ]] &&
+    grep -Fxq "CPASYNC_PAIR_PROFILE_REV=$CPASYNC_PAIR_PROFILE_REV_EXPECT" "$CPASYNC_PAIR_PROFILE"
+}
+
 if [[ "$AUTO_CPASYNC_PAIR_MODE" == 1 && "$MANUAL" == 0 && "$PAIR_MLP" == 1 && "$COL_ILP" == 2 ]]; then
-  if [[ "$CPASYNC_PAIR_RETUNE" == 1 || ! -f "$CPASYNC_PAIR_PROFILE" ]]; then
-    echo "MCBOOST cpasync-preselect exact_n=21 repeats=$CPASYNC_PAIR_REPEATS profile=$CPASYNC_PAIR_PROFILE" >&2
+  if [[ "$CPASYNC_PAIR_RETUNE" == 1 ]] || ! profile_current; then
+    echo "MCBOOST cpasync-preselect exact_n=21 repeats=$CPASYNC_PAIR_REPEATS profile=$CPASYNC_PAIR_PROFILE rev=$CPASYNC_PAIR_PROFILE_REV_EXPECT" >&2
+    # Pipe2 uses the optional PTX ignore-src predicate. Compile/run this tiny
+    # exact probe before building five solver variants so unsupported syntax or
+    # toolchain behavior fails immediately.
+    ARCH="${ARCH:-native}" bash "$ONEESAN_ROOT/scripts/bench/b300-cpasync-ignore-src-microprobe.sh"
     WINNER_ENV="$CPASYNC_PAIR_PROFILE" REPEATS="$CPASYNC_PAIR_REPEATS" \
       SORTED=0 DIRECTGATHER_SPARSE64=0 PRECTX_FORWARD=0 PRECTX_REVERSE=0 \
       bash "$ONEESAN_ROOT/scripts/bench/b300-overlap-local-pipe2-ab.sh"
+    printf 'CPASYNC_PAIR_PROFILE_REV=%s\n' "$CPASYNC_PAIR_PROFILE_REV_EXPECT" >>"$CPASYNC_PAIR_PROFILE"
   else
-    echo "MCBOOST cpasync-preselect reuse profile=$CPASYNC_PAIR_PROFILE" >&2
+    echo "MCBOOST cpasync-preselect reuse profile=$CPASYNC_PAIR_PROFILE rev=$CPASYNC_PAIR_PROFILE_REV_EXPECT" >&2
   fi
   [[ -s "$CPASYNC_PAIR_PROFILE" ]] || { echo "missing/empty cpasync profile: $CPASYNC_PAIR_PROFILE" >&2; exit 3; }
   # shellcheck disable=SC1090
@@ -50,6 +61,12 @@ done
 [[ "$CPASYNC_LOCAL_PAIR" == 0 || "$CPASYNC_PAIR" == 1 ]] || { echo 'local pair requires cpasync pair' >&2; exit 2; }
 [[ "$CPASYNC_OVERLAP_LOCAL_PAIR" == 0 || "$CPASYNC_PAIR" == 1 ]] || { echo 'overlap pair requires cpasync pair' >&2; exit 2; }
 [[ "$CPASYNC_OVERLAP_LOCAL_PIPE2" == 0 || "$CPASYNC_OVERLAP_LOCAL_PAIR" == 1 ]] || { echo 'pipe2 requires overlap pair' >&2; exit 2; }
+
+# A manual pipe2 selection bypasses the auto tuner, so still validate the one
+# instruction form unique to pipe2 before the n=27 builds begin.
+if [[ "$MANUAL" == 1 && "$CPASYNC_OVERLAP_LOCAL_PIPE2" == 1 ]]; then
+  ARCH="${ARCH:-native}" bash "$ONEESAN_ROOT/scripts/bench/b300-cpasync-ignore-src-microprobe.sh"
+fi
 
 export COL_ILP PAIR_MLP
 export CPASYNC_PAIR CPASYNC_LOCAL_PAIR CPASYNC_OVERLAP_LOCAL_PAIR CPASYNC_OVERLAP_LOCAL_PIPE2 CPASYNC_PAIR_MODE
