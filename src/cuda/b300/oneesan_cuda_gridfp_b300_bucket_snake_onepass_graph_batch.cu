@@ -9,6 +9,10 @@
 #include "../gridfp/ramstream32_forward_build_release.hpp"
 #include <vector>
 
+#ifndef BSN_GRAPH_BATCH_POST_RUN_HOOK
+#define BSN_GRAPH_BATCH_POST_RUN_HOOK() ((void)0)
+#endif
+
 int main(int argc,char**argv){
     if(argc<5){std::cerr<<"usage: "<<argv[0]<<" n target_mib max_window gpus p1 [p2 ...] [--plan-only]\n";return 1;}
     int n=std::atoi(argv[1]);(void)std::atoi(argv[2]);(void)std::atoi(argv[3]);int ngpu=std::atoi(argv[4]);bool plan_only=bsn_has_arg(argc,argv,"--plan-only");std::vector<Count>mods;
@@ -36,5 +40,5 @@ int main(int argc,char**argv){
         for(int row=0;row<W;++row){if((row&1)==0){auto t=std::chrono::steady_clock::now();launch_all(BKOC_GRAPH_FORWARD_HIGH);fh+=bsn_since(t);t=std::chrono::steady_clock::now();tx.transpose(tplan);ts+=bsn_since(t);t=std::chrono::steady_clock::now();launch_all(BKOC_GRAPH_FORWARD_LOW);fl+=bsn_since(t);}else{auto t=std::chrono::steady_clock::now();launch_all(BKOC_GRAPH_REVERSE_LOW);rl+=bsn_since(t);t=std::chrono::steady_clock::now();tx.transpose(tplan);ts+=bsn_since(t);t=std::chrono::steady_clock::now();launch_all(BKOC_GRAPH_REVERSE_HIGH);rh+=bsn_since(t);}}
         double wall=bsn_since(wall0);int agpu=final_lmajor?int(fa.owner_l):int(fa.owner_h),aslot=final_lmajor?int(fa.owner_h):int(fa.owner_l);Count answer=0;ck(cudaSetDevice(agpu),"snake graph batch answer set");ck(cudaMemcpy(&answer,reinterpret_cast<uint8_t*>(base[agpu])+tplan.slot[agpu][aslot].off_bytes+uint64_t(fa.off)*sizeof(Count),sizeof(answer),cudaMemcpyDeviceToHost),"snake graph batch answer");uint64_t td=tx.transposes-t0count;double pd=tx.peer_gib-p0;if(td!=uint64_t(W)){std::cerr<<"snake graph batch transpose count mismatch got="<<td<<" expected="<<W<<'\n';return 8;}if(n==21&&mod==4294967291u&&answer!=998035516u){std::cerr<<"n21 snake graph batch residue mismatch got="<<answer<<" expected=998035516\n";return 9;}std::cerr<<"snake_onepass_graph_batch modulus="<<mod<<" reset_s="<<reset_s<<" forward_high_s="<<fh<<" forward_low_s="<<fl<<" reverse_low_s="<<rl<<" reverse_high_s="<<rh<<" transpose_s="<<ts<<" transposes="<<td<<" peer_gib="<<pd<<'\n';std::cout<<"residue="<<answer<<" modulus="<<mod<<" wall_s="<<wall<<'\n';std::cout.flush();
     }
-    tx.release();for(int g=0;g<NG;++g){ck(cudaSetDevice(g),"snake graph batch release set");graphs[g].release();rat[g].release();fat[g].release();rt[g].release();ft[g].release();cudaFree(base[g]);}return 0;
+    tx.release();for(int g=0;g<NG;++g){ck(cudaSetDevice(g),"snake graph batch release set");graphs[g].release();rat[g].release();fat[g].release();rt[g].release();ft[g].release();cudaFree(base[g]);}BSN_GRAPH_BATCH_POST_RUN_HOOK();return 0;
 }
