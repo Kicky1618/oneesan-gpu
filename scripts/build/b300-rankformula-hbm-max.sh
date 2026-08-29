@@ -2,18 +2,25 @@
 set -euo pipefail
 source "$(dirname -- "${BASH_SOURCE[0]}")/../lib/common.sh"
 
-# Aggressive B300 bandwidth-for-latency preset.  Compared with hbm-fast this
-# intentionally issues all seven CROSS source reads whenever a CROSS descriptor
-# is active, even when fewer are mathematically selected.  Unused descriptor
-# slots are zero-filled and masked after the reads, so semantics are unchanged.
-# This is intended for the observed low-MC-utilization regime, not as a universal
-# default.
-N="${N:-21}"
+# Aggressive B300 latency-hiding preset for the observed low memory-controller
+# utilization regime.  Depth-major makes warp descriptor reads contiguous and
+# COL_ILP=2 keeps two independent columns in flight per lane.  FORCE7 remains an
+# opt-in bandwidth-for-latency experiment because it can waste source traffic.
+N="${N:-27}"
+COL_ILP="${COL_ILP:-2}"
+FORCE7="${FORCE7:-0}"
+MLP_WINDOW4="${MLP_WINDOW4:-0}"
 OUT="${OUT:-$ONEESAN_BUILD_DIR/oneesan_cuda_gridfp_b300_rankformula_hbm_max_n${N}}"
+
 N="$N" OUT="$OUT" \
-RANKFORMULA_DIRECTGATHER_FORCE7="${RANKFORMULA_DIRECTGATHER_FORCE7:-1}" \
+COL_ILP="$COL_ILP" \
+DEPTHMAJOR="${DEPTHMAJOR:-1}" \
+FORCE7="$FORCE7" \
+MLP_WINDOW4="$MLP_WINDOW4" \
+PM_ACCUM="${PM_ACCUM:-1}" \
 MAXRREGCOUNT="${MAXRREGCOUNT:-0}" \
 PTXAS_VERBOSE="${PTXAS_VERBOSE:-1}" \
-bash "$ONEESAN_ROOT/scripts/build/b300-rankformula-hbm-fast.sh"
+TRANSPOSE_MODE="${TRANSPOSE_MODE:-pipeline}" \
+bash "$ONEESAN_ROOT/scripts/build/b300-directgather-colilp-fast.sh"
 
-echo "b300-rankformula-hbm-max OK out=$OUT n=$N force7=${RANKFORMULA_DIRECTGATHER_FORCE7:-1} maxrregcount=${MAXRREGCOUNT:-0}" >&2
+echo "b300-rankformula-hbm-max OK out=$OUT n=$N col_ilp=$COL_ILP depthmajor=${DEPTHMAJOR:-1} force7=$FORCE7 mlp_window4=$MLP_WINDOW4 maxrregcount=${MAXRREGCOUNT:-0}" >&2
