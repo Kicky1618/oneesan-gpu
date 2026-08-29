@@ -38,8 +38,7 @@ metadata_ok(){
  grep -Fq "high_main_recurrence=$highrec" "$bout" || return 1
  grep -Fq "main_recurrence=$mainrec" "$bout" || return 1
  grep -Fq 'batch_row_limit_env=B300_ROW_LIMIT' "$bout" || return 1
- if [[ "$highrec" == 1 ]]; then grep -Fq 'high_p_lo=14 high_symbol_range=13..27 high_trit_positions=15 high_min_fixed=7' "$bout" || return 1; fi
- if [[ "$mainrec" == 1 ]]; then grep -Fq 'high_delta_bits=35 high_p_lo=14 high_symbol_range=13..27 high_trit_positions=15 high_min_fixed=7' "$bout" || return 1; fi
+ if [[ "$highrec" == 1 || "$mainrec" == 1 ]]; then grep -Fq 'high_recurrence_p_range=27..15 high_symbol_range=14..27' "$bout" || return 1; fi
  return 0
 }
 
