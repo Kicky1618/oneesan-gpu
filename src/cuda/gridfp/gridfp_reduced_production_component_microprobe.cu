@@ -69,10 +69,10 @@ void install_tables(const ProductionFactorTables& t) {
         sector_primitive[i] = t.sector_primitive[i];
     }
 
-#if !defined(__CUDA_ARCH__) || RP_EXPERIMENTAL_CODEC_CHOOSE_PHYSICAL_MODE == 0
+#if RP_EXPERIMENTAL_CODEC_CHOOSE_PHYSICAL_MODE == 0
     ck(cudaMemcpyToSymbol(RP_CHOOSE, choose, sizeof(choose)), "copy choose");
 #endif
-#if !defined(__CUDA_ARCH__) || RP_EXPERIMENTAL_CODEC_PRIMITIVE_PHYSICAL_MODE == 0
+#if RP_EXPERIMENTAL_CODEC_PRIMITIVE_PHYSICAL_MODE == 0
     ck(cudaMemcpyToSymbol(RP_PRIMITIVE, primitive, sizeof(primitive)), "copy primitive");
 #endif
     ck(cudaMemcpyToSymbol(RP_MOTZKIN, motzkin, sizeof(motzkin)), "copy motzkin");
