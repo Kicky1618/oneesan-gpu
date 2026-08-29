@@ -22,11 +22,15 @@ static_assert(P10DC_RANKFORMULA_PRECTX_FLAT_BID_FUSED == 0,
 //   local_n | cross_depth<<8 | fixed_hs<<16 | cached_bid<<24.
 // The cached bid therefore costs no extra descriptor load and the loaded meta is
 // reused by the row-ref decoder instead of reloading the tail after orbit setup.
+// stream_base is CTA-persistent shared metadata filled once at kernel entry;
+// only lane 0 dereferences it, eliminating one HIGH stream-offset load per orbit
+// without adding a producer-warp synchronization point.
 __device__ __forceinline__ void
 p10dc_orbitcta_flat_dynamic_pipe2_prepare_forward_producer_prectx_warpcoop(
     P10DC_ORBITCTA_CTX& c,
     uint32_t k_lane0,
     uint32_t base_off,
+    const uint32_t* stream_base,
     uint32_t nblocks,
     int p
 ) {
@@ -44,8 +48,8 @@ p10dc_orbitcta_flat_dynamic_pipe2_prepare_forward_producer_prectx_warpcoop(
         c.valid = 0;
         const bool nn = k < c.n0;
         const uint32_t q = nn
-            ? D_BKF_HIGH_NN_OFF[base_off] + k
-            : c.n1 + k - c.n0;
+            ? stream_base[0] + k
+            : stream_base[1] + k - c.n0;
         q_lane0 = q;
         nn_lane0 = uint32_t(nn);
 #if !P10DC_RANKFORMULA_PRECTX_FLAT_BID
@@ -108,6 +112,7 @@ p10dc_orbitcta_flat_dynamic_pipe2_prepare_reverse_producer_prectx_warpcoop(
     P10DC_ORBITCTA_CTX& c,
     uint32_t k_lane0,
     uint32_t base_off,
+    const uint32_t* stream_base,
     uint32_t nblocks,
     int p,
     bool edge
@@ -130,15 +135,15 @@ p10dc_orbitcta_flat_dynamic_pipe2_prepare_reverse_producer_prectx_warpcoop(
         BucketOrbitOp op{};
         if (k < c.n0) {
             kind = CPU_ORBIT_NN; off = D_RS54_HIGH_NN_OFF;
-            q = D_RS54_HIGH_NN_OFF[base_off] + k;
+            q = stream_base[0] + k;
             op = D_RS54_HIGH_NN[q];
         } else if (k < c.n0 + c.n1) {
             kind = CPU_ORBIT_NR; off = D_RS54_HIGH_NR_OFF;
-            q = D_RS54_HIGH_NR_OFF[base_off] + k - c.n0;
+            q = stream_base[1] + k - c.n0;
             op = D_RS54_HIGH_NR[q];
         } else {
             kind = CPU_ORBIT_NL; off = D_RS54_HIGH_NL_OFF;
-            q = D_RS54_HIGH_NL_OFF[base_off] + k - c.n0 - c.n1;
+            q = stream_base[2] + k - c.n0 - c.n1;
             op = D_RS54_HIGH_NL[q];
         }
         q_lane0 = q;
