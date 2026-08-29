@@ -15,14 +15,12 @@
 #endif
 #define P10DC_WARPSTRIPED_CTX P10DCDirectHighResolvedCtx
 #if P10DC_RANKFORMULA_PRECTX_FORWARD
-// The generic warp-striped kernel has qi/nn in lexical scope here.  Keep its
-// scheduling/orbit decode unchanged for the first A/B, but replace the expensive
-// closure-plan construction and local/cross row resolution with one read-only
-// context load built once at bind_owner().
+// The generic warp-striped kernel has qi/nn in lexical scope here. Keep its
+// scheduler fields intact; only replace the per-orbit execution context.
 #define P10DC_WARPSTRIPED_PREPARE_FORWARD(c,payload,loc,p,ss,js,ds,sr,jr,dr) do { \
     (void)(payload); (void)(loc); (void)(p); (void)(ss); (void)(js); (void)(ds); \
     (void)(sr); (void)(jr); (void)(dr); \
-    (c) = p10dc_load_forward_prectx(qi, nn); \
+    p10dc_apply_forward_prectx((c), qi, nn); \
 } while(0)
 #else
 #define P10DC_WARPSTRIPED_PREPARE_FORWARD(c,payload,loc,p,ss,js,ds,sr,jr,dr) \
