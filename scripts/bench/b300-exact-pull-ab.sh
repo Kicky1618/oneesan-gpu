@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 source "$(dirname -- "${BASH_SOURCE[0]}")/../lib/common.sh"
-N="${N:-27}";MOD="${MOD:-4294967291}";NGPU="${NGPU:-8}";TARGET_MIB="${TARGET_MIB:-65536}";MAX_WINDOW="${MAX_WINDOW:-$N}";ROWS="${ROWS:-1}";GRIDFP_THREADS="${GRIDFP_THREADS:-256}";RUNS="${RUNS:-1}"
+N="${N:-27}";MOD="${MOD:-4294967291}";NGPU="${NGPU:-8}";TARGET_MIB="${TARGET_MIB:-65536}";MAX_WINDOW="${MAX_WINDOW:-14}";ROWS="${ROWS:-1}";GRIDFP_THREADS="${GRIDFP_THREADS:-256}";RUNS="${RUNS:-1}"
 PREFIX="${PREFIX:-$ONEESAN_ROOT/work/b300_exact_pull_ab}";LOGDIR="${LOGDIR:-${PREFIX}_logs}";RESULT="${RESULT:-${PREFIX}.tsv}";mkdir -p "$LOGDIR" "$(dirname "$RESULT")"
 command -v nvidia-smi >/dev/null||exit 2;(( $(nvidia-smi --query-gpu=index --format=csv,noheader|wc -l)>=NGPU ))||exit 2
 modes=(push pull blockmate);declare -A bin
