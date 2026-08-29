@@ -52,7 +52,7 @@ if [[ "$RANK_DELTA_CACHE" == 1 ]]; then
 fi
 if [[ "$RANK_STATE_PACKED" == 1 ]]; then
   bash "$ONEESAN_ROOT/scripts/bench/b300-height-recurrence-proof.sh"
-  bash "$ONEESAN_ROOT/scripts/bench/b300-rank-state-i32-bound-proof.sh"
+  bash "$ONEESAN_ROOT/scripts/bench/b300-rank-state-i56-bound-proof.sh"
 fi
 
 BUILD_SRC="$SRC"
@@ -87,4 +87,4 @@ echo "  block_closure_scan=endpoint_setbits block_closure_candidate_rank=increme
 if [[ "$MAIN_PULL_ILP2" == 1 ]]; then echo "  main_pull_destinations_per_thread=2 memory_request_phases=mate,self,pair,block register_pressure_requires_ab=1";fi
 if [[ "$HEIGHT_CACHE" == 1 ]]; then echo "  height_cache_bytes_per_state=1 height_cache_hbm_rw_per_step_bytes=2 prefix_height_popcounts_removed=main_pair,block_closure recurrence_step=O1";fi
 if [[ "$RANK_DELTA_CACHE" == 1 ]]; then echo "  rank_delta_bytes_per_state=8 rank_delta_hbm_rw_per_step_bytes=16 prefix_rank_walk_removed=main_drop,block_lift moving_fixed_checks=0 conditional_scratch=1 coverage_report=1 input_compat_normalized=1";fi
-if [[ "$RANK_STATE_PACKED" == 1 ]]; then echo "  rank_state_storage_bytes=8 delta_bits=32 height_bits=8 rank_state_hbm_rw_per_step_bytes=16 prefix_height_popcounts_removed=main_pair,block_closure int32_group_guard=1 exact_fallback=1";fi
+if [[ "$RANK_STATE_PACKED" == 1 ]]; then echo "  rank_state_storage_bytes=8 delta_bits=56 height_bits=8 rank_state_hbm_rw_per_step_bytes=16 prefix_height_popcounts_removed=main_pair,block_closure width_max=28 full_state_bound=385719506620 fallback_required=0";fi
