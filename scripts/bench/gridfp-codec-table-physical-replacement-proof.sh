@@ -4,9 +4,10 @@ source "$(dirname -- "${BASH_SOURCE[0]}")/../lib/common.sh"
 
 DEVICE="$ONEESAN_ROOT/src/cuda/gridfp/gridfp_reduced_production_device.cuh"
 PHYSICAL="$ONEESAN_ROOT/src/cuda/gridfp/gridfp_reduced_production_codec_physical_device.cuh"
+COMPONENT="$ONEESAN_ROOT/src/cuda/gridfp/gridfp_reduced_production_component_microprobe.cu"
 CHOOSE_PROOF="$ONEESAN_ROOT/scripts/bench/gridfp-choose-sym-u32-table-proof.sh"
 PRIMITIVE_PROOF="$ONEESAN_ROOT/scripts/bench/gridfp-primitive-sym-u32-table-proof.sh"
-for f in "$DEVICE" "$PHYSICAL" "$CHOOSE_PROOF" "$PRIMITIVE_PROOF"; do
+for f in "$DEVICE" "$PHYSICAL" "$COMPONENT" "$CHOOSE_PROOF" "$PRIMITIVE_PROOF"; do
   [[ -f "$f" ]] || { echo "missing physical replacement proof input: $f" >&2; exit 2; }
 done
 
@@ -40,6 +41,14 @@ grep -Fq '#define RP_PRIMITIVE CodecPhysicalPrimitiveProxy{}' "$PHYSICAL"
 grep -Fq 'physical choose layout cannot be combined with an RP_CHOOSE preinclude remap' "$PHYSICAL"
 grep -Fq 'physical primitive layout cannot be combined with an RP_PRIMITIVE preinclude remap' "$PHYSICAL"
 
+# Host cudaMemcpyToSymbol calls remain valid for the global upload sinks, while
+# the CUDA device pass removes those lines before RP_CHOOSE/RP_PRIMITIVE proxy
+# macro expansion can touch a host-only call expression.
+grep -Fq '#if !defined(__CUDA_ARCH__) || RP_EXPERIMENTAL_CODEC_CHOOSE_PHYSICAL_MODE == 0' "$COMPONENT"
+grep -Fq 'cudaMemcpyToSymbol(RP_CHOOSE, choose, sizeof(choose))' "$COMPONENT"
+grep -Fq '#if !defined(__CUDA_ARCH__) || RP_EXPERIMENTAL_CODEC_PRIMITIVE_PHYSICAL_MODE == 0' "$COMPONENT"
+grep -Fq 'cudaMemcpyToSymbol(RP_PRIMITIVE, primitive, sizeof(primitive))' "$COMPONENT"
+
 python3 - <<'PY'
 choose={0:6728,1:900,2:1740,3:3364}
 primitive={0:6960,1:900,2:3480}
@@ -59,7 +68,8 @@ for mode,(c,p,name) in layouts.items():
 print('physical_layout_upload_sink_bytes_when_both_replaced=13688')
 print('physical_layout_upload_sink_memory_space=global')
 print('physical_layout_device_reads_legacy_sink=0')
+print('physical_layout_device_pass_host_copy_guard=1')
 print('physical_layout_exact=1')
 PY
 
-echo "gridfp-codec-table-physical-replacement-proof OK default_legacy_constant=1 physical_old_constant_removed=1 exact=1"
+echo "gridfp-codec-table-physical-replacement-proof OK default_legacy_constant=1 physical_old_constant_removed=1 host_copy_guard=1 exact=1"
