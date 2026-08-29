@@ -14,7 +14,9 @@ grep -Fq 'exhaustive_width_max=12' <<<"$out"
 grep -Fq 'p_scope=2..Wm1 deferred_drop_position=p' <<<"$out"
 grep -Fq 'rl_gate=prefix_height_exact' <<<"$out"
 grep -Eq 'rl_candidates=[1-9][0-9]* rl_rejected=[1-9][0-9]*' <<<"$out"
+grep -Fq 'closure_scan=endpoint_setbits' <<<"$out"
+grep -Eq 'endpoint_steps=[1-9][0-9]* physical_steps=[1-9][0-9]*' <<<"$out"
 grep -Fq 'block_memset_required=0' <<<"$out"
 grep -Fq 'block_atomic_updates_required=0' <<<"$out"
 grep -Fq 'pull_terms_max=5 exact=1' <<<"$out"
-echo 'b300-block-pull-operator-proof OK exact=1 deferred_drop_position=p rl_gate=prefix_height_exact' >&2
+echo 'b300-block-pull-operator-proof OK exact=1 closure_scan=endpoint_setbits' >&2
