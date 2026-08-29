@@ -4,11 +4,14 @@ source "$(dirname -- "${BASH_SOURCE[0]}")/../lib/common.sh"
 
 shells=(
   scripts/build/b300-hbm32.sh
+  scripts/build/b300-directgather-orbitcta-pipe2-producer-warp.sh
   scripts/run/b300x8.sh
   scripts/run/b300x8-rankstate-winner.sh
   scripts/bench/b300x8-rankstate-ilp4-hotd32-race.sh
   scripts/bench/b300x8-block-closure-cg-ab.sh
   scripts/bench/b300-orbitcta-flat-prectx-warpcoop-ab.sh
+  scripts/bench/b300-pipe2-producer-warp-coverage-proof.sh
+  scripts/bench/b300-orbitcta-flat-dynamic-pipe2-producer-quad-ab.sh
 )
 py=(
   scripts/build/gen-b300-rank-state-ilp2.py
@@ -29,6 +32,10 @@ build="$ONEESAN_ROOT/scripts/build/b300-hbm32.sh"
 run="$ONEESAN_ROOT/scripts/run/b300x8.sh"
 chunk="$ONEESAN_ROOT/src/cuda/gridfp/ramstream32_bucket_orbit_closure_pattern10_depthcode_orbitcta_flat_chunked.cuh"
 coop="$ONEESAN_ROOT/src/cuda/gridfp/ramstream32_bucket_precomputed_high_ctx_compact_warpcoop.cuh"
+producer="$ONEESAN_ROOT/src/cuda/gridfp/ramstream32_bucket_orbit_closure_pattern10_depthcode_orbitcta_flat_dynamic_pipe2_producer_warp.cuh"
+producer_build="$ONEESAN_ROOT/scripts/build/b300-directgather-orbitcta-pipe2-producer-warp.sh"
+producer_ab="$ONEESAN_ROOT/scripts/bench/b300-orbitcta-flat-dynamic-pipe2-producer-quad-ab.sh"
+coverage="$ONEESAN_ROOT/scripts/bench/b300-pipe2-producer-warp-coverage-proof.sh"
 
 for s in 'destinations_per_thread=2' 'launch_cover_per_thread=2' 'launch_blocks=ceil_n_over_2threads_capped65535' 'b300_rankstate_ilp2_blocks(ms.size,threads)' 'rank_state_store_before_count_gather=1'; do
   grep -Fq "$s" "$main2" || { echo "missing main ILP2 marker: $s" >&2; exit 3; }
@@ -64,7 +71,21 @@ for s in 'BKCZ_MAX_LOCAL + 1 <= 32' 'offsetof(P10DCHighClosureCompactPreCtx, loc
   grep -Fq "$s" "$coop" || { echo "missing coalesced warpcoop helper marker: $s" >&2; exit 3; }
 done
 
+for s in 'P10DC_ORBITCTA_PLAN_SUM_QUAD' 'producer-warp quad plan sum requires ILP=4' 'valid[0] && valid[1] && valid[2] && valid[3]' 'P10DC_ORBITCTA_PLAN_SUM_PAIR' 'Full groups now issue one quad gather'; do
+  grep -Fq "$s" "$producer" || { echo "missing producer native-quad marker: $s" >&2; exit 3; }
+done
+for s in 'QUAD_MLP="${QUAD_MLP:-0}"' 'producer-warp native QUAD_MLP=1 requires ORBITCTA_COL_ILP=4' 'QUAD_MLP="$QUAD_MLP"'; do
+  grep -Fq "$s" "$producer_build" || { echo "missing producer build quad wiring: $s" >&2; exit 3; }
+done
+for s in 'QUAD_MLP=1 ORBITCTA_COL_ILP=4' 'producer-quad A/B fixes CPASYNC_PAIR=1' 'producer_quad_high_speedup=' 'producer_quad_memctrl_delta='; do
+  grep -Fq "$s" "$producer_ab" || { echo "missing producer quad A/B marker: $s" >&2; exit 3; }
+done
+for s in 'producer_quad_full_groups_seen=' 'producer_quad_tail_groups_seen=' 'quad_tail_valid_prefix=1' 'pair_single_fallback_exact=1'; do
+  grep -Fq "$s" "$coverage" || { echo "missing producer quad coverage marker: $s" >&2; exit 3; }
+done
+
 echo 'b300_rankstate_ilp4_static_preflight=OK'
 echo 'ilp2_launch_cover=2 ilp4_launch_cover=4 old_full_grid_degeneracy=removed'
 echo 'warpcoop_compact_bytes=40 warpcoop_ticket_shuffles=2 warpcoop_meta_broadcast=1 extra_syncwarp=0 cross_depth_ticket_reuse=0'
+echo 'pipe2_producer_native_quad=1 ilp4_full_group_quad=1 partial_group_pair_single_fallback=1 producer_warp=32'
 echo 'gpu_work=0 actions_triggered=0'
