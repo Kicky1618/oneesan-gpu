@@ -21,6 +21,9 @@
 #ifndef P10DC_ORBITCTA_FLAT_DYNAMIC_FUSE_LEASE_PREP
 #define P10DC_ORBITCTA_FLAT_DYNAMIC_FUSE_LEASE_PREP 0
 #endif
+#ifndef P10DC_ORBITCTA_FLAT_DYNAMIC_ADAPTIVE_WAVES
+#define P10DC_ORBITCTA_FLAT_DYNAMIC_ADAPTIVE_WAVES 0
+#endif
 static_assert(P10DC_ORBITCTA_FLAT_DYNAMIC_BATCH == 1 ||
               P10DC_ORBITCTA_FLAT_DYNAMIC_BATCH == 2 ||
               P10DC_ORBITCTA_FLAT_DYNAMIC_BATCH == 4 ||
@@ -30,6 +33,11 @@ static_assert(P10DC_ORBITCTA_FLAT_DYNAMIC_BATCH == 1 ||
 static_assert(P10DC_ORBITCTA_FLAT_DYNAMIC_FUSE_LEASE_PREP == 0 ||
               P10DC_ORBITCTA_FLAT_DYNAMIC_FUSE_LEASE_PREP == 1,
               "dynamic lease/prepare fusion must be 0 or 1");
+static_assert(P10DC_ORBITCTA_FLAT_DYNAMIC_ADAPTIVE_WAVES == 0 ||
+              P10DC_ORBITCTA_FLAT_DYNAMIC_ADAPTIVE_WAVES == 1 ||
+              P10DC_ORBITCTA_FLAT_DYNAMIC_ADAPTIVE_WAVES == 2 ||
+              P10DC_ORBITCTA_FLAT_DYNAMIC_ADAPTIVE_WAVES == 4,
+              "dynamic adaptive waves must be 0,1,2,4");
 
 // One 32-bit queue head per device. Graph capture inserts a reset kernel before
 // every HIGH position. Each resident CTA atomically leases BATCH consecutive
@@ -40,6 +48,28 @@ __device__ uint32_t D_P10DC_ORBITCTA_FLAT_NEXT = 0;
 
 __global__ void p10dc_orbitcta_flat_dynamic_reset_kernel() {
     if (blockIdx.x == 0 && threadIdx.x == 0) D_P10DC_ORBITCTA_FLAT_NEXT = 0;
+}
+
+__device__ __forceinline__ uint32_t p10dc_orbitcta_flat_dynamic_effective_batch(uint32_t total) {
+    constexpr uint32_t MAX_BATCH = uint32_t(P10DC_ORBITCTA_FLAT_DYNAMIC_BATCH);
+#if P10DC_ORBITCTA_FLAT_DYNAMIC_ADAPTIVE_WAVES == 0
+    (void)total;
+    return MAX_BATCH;
+#else
+    // Keep at least ADAPTIVE_WAVES lease waves available across the launched
+    // persistent CTA pool. This shrinks a large compile-time batch only for
+    // small HIGH positions where fixed batching would strand resident CTAs.
+    constexpr uint32_t WAVES = uint32_t(P10DC_ORBITCTA_FLAT_DYNAMIC_ADAPTIVE_WAVES);
+    const uint64_t denom = uint64_t(gridDim.x) * uint64_t(WAVES);
+    if (!denom) return MAX_BATCH;
+    const uint32_t cap = uint32_t((uint64_t(total) + denom - 1u) / denom);
+    uint32_t b = 1;
+    if (MAX_BATCH >= 2 && cap >= 2) b = 2;
+    if (MAX_BATCH >= 4 && cap >= 4) b = 4;
+    if (MAX_BATCH >= 8 && cap >= 8) b = 8;
+    if (MAX_BATCH >= 16 && cap >= 16) b = 16;
+    return b;
+#endif
 }
 
 __device__ __forceinline__ void p10dc_orbitcta_flat_dynamic_prepare_forward(
@@ -192,10 +222,15 @@ __global__ void bucket_high_orbit_closure_pattern10_depthcode_orbitcta_flat_dyna
     }
     __syncthreads();
     constexpr uint32_t BATCH = uint32_t(P10DC_ORBITCTA_FLAT_DYNAMIC_BATCH);
+#if P10DC_ORBITCTA_FLAT_DYNAMIC_ADAPTIVE_WAVES == 0
+    constexpr uint32_t LEASE_BATCH = BATCH;
+#else
+    const uint32_t LEASE_BATCH = p10dc_orbitcta_flat_dynamic_effective_batch(c.total);
+#endif
     for (;;) {
 #if P10DC_ORBITCTA_FLAT_DYNAMIC_FUSE_LEASE_PREP
         if (threadIdx.x == 0) {
-            lease_base = atomicAdd(&D_P10DC_ORBITCTA_FLAT_NEXT, BATCH);
+            lease_base = atomicAdd(&D_P10DC_ORBITCTA_FLAT_NEXT, LEASE_BATCH);
             c.valid = 0;
             if (lease_base < c.total)
                 p10dc_orbitcta_flat_dynamic_prepare_forward(c, lease_base, base_off, nblocks, p);
@@ -208,7 +243,7 @@ __global__ void bucket_high_orbit_closure_pattern10_depthcode_orbitcta_flat_dyna
         if (c.valid == 1) p10dc_orbitcta_flat_forward_columns(c);
         __syncthreads();
 #pragma unroll 1
-        for (uint32_t j = 1; j < BATCH; ++j) {
+        for (uint32_t j = 1; j < LEASE_BATCH; ++j) {
             if (threadIdx.x == 0) {
                 c.valid = 0;
                 const uint32_t k = lease_base + j;
@@ -221,11 +256,11 @@ __global__ void bucket_high_orbit_closure_pattern10_depthcode_orbitcta_flat_dyna
         }
 #else
         if (threadIdx.x == 0)
-            lease_base = atomicAdd(&D_P10DC_ORBITCTA_FLAT_NEXT, BATCH);
+            lease_base = atomicAdd(&D_P10DC_ORBITCTA_FLAT_NEXT, LEASE_BATCH);
         __syncthreads();
         if (lease_base >= c.total) break;
 #pragma unroll 1
-        for (uint32_t j = 0; j < BATCH; ++j) {
+        for (uint32_t j = 0; j < LEASE_BATCH; ++j) {
             if (threadIdx.x == 0) {
                 c.valid = 0;
                 const uint32_t k = lease_base + j;
@@ -262,10 +297,15 @@ __global__ void bucket_reverse_high_pattern10_depthcode_orbitcta_flat_dynamic_ke
     }
     __syncthreads();
     constexpr uint32_t BATCH = uint32_t(P10DC_ORBITCTA_FLAT_DYNAMIC_BATCH);
+#if P10DC_ORBITCTA_FLAT_DYNAMIC_ADAPTIVE_WAVES == 0
+    constexpr uint32_t LEASE_BATCH = BATCH;
+#else
+    const uint32_t LEASE_BATCH = p10dc_orbitcta_flat_dynamic_effective_batch(c.total);
+#endif
     for (;;) {
 #if P10DC_ORBITCTA_FLAT_DYNAMIC_FUSE_LEASE_PREP
         if (threadIdx.x == 0) {
-            lease_base = atomicAdd(&D_P10DC_ORBITCTA_FLAT_NEXT, BATCH);
+            lease_base = atomicAdd(&D_P10DC_ORBITCTA_FLAT_NEXT, LEASE_BATCH);
             c.valid = 0;
             if (lease_base < c.total)
                 p10dc_orbitcta_flat_dynamic_prepare_reverse(
@@ -276,7 +316,7 @@ __global__ void bucket_reverse_high_pattern10_depthcode_orbitcta_flat_dynamic_ke
         if (c.valid == 1) p10dc_orbitcta_flat_reverse_columns(c, edge);
         __syncthreads();
 #pragma unroll 1
-        for (uint32_t j = 1; j < BATCH; ++j) {
+        for (uint32_t j = 1; j < LEASE_BATCH; ++j) {
             if (threadIdx.x == 0) {
                 c.valid = 0;
                 const uint32_t k = lease_base + j;
@@ -290,11 +330,11 @@ __global__ void bucket_reverse_high_pattern10_depthcode_orbitcta_flat_dynamic_ke
         }
 #else
         if (threadIdx.x == 0)
-            lease_base = atomicAdd(&D_P10DC_ORBITCTA_FLAT_NEXT, BATCH);
+            lease_base = atomicAdd(&D_P10DC_ORBITCTA_FLAT_NEXT, LEASE_BATCH);
         __syncthreads();
         if (lease_base >= c.total) break;
 #pragma unroll 1
-        for (uint32_t j = 0; j < BATCH; ++j) {
+        for (uint32_t j = 0; j < LEASE_BATCH; ++j) {
             if (threadIdx.x == 0) {
                 c.valid = 0;
                 const uint32_t k = lease_base + j;
