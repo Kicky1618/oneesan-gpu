@@ -18,7 +18,7 @@ static std::vector<MateID> gen_valid(int W){
         if(pos==W){if(h==0)out.push_back(m);return;}
         int bit=W-1-pos;self(self,pos+1,h,m);
         if(h>0)self(self,pos+1,h-1,m|(MateID(R)<<(2*bit)));
-        self(self,pos+1,h+1,m|(MateID(L)<<(2*bit));
+        self(self,pos+1,h+1,m|(MateID(L)<<(2*bit)));
     };
     rec(rec,0,1,0);return out;
 }
@@ -68,8 +68,6 @@ int main(){
         }
     }
     if(!closures||!candidates||!rejected)return 4;
-    // At least one nonzero threshold must exercise both branches in the
-    // exhaustive range; otherwise the benchmark threshold would be vacuous.
     bool mixed=false;for(std::size_t i=1;i<THRESH.size();++i)mixed|=scalar[i]&&warp[i];
     if(!mixed)return 5;
     std::cout<<"b300-block-closure-warp-hybrid-proof OK exhaustive_width_max=12 closures="<<closures
