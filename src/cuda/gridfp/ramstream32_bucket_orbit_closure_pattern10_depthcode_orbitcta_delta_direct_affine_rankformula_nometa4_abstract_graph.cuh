@@ -20,8 +20,9 @@ static void bucket_enqueue_high_orbit_closure_pattern10_depthcode_orbitcta_rankf
     p10dc_warpstriped_delta_direct_affine_rankformula_nometa4_abstract_require_threads(threads);
     const dim3 block(unsigned(threads));
     const dim3 grid(1u, unsigned(gy), unsigned(layout.main_blocks.size()));
+    const size_t smem = sizeof(P10DCDirectHighResolvedCtx);
     for (int p = TARGET_W - 1; p >= LOW_LUT_K + 1; --p) {
-        bucket_high_orbit_closure_pattern10_depthcode_orbitcta_kernel<<<grid, block, 0, stream>>>(p);
+        bucket_high_orbit_closure_pattern10_depthcode_orbitcta_kernel<<<grid, block, smem, stream>>>(p);
         ck(cudaGetLastError(), "bucket high orbitcta rankformula-nometa4-abstract stream");
     }
 }
@@ -32,8 +33,9 @@ static void bucket_enqueue_reverse_high_pattern10_depthcode_orbitcta_rankformula
     p10dc_warpstriped_delta_direct_affine_rankformula_nometa4_abstract_require_threads(threads);
     const dim3 block(unsigned(threads));
     const dim3 grid(1u, unsigned(gy), unsigned(layout.main_blocks.size()));
+    const size_t smem = sizeof(P10DCDirectHighResolvedCtx);
     for (int p = LOW_LUT_K + 1; p < TARGET_W; ++p) {
-        bucket_reverse_high_pattern10_depthcode_orbitcta_kernel<<<grid, block, 0, stream>>>(p);
+        bucket_reverse_high_pattern10_depthcode_orbitcta_kernel<<<grid, block, smem, stream>>>(p);
         ck(cudaGetLastError(), "bucket reverse high orbitcta rankformula-nometa4-abstract stream");
     }
 }
@@ -68,7 +70,8 @@ struct BucketPattern10DepthCodeOrbitCtaDirectAffineRankFormulaNometa4AbstractGra
         std::cerr << "rankformula_orbitcta_grid threads=" << threads
                   << " low_gx=" << low_gx << " low_gy=" << low_gy
                   << " high_gx=1 high_gy=" << orbit_gy
-                  << " orbit_context_builds_per_orbit=1\n";
+                  << " orbit_context_builds_per_orbit=1"
+                  << " context_smem_bytes=" << sizeof(P10DCDirectHighResolvedCtx) << '\n';
         ck(cudaStreamCreateWithFlags(&stream, cudaStreamNonBlocking), "orbitcta graph stream");
         capture_one(BKOC_GRAPH_FORWARD_LOW, [&] {
             bucket_enqueue_low_orbit_closure_pattern10_depthcode_warpstriped_delta_direct_affine_rankformula_nometa4_abstract(
