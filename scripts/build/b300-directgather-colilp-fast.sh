@@ -36,7 +36,6 @@ if [[ "$CPASYNC_PAIR" == 1 ]]; then
 fi
 if [[ "$SORTED" == 1 ]]; then
   [[ "$DEPTHMAJOR" == 1 ]] || { echo "SORTED currently targets DEPTHMAJOR=1" >&2; exit 2; }
-  [[ "$DIRECTGATHER64" == 0 ]] || { echo "SORTED directgather64 combination is intentionally isolated; use DIRECTGATHER64=0" >&2; exit 2; }
 fi
 if [[ "$PRECTX_FORWARD" == 1 || "$PRECTX_REVERSE" == 1 ]]; then
   [[ "$DEPTHMAJOR" == 1 ]] || { echo "PRECTX currently targets DEPTHMAJOR=1" >&2; exit 2; }
@@ -49,7 +48,6 @@ fi
 if [[ "$DIRECTGATHER_SPARSE64" == 1 ]]; then
   [[ "$DIRECTGATHER64" == 1 ]] || { echo "DIRECTGATHER_SPARSE64 requires DIRECTGATHER64=1" >&2; exit 2; }
   [[ "$DEPTHMAJOR" == 1 ]] || { echo "DIRECTGATHER_SPARSE64 requires DEPTHMAJOR=1" >&2; exit 2; }
-  [[ "$PAIR_MLP" == 0 ]] || { echo "DIRECTGATHER_SPARSE64 pair path is not wired yet; use PAIR_MLP=0" >&2; exit 2; }
 fi
 [[ "$MAXRREGCOUNT" =~ ^[0-9]+$ ]] || { echo "MAXRREGCOUNT must be non-negative integer" >&2; exit 2; }
 if (( MAXRREGCOUNT != 0 && (MAXRREGCOUNT < 32 || MAXRREGCOUNT > 255) )); then
