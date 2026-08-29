@@ -31,7 +31,10 @@ __global__ void main_pull_kernel(const Count*in,const MateID*mates,Code n,const 
             default:break;
         }
         if(has){Code j=rank_same_t<TARGET_W>(i,m,x,D_MAIN_FIXED,D_MAIN_OCC,D_MAIN_DP);acc+=in[j];}
-        if(nblock&&mget(m,p)==N){MateID b=mshrink(m,p);Code j=rank_group_t<TARGET_W-1>(b,D_BLOCK_FIXED,D_BLOCK_OCC,D_BLOCK_DP);if(j<nblock)acc+=in_block[j];}
+        // d[p]==N means d is exactly the N-lift of its blocked predecessor.
+        // Reuse the production direct drop-rank delta instead of recomputing a
+        // full W-1 grouped rank from mshrink(d,p).
+        if(nblock&&mget(m,p)==N){Code j=rank_drop_n_t<TARGET_W>(i,m,p);if(j<nblock)acc+=in_block[j];}
         uint64_t mod=D_MOD;if(acc>=mod)acc-=mod;if(acc>=mod)acc-=mod;out_main[i]=Count(acc);
     }
 }
@@ -95,4 +98,4 @@ s = s[:a] + new_loop + s[b:]
 
 out.parent.mkdir(parents=True, exist_ok=True)
 out.write_text(s)
-print(f'generated {out} from {src}: b300_main_pull=1 p_scope=2..Wm1 main_atomic=0 main_identity_copy=0 blocked_to_main_scatter=0 block_rank_guard=1')
+print(f'generated {out} from {src}: b300_main_pull=1 p_scope=2..Wm1 main_atomic=0 main_identity_copy=0 blocked_to_main_scatter=0 block_rank_guard=1 blocked_preimage_rank=direct_drop')
