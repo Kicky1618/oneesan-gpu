@@ -17,6 +17,7 @@ MAX_WINDOW="${MAX_WINDOW:-14}"
 TRANSPOSE_MODE="${TRANSPOSE_MODE:-pipeline}"
 DEPTHCODE_DECODE_LOAD="${DEPTHCODE_DECODE_LOAD:-ldg}"
 RANKSTREAM_LUT_LOAD="${RANKSTREAM_LUT_LOAD:-ldg}"
+RANKCHUNK32_RANKPLANE="${RANKCHUNK32_RANKPLANE:-1}"
 RANKCHUNK32_BLOCK64="${RANKCHUNK32_BLOCK64:-0}"
 PM_ACCUM="${PM_ACCUM:-0}"
 TERNARY_KEY4="${TERNARY_KEY4:-1}"
@@ -28,7 +29,7 @@ ILP_MODES="${ILP_MODES:-1 2 4}"
 PTXAS_VERBOSE="${PTXAS_VERBOSE:-1}"
 RUN_SELFTEST="${RUN_SELFTEST:-1}"
 
-PREFIX="${PREFIX:-$ONEESAN_ROOT/work/b300_depthcode_rankchunk32_ilp_ab_n${N}_${TRANSPOSE_MODE}}"
+PREFIX="${PREFIX:-$ONEESAN_ROOT/work/b300_depthcode_rankchunk32_ilp_ab_n${N}_${TRANSPOSE_MODE}_rankplane${RANKCHUNK32_RANKPLANE}}"
 RESULT="${RESULT:-${PREFIX}.tsv}"
 SUMMARY="${SUMMARY:-${PREFIX}_summary.tsv}"
 LOGDIR="${LOGDIR:-${PREFIX}_logs}"
@@ -36,7 +37,7 @@ LOGDIR="${LOGDIR:-${PREFIX}_logs}"
 case "$TRANSPOSE_MODE" in sync|events|pipeline) ;; *) echo "invalid TRANSPOSE_MODE" >&2; exit 2;; esac
 case "$DEPTHCODE_DECODE_LOAD" in global|ldg) ;; *) echo "invalid DEPTHCODE_DECODE_LOAD" >&2; exit 2;; esac
 case "$RANKSTREAM_LUT_LOAD" in constant|ldg|ldg256) ;; *) echo "invalid RANKSTREAM_LUT_LOAD" >&2; exit 2;; esac
-for x in RANKCHUNK32_BLOCK64 PM_ACCUM TERNARY_KEY4 PTXAS_VERBOSE RUN_SELFTEST; do
+for x in RANKCHUNK32_RANKPLANE RANKCHUNK32_BLOCK64 PM_ACCUM TERNARY_KEY4 PTXAS_VERBOSE RUN_SELFTEST; do
   v="${!x}"; [[ "$v" == 0 || "$v" == 1 ]] || { echo "$x must be 0 or 1" >&2; exit 2; }
 done
 for ilp in $ILP_MODES; do case "$ilp" in 1|2|4) ;; *) echo "ILP_MODES entries must be 1, 2, or 4" >&2; exit 2;; esac; done
@@ -55,9 +56,10 @@ bash "$ONEESAN_ROOT/scripts/bench/rankchunk32-warpbase-proof.sh"
 
 if [[ "$RUN_SELFTEST" == 1 ]]; then
   for ilp in $ILP_MODES; do
-    echo "=== selftest rankchunk32 directmask ILP=$ilp ===" >&2
+    echo "=== selftest rankchunk32 directmask rankplane=$RANKCHUNK32_RANKPLANE ILP=$ilp ===" >&2
     W=10 ARCH="$ARCH" RUN_LAYOUT_PROOF=0 \
-      RANKCHUNK32_DIRECTMASK=1 RANKCHUNK32_ILP="$ilp" RANKCHUNK32_ALIGN32=1 \
+      RANKCHUNK32_DIRECTMASK=1 RANKCHUNK32_RANKPLANE="$RANKCHUNK32_RANKPLANE" \
+      RANKCHUNK32_ILP="$ilp" RANKCHUNK32_ALIGN32=1 \
       RANKCHUNK32_ONESHFL=1 RANKCHUNK32_DIRECT3=0 RANKCHUNK32_FUSED16=0 \
       RANKCHUNK32_BYTEPACK=0 RANKCHUNK32_BLOCK64="$RANKCHUNK32_BLOCK64" \
       RANKSTREAM_LUT_LOAD="$RANKSTREAM_LUT_LOAD" PM_ACCUM="$PM_ACCUM" \
@@ -77,8 +79,9 @@ build_one() {
   N="$N" ARCH="$ARCH" OUT="$bin" HIGH_CTX=warpstriped_delta_direct_affine_rankchunk32_cross5 \
     TRANSPOSE_MODE="$TRANSPOSE_MODE" DEPTHCODE_DECODE_LOAD="$DEPTHCODE_DECODE_LOAD" \
     RANKSTREAM_LUT_LOAD="$RANKSTREAM_LUT_LOAD" RANKCHUNK32_DIRECTMASK=1 \
-    RANKCHUNK32_ILP="$ilp" RANKCHUNK32_ALIGN32=1 RANKCHUNK32_ONESHFL=1 \
-    RANKCHUNK32_DIRECT3=0 RANKCHUNK32_FUSED16=0 RANKCHUNK32_BYTEPACK=0 \
+    RANKCHUNK32_RANKPLANE="$RANKCHUNK32_RANKPLANE" RANKCHUNK32_ILP="$ilp" \
+    RANKCHUNK32_ALIGN32=1 RANKCHUNK32_ONESHFL=1 RANKCHUNK32_DIRECT3=0 \
+    RANKCHUNK32_FUSED16=0 RANKCHUNK32_BYTEPACK=0 \
     RANKCHUNK32_BLOCK64="$RANKCHUNK32_BLOCK64" PM_ACCUM="$PM_ACCUM" \
     TERNARY_KEY4="$TERNARY_KEY4" PTXAS_VERBOSE="$PTXAS_VERBOSE" \
     bash "$ONEESAN_ROOT/scripts/build/b300-bucket-snake-pattern10-depthcode-graph-batch.sh" \
@@ -105,19 +108,19 @@ run_one() {
 }
 
 for ilp in $ILP_MODES; do
-  bin="$ONEESAN_BUILD_DIR/ab_depthcode_rankchunk32_ilp_${ilp}_${TRANSPOSE_MODE}_n${N}"
-  echo "=== build rankchunk32 directmask ILP=$ilp ===" >&2
+  bin="$ONEESAN_BUILD_DIR/ab_depthcode_rankchunk32_rankplane${RANKCHUNK32_RANKPLANE}_ilp_${ilp}_${TRANSPOSE_MODE}_n${N}"
+  echo "=== build rankchunk32 rankplane=$RANKCHUNK32_RANKPLANE ILP=$ilp ===" >&2
   build_one "$ilp" "$bin"
   for ((r=1; r<=REPEATS; ++r)); do
-    echo "=== run rankchunk32 directmask ILP=$ilp $r/$REPEATS ===" >&2
+    echo "=== run rankchunk32 rankplane=$RANKCHUNK32_RANKPLANE ILP=$ilp $r/$REPEATS ===" >&2
     run_one "$ilp" "$bin" "$r"
   done
 done
 
 cat "$RESULT"
-python3 - "$RESULT" "$SUMMARY" <<'PY'
+python3 - "$RESULT" "$SUMMARY" "$RANKCHUNK32_RANKPLANE" <<'PY'
 import csv, statistics, sys
-src,dst=sys.argv[1:]
+src,dst,rankplane=sys.argv[1:]
 rows=list(csv.DictReader(open(src),delimiter='\t'))
 metrics=('wall_s','forward_high_s','reverse_high_s','forward_low_s','reverse_low_s','transpose_s')
 modes=[]
@@ -142,7 +145,8 @@ if '1' in q:
             b=float(q[mode]['forward_high_s'])+float(q[mode]['reverse_high_s'])
             print(f'rankchunk32_ilp1_to_{mode}_total_high_speedup={a/b:.6f}x')
 print('ilp_model=independent_lr_chains_batched_before_consumption')
-print('directmask_runtime_path=mask8_then_offset32_then_rank16_then_source32')
+print('rankplane='+rankplane)
+print('directmask_runtime_path=' + ('mask8_then_rank16plane_then_source32' if rankplane=='1' else 'mask8_then_offset32_then_rank16_then_source32'))
 print('rankchunk_meta_runtime=0')
 print('blockbase_shuffle_runtime=0')
 print('ilp2_outstanding_chains_per_lane=2')
@@ -152,4 +156,38 @@ print('align32=1')
 print(f'summary={dst}')
 PY
 
-echo "b300-depthcode-rankchunk32-ilp-ab OK n=$N repeats=$REPEATS modes='$ILP_MODES' selftest=$RUN_SELFTEST result=$RESULT logs=$LOGDIR" >&2
+if [[ "$PTXAS_VERBOSE" == 1 ]]; then
+python3 - "$LOGDIR" $ILP_MODES <<'PY'
+import pathlib, re, sys
+logdir=pathlib.Path(sys.argv[1])
+for mode in sys.argv[2:]:
+    path=logdir/f'ilp_{mode}.build.err'
+    text=path.read_text(errors='replace') if path.exists() else ''
+    regs=[int(x) for x in re.findall(r'Used\s+(\d+)\s+registers', text)]
+    stores=[int(x) for x in re.findall(r'(\d+)\s+bytes spill stores', text)]
+    loads=[int(x) for x in re.findall(r'(\d+)\s+bytes spill loads', text)]
+    blocks=re.split(r"(?=ptxas info\s*: Compiling entry function )", text)
+    hot=[]
+    for block in blocks:
+        if 'rankchunk32_cross5_kernel' not in block:
+            continue
+        r=re.search(r'Used\s+(\d+)\s+registers', block)
+        ss=re.search(r'(\d+)\s+bytes spill stores', block)
+        sl=re.search(r'(\d+)\s+bytes spill loads', block)
+        hot.append((int(r.group(1)) if r else -1,
+                    int(ss.group(1)) if ss else 0,
+                    int(sl.group(1)) if sl else 0))
+    print(f'ptxas_ilp{mode}_max_registers_all={max(regs) if regs else "NA"}')
+    print(f'ptxas_ilp{mode}_max_spill_store_bytes_all={max(stores) if stores else 0}')
+    print(f'ptxas_ilp{mode}_max_spill_load_bytes_all={max(loads) if loads else 0}')
+    if hot:
+        print(f'ptxas_ilp{mode}_hot_max_registers={max(x[0] for x in hot)}')
+        print(f'ptxas_ilp{mode}_hot_max_spill_store_bytes={max(x[1] for x in hot)}')
+        print(f'ptxas_ilp{mode}_hot_max_spill_load_bytes={max(x[2] for x in hot)}')
+        print(f'ptxas_ilp{mode}_hot_spill_free={int(all(x[1]==0 and x[2]==0 for x in hot))}')
+    else:
+        print(f'ptxas_ilp{mode}_hot_kernel_parse=NA')
+PY
+fi
+
+echo "b300-depthcode-rankchunk32-ilp-ab OK n=$N repeats=$REPEATS modes='$ILP_MODES' rankplane=$RANKCHUNK32_RANKPLANE selftest=$RUN_SELFTEST result=$RESULT logs=$LOGDIR" >&2
