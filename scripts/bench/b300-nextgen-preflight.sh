@@ -15,6 +15,7 @@ shells=(
   scripts/bench/b300-nextgen-calibrate-cgl2.sh
   scripts/bench/b300-nextgen-hybrid-ilp8-sweep.sh
   scripts/bench/b300-nextgen-hybrid8-staged-calibrate.sh
+  scripts/bench/b300-mainrec-hybrid-ilp8-transform-preflight.sh
   scripts/run/b300x8-nextgen-hybrid8-staged-fullprime-race.sh
   scripts/run/b300x8-race-forced-set-profiled-once.sh
   scripts/run/b300x8-nextgen-select.sh
@@ -25,6 +26,7 @@ py=(
   scripts/build/gen-b300-mainrec-random-cg.py
   scripts/build/gen-b300-mainrec-prefetch-l2.py
   scripts/bench/b300-main-recurrence-ilp-partition-proof.py
+  scripts/bench/b300-mainrec-hybrid-ilp8-partition-proof.py
 )
 for f in "${shells[@]}"; do p="$ONEESAN_ROOT/$f"; [[ -f "$p" ]] || { echo "missing $f" >&2; exit 2; }; bash -n "$p"; done
 python3 - "$ONEESAN_ROOT" "${py[@]}" <<'PY'
@@ -37,6 +39,8 @@ for rel in sys.argv[2:]:
  print('AST_OK',rel)
 PY
 python3 "$ONEESAN_ROOT/scripts/bench/b300-main-recurrence-ilp-partition-proof.py" | grep -F 'b300-main-recurrence-ilp-partition-proof OK exact=1'
+python3 "$ONEESAN_ROOT/scripts/bench/b300-mainrec-hybrid-ilp8-partition-proof.py" | grep -F 'b300-mainrec-hybrid-ilp8-partition-proof OK'
+bash "$ONEESAN_ROOT/scripts/bench/b300-mainrec-hybrid-ilp8-transform-preflight.sh" | grep -F 'b300-mainrec-hybrid-ilp8-transform-preflight OK'
 
 builder="$ONEESAN_ROOT/scripts/build/b300-forced-nextgen.sh"
 randomcg="$ONEESAN_ROOT/scripts/build/gen-b300-mainrec-random-cg.py"
@@ -87,6 +91,10 @@ for s in \
   'ILP8_THRESHOLDS="$thresholds"' \
   'B300_HYBRID8_WINNER_SPILL_FREE=1' \
   'B300_HYBRID8_FINAL_SPILL_FREE' \
+  'if [[ "$rows" == "$SEARCH_ROWS" && "$stage_res" != "$CORE_RES" ]]' \
+  'B300_HYBRID8_FINAL_STAGE_ROWS' \
+  'B300_HYBRID8_FINAL_STAGE_RESIDUE' \
+  'row_scoped_residue_gate=1' \
   'canonical_sweep=1'; do
   grep -Fq "$s" "$hybrid8_staged" || { echo "staged hybrid8 marker missing: $s" >&2; exit 3; }
 done
@@ -94,7 +102,12 @@ for s in \
   'B300_HYBRID8_STAGED_VALIDATED' \
   'B300_HYBRID8_FINAL_ENABLED' \
   'B300_HYBRID8_FINAL_SPILL_FREE' \
+  'B300_HYBRID8_FINAL_STAGE_ROWS' \
+  'B300_HYBRID8_FINAL_STAGE_RESIDUE' \
+  'MANIFEST="${MANIFEST:-${STAGED_PREFIX}_promotion-inputs.sha256}"' \
+  'sha256sum -c "$MANIFEST"' \
   'B300_HYBRID8_PROMOTION_SPILL_FREE=1' \
+  'B300_HYBRID8_PROMOTION_FINAL_STAGE_RESIDUE' \
   'FORCED_OVERRIDE_BIN="$B300_HYBRID8_FINAL_BIN"' \
   'FORCED_BASE_BIN="$B300_HYBRID8_BASE_BIN"' \
   'b300x8-race-external-forced-profiled-once.sh'; do
@@ -144,4 +157,4 @@ for s in \
   grep -Fq "$s" "$staged" || { echo "Stage-D calibration marker missing: $s" >&2; exit 3; }
 done
 
-echo 'b300_nextgen_preflight=OK bash_syntax=OK python_ast=OK ilp_partition=OK transform_order=OK hybrid_ilp8_builder=OK hybrid_cache_policy=OK hybrid_ilp8_sweep=OK hybrid8_staged=OK hybrid8_fullprime_gate=OK uncapped_baseline=OK spill_gate=OK cgl2_stage_d=OK forced_set_single_pass=OK selection_default=only gpu_work=0 actions_triggered=0'
+echo 'b300_nextgen_preflight=OK bash_syntax=OK python_ast=OK ilp_partition=OK hybrid_partition=OK hybrid_transform=OK transform_order=OK hybrid_ilp8_builder=OK hybrid_cache_policy=OK hybrid_ilp8_sweep=OK hybrid8_staged=OK row_scoped_residue=OK hybrid8_fullprime_gate=OK fingerprint_gate=OK uncapped_baseline=OK spill_gate=OK cgl2_stage_d=OK forced_set_single_pass=OK selection_default=only gpu_work=0 actions_triggered=0'
