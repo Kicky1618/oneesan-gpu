@@ -16,8 +16,14 @@ static inline bool p10dc_warpstriped_threads_ok(int threads) {
 #ifndef P10DC_WARPSTRIPED_EARLY_JP_LOAD
 #define P10DC_WARPSTRIPED_EARLY_JP_LOAD 0
 #endif
+#ifndef P10DC_WARPSTRIPED_COL_ILP
+#define P10DC_WARPSTRIPED_COL_ILP 1
+#endif
 static_assert(P10DC_WARPSTRIPED_EARLY_JP_LOAD == 0 || P10DC_WARPSTRIPED_EARLY_JP_LOAD == 1,
               "P10DC_WARPSTRIPED_EARLY_JP_LOAD must be 0 or 1");
+static_assert(P10DC_WARPSTRIPED_COL_ILP == 1 || P10DC_WARPSTRIPED_COL_ILP == 2 ||
+              P10DC_WARPSTRIPED_COL_ILP == 4,
+              "P10DC_WARPSTRIPED_COL_ILP must be 1, 2, or 4");
 
 #ifndef P10DC_WARPSTRIPED_CTX
 #define P10DC_WARPSTRIPED_CTX P10DCHighResolvedCtx
@@ -100,33 +106,53 @@ __global__ void bucket_high_orbit_closure_pattern10_depthcode_warpstriped_kernel
             Count* const jp_base = c.jp_base;
             Count* const dp_base = c.dp_base;
             const uint32_t kind = c.kind;
-            for (uint32_t lr = uint32_t(blockIdx.x) * 32u + lane;
-                 lr < xb.cols;
-                 lr += uint32_t(gridDim.x) * 32u) {
-                Count* ip = ip_base + lr;
-                Count* jp = jp_base + lr;
-                Count* dp = dp_base + lr;
-                Count x = *ip, old = *dp;
+            const uint32_t step = uint32_t(gridDim.x) * 32u;
+            for (uint32_t base = uint32_t(blockIdx.x) * 32u + lane;
+                 base < xb.cols;
+                 base += step * uint32_t(P10DC_WARPSTRIPED_COL_ILP)) {
+                uint32_t lr[P10DC_WARPSTRIPED_COL_ILP];
+                Count x[P10DC_WARPSTRIPED_COL_ILP]{};
+                Count old[P10DC_WARPSTRIPED_COL_ILP]{};
+                Count y[P10DC_WARPSTRIPED_COL_ILP]{};
+                Count extra[P10DC_WARPSTRIPED_COL_ILP]{};
+                bool live[P10DC_WARPSTRIPED_COL_ILP]{};
+#pragma unroll
+                for (int t = 0; t < P10DC_WARPSTRIPED_COL_ILP; ++t) {
+                    lr[t] = base + uint32_t(t) * step;
+                    live[t] = lr[t] < xb.cols;
+                    if (live[t]) {
+                        x[t] = ip_base[lr[t]];
+                        old[t] = dp_base[lr[t]];
 #if P10DC_WARPSTRIPED_EARLY_JP_LOAD
-                // This is the same jp read the update needs later, simply issued
-                // before the long closure gather so its latency can overlap.
-                Count y = *jp;
+                        y[t] = jp_base[lr[t]];
 #endif
-                Count extra = p10dc_resolved_high_plan_sum(c, db, lr);
-                if (kind == CPU_ORBIT_NN) {
+                    }
+                }
+#pragma unroll
+                for (int t = 0; t < P10DC_WARPSTRIPED_COL_ILP; ++t) {
+                    if (live[t]) extra[t] = p10dc_resolved_high_plan_sum(c, db, lr[t]);
+                }
+#pragma unroll
+                for (int t = 0; t < P10DC_WARPSTRIPED_COL_ILP; ++t) {
+                    if (!live[t]) continue;
+                    Count* ip = ip_base + lr[t];
+                    Count* jp = jp_base + lr[t];
+                    Count* dp = dp_base + lr[t];
+                    if (kind == CPU_ORBIT_NN) {
 #if P10DC_WARPSTRIPED_EARLY_JP_LOAD
-                    *jp = gpu_direct_add(y, x);
+                        *jp = gpu_direct_add(y[t], x[t]);
 #else
-                    *jp = gpu_direct_add(*jp, x);
+                        *jp = gpu_direct_add(*jp, x[t]);
 #endif
-                    *ip = gpu_direct_add(x, old);
-                    *dp = extra;
-                } else {
+                        *ip = gpu_direct_add(x[t], old[t]);
+                        *dp = extra[t];
+                    } else {
 #if !P10DC_WARPSTRIPED_EARLY_JP_LOAD
-                    Count y = *jp;
+                        y[t] = *jp;
 #endif
-                    *ip = gpu_direct_add(gpu_direct_add(x, y), old);
-                    *dp = gpu_direct_add(x, extra);
+                        *ip = gpu_direct_add(gpu_direct_add(x[t], y[t]), old[t]);
+                        *dp = gpu_direct_add(x[t], extra[t]);
+                    }
                 }
             }
         }
@@ -203,35 +229,57 @@ __global__ void bucket_reverse_high_pattern10_depthcode_warpstriped_kernel(int p
             Count* const jp_base = c.jp_base;
             Count* const dp_base = c.dp_base;
             const uint32_t kind = c.kind;
-            for (uint32_t lr = uint32_t(blockIdx.x) * 32u + lane;
-                 lr < xb.cols;
-                 lr += uint32_t(gridDim.x) * 32u) {
-                Count* ip = ip_base + lr;
-                Count* jp = jp_base + lr;
-                Count* dp = dp_base + lr;
-                Count x = *ip, old = *dp;
+            const uint32_t step = uint32_t(gridDim.x) * 32u;
+            for (uint32_t base = uint32_t(blockIdx.x) * 32u + lane;
+                 base < xb.cols;
+                 base += step * uint32_t(P10DC_WARPSTRIPED_COL_ILP)) {
+                uint32_t lr[P10DC_WARPSTRIPED_COL_ILP];
+                Count x[P10DC_WARPSTRIPED_COL_ILP]{};
+                Count old[P10DC_WARPSTRIPED_COL_ILP]{};
+                Count y[P10DC_WARPSTRIPED_COL_ILP]{};
+                Count extra[P10DC_WARPSTRIPED_COL_ILP]{};
+                bool live[P10DC_WARPSTRIPED_COL_ILP]{};
+#pragma unroll
+                for (int t = 0; t < P10DC_WARPSTRIPED_COL_ILP; ++t) {
+                    lr[t] = base + uint32_t(t) * step;
+                    live[t] = lr[t] < xb.cols;
+                    if (live[t]) {
+                        x[t] = ip_base[lr[t]];
+                        old[t] = dp_base[lr[t]];
 #if P10DC_WARPSTRIPED_EARLY_JP_LOAD
-                Count y = *jp;
+                        y[t] = jp_base[lr[t]];
 #endif
-                Count extra = p10dc_resolved_high_plan_sum(c, edge ? xb : db, lr);
-                if (kind == CPU_ORBIT_NN) {
+                    }
+                }
+#pragma unroll
+                for (int t = 0; t < P10DC_WARPSTRIPED_COL_ILP; ++t) {
+                    if (live[t]) extra[t] = p10dc_resolved_high_plan_sum(c, edge ? xb : db, lr[t]);
+                }
+#pragma unroll
+                for (int t = 0; t < P10DC_WARPSTRIPED_COL_ILP; ++t) {
+                    if (!live[t]) continue;
+                    Count* ip = ip_base + lr[t];
+                    Count* jp = jp_base + lr[t];
+                    Count* dp = dp_base + lr[t];
+                    if (kind == CPU_ORBIT_NN) {
 #if P10DC_WARPSTRIPED_EARLY_JP_LOAD
-                    *jp = gpu_direct_add(y, x);
+                        *jp = gpu_direct_add(y[t], x[t]);
 #else
-                    *jp = gpu_direct_add(*jp, x);
+                        *jp = gpu_direct_add(*jp, x[t]);
 #endif
-                    *ip = gpu_direct_add(gpu_direct_add(x, old), edge ? extra : 0);
-                    *dp = edge ? 0 : extra;
-                } else {
-#if !P10DC_WARPSTRIPED_EARLY_JP_LOAD
-                    Count y = *jp;
-#endif
-                    *ip = gpu_direct_add(gpu_direct_add(x, y), old);
-                    if (edge) {
-                        *jp = gpu_direct_add(x, y);
-                        *dp = 0;
+                        *ip = gpu_direct_add(gpu_direct_add(x[t], old[t]), edge ? extra[t] : 0);
+                        *dp = edge ? 0 : extra[t];
                     } else {
-                        *dp = gpu_direct_add(x, extra);
+#if !P10DC_WARPSTRIPED_EARLY_JP_LOAD
+                        y[t] = *jp;
+#endif
+                        *ip = gpu_direct_add(gpu_direct_add(x[t], y[t]), old[t]);
+                        if (edge) {
+                            *jp = gpu_direct_add(x[t], y[t]);
+                            *dp = 0;
+                        } else {
+                            *dp = gpu_direct_add(x[t], extra[t]);
+                        }
                     }
                 }
             }
