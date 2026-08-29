@@ -13,6 +13,9 @@
 #ifndef P10DC_RANKFORMULA_PAIR_MLP
 #define P10DC_RANKFORMULA_PAIR_MLP 0
 #endif
+#ifndef P10DC_RANKFORMULA_DIRECTGATHER64
+#define P10DC_RANKFORMULA_DIRECTGATHER64 0
+#endif
 #ifndef P10DC_WARPSTRIPED_COL_ILP
 #define P10DC_WARPSTRIPED_COL_ILP 1
 #endif
@@ -22,10 +25,21 @@ static_assert(P10DC_RANKFORMULA_PREFETCH_NEXT == 0 || P10DC_RANKFORMULA_PREFETCH
               "P10DC_RANKFORMULA_PREFETCH_NEXT must be 0 or 1");
 static_assert(P10DC_RANKFORMULA_PAIR_MLP == 0 || P10DC_RANKFORMULA_PAIR_MLP == 1,
               "P10DC_RANKFORMULA_PAIR_MLP must be 0 or 1");
+static_assert(P10DC_RANKFORMULA_DIRECTGATHER64 == 0 || P10DC_RANKFORMULA_DIRECTGATHER64 == 1,
+              "P10DC_RANKFORMULA_DIRECTGATHER64 must be 0 or 1");
 static_assert(!P10DC_RANKFORMULA_PAIR_MLP || P10DC_RANKFORMULA_GATHER_MLP,
               "PAIR_MLP requires GATHER_MLP");
+static_assert(!P10DC_RANKFORMULA_DIRECTGATHER64 || P10DC_RANKFORMULA_GATHER_MLP,
+              "DIRECTGATHER64 requires GATHER_MLP");
+static_assert(!(P10DC_RANKFORMULA_DIRECTGATHER64 && P10DC_RANKFORMULA_PAIR_MLP),
+              "DIRECTGATHER64 pair path is intentionally isolated for A/B");
+static_assert(!(P10DC_RANKFORMULA_DIRECTGATHER64 && P10DC_RANKFORMULA_PREFETCH_NEXT),
+              "DIRECTGATHER64 prefetch path is intentionally isolated for A/B");
 #if P10DC_RANKFORMULA_GATHER_MLP
 #include "ramstream32_bucket_closure_cross5_rankformula_nometa4_abstract_mlp.cuh"
+#if P10DC_RANKFORMULA_DIRECTGATHER64
+#include "ramstream32_bucket_closure_cross5_rankformula_nometa4_directgather64.cuh"
+#endif
 #if P10DC_RANKFORMULA_PAIR_MLP
 #include "ramstream32_bucket_closure_cross5_rankformula_nometa4_abstract_pair.cuh"
 #endif
@@ -40,6 +54,20 @@ static_assert(!P10DC_RANKFORMULA_PAIR_MLP || P10DC_RANKFORMULA_GATHER_MLP,
 #ifndef P10DC_SPARSE_CROSS5_INSTALL_COMPAT_DEFINED
 #define P10DC_SPARSE_CROSS5_INSTALL_COMPAT_DEFINED 1
 static inline void p10dc_install_cross5_lut() { p10dc_install_rankformula_abstract_lut(); }
+#endif
+
+#if P10DC_RANKFORMULA_GATHER_MLP
+__device__ __forceinline__ BkczCrossAccum p10dc_rankformula_cross_mlp_dispatch(
+    uint32_t h, uint32_t rank, uint32_t depth, const Count* source_row
+) {
+#if P10DC_RANKFORMULA_DIRECTGATHER64
+    return p10dc_resolved_low_preimages_cross5_rankformula_nometa4_directgather64_fixed(
+        h, rank, depth, source_row);
+#else
+    return p10dc_resolved_low_preimages_cross5_rankformula_nometa4_abstract_mlp_fixed(
+        h, rank, depth, source_row);
+#endif
+}
 #endif
 
 #if P10DC_RANKFORMULA_PREFETCH_NEXT
@@ -128,7 +156,7 @@ __device__ __forceinline__ Count p10dc_direct_resolved_high_plan_sum_cross5_rank
 
     BkczCrossAccum cross = 0;
     if (c.cross_depth) {
-        cross = p10dc_resolved_low_preimages_cross5_rankformula_nometa4_abstract_mlp_fixed(
+        cross = p10dc_rankformula_cross_mlp_dispatch(
             db.hs, lr, c.cross_depth, c.cross_base);
     }
     const BkczCrossAccum local03 = p10dc_rankformula_accum_add(
@@ -164,7 +192,7 @@ __device__ __forceinline__ Count p10dc_direct_resolved_high_plan_sum_cross5_rank
 
     BkczCrossAccum cross = 0;
     if (c.cross_depth) {
-        cross = p10dc_resolved_low_preimages_cross5_rankformula_nometa4_abstract_mlp_fixed(
+        cross = p10dc_rankformula_cross_mlp_dispatch(
             db.hs, lr, c.cross_depth, c.cross_base);
     }
 
