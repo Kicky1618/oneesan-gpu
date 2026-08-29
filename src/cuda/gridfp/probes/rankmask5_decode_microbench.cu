@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <array>
+#include <cmath>
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
@@ -75,6 +76,77 @@ constexpr uint8_t rankmask_host(uint32_t key, uint32_t input_state) {
         rankmask = uint8_t(rankmask | uint8_t(1u << ordinal));
     }
     return rankmask;
+}
+
+static bool parse_weights(const char* text, std::array<uint64_t, 8>& out) {
+    if (!text || !*text) return false;
+    const char* p = text;
+    bool any = false;
+    for (size_t i = 0; i < out.size(); ++i) {
+        char* end = nullptr;
+        const unsigned long long v = std::strtoull(p, &end, 10);
+        if (end == p) return false;
+        out[i] = uint64_t(v);
+        any = any || v != 0;
+        if (i + 1 < out.size()) {
+            if (*end != ',') return false;
+            p = end + 1;
+        } else if (*end != '\0') {
+            return false;
+        }
+    }
+    return any;
+}
+
+static void deterministic_shuffle(std::vector<uint8_t>& v, uint64_t seed) {
+    uint64_t rng = seed;
+    auto next_u64 = [&]() {
+        rng ^= rng << 13;
+        rng ^= rng >> 7;
+        rng ^= rng << 17;
+        return rng;
+    };
+    for (size_t i = v.size(); i > 1; --i) {
+        const size_t j = size_t(next_u64() % uint64_t(i));
+        std::swap(v[i - 1], v[j]);
+    }
+}
+
+static std::array<size_t, 8> weighted_counts(
+    size_t n, const std::array<uint64_t, 8>& weights
+) {
+    long double total = 0.0L;
+    for (uint64_t x : weights) total += static_cast<long double>(x);
+    std::array<size_t, 8> count{};
+    std::array<long double, 8> frac{};
+    size_t used = 0;
+    for (size_t i = 0; i < count.size(); ++i) {
+        const long double exact = static_cast<long double>(n) *
+            static_cast<long double>(weights[i]) / total;
+        const long double base = std::floor(exact);
+        count[i] = size_t(base);
+        frac[i] = exact - base;
+        used += count[i];
+    }
+    // Largest-remainder apportionment preserves the requested histogram to
+    // within one sample per mask, then we shuffle without changing counts.
+    std::array<size_t, 8> order{0,1,2,3,4,5,6,7};
+    std::stable_sort(order.begin(), order.end(), [&](size_t a, size_t b) {
+        return frac[a] > frac[b];
+    });
+    if (used <= n) {
+        for (size_t k = 0; k < n - used; ++k) ++count[order[k % order.size()]];
+    } else {
+        size_t excess = used - n;
+        for (size_t k = order.size(); excess && k > 0; --k) {
+            const size_t i = order[k - 1];
+            const size_t take = std::min(excess, count[i]);
+            count[i] -= take;
+            excess -= take;
+        }
+        if (excess) std::exit(6);
+    }
+    return count;
 }
 
 __device__ __forceinline__ uint64_t decode_ffs(
@@ -224,10 +296,16 @@ int main(int argc, char** argv) {
     const int trials = argc > 3 ? std::atoi(argv[3]) : 5;
     const char* mask_order = argc > 4 ? argv[4] : "ordered";
     const bool shuffle_masks = std::strcmp(mask_order, "shuffled") == 0;
+    const bool weighted_masks = std::strcmp(mask_order, "weighted") == 0;
+    std::array<uint64_t, 8> weights{};
+    if (weighted_masks && (argc <= 5 || !parse_weights(argv[5], weights))) {
+        std::fprintf(stderr, "weighted mode requires eight comma-separated nonnegative weights\n");
+        return 2;
+    }
     if (!n || repeats <= 0 || trials <= 0 ||
-        (!shuffle_masks && std::strcmp(mask_order, "ordered") != 0)) {
+        (!shuffle_masks && !weighted_masks && std::strcmp(mask_order, "ordered") != 0)) {
         std::fprintf(stderr,
-                     "usage: %s [n>0] [repeats>0] [trials>0] [ordered|shuffled]\n",
+                     "usage: %s [n>0] [repeats>0] [trials>0] [ordered|shuffled|weighted] [w0,...,w7]\n",
                      argv[0]);
         return 2;
     }
@@ -248,23 +326,32 @@ int main(int argc, char** argv) {
         std::fprintf(stderr, "direct3 invariant failure rankmask_or=0x%02x\n", unsigned(rankmask_or));
         return 4;
     }
-    if (shuffle_masks) {
-        // Keep the same exact table-space histogram, but destroy state/key
-        // locality so zero-heavy masks do not accidentally form coherent warps.
-        uint32_t shuffle_rng = 0x6d2b79f5u;
-        auto next_shuffle = [&]() {
-            shuffle_rng ^= shuffle_rng << 13;
-            shuffle_rng ^= shuffle_rng >> 17;
-            shuffle_rng ^= shuffle_rng << 5;
-            return shuffle_rng;
-        };
-        for (size_t i = table_masks.size() - 1; i > 0; --i) {
-            const size_t j = size_t(next_shuffle()) % (i + 1u);
-            std::swap(table_masks[i], table_masks[j]);
-        }
-    }
+    if (shuffle_masks) deterministic_shuffle(table_masks, 0x6d2b79f5u);
 
     std::vector<uint8_t> h_masks(n);
+    if (weighted_masks) {
+        const auto count = weighted_counts(n, weights);
+        size_t at = 0;
+        for (uint32_t m = 0; m < count.size(); ++m)
+            for (size_t k = 0; k < count[m]; ++k) h_masks[at++] = uint8_t(m);
+        if (at != n) {
+            std::fprintf(stderr, "weighted mask apportionment mismatch got=%zu expected=%zu\n", at, n);
+            return 6;
+        }
+        deterministic_shuffle(h_masks, 0xd1b54a32d192ed03ull);
+    } else {
+        for (size_t i = 0; i < n; ++i) h_masks[i] = table_masks[i % table_masks.size()];
+    }
+
+    std::array<uint64_t, 8> input_hist{};
+    for (uint8_t m : h_masks) {
+        if (m >= input_hist.size()) {
+            std::fprintf(stderr, "input rankmask overflow mask=%u\n", unsigned(m));
+            return 7;
+        }
+        ++input_hist[m];
+    }
+
     std::vector<uint16_t> h_ranks(n * kChunk);
     std::vector<uint32_t> h_source(kSourceN);
     uint32_t rng = 0x12345678u;
@@ -276,11 +363,9 @@ int main(int argc, char** argv) {
     };
     for (uint32_t i = 0; i < kSourceN; ++i)
         h_source[i] = next_u32() | 1u;
-    for (size_t i = 0; i < n; ++i) {
-        h_masks[i] = table_masks[i % table_masks.size()];
+    for (size_t i = 0; i < n; ++i)
         for (uint32_t j = 0; j < kChunk; ++j)
             h_ranks[i * kChunk + j] = uint16_t(next_u32() & (kSourceN - 1u));
-    }
 
     uint8_t* d_masks = nullptr;
     uint16_t* d_ranks = nullptr;
@@ -318,7 +403,6 @@ int main(int argc, char** argv) {
         return 3;
     }
 
-    // Mirror all four modes to reduce first/last-mode bias; report best launch time.
     const Timing ffs_a = bench<kDecodeFfs>(d_masks, d_ranks, d_source, n, d_partial,
                                            blocks, repeats, trials);
     const Timing unr_a = bench<kDecodeUnrolled5>(d_masks, d_ranks, d_source, n, d_partial,
@@ -350,6 +434,22 @@ int main(int argc, char** argv) {
                 (unsigned long long)hist[2], (unsigned long long)hist[3],
                 (unsigned long long)hist[4], (unsigned long long)hist[5],
                 unsigned(rankmask_or), (unsigned long long)sum_ffs);
+    const double input_zero_frac = n ? double(input_hist[0]) / double(n) : 0.0;
+    std::printf("input_mask_hist=%llu,%llu,%llu,%llu,%llu,%llu,%llu,%llu input_zero_frac=%.9f input_nonzero_frac=%.9f input_source=%s\n",
+                (unsigned long long)input_hist[0], (unsigned long long)input_hist[1],
+                (unsigned long long)input_hist[2], (unsigned long long)input_hist[3],
+                (unsigned long long)input_hist[4], (unsigned long long)input_hist[5],
+                (unsigned long long)input_hist[6], (unsigned long long)input_hist[7],
+                input_zero_frac, 1.0 - input_zero_frac,
+                weighted_masks ? "weighted_histogram_shuffled" :
+                (shuffle_masks ? "uniform_table_shuffled" : "uniform_table_ordered"));
+    if (weighted_masks) {
+        std::printf("requested_mask_weights=%llu,%llu,%llu,%llu,%llu,%llu,%llu,%llu\n",
+                    (unsigned long long)weights[0], (unsigned long long)weights[1],
+                    (unsigned long long)weights[2], (unsigned long long)weights[3],
+                    (unsigned long long)weights[4], (unsigned long long)weights[5],
+                    (unsigned long long)weights[6], (unsigned long long)weights[7]);
+    }
     std::printf("ffs_loop_ms=%.6f unrolled5_ms=%.6f direct3_ms=%.6f direct3_guard_ms=%.6f ffs_to_unrolled5_speedup=%.6f ffs_to_direct3_speedup=%.6f ffs_to_direct3_guard_speedup=%.6f unrolled5_to_direct3_speedup=%.6f direct3_to_guard_speedup=%.6f\n",
                 ffs_ms, unrolled_ms, direct3_ms, direct3_guard_ms,
                 double(ffs_ms) / double(unrolled_ms),
@@ -357,7 +457,8 @@ int main(int argc, char** argv) {
                 double(ffs_ms) / double(direct3_guard_ms),
                 double(unrolled_ms) / double(direct3_ms),
                 double(direct3_ms) / double(direct3_guard_ms));
-    std::printf("decode_model=rank16_then_source32 mask_source=all_state1_25_x_key0_242_repeated direct3_ordinals=0,1,2 direct3_guard=rankmask_nonzero_outer_guard mask_order=%s\n",
+    std::printf("decode_model=rank16_then_source32 mask_source=%s direct3_ordinals=0,1,2 direct3_guard=rankmask_nonzero_outer_guard mask_order=%s\n",
+                weighted_masks ? "weighted_histogram" : "all_state1_25_x_key0_242_repeated",
                 mask_order);
 
     cudaFree(d_partial);
