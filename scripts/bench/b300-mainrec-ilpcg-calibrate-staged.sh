@@ -65,6 +65,23 @@ FINAL_BIN="$ONEESAN_BUILD_DIR/b300_mainrec_ilpcg_${FINAL_MODE}_hd${FINAL_HIGH}_n
 [[ -x "$BASE_BIN" ]] || { echo "missing stage baseline binary=$BASE_BIN" >&2; exit 3; }
 [[ -x "$FINAL_BIN" ]] || { echo "missing stage winner binary=$FINAL_BIN" >&2; exit 3; }
 
+FINAL_SPILL_STORE=0
+FINAL_SPILL_LOAD=0
+if [[ "$ADOPT" == 1 ]]; then
+  SWEEP_WINNER_ENV="${PREFIX}_search.hd${FINAL_HIGH}_winner.env"
+  [[ -f "$SWEEP_WINNER_ENV" ]] || { echo "missing selected sweep winner env=$SWEEP_WINNER_ENV" >&2; exit 3; }
+  # shellcheck disable=SC1090
+  source "$SWEEP_WINNER_ENV"
+  [[ "${B300_MAINREC_WINNER_MODE:-}" == "$FINAL_MODE" ]] || { echo "staged/sweep mode mismatch staged=$FINAL_MODE sweep=${B300_MAINREC_WINNER_MODE:-missing}" >&2; exit 3; }
+  [[ "${B300_MAINREC_WINNER_BIN:-}" == "$FINAL_BIN" ]] || { echo 'staged/sweep binary mismatch' >&2; exit 3; }
+  FINAL_SPILL_STORE="${B300_MAINREC_WINNER_SPILL_STORE_BYTES:-missing}"
+  FINAL_SPILL_LOAD="${B300_MAINREC_WINNER_SPILL_LOAD_BYTES:-missing}"
+  [[ "$FINAL_SPILL_STORE" == 0 && "$FINAL_SPILL_LOAD" == 0 ]] || {
+    echo "refusing staged validation of spilling transform store=$FINAL_SPILL_STORE load=$FINAL_SPILL_LOAD" >&2
+    exit 4
+  }
+fi
+
 printf 'stage_rows\tvariant\trepeat\thigh_drop\tmode\tthreads\tresidue\twall_s\tmc_avg_pct\tmc_max_pct\tmc_samples\n' >"$RESULT"
 
 sample_mem(){
@@ -110,10 +127,10 @@ if [[ "$ADOPT" == 1 ]]; then
 fi
 
 python3 - "$RESULT" "$WINNER_ENV" "$TRANSFORM_MIN_SPEEDUP" "$ADOPT" "$SEARCH_RESIDUE" \
-  "$BASE_HIGH" "$BASE_THREADS" "$BASE_WALL" "$FINAL_HIGH" "$FINAL_MODE" "$FINAL_ILP" "$FINAL_CG" "$FINAL_THREADS" <<'PY'
+  "$BASE_HIGH" "$BASE_THREADS" "$BASE_WALL" "$BASE_BIN" "$FINAL_HIGH" "$FINAL_MODE" "$FINAL_ILP" "$FINAL_CG" "$FINAL_THREADS" "$FINAL_BIN" "$FINAL_SPILL_STORE" "$FINAL_SPILL_LOAD" <<'PY'
 import csv,statistics,sys
-(result,wenv,minsp_s,adopt_s,search_res,base_high,base_threads,base_wall,
- final_high,final_mode,final_ilp,final_cg,final_threads)=sys.argv[1:]
+(result,wenv,minsp_s,adopt_s,search_res,base_high,base_threads,base_wall,base_bin,
+ final_high,final_mode,final_ilp,final_cg,final_threads,final_bin,final_spill_store,final_spill_load)=sys.argv[1:]
 minsp=float(minsp_s); adopt=adopt_s=='1'
 rows=list(csv.DictReader(open(result),delimiter='\t'))
 validated=adopt
@@ -140,26 +157,37 @@ if adopt:
         print(f'STAGED rows={stage} baseline_wall={bw:.9f} candidate_wall={cw:.9f} speedup={speed:.6f}x baseline_mc={bm:.3f} candidate_mc={cm:.3f} mc_delta={cm-bm:.3f}pp exact=1',file=sys.stderr)
 
 if validated:
-    high,mode,ilp,cg,threads=final_high,final_mode,final_ilp,final_cg,final_threads
+    high,mode,ilp,cg,threads,bin_path=final_high,final_mode,final_ilp,final_cg,final_threads,final_bin
+    spill_store,spill_load=final_spill_store,final_spill_load
 else:
-    high,mode,ilp,cg,threads=base_high,'ilp2','2','0',base_threads
+    high,mode,ilp,cg,threads,bin_path=base_high,'ilp2','2','0',base_threads,base_bin
+    spill_store,spill_load='0','0'
+transformed=int(validated and mode!='ilp2')
 with open(wenv,'w') as f:
     f.write(f'B300_MAINREC_STAGED_VALIDATED={int(validated)}\n')
+    f.write(f'B300_MAINREC_TRANSFORMED={transformed}\n')
     f.write(f'B300_MAINREC_HIGH_DROP_CHUNK={high}\n')
     f.write(f'B300_MAINREC_MODE={mode}\n')
     f.write(f'B300_MAINREC_ILP={ilp}\n')
     f.write(f'B300_MAINREC_RANDOM_CG={cg}\n')
     f.write(f'B300_MAINREC_THREADS={threads}\n')
+    f.write(f'B300_MAINREC_BIN={bin_path}\n')
+    f.write(f'B300_MAINREC_BASE_BIN={base_bin}\n')
+    f.write(f'B300_MAINREC_BASE_THREADS={base_threads}\n')
+    f.write(f'B300_MAINREC_SPILL_STORE_BYTES={spill_store}\n')
+    f.write(f'B300_MAINREC_SPILL_LOAD_BYTES={spill_load}\n')
     f.write(f'B300_MAINREC_SEARCH_RESIDUE={search_res}\n')
     f.write(f'B300_MAINREC_TRANSFORM_MIN_SPEEDUP={minsp:.9f}\n')
     if stage_speedups:
         f.write('B300_MAINREC_STAGE_SPEEDUPS='+','.join(f'{s}:{v:.9f}' for s,v,_,_ in stage_speedups)+'\n')
 print(f'b300_mainrec_ilpcg_staged_validated={int(validated)}')
+print(f'b300_mainrec_ilpcg_staged_transformed={transformed}')
 print(f'b300_mainrec_ilpcg_staged_final_high_drop_chunk={high}')
 print(f'b300_mainrec_ilpcg_staged_final_mode={mode}')
 print(f'b300_mainrec_ilpcg_staged_final_ilp={ilp}')
 print(f'b300_mainrec_ilpcg_staged_final_random_cg={cg}')
 print(f'b300_mainrec_ilpcg_staged_final_threads={threads}')
+print(f'b300_mainrec_ilpcg_staged_final_bin={bin_path}')
 print(f'b300_mainrec_ilpcg_staged_winner_env={wenv}')
 PY
 
