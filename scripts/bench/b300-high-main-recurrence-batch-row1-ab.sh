@@ -28,6 +28,7 @@ BASE_BIN="$ONEESAN_BUILD_DIR/b300_batch_n27_highmainrec0_high${HIGH_DROP_CHUNK}"
 CAND_BIN="$ONEESAN_BUILD_DIR/b300_batch_n27_highmainrec1_high${HIGH_DROP_CHUNK}"
 build_one base 0 "$BASE_BIN";build_one cand 1 "$CAND_BIN"
 
+field(){ local k="$1" l="$2"; sed -nE "s/(^|.*[[:space:]])${k}=([^[:space:]]+).*/\\2/p" <<<"$l" | tail -n1; }
 run_one(){
   local mode="$1" bin="$2";local out="${PREFIX}.${mode}.out" err="${PREFIX}.${mode}.err" tele="${PREFIX}.${mode}.gpu.csv"
   : >"$tele"
@@ -36,10 +37,11 @@ run_one(){
   B300_ROW_LIMIT="$ROWS" GRIDFP_THREADS="$THREADS" "$bin" "$N" "$TARGET_MIB" "$MAX_WINDOW" "$GPUS" "$MOD" >"$out" 2>"$err";local rc=$?;set -e
   kill "$mon" 2>/dev/null||true;wait "$mon" 2>/dev/null||true
   ((rc==0))||{ echo "$mode failed rc=$rc" >&2;tail -n 120 "$err" >&2||true;return "$rc"; }
-  local line residue wall
+  local line residue wall hg hf
   line="$(grep '^backend=gridfp-b300-hbm32-forced2window-opt-batch ' "$out"|tail -n1||true)";[[ -n "$line" ]]||return 4
   grep -Fq " rows=$ROWS calibration=$((ROWS<28?1:0)) " <<<"$line"||{ echo "$mode row metadata mismatch" >&2;return 5; }
-  residue="$(sed -nE 's/.* residue=([^[:space:]]+).*/\1/p'<<<"$line")";wall="$(sed -nE 's/.* wall_s=([^[:space:]]+).*/\1/p'<<<"$line")"
+  residue="$(field residue "$line")";wall="$(field wall_s "$line")";hg="$(field high_rec_groups "$line")";hf="$(field high_rec_fallback_groups "$line")"
+  [[ -n "$hg" ]]||hg=0;[[ -n "$hf" ]]||hf=0
   local st
   st="$(python3 - "$tele" <<'PY'
 import csv,sys
@@ -54,14 +56,15 @@ def a(x):return sum(x)/len(x) if x else float('nan')
 print(f'{a(m):.6f} {max(m) if m else float("nan"):.6f} {a(b):.6f} {a(s):.6f}')
 PY
 )"
-  printf '%s\t%s\t%s\n' "$residue" "$wall" "$st"
+  printf '%s\t%s\t%s\t%s\t%s\n' "$residue" "$wall" "$st" "$hg" "$hf"
 }
-read -r BR BW BM BMAX BBUSY BSM <<<"$(run_one base "$BASE_BIN")"
-read -r CR CW CM CMAX CBUSY CSM <<<"$(run_one cand "$CAND_BIN")"
+read -r BR BW BM BMAX BBUSY BSM BHG BHF <<<"$(run_one base "$BASE_BIN")"
+read -r CR CW CM CMAX CBUSY CSM CHG CHF <<<"$(run_one cand "$CAND_BIN")"
 [[ "$BR" == "$CR" ]]||{ echo "high-main recurrence residue mismatch base=$BR cand=$CR" >&2;exit 6; }
-python3 - "$BW" "$CW" "$BM" "$CM" "$BBUSY" "$CBUSY" "$BSM" "$CSM" <<'PY'
+[[ "$CHG" =~ ^[0-9]+$ ]] && ((CHG>0)) || { echo "high-main recurrence candidate had zero recurrent coverage high_rec_groups=$CHG fallback=$CHF" >&2;exit 7; }
+python3 - "$BW" "$CW" "$BM" "$CM" "$BBUSY" "$CBUSY" "$BSM" "$CSM" "$CHG" "$CHF" <<'PY'
 import sys
-bw,cw,bm,cm,bb,cb,bs,cs=map(float,sys.argv[1:])
+bw,cw,bm,cm,bb,cb,bs,cs=map(float,sys.argv[1:9]);hg,hf=map(int,sys.argv[9:11])
 print('b300_high_main_recurrence_exact_intermediate_match=1')
 print(f'b300_high_main_recurrence_wall_baseline_s={bw:.9f}')
 print(f'b300_high_main_recurrence_wall_candidate_s={cw:.9f}')
@@ -73,6 +76,8 @@ print(f'b300_high_main_recurrence_memctl_busy_candidate_avg_pct={cb:.3f}')
 print(f'b300_high_main_recurrence_memctl_busy_delta_pp={cb-bb:.3f}')
 print(f'b300_high_main_recurrence_sm_baseline_avg_pct={bs:.3f}')
 print(f'b300_high_main_recurrence_sm_candidate_avg_pct={cs:.3f}')
+print(f'b300_high_main_recurrence_groups={hg}')
+print(f'b300_high_main_recurrence_fallback_groups={hf}')
 PY
 printf 'b300_high_main_recurrence_ilp=2\n'
 printf 'b300_high_main_recurrence_threads=%s\n' "$THREADS"
