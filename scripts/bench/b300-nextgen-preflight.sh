@@ -11,6 +11,8 @@ shells=(
   scripts/bench/b300-nextgen-calibrate.sh
   scripts/bench/b300-nextgen-latency-regcap-sweep.sh
   scripts/bench/b300-nextgen-calibrate-latency.sh
+  scripts/bench/b300-nextgen-cg-l2size-sweep.sh
+  scripts/bench/b300-nextgen-calibrate-cgl2.sh
   scripts/run/b300x8-race-forced-set-profiled-once.sh
   scripts/run/b300x8-nextgen-select.sh
 )
@@ -36,23 +38,27 @@ builder="$ONEESAN_ROOT/scripts/build/b300-forced-nextgen.sh"
 selector="$ONEESAN_ROOT/scripts/run/b300x8-nextgen-select.sh"
 race="$ONEESAN_ROOT/scripts/run/b300x8-race-forced-set-profiled-once.sh"
 lat="$ONEESAN_ROOT/scripts/bench/b300-nextgen-latency-regcap-sweep.sh"
+cgl2="$ONEESAN_ROOT/scripts/bench/b300-nextgen-cg-l2size-sweep.sh"
+staged="$ONEESAN_ROOT/scripts/bench/b300-nextgen-calibrate-cgl2.sh"
 for s in \
   'RECURRENCE_ILP' \
-  'RANDOM_CG' \
+  'RANDOM_CG_L2_FETCH_BYTES' \
   'PREFETCH_L2' \
   'DUALMASK' \
   'CLOSURE_BATCH' \
   'MAXRREGCOUNT' \
-  'transform_order=production_recurrence,recurrence_ilp,random_cg,prefetch_l2,dualmask,closure_batch,register_cap'; do
+  'transform_order=production_recurrence,recurrence_ilp,random_cg_l2_fetch,prefetch_l2,dualmask,closure_batch,register_cap'; do
   grep -Fq "$s" "$builder" || { echo "builder marker missing: $s" >&2; exit 3; }
 done
 for s in \
   'SELECT_ONLY="${SELECT_ONLY:-1}"' \
-  'b300-nextgen-calibrate-latency.sh' \
+  'b300-nextgen-calibrate-cgl2.sh' \
   'build_candidate final' \
+  'build_candidate stagec' \
   'build_candidate uncapped' \
   'build_candidate main' \
   'build_candidate base' \
+  'RANDOM_CG_L2_FETCH_BYTES="$cgl2"' \
   'b300x8-race-forced-set-profiled-once.sh'; do
   grep -Fq "$s" "$selector" || { echo "selector marker missing: $s" >&2; exit 3; }
 done
@@ -71,5 +77,21 @@ for s in \
   'b300_nextgen_latency_speedup_vs_uncapped_sync'; do
   grep -Fq "$s" "$lat" || { echo "latency marker missing: $s" >&2; exit 3; }
 done
+for s in \
+  'RANDOM_CG_L2_FETCH_BYTES="$l2"' \
+  'L2_SIZES="${L2_SIZES:-0 64 128 256}"' \
+  'no CG L2 candidate has known spill-free main recurrence ptxas' \
+  'B300_CGL2_WINNER_L2_FETCH_BYTES' \
+  'b300_nextgen_cgl2_exact_intermediate_match=1'; do
+  grep -Fq "$s" "$cgl2" || { echo "CG-L2 sweep marker missing: $s" >&2; exit 3; }
+done
+for s in \
+  'b300-nextgen-calibrate-latency.sh' \
+  'b300-nextgen-cg-l2size-sweep.sh' \
+  'CGL2_MIN_SPEEDUP' \
+  'b300_nextgen_cgl2_calibrate_exact_gates=1' \
+  'complete-prime arbitration retains Stage-C candidate'; do
+  grep -Fq "$s" "$staged" || { echo "Stage-D calibration marker missing: $s" >&2; exit 3; }
+done
 
-echo 'b300_nextgen_preflight=OK bash_syntax=OK python_ast=OK ilp_partition=OK transform_order=OK uncapped_baseline=OK spill_gate=OK forced_set_single_pass=OK selection_default=only gpu_work=0 actions_triggered=0'
+echo 'b300_nextgen_preflight=OK bash_syntax=OK python_ast=OK ilp_partition=OK transform_order=OK uncapped_baseline=OK spill_gate=OK cgl2_stage_d=OK forced_set_single_pass=OK selection_default=only gpu_work=0 actions_triggered=0'
