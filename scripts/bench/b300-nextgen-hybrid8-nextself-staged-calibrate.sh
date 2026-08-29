@@ -7,6 +7,7 @@ MOD="${MOD:-4294967291}"
 TARGET_MIB="${TARGET_MIB:-65536}"
 MAX_WINDOW="${MAX_WINDOW:-14}"
 THREADS_LIST="${THREADS_LIST:-128 256 512}"
+WIDTH_LIST="${WIDTH_LIST:-1 2 4 8}"
 SEARCH_ROWS="${SEARCH_ROWS:-1}"
 VALIDATE_ROWS="${VALIDATE_ROWS:-4 8}"
 SEARCH_REPEATS="${SEARCH_REPEATS:-1}"
@@ -27,6 +28,7 @@ done
 for n in SEARCH_REPEATS VALIDATE_REPEATS; do
   v="${!n}"; [[ "$v" =~ ^[1-9][0-9]*$ ]] || { echo "$n must be >=1" >&2; exit 2; }
 done
+for w in $WIDTH_LIST; do case "$w" in 1|2|4|8) ;; *) echo "bad WIDTH_LIST entry=$w" >&2; exit 2;; esac; done
 python3 - "$MIN_SPEEDUP" "$SAMPLE_INTERVAL" <<'PY'
 import sys
 if float(sys.argv[1])<1.0: raise SystemExit('MIN_SPEEDUP must be >=1')
@@ -90,15 +92,16 @@ check_stage_e_residue(){
 }
 
 run_stage(){
-  local rows="$1" threads="$2" repeats="$3" tag="$4"
+  local rows="$1" threads="$2" repeats="$3" tag="$4" widths="$5"
   local p="${PREFIX}.${tag}.r${rows}" log="${p}.log" env="${p}_winner.env"
-  echo "=== Stage F hybrid8 next-self rows=$rows threads=[$threads] repeats=$repeats threshold=$THRESHOLD ===" >&2
+  echo "=== Stage F hybrid8 next-self rows=$rows widths=[$widths] threads=[$threads] repeats=$repeats threshold=$THRESHOLD ===" >&2
   ARCH="$ARCH" MOD="$MOD" ROWS="$rows" TARGET_MIB="$TARGET_MIB" MAX_WINDOW="$MAX_WINDOW" \
     HIGH_DROP_CHUNK="$H" HYBRID_THRESHOLD="$THRESHOLD" RANDOM_CG="$CG" RANDOM_CG_L2_FETCH_BYTES="$CGL2" \
     PREFETCH_L2="$PRE" DUALMASK="$DUAL" CLOSURE_BATCH="$BATCH" MAXRREGCOUNT="$CAP" \
-    THREADS_LIST="$threads" REPEATS="$repeats" SAMPLE_INTERVAL="$SAMPLE_INTERVAL" PREFIX="$p" WINNER_ENV="$env" \
-    bash "$ONEESAN_ROOT/scripts/bench/b300-nextgen-hybrid8-nextself-ab.sh" | tee "$log" >&2
+    THREADS_LIST="$threads" WIDTH_LIST="$widths" REPEATS="$repeats" SAMPLE_INTERVAL="$SAMPLE_INTERVAL" PREFIX="$p" WINNER_ENV="$env" \
+    bash "$ONEESAN_ROOT/scripts/bench/b300-nextgen-hybrid8-nextself-width-sweep.sh" | tee "$log" >&2
   grep -Fq 'b300_nextgen_hybrid8_nextself_exact_intermediate_match=1' "$log" || { echo "Stage F exact gate missing rows=$rows" >&2; exit 4; }
+  grep -Fq 'b300_nextgen_hybrid8_nextself_width_sweep=1' "$log" || { echo "Stage F width-sweep marker missing rows=$rows" >&2; exit 4; }
   [[ -s "$env" ]] || { echo "Stage F env missing rows=$rows" >&2; exit 4; }
   printf '%s\n' "$env"
 }
@@ -109,13 +112,15 @@ print(1 if float(sys.argv[1])>=float(sys.argv[2]) else 0)
 PY
 }
 
-SEARCH_ENV="$(run_stage "$SEARCH_ROWS" "$THREADS_LIST" "$SEARCH_REPEATS" search)"
+SEARCH_ENV="$(run_stage "$SEARCH_ROWS" "$THREADS_LIST" "$SEARCH_REPEATS" search "$WIDTH_LIST")"
 # shellcheck disable=SC1090
 source "$SEARCH_ENV"
 check_stage_e_residue "$SEARCH_ROWS" "$B300_HYBRID8_NEXTSELF_RESIDUE"
 VALIDATED=0
 CURRENT_ENV="$SEARCH_ENV"
+SELECTED_WIDTH=0
 if [[ "$B300_HYBRID8_NEXTSELF_BEST_ENABLED" == 1 && "$B300_HYBRID8_NEXTSELF_CONTROL_SPILL_FREE" == 1 && "$B300_HYBRID8_NEXTSELF_SPILL_FREE" == 1 && "$(passes "$B300_HYBRID8_NEXTSELF_SPEEDUP")" == 1 ]]; then
+  case "$B300_HYBRID8_NEXTSELF_WIDTH" in 1|2|4|8) SELECTED_WIDTH="$B300_HYBRID8_NEXTSELF_WIDTH";; *) echo 'Stage F search selected invalid width' >&2; exit 4;; esac
   VALIDATED=1
   control_threads="$B300_HYBRID8_NEXTSELF_CONTROL_THREADS"
   test_threads="$B300_HYBRID8_NEXTSELF_THREADS"
@@ -124,10 +129,14 @@ if [[ "$B300_HYBRID8_NEXTSELF_BEST_ENABLED" == 1 && "$B300_HYBRID8_NEXTSELF_CONT
   stage=0
   for rows in "${stage_validate_rows[@]}"; do
     ((stage+=1))
-    CURRENT_ENV="$(run_stage "$rows" "$validation_threads" "$VALIDATE_REPEATS" "validate${stage}")"
+    CURRENT_ENV="$(run_stage "$rows" "$validation_threads" "$VALIDATE_REPEATS" "validate${stage}" "$SELECTED_WIDTH")"
     # shellcheck disable=SC1090
     source "$CURRENT_ENV"
     check_stage_e_residue "$rows" "$B300_HYBRID8_NEXTSELF_RESIDUE"
+    if [[ "$B300_HYBRID8_NEXTSELF_WIDTH" != "$SELECTED_WIDTH" ]]; then
+      echo "FATAL Stage-F width changed during validation selected=$SELECTED_WIDTH got=$B300_HYBRID8_NEXTSELF_WIDTH rows=$rows" >&2
+      exit 4
+    fi
     if [[ "$B300_HYBRID8_NEXTSELF_BEST_ENABLED" != 1 || "$B300_HYBRID8_NEXTSELF_CONTROL_SPILL_FREE" != 1 || "$B300_HYBRID8_NEXTSELF_SPILL_FREE" != 1 || "$(passes "$B300_HYBRID8_NEXTSELF_SPEEDUP")" != 1 ]]; then
       VALIDATED=0
       break
@@ -143,12 +152,14 @@ fi
 source "$CURRENT_ENV"
 if [[ "$VALIDATED" == 1 ]]; then
   FINAL_ENABLED=1
+  FINAL_WIDTH="$SELECTED_WIDTH"
   FINAL_BIN="$B300_HYBRID8_NEXTSELF_BIN"
   FINAL_THREADS="$B300_HYBRID8_NEXTSELF_THREADS"
   FINAL_WALL="$B300_HYBRID8_NEXTSELF_WALL_S"
   FINAL_SPEED="$B300_HYBRID8_NEXTSELF_SPEEDUP"
 else
   FINAL_ENABLED=0
+  FINAL_WIDTH=0
   FINAL_BIN="$B300_HYBRID8_NEXTSELF_CONTROL_BIN"
   FINAL_THREADS="$B300_HYBRID8_NEXTSELF_CONTROL_THREADS"
   FINAL_WALL="$B300_HYBRID8_NEXTSELF_CONTROL_WALL_S"
@@ -158,6 +169,7 @@ fi
 {
   printf 'B300_HYBRID8_NEXTSELF_STAGED_VALIDATED=%q\n' "$VALIDATED"
   printf 'B300_HYBRID8_NEXTSELF_FINAL_ENABLED=%q\n' "$FINAL_ENABLED"
+  printf 'B300_HYBRID8_NEXTSELF_FINAL_WIDTH=%q\n' "$FINAL_WIDTH"
   printf 'B300_HYBRID8_NEXTSELF_FINAL_BIN=%q\n' "$FINAL_BIN"
   printf 'B300_HYBRID8_NEXTSELF_FINAL_THREADS=%q\n' "$FINAL_THREADS"
   printf 'B300_HYBRID8_NEXTSELF_FINAL_WALL_S=%q\n' "$FINAL_WALL"
@@ -182,8 +194,9 @@ fi
   printf 'B300_HYBRID8_NEXTSELF_CLOSURE_BATCH=%q\n' "$BATCH"
   printf 'B300_HYBRID8_NEXTSELF_MAXRREGCOUNT=%q\n' "$CAP"
   printf 'B300_HYBRID8_NEXTSELF_MIN_SPEEDUP=%q\n' "$MIN_SPEEDUP"
+  printf 'B300_HYBRID8_NEXTSELF_SEARCH_WIDTHS=%q\n' "$WIDTH_LIST"
   printf 'B300_HYBRID8_NEXTSELF_STAGE_E_ENV=%q\n' "$HYBRID_WINNER_ENV"
 } >"$FINAL_ENV"
 
 cat "$FINAL_ENV"
-echo "b300-nextgen-hybrid8-nextself-staged-calibrate OK validated=$VALIDATED threshold=$THRESHOLD final_rows=$B300_HYBRID8_NEXTSELF_ROWS winner_env=$FINAL_ENV spill_proof=1 stage_e_crosscheck=1" >&2
+echo "b300-nextgen-hybrid8-nextself-staged-calibrate OK validated=$VALIDATED width=$FINAL_WIDTH threshold=$THRESHOLD final_rows=$B300_HYBRID8_NEXTSELF_ROWS winner_env=$FINAL_ENV spill_proof=1 stage_e_crosscheck=1 width_locked=1" >&2
