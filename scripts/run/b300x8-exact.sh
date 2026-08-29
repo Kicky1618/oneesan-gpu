@@ -18,19 +18,23 @@ LOW_DROP_CHUNK="${LOW_DROP_CHUNK:-1}"
 LOW_BLOCK_CACHE="${LOW_BLOCK_CACHE:-1}"
 HIGH_DROP_CHUNK="${HIGH_DROP_CHUNK:-0}"
 REBUILD="${REBUILD:-0}"
-BIN="${BIN:-$ONEESAN_BUILD_DIR/oneesan_cuda_gridfp_b300_hbm32_batch_n${N}}"
+case "$MAIN_PULL_ILP" in 1|2|4) ;; *) echo "MAIN_PULL_ILP must be 1, 2, or 4" >&2; exit 2;; esac
+# Preserve the established production ILP2 binary path/checkpoints. Experimental
+# ILP1/ILP4 get distinct binary names so REBUILD=0 can never silently reuse an
+# ILP2 executable.
+if [[ "$MAIN_PULL_ILP" == 2 ]]; then DEFAULT_BIN="$ONEESAN_BUILD_DIR/oneesan_cuda_gridfp_b300_hbm32_batch_n${N}"; else DEFAULT_BIN="$ONEESAN_BUILD_DIR/oneesan_cuda_gridfp_b300_hbm32_batch_n${N}_ilp${MAIN_PULL_ILP}"; fi
+BIN="${BIN:-$DEFAULT_BIN}"
 
 for name in MAIN_MATE_CACHE MAIN_PULL BLOCK_PULL BLOCK_MATE_CACHE LOW_DROP_CACHE LOW_DROP_CHUNK LOW_BLOCK_CACHE HIGH_DROP_CHUNK REBUILD; do
   value="${!name}"; [[ "$value" == 0 || "$value" == 1 ]] || { echo "$name must be 0 or 1" >&2; exit 2; }
 done
-[[ "$MAIN_PULL_ILP" == 1 || "$MAIN_PULL_ILP" == 2 ]] || { echo "MAIN_PULL_ILP must be 1 or 2" >&2; exit 2; }
 if [[ "$BLOCK_PULL" == 1 && "$MAIN_PULL" != 1 ]]; then echo "BLOCK_PULL=1 requires MAIN_PULL=1" >&2; exit 2; fi
 if [[ "$BLOCK_MATE_CACHE" == 1 && "$BLOCK_PULL" != 1 ]]; then echo "BLOCK_MATE_CACHE=1 requires BLOCK_PULL=1" >&2; exit 2; fi
 if [[ "$LOW_DROP_CACHE" == 1 && ( "$MAIN_PULL" != 1 || "$MAIN_MATE_CACHE" != 1 ) ]]; then echo "LOW_DROP_CACHE=1 requires MAIN_PULL=1 MAIN_MATE_CACHE=1" >&2; exit 2; fi
 if [[ "$LOW_DROP_CHUNK" == 1 && "$LOW_DROP_CACHE" != 1 ]]; then echo "LOW_DROP_CHUNK=1 requires LOW_DROP_CACHE=1" >&2; exit 2; fi
 if [[ "$LOW_BLOCK_CACHE" == 1 && ( "$LOW_DROP_CHUNK" != 1 || "$BLOCK_MATE_CACHE" != 1 ) ]]; then echo "LOW_BLOCK_CACHE=1 requires LOW_DROP_CHUNK=1 BLOCK_MATE_CACHE=1" >&2; exit 2; fi
 if [[ "$HIGH_DROP_CHUNK" == 1 && ( "$LOW_DROP_CACHE" != 1 || "$BLOCK_PULL" != 1 ) ]]; then echo "HIGH_DROP_CHUNK=1 requires LOW_DROP_CACHE=1 BLOCK_PULL=1" >&2; exit 2; fi
-if [[ "$MAIN_PULL_ILP" == 2 && "$MAIN_PULL" != 1 ]]; then echo "MAIN_PULL_ILP=2 requires MAIN_PULL=1" >&2; exit 2; fi
+if [[ "$MAIN_PULL_ILP" != 1 && "$MAIN_PULL" != 1 ]]; then echo "MAIN_PULL_ILP=$MAIN_PULL_ILP requires MAIN_PULL=1" >&2; exit 2; fi
 
 if ! command -v nvidia-smi >/dev/null; then echo "nvidia-smi not found" >&2; exit 2; fi
 visible="$(nvidia-smi --query-gpu=index --format=csv,noheader | wc -l)"
