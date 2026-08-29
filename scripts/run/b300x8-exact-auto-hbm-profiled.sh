@@ -54,7 +54,7 @@ case "$ORBITCTA_FLAT_CHUNK" in 1|2|4|8|16|32) ;; *) echo 'ORBITCTA_FLAT_CHUNK mu
 [[ "$ORBITCTA_FLAT" == 1 || "$ORBITCTA_FLAT_CHUNK" == 1 ]] || { echo 'chunked orbit profile requires ORBITCTA_FLAT=1' >&2; exit 2; }
 if [[ "$ORBITCTA_FLAT_DYNAMIC" == 1 ]]; then
   [[ "$ORBITCTA_FLAT" == 1 && "$ORBITCTA_FLAT_CHUNK" == 1 ]] || { echo 'dynamic orbit profile requires flat chunk=1' >&2; exit 2; }
-  [[ "$ORBIT_QUAD_MLP" == 0 && "$ORBIT_PRECTX_WARPCOOP" == 0 ]] || { echo 'dynamic queue is mutually exclusive with quad/warpcoop' >&2; exit 2; }
+  [[ "$ORBIT_PRECTX_WARPCOOP" == 0 ]] || { echo 'dynamic queue is mutually exclusive with warpcoop' >&2; exit 2; }
   if (( ORBITCTA_FLAT_DYNAMIC_ADAPTIVE_WAVES != 0 )); then (( ORBITCTA_FLAT_DYNAMIC_BATCH > 1 )) || { echo 'adaptive dynamic waves require dynamic batch >1' >&2; exit 2; }; fi
   if [[ "$ORBITCTA_FLAT_DYNAMIC_PIPE2" == 1 ]]; then [[ "$ORBITCTA_FLAT_DYNAMIC_FUSE_LEASE_PREP" == 0 ]] || { echo 'dynamic PIPE2 requires fusion=0' >&2; exit 2; }; fi
 else
@@ -81,7 +81,8 @@ case "$ORBIT_COL_ILP" in 2|4) ;; *) echo "invalid ORBIT_COL_ILP=$ORBIT_COL_ILP" 
 if [[ "$ORBIT_PRECTX_FLAT_BID" == 1 ]]; then
   [[ "$ORBITCTA_FLAT" == 1 && "$ORBITCTA_FLAT_CHUNK" == 1 ]] || { echo 'ORBIT_PRECTX_FLAT_BID requires flat chunk=1' >&2; exit 2; }
   [[ "$ORBIT_PRECTX_COMPACT" == 1 && "$ORBIT_PRECTX_FORWARD" == 1 && "$ORBIT_PRECTX_REVERSE" == 1 ]] || { echo 'ORBIT_PRECTX_FLAT_BID requires compact forward+reverse prectx' >&2; exit 2; }
-  [[ "$ORBIT_QUAD_MLP" == 0 && "$ORBIT_PRECTX_WARPCOOP" == 0 ]] || { echo 'flat-bid is mutually exclusive with quad/warpcoop' >&2; exit 2; }
+  [[ "$ORBIT_PRECTX_WARPCOOP" == 0 ]] || { echo 'flat-bid is mutually exclusive with warpcoop' >&2; exit 2; }
+  [[ "$ORBITCTA_FLAT_DYNAMIC" == 1 || "$ORBIT_QUAD_MLP" == 0 ]] || { echo 'static quad is mutually exclusive with flat-bid' >&2; exit 2; }
 else [[ "$ORBIT_PRECTX_FLAT_BID_FUSED" == 0 ]] || { echo 'ORBIT_PRECTX_FLAT_BID_FUSED requires ORBIT_PRECTX_FLAT_BID=1' >&2; exit 2; }; fi
 if [[ "$ORBIT_PRECTX_WARPCOOP" == 1 ]]; then
   [[ "$ORBITCTA_FLAT" == 1 ]] && (( ORBITCTA_FLAT_CHUNK > 1 )) || { echo 'ORBIT_PRECTX_WARPCOOP requires chunked flat orbit CTA' >&2; exit 2; }
@@ -89,9 +90,18 @@ if [[ "$ORBIT_PRECTX_WARPCOOP" == 1 ]]; then
   [[ "$ORBIT_PRECTX_FLAT_BID" == 0 && "$ORBITCTA_FLAT_DYNAMIC" == 0 ]] || { echo 'warpcoop is mutually exclusive with flat-bid/dynamic' >&2; exit 2; }
 fi
 if [[ "$ORBIT_QUAD_MLP" == 1 ]]; then
-  [[ "$ORBITCTA_FLAT" == 1 ]] && (( ORBITCTA_FLAT_CHUNK > 1 )) || { echo 'ORBIT_QUAD_MLP requires chunked flat orbit CTA' >&2; exit 2; }
+  [[ "$ORBITCTA_FLAT" == 1 ]] || { echo 'ORBIT_QUAD_MLP requires flat orbit CTA' >&2; exit 2; }
   [[ "$ORBIT_COL_ILP" == 4 ]] || { echo 'ORBIT_QUAD_MLP requires ORBIT_COL_ILP=4' >&2; exit 2; }
-  [[ "$ORBIT_PRECTX_FLAT_BID" == 0 && "$ORBIT_PRECTX_FLAT_BID_FUSED" == 0 && "$ORBITCTA_FLAT_DYNAMIC" == 0 ]] || { echo 'quad is mutually exclusive with flat-bid/dynamic' >&2; exit 2; }
+  if [[ "$ORBITCTA_FLAT_DYNAMIC" == 1 ]]; then
+    [[ "$ORBITCTA_FLAT_CHUNK" == 1 ]] || { echo 'dynamic quad requires flat chunk=1' >&2; exit 2; }
+    [[ "$ORBIT_QUAD_OVERLAP_LOCAL" == 0 ]] || { echo 'dynamic quad currently isolates QOL overlap-local' >&2; exit 2; }
+    (( ORBIT_QUAD_LOCAL_DIRECT_MAX == 0 )) || { echo 'dynamic quad requires local-direct-max=0' >&2; exit 2; }
+    [[ "$ORBIT_QUAD_SPARSE_DESC_MLP" == 0 && "$ORBIT_QUAD_OVERLAP_BYPASS_LOCAL0" == 0 ]] || { echo 'dynamic quad currently isolates QOL descriptor/local0 tuning' >&2; exit 2; }
+    [[ "$ORBIT_QUAD_CPASYNC_PREFETCH_BYTES" == 0 && "$ORBIT_QUAD_CPASYNC_GROUP_COLS" == 1 ]] || { echo 'dynamic quad currently isolates QOL cp.async tuning' >&2; exit 2; }
+  else
+    (( ORBITCTA_FLAT_CHUNK > 1 )) || { echo 'static quad requires chunked flat orbit CTA' >&2; exit 2; }
+    [[ "$ORBIT_PRECTX_FLAT_BID" == 0 && "$ORBIT_PRECTX_FLAT_BID_FUSED" == 0 ]] || { echo 'static quad is mutually exclusive with flat-bid' >&2; exit 2; }
+  fi
 else
   [[ "$ORBIT_QUAD_OVERLAP_LOCAL" == 0 ]] || { echo 'ORBIT_QUAD_OVERLAP_LOCAL requires ORBIT_QUAD_MLP=1' >&2; exit 2; }
   (( ORBIT_QUAD_LOCAL_DIRECT_MAX == 0 )) || { echo 'ORBIT_QUAD_LOCAL_DIRECT_MAX requires ORBIT_QUAD_MLP=1' >&2; exit 2; }
