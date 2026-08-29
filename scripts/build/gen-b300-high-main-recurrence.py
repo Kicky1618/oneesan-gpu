@@ -28,10 +28,11 @@ if s.count(pack_call)!=2:raise SystemExit(f'expected two main mate packing calls
 s=s.replace(pack_call,'b300_pack_main_transition_cache(m)',2)
 
 high_rank='b300_high_chunk_drop_rank(i,m,p)' if 'b300_high_chunk_drop_rank' in s else 'rank_drop_n_t<TARGET_W>(i,m,p)'
-marker='\n\nstatic Code rank_full(MateID m,int width)'
-if marker not in s:raise SystemExit('rank_full marker not found')
+# gather_main/materialize kernels call b300_pack_main_transition_cache, so all
+# helper definitions must appear before the first gather_main kernel definition.
+marker='__global__ void gather_main_kernel('
+if s.count(marker)!=1:raise SystemExit(f'gather_main marker expected once, got {s.count(marker)}')
 helper=r'''
-
 __device__ __forceinline__ bool b300_high_main_state_active(){
     if constexpr(TARGET_W!=28)return false;
     else {
@@ -90,7 +91,7 @@ __device__ __forceinline__ Code b300_main_pair_rank_h(Code dst_rank,int p,MateVa
     }
 }
 '''
-s=s.replace(marker,helper+marker,1)
+s=s.replace(marker,helper+'\n'+marker,1)
 
 prepare=f'''__device__ __forceinline__ void b300_main_pull_prepare(
     Code i,MateID m,int p,Code nblock,
@@ -122,7 +123,7 @@ s=s.replace(old,'if(v1){uint64_t a1=uint64_t(self1)+pair1+block1;if(a1>=mod)a1-=
 for required in ('b300_high_main_state_active','b300_high_state_drop_rank','b300_main_pair_rank_h','b300_pack_main_transition_cache','b300_high_state_advance(m1,p)','return b300_pack_low_window_main_mate(m);'):
     if required not in s:raise SystemExit(f'missing high-main recurrence artifact: {required}')
 if s.count('b300_pack_main_transition_cache(m)')!=2:raise SystemExit(f'expected exactly two production transition-cache packing calls, got {s.count("b300_pack_main_transition_cache(m)")}')
-if 'block_j=b300_low_window_cache_active()?b300_low_cached_drop_rank(i,m,p):rank_drop_n_t<TARGET_W>(i,m,p);' in s:
-    raise SystemExit('stale ILP2 high drop path remains')
+if s.find('b300_pack_main_transition_cache',s.find('__global__ void gather_main_kernel'))>=0 and s.find('b300_pack_main_transition_cache')>s.find('__global__ void gather_main_kernel'):
+    raise SystemExit('transition-cache helper was emitted after gather_main')
 out.parent.mkdir(parents=True,exist_ok=True);out.write_text(s)
-print(f'generated {out} from {src}: high_main_recurrence=1 ilp=2 extra_state_bytes=0 trit_bits=25 signed_delta_bits=35 height_bits=4 mate_hbm_store_per_state_step=8 high_drop_walk_or_table_loads_per_state_step=0 high_height_walk_per_state_step=0')
+print(f'generated {out} from {src}: high_main_recurrence=1 ilp=2 extra_state_bytes=0 trit_bits=25 signed_delta_bits=35 height_bits=4 helper_before_gather=1 mate_hbm_store_per_state_step=8 high_drop_walk_or_table_loads_per_state_step=0 high_height_walk_per_state_step=0')
