@@ -31,11 +31,12 @@ command -v nvcc >/dev/null || { echo 'nvcc required' >&2; exit 2; }; command -v 
 
 bash "$ONEESAN_ROOT/scripts/bench/b300-pipe2-producer-warp-coverage-proof.sh" >"$LOGDIR/coverage.out"
 grep -q 'producer_worker_weight=0,1,2,3,4 exact_once=1' "$LOGDIR/coverage.out" || { echo 'weighted producer coverage gate failed' >&2; exit 5; }
-PIPE2_PRODUCER_PATCH_ONLY=1 PRODUCER_WORKER_WEIGHT=4 QUAD_MLP="$QUAD_MLP" ORBITCTA_COL_ILP="$COL_ILP" \
+PIPE2_PRODUCER_PATCH_ONLY=1 PRODUCER_WORKER_WEIGHT=4 PRODUCER_ADAPTIVE_COLS=0 QUAD_MLP="$QUAD_MLP" ORBITCTA_COL_ILP="$COL_ILP" \
   PRECTX_FORWARD="$PRECTX_FORWARD" PRECTX_REVERSE="$PRECTX_REVERSE" PRECTX_COMPACT="$PRECTX_COMPACT" PRECTX_FLAT_BID="$PRECTX_FLAT_BID" PRECTX_FLAT_BID_FUSED="$PRECTX_FLAT_BID_FUSED" \
   ORBITCTA_FLAT=1 ORBITCTA_FLAT_DYNAMIC=1 ORBITCTA_FLAT_DYNAMIC_PIPE2=1 ORBITCTA_FLAT_CHUNK=1 ORBITCTA_FLAT_DYNAMIC_FUSE_LEASE_PREP=0 \
   bash "$ONEESAN_ROOT/scripts/build/b300-directgather-orbitcta-pipe2-producer-warp.sh" >"$LOGDIR/producer-patch.out"
 grep -q 'producer_worker_weight=4' "$LOGDIR/producer-patch.out" || { echo 'weighted producer patch marker missing' >&2; exit 5; }
+grep -q 'producer_adaptive_cols=0' "$LOGDIR/producer-patch.out" || { echo 'producer weight sweep must isolate adaptive_cols=0' >&2; exit 5; }
 
 COMMON=(N="$N" ARCH="$ARCH" PM_ACCUM="$PM_ACCUM" DIRECTGATHER64=1 DIRECTGATHER_SPARSE64="$SPARSE64" DIRECTGATHER_SORT_RANKS=0
  RANKFORMULA_MLP_WINDOW4=1 PAIR_MLP=1 CPASYNC_PAIR="$CPASYNC_PAIR" ORBITCTA_FLAT=1 ORBITCTA_FLAT_CHUNK=1
@@ -43,7 +44,7 @@ COMMON=(N="$N" ARCH="$ARCH" PM_ACCUM="$PM_ACCUM" DIRECTGATHER64=1 DIRECTGATHER_S
  ORBITCTA_FLAT_DYNAMIC_FUSE_LEASE_PREP=0 ORBITCTA_FLAT_DYNAMIC_PIPE2=1 ORBITCTA_COL_ILP="$COL_ILP"
  QUAD_MLP="$QUAD_MLP" QUAD_OVERLAP_LOCAL=0 QUAD_LOCAL_DIRECT_MAX=0 QUAD_SPARSE_DESC_MLP=0 QUAD_OVERLAP_BYPASS_LOCAL0=0 QUAD_CPASYNC_PREFETCH_BYTES=0 QUAD_CPASYNC_GROUP_COLS=1
  PRECTX_FORWARD="$PRECTX_FORWARD" PRECTX_REVERSE="$PRECTX_REVERSE" PRECTX_COMPACT="$PRECTX_COMPACT"
- PRECTX_FLAT_BID="$PRECTX_FLAT_BID" PRECTX_FLAT_BID_FUSED="$PRECTX_FLAT_BID_FUSED" PRECTX_WARPCOOP=0 PTXAS_VERBOSE=1)
+ PRECTX_FLAT_BID="$PRECTX_FLAT_BID" PRECTX_FLAT_BID_FUSED="$PRECTX_FLAT_BID_FUSED" PRECTX_WARPCOOP=0 PRODUCER_ADAPTIVE_COLS=0 PTXAS_VERBOSE=1)
 
 printf 'backend\tkernel\tregisters\tstack_bytes\tspill_store_bytes\tspill_load_bytes\tsmem_bytes\tcmem0_bytes\n' >"$RESOURCE"
 declare -A BIN
@@ -56,6 +57,7 @@ for w in 0 1 2 3 4; do
   env "${COMMON[@]}" PRODUCER_PRECTX_WARPCOOP=0 PRODUCER_WORKER_WEIGHT="$w" OUT="${BIN[$name]}" \
     bash "$ONEESAN_ROOT/scripts/build/b300-directgather-orbitcta-pipe2-producer-warp.sh" >"$LOGDIR/${name}.build.out" 2>"$LOGDIR/${name}.build.err"
   grep -q "pipe2_producer_warp=1 pipe2_producer_worker_weight=$w" "$LOGDIR/${name}.build.err" || { echo "$name producer weight marker mismatch" >&2; exit 6; }
+  grep -q 'pipe2_producer_adaptive_cols=0' "$LOGDIR/${name}.build.err" || { echo "$name adaptive isolation marker mismatch" >&2; exit 6; }
   grep -q "quad_mlp=$QUAD_MLP" "$LOGDIR/${name}.build.err" || { echo "$name quad marker mismatch" >&2; exit 6; }
   python3 "$PARSER" "$LOGDIR/${name}.build.err" --label "$name" >>"$RESOURCE" || true
 done
@@ -100,11 +102,12 @@ for v in variants: print(f'{v}_wall_median={m(v,"wall_s"):.9f} {v}_high_median={
 w=min(variants,key=lambda v:m(v,'wall_s'))
 producer=0 if w=='standard' else 1
 weight=0 if w=='standard' else int(w[1:])
-print(f'producer_weight_winner={w} producer={producer} worker_weight={weight} speedup_vs_standard={m("standard","wall_s")/m(w,"wall_s"):.6f}x')
+print(f'producer_weight_winner={w} producer={producer} worker_weight={weight} adaptive_cols=0 speedup_vs_standard={m("standard","wall_s")/m(w,"wall_s"):.6f}x')
 with open(out,'w') as f:
  f.write(f'ORBITCTA_FLAT_DYNAMIC_PIPE2_PRODUCER_WARP={producer}\n')
  f.write(f'ORBITCTA_FLAT_DYNAMIC_PIPE2_PRODUCER_WORKER_WEIGHT={weight}\n')
+ f.write('ORBITCTA_FLAT_DYNAMIC_PIPE2_PRODUCER_ADAPTIVE_COLS=0\n')
  f.write('ORBITCTA_FLAT_DYNAMIC_PIPE2_PRODUCER_PRECTX_WARPCOOP=0\n')
  f.write(f'DYNAMIC_PRODUCER_WALL_S={m(w,"wall_s"):.9f}\nDYNAMIC_PRODUCER_HIGH_S={m(w,"high_s"):.9f}\n')
 PY
-echo "selected pipe2 producer weight sweep OK result=$RESULT resources=$RESOURCE winner_env=$WINNER_ENV" >&2
+echo "selected pipe2 producer weight sweep OK adaptive_cols=0 result=$RESULT resources=$RESOURCE winner_env=$WINNER_ENV" >&2
