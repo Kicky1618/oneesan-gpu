@@ -104,14 +104,7 @@ new='''if(ds.size){if(useRankDelta){b300_block_pull_rankstate_ilp4_kernel<<<bd,t
 if s.count(old)!=1:raise SystemExit(f'ILP4 launch anchor expected one match got {s.count(old)}')
 s=s.replace(old,new,1)
 
-# The replacement adds a brace around the useRankDelta branch; close it before
-# the existing else-if fallback.
-old=''';else if(useBlockMate)block_pull_kernel<true,false>'''
-new=''';}else if(useBlockMate)block_pull_kernel<true,false>'''
-if s.count(old)!=1:raise SystemExit(f'fallback branch anchor expected one match got {s.count(old)}')
-s=s.replace(old,new,1)
-
-for req in ('b300_block_closure_warp_kernel','__shared__ Code ranks[MAX_WARPS][MAX_TERMS]','lane<unsigned(cnt)?in_main','__shfl_down_sync','cnt=-1','endpoint states remain','b300_block_pull_rankstate_ilp4_kernel<<<','b300_block_closure_warp_kernel<<<'):
+for req in ('b300_block_closure_warp_kernel','__shared__ Code ranks[MAX_WARPS][MAX_TERMS]','lane<unsigned(cnt)?in_main','__shfl_down_sync','cnt=-1','Endpoint states remain','b300_block_pull_rankstate_ilp4_kernel<<<','b300_block_closure_warp_kernel<<<','}else if(useBlockMate)'):
     if req not in s:raise SystemExit(f'missing closure-warp artifact: {req}')
 out.parent.mkdir(parents=True,exist_ok=True);out.write_text(s)
 print(f'generated {out} from {src}: b300_block_closure_warp=1 warp_per_destination=1 rank_generation_lane0=1 source_loads_parallel_lanes=32 shared_bytes_per_block=8192 endpoint_kernel_split=1 closure_kernel_split=1 same_stream_exact_order=1')
