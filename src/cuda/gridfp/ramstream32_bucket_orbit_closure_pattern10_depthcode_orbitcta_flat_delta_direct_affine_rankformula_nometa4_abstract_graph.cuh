@@ -6,12 +6,18 @@
 #include "ramstream32_bucket_orbit_closure_pattern10_depthcode_orbitcta_delta_direct_affine_rankformula_nometa4_abstract_graph.cuh"
 #include "ramstream32_bucket_orbit_closure_pattern10_depthcode_orbitcta_flat_delta_direct_affine_rankformula_nometa4_abstract.cuh"
 
-#if P10DC_ORBITCTA_FLAT_CHUNK > 1
+#if P10DC_RANKFORMULA_PRECTX_FLAT_BID
+#define P10DC_ORBITCTA_FLAT_FORWARD_KERNEL bucket_high_orbit_closure_pattern10_depthcode_orbitcta_flat_prectx_bid_kernel
+#define P10DC_ORBITCTA_FLAT_REVERSE_KERNEL bucket_reverse_high_pattern10_depthcode_orbitcta_flat_prectx_bid_kernel
+#define P10DC_ORBITCTA_FLAT_BID_MODE "compact_prectx"
+#elif P10DC_ORBITCTA_FLAT_CHUNK > 1
 #define P10DC_ORBITCTA_FLAT_FORWARD_KERNEL bucket_high_orbit_closure_pattern10_depthcode_orbitcta_flat_chunked_kernel
 #define P10DC_ORBITCTA_FLAT_REVERSE_KERNEL bucket_reverse_high_pattern10_depthcode_orbitcta_flat_chunked_kernel
+#define P10DC_ORBITCTA_FLAT_BID_MODE "chunk_amortized"
 #else
 #define P10DC_ORBITCTA_FLAT_FORWARD_KERNEL bucket_high_orbit_closure_pattern10_depthcode_orbitcta_flat_kernel
 #define P10DC_ORBITCTA_FLAT_REVERSE_KERNEL bucket_reverse_high_pattern10_depthcode_orbitcta_flat_kernel
+#define P10DC_ORBITCTA_FLAT_BID_MODE "binary_search"
 #endif
 
 static inline int p10dc_orbitcta_flat_blocks_env(int fallback) {
@@ -68,6 +74,7 @@ static P10DCOrbitCtaFlatOccupancy p10dc_orbitcta_flat_report_high_occupancy(int 
               << " threads=" << threads
               << " dynamic_smem_bytes=" << smem
               << " flat_chunk=" << P10DC_ORBITCTA_FLAT_CHUNK
+              << " flat_bid_mode=" << P10DC_ORBITCTA_FLAT_BID_MODE
               << " cpasync_pair=" << P10DC_RANKFORMULA_CPASYNC_PAIR
               << " forward_regs=" << fa.numRegs
               << " reverse_regs=" << ra.numRegs
@@ -140,11 +147,6 @@ struct BucketPattern10DepthCodeFlatOrbitCtaDirectAffineRankFormulaNometa4Abstrac
         const int low_gx = p10dc_rankformula_grid_env("BUCKET_LOW_GRID_X", 16);
         const int low_gy = p10dc_rankformula_grid_env("BUCKET_LOW_GRID_Y", 8);
 
-        // A persistent static-stride grid should normally have about as many
-        // CTAs as can be resident. Oversizing the grid reserves q residues for
-        // CTAs that have not started yet and turns the persistent pass into
-        // multiple scheduling waves. Keep explicit tuning knobs, but make the
-        // no-env production default occupancy-derived and direction-specific.
         const int explicit_blocks = p10dc_orbitcta_flat_blocks_env(0);
         const int explicit_per_sm = p10dc_orbitcta_flat_blocks_per_sm_env(0);
         int forward_flat_blocks = 0, reverse_flat_blocks = 0;
@@ -177,7 +179,9 @@ struct BucketPattern10DepthCodeFlatOrbitCtaDirectAffineRankFormulaNometa4Abstrac
                   << " pool_mode=" << pool_mode
                   << " scheduler=persistent_global_orbit_pool"
                   << " flat_chunk=" << P10DC_ORBITCTA_FLAT_CHUNK
-                  << " bid_binary_search_per_chunk=1"
+                  << " flat_bid_mode=" << P10DC_ORBITCTA_FLAT_BID_MODE
+                  << " bid_binary_search_per_chunk="
+                  << (P10DC_RANKFORMULA_PRECTX_FLAT_BID ? 0 : 1)
                   << " high_grid_y=1 high_grid_z=1"
                   << " context_smem_bytes=" << sizeof(P10DCDirectHighResolvedCtx)
                   << " launch_smem_bytes=" << p10dc_orbitcta_high_smem_bytes(threads)
@@ -230,5 +234,6 @@ static void bucket_pattern10_depthcode_flat_orbitcta_rankformula_nometa4_abstrac
     }
 }
 
+#undef P10DC_ORBITCTA_FLAT_BID_MODE
 #undef P10DC_ORBITCTA_FLAT_REVERSE_KERNEL
 #undef P10DC_ORBITCTA_FLAT_FORWARD_KERNEL
