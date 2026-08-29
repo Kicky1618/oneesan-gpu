@@ -47,14 +47,14 @@ if [[ "$PRECTX_COMPACT" == 1 ]]; then
   ARCH="$ARCH" PM_ACCUM="$PM_ACCUM" bash "$ONEESAN_ROOT/scripts/bench/compact-prectx-selftest.sh" >"$LOGDIR/compact-prectx.out" 2>"$LOGDIR/compact-prectx.err"
 fi
 
-# Keep this benchmark isolated to the chunk scheduler. Newer flat-bid and quad
-# experiments are forced off even if the parent shell exported them.
-COMMON=(N="$N" ARCH="$ARCH" ORBITCTA_FLAT=1 DIRECTGATHER64=1 DIRECTGATHER_SPARSE64="$SPARSE64" DIRECTGATHER_SORT_RANKS="$SORT_RANKS" ORBITCTA_COL_ILP="$COL_ILP" PAIR_MLP="$PAIR_MLP" CPASYNC_PAIR="$CPASYNC_PAIR" QUAD_MLP=0 QUAD_OVERLAP_LOCAL=0 QUAD_LOCAL_DIRECT_MAX=0 RANKFORMULA_MLP_WINDOW4="$WINDOW4" PM_ACCUM="$PM_ACCUM" PRECTX_FORWARD="$PRECTX_FORWARD" PRECTX_REVERSE="$PRECTX_REVERSE" PRECTX_COMPACT="$PRECTX_COMPACT" PRECTX_FLAT_BID=0 PRECTX_FLAT_BID_FUSED=0 PTXAS_VERBOSE="$PTXAS_VERBOSE")
+# Keep this benchmark isolated to the chunk scheduler. Newer flat-bid, dynamic
+# queue and quad experiments are forced off even if the parent shell exported them.
+COMMON=(N="$N" ARCH="$ARCH" ORBITCTA_FLAT=1 ORBITCTA_FLAT_DYNAMIC=0 DIRECTGATHER64=1 DIRECTGATHER_SPARSE64="$SPARSE64" DIRECTGATHER_SORT_RANKS="$SORT_RANKS" ORBITCTA_COL_ILP="$COL_ILP" PAIR_MLP="$PAIR_MLP" CPASYNC_PAIR="$CPASYNC_PAIR" QUAD_MLP=0 QUAD_OVERLAP_LOCAL=0 QUAD_LOCAL_DIRECT_MAX=0 QUAD_SPARSE_DESC_MLP=0 QUAD_OVERLAP_BYPASS_LOCAL0=0 QUAD_CPASYNC_PREFETCH_BYTES=0 QUAD_CPASYNC_GROUP_COLS=1 RANKFORMULA_MLP_WINDOW4="$WINDOW4" PM_ACCUM="$PM_ACCUM" PRECTX_FORWARD="$PRECTX_FORWARD" PRECTX_REVERSE="$PRECTX_REVERSE" PRECTX_COMPACT="$PRECTX_COMPACT" PRECTX_FLAT_BID=0 PRECTX_FLAT_BID_FUSED=0 PRECTX_WARPCOOP=0 PTXAS_VERBOSE="$PTXAS_VERBOSE")
 
 field(){ local k="$1" l="$2"; sed -nE "s/(^|.*[[:space:]])${k}=([^[:space:]]+).*/\\2/p" <<<"$l" | tail -n1; }
 sample(){ local pid="$1" out="$2"; : >"$out"; while kill -0 "$pid" 2>/dev/null; do nvidia-smi --query-gpu=utilization.gpu,utilization.memory --format=csv,noheader,nounits 2>/dev/null | awk -F',' '{g=$1+0;m=$2+0;sg+=g;sm+=m;if(g>mg)mg=g;if(m>mm)mm=m;n++}END{if(n)printf "%.6f %.6f %d %d\n",sg/n,sm/n,mg,mm}' >>"$out" || true; sleep "$SAMPLE_INTERVAL"; done; }
 
-printf 'chunk\trepeat\tresidue\twall_s\tforward_high_s\treverse_high_s\thigh_s\tavg_gpu_util_pct\tavg_memctrl_util_pct\tmax_gpu_util_pct\tmax_memctrl_util_pct\tforward_flat_blocks\treverse_flat_blocks\tforward_regs\treverse_regs\tforward_blocks_per_sm\treverse_blocks_per_sm\n' >"$RESULT"
+printf 'chunk\trepeat\tresidue\twall_s\tforward_high_s\treverse_high_s\thigh_s\tavg_gpu_util_pct\tavg_memctrl_util_pct\tmax_gpu_util_pct\tmax_memctrl_util_pct\tforward_flat_blocks\treverse_flat_blocks\tforward_regs\treverse_regs\tforward_blocks_per_sm\treverse_blocks_per_sm\tscheduler_mode\n' >"$RESULT"
 printf 'backend\tkernel\tregisters\tstack_bytes\tspill_store_bytes\tspill_load_bytes\tsmem_bytes\tcmem0_bytes\n' >"$RESOURCE"
 
 for chunk in $CHUNKS; do
@@ -78,8 +78,10 @@ for chunk in $CHUNKS; do
     grid="$(grep 'rankformula_orbitcta_flat_grid device=0 ' "$se" | head -n1 || true)"
     occ="$(grep 'rankformula_orbitcta_flat_occupancy device=0 ' "$se" | head -n1 || true)"
     [[ "$(field flat_chunk "$grid")" == "$chunk" ]] || { echo "chunk=$chunk runtime grid log mismatch" >&2; exit 6; }
-    expected_mode=binary_search; (( chunk > 1 )) && expected_mode=chunk_amortized
+    expected_mode=binary_search; expected_sched=static_cyclic
+    if (( chunk > 1 )); then expected_mode=chunk_amortized; expected_sched=static_chunk_cyclic; fi
     [[ "$(field flat_bid_mode "$grid")" == "$expected_mode" ]] || { echo "chunk=$chunk flat_bid_mode mismatch" >&2; exit 6; }
+    [[ "$(field scheduler_mode "$grid")" == "$expected_sched" ]] || { echo "chunk=$chunk scheduler_mode mismatch" >&2; exit 6; }
     fh="$(field forward_high_s "$detail")"; rh="$(field reverse_high_s "$detail")"
     high="$(python3 - "$fh" "$rh" <<'PY'
 import sys
@@ -87,11 +89,11 @@ print(f'{float(sys.argv[1])+float(sys.argv[2]):.9f}')
 PY
 )"
     read -r ag am mg mm < <(awk '{sg+=$1;sm+=$2;if($3>mg)mg=$3;if($4>mm)mm=$4;n++}END{if(n)printf "%.6f %.6f %d %d\n",sg/n,sm/n,mg,mm;else print "NA NA NA NA"}' "$util")
-    printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
+    printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
       "$chunk" "$rep" "$residue" "$(field wall_s "$line")" "$fh" "$rh" "$high" "$ag" "$am" "$mg" "$mm" \
       "$(field forward_flat_blocks "$grid")" "$(field reverse_flat_blocks "$grid")" \
       "$(field forward_regs "$occ")" "$(field reverse_regs "$occ")" \
-      "$(field forward_blocks_per_sm "$occ")" "$(field reverse_blocks_per_sm "$occ")" >>"$RESULT"
+      "$(field forward_blocks_per_sm "$occ")" "$(field reverse_blocks_per_sm "$occ")" "$expected_sched" >>"$RESULT"
   done
 done
 
@@ -101,13 +103,13 @@ src,summary,winner=sys.argv[1:]
 rows=list(csv.DictReader(open(src),delimiter='\t')); out=[]
 for chunk in dict.fromkeys(r['chunk'] for r in rows):
     g=[r for r in rows if r['chunk']==chunk]
-    z={'chunk':chunk,'repeats':len(g)}
+    z={'chunk':chunk,'repeats':len(g),'scheduler_mode':g[0]['scheduler_mode']}
     for k in ('wall_s','forward_high_s','reverse_high_s','high_s','avg_gpu_util_pct','avg_memctrl_util_pct','max_memctrl_util_pct'):
         vals=[float(r[k]) for r in g if r[k]!='NA']; z[k]=statistics.median(vals) if vals else float('nan')
     for k in ('forward_flat_blocks','reverse_flat_blocks','forward_regs','reverse_regs','forward_blocks_per_sm','reverse_blocks_per_sm'):
         vals=[int(r[k]) for r in g if r[k]]; z[k]=int(statistics.median(vals)) if vals else 0
     out.append(z)
-keys=('chunk','repeats','wall_s','forward_high_s','reverse_high_s','high_s','avg_gpu_util_pct','avg_memctrl_util_pct','max_memctrl_util_pct','forward_flat_blocks','reverse_flat_blocks','forward_regs','reverse_regs','forward_blocks_per_sm','reverse_blocks_per_sm')
+keys=('chunk','repeats','wall_s','forward_high_s','reverse_high_s','high_s','avg_gpu_util_pct','avg_memctrl_util_pct','max_memctrl_util_pct','forward_flat_blocks','reverse_flat_blocks','forward_regs','reverse_regs','forward_blocks_per_sm','reverse_blocks_per_sm','scheduler_mode')
 with open(summary,'w') as f:
     f.write('\t'.join(keys)+'\n')
     for z in out:f.write('\t'.join(str(z[k]) for k in keys)+'\n')
@@ -115,12 +117,12 @@ base=next((z for z in out if z['chunk']=='1'),None)
 for z in sorted(out,key=lambda z:z['high_s']):
     extra=''
     if base: extra=f" high_speedup_vs_chunk1={base['high_s']/z['high_s']:.6f} wall_speedup_vs_chunk1={base['wall_s']/z['wall_s']:.6f}"
-    print('FLAT_CHUNK',z['chunk'],f"wall_s={z['wall_s']:.6f}",f"high_s={z['high_s']:.6f}",f"regs={z['forward_regs']}/{z['reverse_regs']}",f"active_blocks_sm={z['forward_blocks_per_sm']}/{z['reverse_blocks_per_sm']}"+extra)
+    print('FLAT_CHUNK',z['chunk'],f"wall_s={z['wall_s']:.6f}",f"high_s={z['high_s']:.6f}",f"regs={z['forward_regs']}/{z['reverse_regs']}",f"active_blocks_sm={z['forward_blocks_per_sm']}/{z['reverse_blocks_per_sm']}",f"scheduler={z['scheduler_mode']}"+extra)
 b=min(out,key=lambda z:z['wall_s'])
 with open(winner,'w') as f:
     f.write('ORBITCTA_FLAT=1\n')
     f.write(f'ORBITCTA_FLAT_CHUNK={b["chunk"]}\n')
-    f.write('PRECTX_FLAT_BID=0\nPRECTX_FLAT_BID_FUSED=0\nQUAD_MLP=0\nQUAD_OVERLAP_LOCAL=0\nQUAD_LOCAL_DIRECT_MAX=0\n')
+    f.write('ORBITCTA_FLAT_DYNAMIC=0\nPRECTX_FLAT_BID=0\nPRECTX_FLAT_BID_FUSED=0\nPRECTX_WARPCOOP=0\nQUAD_MLP=0\nQUAD_OVERLAP_LOCAL=0\nQUAD_LOCAL_DIRECT_MAX=0\n')
 print('WINNER_CHUNK='+b['chunk'],f"wall_s={b['wall_s']:.6f}",f"high_s={b['high_s']:.6f}",f"winner_env={winner}")
 PY
 cat "$RESULT"
