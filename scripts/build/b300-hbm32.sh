@@ -37,6 +37,7 @@ if [[ "$MAIN_PULL" == 1 ]]; then bash "$ONEESAN_ROOT/scripts/bench/b300-main-pul
 if [[ "$BLOCK_PULL" == 1 ]]; then
   bash "$ONEESAN_ROOT/scripts/bench/b300-block-pull-operator-proof.sh"
   bash "$ONEESAN_ROOT/scripts/bench/b300-group-rank-drop-insert-proof.sh"
+  bash "$ONEESAN_ROOT/scripts/bench/b300-block-closure-rank-incremental-proof.sh"
 fi
 if [[ "$RANK_DELTA_CACHE" == 1 ]]; then
   bash "$ONEESAN_ROOT/scripts/bench/b300-rank-delta-recurrence-proof.sh"
@@ -75,4 +76,5 @@ echo "  source=$SRC"
 echo "  build_source=$BUILD_SRC"
 echo "  n=$N width=$W arch=$ARCH low_lut_k=$LOW_LUT_K high_lut_k=$HIGH_LUT_K fast_shard_address8=$FAST_SHARD_ADDRESS8 main_mate_cache=$MAIN_MATE_CACHE main_pull=$MAIN_PULL block_pull=$BLOCK_PULL block_mate_cache=$BLOCK_MATE_CACHE rank_delta_cache=$RANK_DELTA_CACHE ptxas_verbose=$PTXAS_VERBOSE"
 echo "  row_limit_env=B300_ROW_LIMIT default_rows=$W runtime_threads_env=GRIDFP_THREADS default_threads=256 planner_target_env=GRIDFP_PLAN_TARGET_MIB scratch_target_separate=1"
+echo "  block_closure_scan=endpoint_setbits block_closure_candidate_rank=incremental_delta rank_same_calls_per_closure_candidate=0"
 if [[ "$RANK_DELTA_CACHE" == 1 ]]; then echo "  rank_delta_bytes_per_state=8 rank_delta_hbm_rw_per_step_bytes=16 prefix_rank_walk_removed=main_drop,block_lift moving_fixed_checks=0 conditional_scratch=1 coverage_report=1 input_compat_normalized=1";fi
