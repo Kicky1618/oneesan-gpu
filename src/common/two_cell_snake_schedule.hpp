@@ -1,6 +1,7 @@
 #pragma once
 
-#include <array>
+#include "two_cell_recoupling_rank.hpp"
+
 #include <cstdint>
 
 namespace oneesan::twocell {
