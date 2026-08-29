@@ -38,7 +38,6 @@ s=replace_function(s,'block_pull_rank_contrib',r'''__device__ __forceinline__ Co
     return Code(v==R?uint32_t(z):uint32_t(z>>32));
 }''')
 
-# Add the signed h->h+2 helper immediately after the replaced rank contribution.
 needle='''__device__ __forceinline__ Code block_pull_rank_contrib(MateValue v,int pos,int h){
     if(v==N)return 0;
     const unsigned long long z=D_BLOCK_CLOSURE_CONTRIB32[pos][h];
@@ -55,25 +54,16 @@ __device__ __forceinline__ BlockClosureDelta block_pull_rank_shift2(MateValue v,
 '''
 s=s.replace(needle,needle+shift_helper,1)
 
-# Replace all exact recurring h+2 update expressions in generic, ILP4 and warp
-# closure implementations. Candidate cross-symbol corrections stay on the
-# absolute packed table because they use different symbols/heights.
 patterns=(
-    ('BlockClosureDelta(block_pull_rank_contrib(v,q,hb+2))-\n                        BlockClosureDelta(block_pull_rank_contrib(v,q,hb))',
-     'block_pull_rank_shift2(v,q,hb)'),
-    ('BlockClosureDelta(block_pull_rank_contrib(v,q,hq+2))-\n                         BlockClosureDelta(block_pull_rank_contrib(v,q,hq))',
-     'block_pull_rank_shift2(v,q,hq)'),
-    ('BlockClosureDelta(block_pull_rank_contrib(v,q,hb+2))-BlockClosureDelta(block_pull_rank_contrib(v,q,hb))',
-     'block_pull_rank_shift2(v,q,hb)'),
-    ('BlockClosureDelta(block_pull_rank_contrib(v,q,hq+2))-BlockClosureDelta(block_pull_rank_contrib(v,q,hq))',
-     'block_pull_rank_shift2(v,q,hq)'),
+    ('BlockClosureDelta(block_pull_rank_contrib(v,q,hb+2))-\n                        BlockClosureDelta(block_pull_rank_contrib(v,q,hb))','block_pull_rank_shift2(v,q,hb)'),
+    ('BlockClosureDelta(block_pull_rank_contrib(v,q,hq+2))-\n                         BlockClosureDelta(block_pull_rank_contrib(v,q,hq))','block_pull_rank_shift2(v,q,hq)'),
+    ('BlockClosureDelta(block_pull_rank_contrib(v,q,hb+2))-BlockClosureDelta(block_pull_rank_contrib(v,q,hb))','block_pull_rank_shift2(v,q,hb)'),
+    ('BlockClosureDelta(block_pull_rank_contrib(v,q,hq+2))-BlockClosureDelta(block_pull_rank_contrib(v,q,hq))','block_pull_rank_shift2(v,q,hq)'),
 )
 repl=0
 for old,new in patterns:
     n=s.count(old)
-    if n:
-        s=s.replace(old,new)
-        repl+=n
+    if n:s=s.replace(old,new);repl+=n
 if repl<2:raise SystemExit(f'closure shift2 update replacements too few: {repl}')
 
 anchor='''    ck(cudaMemcpyToSymbol(D_MAIN_DP,ms.dp,sizeof(ms.dp)),"main dp");ck(cudaMemcpyToSymbol(D_BLOCK_DP,ds.dp,sizeof(ds.dp)),"block dp");'''
@@ -85,7 +75,7 @@ prep=r'''    unsigned long long closureContrib32[MAXW+1][MAXW+2]{};
         Code nbranch=0,rbranch=0;
         if(allowed_host(ms.fixed,ms.occ,pp,N))nbranch=ms.dp[pp][hh];
         if(hh>0&&allowed_host(ms.fixed,ms.occ,pp,R))rbranch=ms.dp[pp][hh-1];
-        return which==0?unsigned long long(nbranch):unsigned long long(nbranch+rbranch);
+        return which==0?static_cast<unsigned long long>(nbranch):static_cast<unsigned long long>(nbranch+rbranch);
     };
     unsigned long long closureAbsMax=0;long long closureShiftAbsMax=0;
     for(int pp=0;pp<W;++pp)for(int hh=0;hh<=MAXW+1;++hh){
@@ -93,13 +83,13 @@ prep=r'''    unsigned long long closureContrib32[MAXW+1][MAXW+2]{};
         if(cr>0xffffffffULL||cl>0xffffffffULL){
             std::cerr<<"closure contrib u32 overflow p="<<pp<<" h="<<hh<<" R="<<cr<<" L="<<cl<<'\n';std::exit(839);
         }
-        closureContrib32[pp][hh]=(unsigned long long(uint32_t(cl))<<32)|uint32_t(cr);
-        const long long dr=long long(closure_contrib_host(pp,hh+2,0))-long long(cr);
-        const long long dl=long long(closure_contrib_host(pp,hh+2,1))-long long(cl);
+        closureContrib32[pp][hh]=(static_cast<unsigned long long>(uint32_t(cl))<<32)|uint32_t(cr);
+        const long long dr=static_cast<long long>(closure_contrib_host(pp,hh+2,0))-static_cast<long long>(cr);
+        const long long dl=static_cast<long long>(closure_contrib_host(pp,hh+2,1))-static_cast<long long>(cl);
         if(dr<-2147483648LL||dr>2147483647LL||dl<-2147483648LL||dl>2147483647LL){
             std::cerr<<"closure shift2 i32 overflow p="<<pp<<" h="<<hh<<" R="<<dr<<" L="<<dl<<'\n';std::exit(840);
         }
-        closureShift232[pp][hh]=(unsigned long long(uint32_t(int32_t(dl)))<<32)|uint32_t(int32_t(dr));
+        closureShift232[pp][hh]=(static_cast<unsigned long long>(uint32_t(int32_t(dl)))<<32)|uint32_t(int32_t(dr));
         closureAbsMax=std::max(closureAbsMax,std::max(cr,cl));
         closureShiftAbsMax=std::max(closureShiftAbsMax,std::max(dr<0?-dr:dr,dl<0?-dl:dl));
     }
@@ -113,7 +103,7 @@ s=s.replace(anchor,prep+anchor,1)
 
 for req in ('D_BLOCK_CLOSURE_CONTRIB32','D_BLOCK_CLOSURE_SHIFT232','block_pull_rank_shift2','block closure contrib32','block closure shift232','u32_i32_checked=1'):
     if req not in s:raise SystemExit(f'missing packed closure-table artifact: {req}')
-for stale in ('D_BLOCK_CLOSURE_CONTRIB[MAXW+1][MAXW+2][2]','BlockClosureDelta(block_pull_rank_contrib(v,q,hb+2))-BlockClosureDelta(block_pull_rank_contrib(v,q,hb))','BlockClosureDelta(block_pull_rank_contrib(v,q,hq+2))-BlockClosureDelta(block_pull_rank_contrib(v,q,hq))'):
+for stale in ('D_BLOCK_CLOSURE_CONTRIB[MAXW+1][MAXW+2][2]','unsigned long long(nbranch)','long long(closure_contrib_host','BlockClosureDelta(block_pull_rank_contrib(v,q,hb+2))-BlockClosureDelta(block_pull_rank_contrib(v,q,hb))','BlockClosureDelta(block_pull_rank_contrib(v,q,hq+2))-BlockClosureDelta(block_pull_rank_contrib(v,q,hq))'):
     if stale in s:raise SystemExit(f'stale closure table artifact remains: {stale}')
 
 out.parent.mkdir(parents=True,exist_ok=True);out.write_text(s)
