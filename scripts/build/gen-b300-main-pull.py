@@ -16,7 +16,7 @@ if marker not in s:
 insert = r'''
 
 template<bool CACHED_MATE>
-__global__ void main_pull_kernel(const Count*in,const MateID*mates,Code n,const Count*in_block,Count*out_main,int p){
+__global__ void main_pull_kernel(const Count*in,const MateID*mates,Code n,const Count*in_block,Code nblock,Count*out_main,int p){
     Code i=Code(blockIdx.x)*blockDim.x+threadIdx.x,stride=Code(gridDim.x)*blockDim.x;
     for(;i<n;i+=stride){
         MateID m;
@@ -31,7 +31,7 @@ __global__ void main_pull_kernel(const Count*in,const MateID*mates,Code n,const 
             default:break;
         }
         if(has){Code j=rank_same_t<TARGET_W>(i,m,x,D_MAIN_FIXED,D_MAIN_OCC,D_MAIN_DP);acc+=in[j];}
-        if(mget(m,p)==N){MateID b=mshrink(m,p);Code j=rank_group_t<TARGET_W-1>(b,D_BLOCK_FIXED,D_BLOCK_OCC,D_BLOCK_DP);acc+=in_block[j];}
+        if(nblock&&mget(m,p)==N){MateID b=mshrink(m,p);Code j=rank_group_t<TARGET_W-1>(b,D_BLOCK_FIXED,D_BLOCK_OCC,D_BLOCK_DP);if(j<nblock)acc+=in_block[j];}
         uint64_t mod=D_MOD;if(acc>=mod)acc-=mod;if(acc>=mod)acc-=mod;out_main[i]=Count(acc);
     }
 }
@@ -65,13 +65,12 @@ if a < 0:
 b = s.find(end_marker, a)
 if b < 0:
     raise SystemExit('process_group loop end not found')
-old_loop = s[a:b]
 new_loop = r'''    for(int p=wp.p_hi;p>=wp.p_lo;--p){
         if(p>1){
             if(ds.size)ck(cudaMemsetAsync(dnext,0,size_t(ds.size)*sizeof(Count),c.sBlock),"clear next D pull");
             if(ms.size){
-                if(useMate)main_pull_kernel<true><<<bm,threads,0,c.sMain>>>(cur,c.dMate,ms.size,dcur,nxt,p);
-                else main_pull_kernel<false><<<bm,threads,0,c.sMain>>>(cur,nullptr,ms.size,dcur,nxt,p);
+                if(useMate)main_pull_kernel<true><<<bm,threads,0,c.sMain>>>(cur,c.dMate,ms.size,dcur,ds.size,nxt,p);
+                else main_pull_kernel<false><<<bm,threads,0,c.sMain>>>(cur,nullptr,ms.size,dcur,ds.size,nxt,p);
                 if(ds.size){
                     if(useMate)main_to_block_kernel<true><<<bm,threads,0,c.sBlock>>>(cur,c.dMate,ms.size,dnext,p);
                     else main_to_block_kernel<false><<<bm,threads,0,c.sBlock>>>(cur,nullptr,ms.size,dnext,p);
@@ -96,4 +95,4 @@ s = s[:a] + new_loop + s[b:]
 
 out.parent.mkdir(parents=True, exist_ok=True)
 out.write_text(s)
-print(f'generated {out} from {src}: b300_main_pull=1 p_scope=2..Wm1 main_atomic=0 main_identity_copy=0 blocked_to_main_scatter=0')
+print(f'generated {out} from {src}: b300_main_pull=1 p_scope=2..Wm1 main_atomic=0 main_identity_copy=0 blocked_to_main_scatter=0 block_rank_guard=1')
