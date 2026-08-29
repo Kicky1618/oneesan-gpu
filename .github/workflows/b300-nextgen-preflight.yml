@@ -4,12 +4,16 @@ on:
   push:
     paths:
       - 'scripts/build/b300-forced-nextgen.sh'
+      - 'scripts/build/gen-b300-low-drop-chunk.py'
+      - 'scripts/build/gen-b300-low-window-drop-cache.py'
       - 'scripts/build/gen-b300-main-recurrence-ilp.py'
       - 'scripts/build/gen-b300-main-recurrence-hybrid-ilp8.py'
       - 'scripts/build/gen-b300-mainrec-hybrid8-next-self-prefetch.py'
       - 'scripts/build/gen-b300-mainrec-random-cg.py'
       - 'scripts/build/gen-b300-mainrec-prefetch-l2.py'
       - 'scripts/bench/b300-nextgen-*.sh'
+      - 'scripts/bench/b300-low-window-drop-cache-proof.sh'
+      - 'scripts/bench/b300-main-recurrence-production-generate-proof.sh'
       - 'scripts/bench/b300-grand-selector-contract-preflight.sh'
       - 'scripts/bench/b300-main-recurrence-ilp-partition-proof.py'
       - 'scripts/bench/b300-mainrec-hybrid-ilp8-partition-proof.py'
@@ -27,16 +31,21 @@ on:
       - 'scripts/run/b300x8-race-forced-profiled-once.sh'
       - 'scripts/run/b300x8-race-external-forced-profiled-once.sh'
       - 'scripts/run/b300x8-grand-firstpass.sh'
+      - 'src/cpp/probes/b300_low_window_drop_cache_proof.cpp'
       - '.github/workflows/b300-nextgen-preflight.yml'
   pull_request:
     paths:
       - 'scripts/build/b300-forced-nextgen.sh'
+      - 'scripts/build/gen-b300-low-drop-chunk.py'
+      - 'scripts/build/gen-b300-low-window-drop-cache.py'
       - 'scripts/build/gen-b300-main-recurrence-ilp.py'
       - 'scripts/build/gen-b300-main-recurrence-hybrid-ilp8.py'
       - 'scripts/build/gen-b300-mainrec-hybrid8-next-self-prefetch.py'
       - 'scripts/build/gen-b300-mainrec-random-cg.py'
       - 'scripts/build/gen-b300-mainrec-prefetch-l2.py'
       - 'scripts/bench/b300-nextgen-*.sh'
+      - 'scripts/bench/b300-low-window-drop-cache-proof.sh'
+      - 'scripts/bench/b300-main-recurrence-production-generate-proof.sh'
       - 'scripts/bench/b300-grand-selector-contract-preflight.sh'
       - 'scripts/bench/b300-main-recurrence-ilp-partition-proof.py'
       - 'scripts/bench/b300-mainrec-hybrid-ilp8-partition-proof.py'
@@ -54,6 +63,7 @@ on:
       - 'scripts/run/b300x8-race-forced-profiled-once.sh'
       - 'scripts/run/b300x8-race-external-forced-profiled-once.sh'
       - 'scripts/run/b300x8-grand-firstpass.sh'
+      - 'src/cpp/probes/b300_low_window_drop_cache_proof.cpp'
       - '.github/workflows/b300-nextgen-preflight.yml'
   workflow_dispatch:
 
@@ -66,6 +76,10 @@ jobs:
     timeout-minutes: 5
     steps:
       - uses: actions/checkout@v4
+      - name: Validate low-window drop-cache rank decomposition
+        run: bash scripts/bench/b300-low-window-drop-cache-proof.sh
+      - name: Validate production recurrence transform composition
+        run: bash scripts/bench/b300-main-recurrence-production-generate-proof.sh
       - name: Validate nextgen transform chain
         run: bash scripts/bench/b300-nextgen-preflight.sh
       - name: Validate hybrid8 next-self transform composition
