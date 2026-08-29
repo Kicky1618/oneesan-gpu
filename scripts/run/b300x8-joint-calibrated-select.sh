@@ -9,7 +9,8 @@ PROFILE_FILE="${PROFILE_FILE:-$ONEESAN_ROOT/work/b300_hbm_profile_refined21.env}
 PREFIX="${PREFIX:-$ONEESAN_ROOT/work/b300_joint_calibrated_select_n27}";CAL_PREFIX="${CAL_PREFIX:-${PREFIX}.calibration}";CAL_LOG="${CAL_LOG:-${PREFIX}.calibration.log}"
 RECALIBRATE="${RECALIBRATE:-1}";SELECT_ONLY="${SELECT_ONLY:-1}"
 N27_PRODUCER_WEIGHT_RACE="${N27_PRODUCER_WEIGHT_RACE:-1}";PWW_REBUILD="${PWW_REBUILD:-1}"
-for x in RECALIBRATE SELECT_ONLY N27_PRODUCER_WEIGHT_RACE PWW_REBUILD;do v="${!x}";[[ "$v" == 0 || "$v" == 1 ]]||{ echo "$x must be 0 or 1" >&2;exit 2; };done
+N27_PRODUCER_ADAPTIVE_RACE="${N27_PRODUCER_ADAPTIVE_RACE:-1}";PAC_REBUILD="${PAC_REBUILD:-1}"
+for x in RECALIBRATE SELECT_ONLY N27_PRODUCER_WEIGHT_RACE PWW_REBUILD N27_PRODUCER_ADAPTIVE_RACE PAC_REBUILD;do v="${!x}";[[ "$v" == 0 || "$v" == 1 ]]||{ echo "$x must be 0 or 1" >&2;exit 2; };done
 mkdir -p "$(dirname "$PREFIX")"
 getv(){ local k="$1" f="$2";sed -nE "s/^${k}=([^[:space:]]+).*/\\1/p" "$f"|tail -n1; }
 
@@ -49,11 +50,8 @@ if [[ "$DUAL" != 0 || "$BATCH" != 0 || "$HIGH" != "$BASE_HIGH" || "$THREADS" != 
   echo "JOINT BASELINE FORCED label=$BASE_LABEL binary=$BASE_BIN" >&2
 fi
 
-# The n=21 profile picks a producer share cheaply, but n=27 can have a different
-# column/prepare balance. Before the expensive forced-vs-bucket race, smoke all
-# requested producer weights on a complete n=27 prime and carry only the fastest
-# exact profile forward. If the profile is not a producer-warp profile, the
-# wrapper simply copies it and returns without extra GPU work.
+# n=21 gives a cheap first estimate of producer share. Recalibrate on a complete
+# n=27 prime before comparing the bucket family against the forced family.
 if [[ "$N27_PRODUCER_WEIGHT_RACE" == 1 ]];then
   PWW_PROFILE_OUT="${PWW_PROFILE_OUT:-${PREFIX}.producer-weight.env}"
   PWW_PREFIX="${PWW_PREFIX:-${PREFIX}.producer-weight}"
@@ -65,6 +63,27 @@ if [[ "$N27_PRODUCER_WEIGHT_RACE" == 1 ]];then
   PROFILE_FILE="$PWW_PROFILE_OUT"
 fi
 
+# Once the n=27 base weight is known, calibrate the column threshold that makes
+# small orbits use weight=1 while large orbits keep that base weight. The
+# canonical profiled selector does not consume the threshold key yet, so export
+# the build-wrapper knob explicitly for every downstream rebuild.
+if [[ "$N27_PRODUCER_ADAPTIVE_RACE" == 1 ]];then
+  PAC_PROFILE_OUT="${PAC_PROFILE_OUT:-${PREFIX}.producer-adaptive.env}"
+  PAC_PREFIX="${PAC_PREFIX:-${PREFIX}.producer-adaptive}"
+  echo '=== joint calibrated selector: n27 producer adaptive-threshold race ===' >&2
+  PROFILE_FILE="$PROFILE_FILE" PROFILE_OUT="$PAC_PROFILE_OUT" PREFIX="$PAC_PREFIX" \
+    ADAPTIVE_RACE_ONLY=1 ADAPTIVE_REBUILD="$PAC_REBUILD" ARCH="$ARCH" SMOKE_PRIME="$PRIME" MAX_WINDOW="$MAX_WINDOW" \
+    bash "$ONEESAN_ROOT/scripts/run/b300x8-exact-auto-hbm-profiled-producer-adaptive-race.sh" 27
+  [[ -s "$PAC_PROFILE_OUT" ]]||{ echo "producer-adaptive profile missing: $PAC_PROFILE_OUT" >&2;exit 4; }
+  PROFILE_FILE="$PAC_PROFILE_OUT"
+fi
+PRODUCER_ADAPTIVE_COLS="$(getv ORBIT_N27_PRODUCER_ADAPTIVE_COLS "$PROFILE_FILE")"
+[[ -n "$PRODUCER_ADAPTIVE_COLS" ]] || PRODUCER_ADAPTIVE_COLS="$(getv ORBITCTA_FLAT_DYNAMIC_PIPE2_PRODUCER_ADAPTIVE_COLS "$PROFILE_FILE")"
+PRODUCER_ADAPTIVE_COLS="${PRODUCER_ADAPTIVE_COLS:-0}"
+[[ "$PRODUCER_ADAPTIVE_COLS" =~ ^[0-9]+$ ]]||{ echo "bad selected producer adaptive cols=$PRODUCER_ADAPTIVE_COLS" >&2;exit 4; }
+export PRODUCER_ADAPTIVE_COLS
+
+echo "JOINT BUCKET PROFILE profile=$PROFILE_FILE producer_adaptive_cols=$PRODUCER_ADAPTIVE_COLS" >&2
 export SELECT_ONLY FORCED_OVERRIDE_BIN="$BIN" FORCED_OVERRIDE_LABEL="$LABEL" FORCED_OVERRIDE_THREADS="$THREADS" PROFILE_FILE SMOKE_PRIME="$PRIME" FORCED_TARGET_MIB="$TARGET_MIB" MAX_WINDOW
 export PREFIX="${RACE_PREFIX:-${PREFIX}.race}"
 exec "$ONEESAN_ROOT/scripts/run/b300x8-race-external-forced-profiled.sh" 27 "$@"
