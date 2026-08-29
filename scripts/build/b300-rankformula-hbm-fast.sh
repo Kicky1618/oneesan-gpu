@@ -9,6 +9,7 @@ source "$(dirname -- "${BASH_SOURCE[0]}")/../lib/common.sh"
 N="${N:-21}"
 ARCH="${ARCH:-native}"
 TRANSPOSE_MODE="${TRANSPOSE_MODE:-pipeline}"
+MAXRREGCOUNT="${MAXRREGCOUNT:-0}"
 OUT="${OUT:-$ONEESAN_BUILD_DIR/oneesan_cuda_gridfp_b300_rankformula_hbm_fast_n${N}}"
 
 N="$N" ARCH="$ARCH" OUT="$OUT" \
@@ -24,6 +25,7 @@ RANKFORMULA_ABSTRACT_SELECT8=1 \
 RANKFORMULA_ABSTRACT_DEPTH4=1 \
 RANKFORMULA_ABSTRACT_SRCPACK10=1 \
 RANKFORMULA_GATHER_MLP=1 \
+MAXRREGCOUNT="$MAXRREGCOUNT" \
 PM_ACCUM=1 \
 TERNARY_KEY4=1 \
 DEPTHCODE_DECODE_LOAD=ldg \
@@ -32,4 +34,4 @@ TRANSPOSE_MODE="$TRANSPOSE_MODE" \
 PTXAS_VERBOSE="${PTXAS_VERBOSE:-1}" \
 bash "$ONEESAN_ROOT/scripts/build/b300-bucket-snake-pattern10-depthcode-rankformula-nometa4-abstract.sh"
 
-printf 'b300-rankformula-hbm-fast OK out=%s n=%s block=16 group61=1 directmap=1 directgather=1 depth4=1 srcpack10=1 gather_mlp=1 pm_accum=1\n' "$OUT" "$N" >&2
+printf 'b300-rankformula-hbm-fast OK out=%s n=%s block=16 group61=1 directmap=1 directgather=1 depth4=1 srcpack10=1 gather_mlp=1 maxrregcount=%s pm_accum=1\n' "$OUT" "$N" "$MAXRREGCOUNT" >&2
