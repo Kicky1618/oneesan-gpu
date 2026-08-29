@@ -22,40 +22,42 @@ command -v nvcc >/dev/null || { echo "nvcc required" >&2; exit 2; }
 command -v nvidia-smi >/dev/null || { echo "nvidia-smi required" >&2; exit 2; }
 (( $(nvidia-smi --query-gpu=index --format=csv,noheader | wc -l) >= 8 )) || { echo "need 8 visible GPUs" >&2; exit 2; }
 
-# mode | ILP | high-drop-chunk | low-main-recurrence | high-main-recurrence
+# mode | ILP | high-drop-chunk | low-main-recurrence | high-main-recurrence | unified-main-recurrence
 SPECS=(
-  'forced_ilp1|1|0|0|0'
-  'forced|2|0|0|0'
-  'forced_ilp3|3|0|0|0'
-  'forced_ilp4|4|0|0|0'
-  'forced_high|2|1|0|0'
-  'forced_lowrec|2|0|1|0'
-  'forced_highrec|2|0|0|1'
-  'forced_highrec_high|2|1|0|1'
+  'forced_ilp1|1|0|0|0|0'
+  'forced|2|0|0|0|0'
+  'forced_ilp3|3|0|0|0|0'
+  'forced_ilp4|4|0|0|0|0'
+  'forced_high|2|1|0|0|0'
+  'forced_lowrec|2|0|1|0|0'
+  'forced_highrec|2|0|0|1|0'
+  'forced_highrec_high|2|1|0|1|0'
+  'forced_mainrec|2|0|0|0|1'
+  'forced_mainrec_high|2|1|0|0|1'
 )
 declare -A BINS BUILD_OK BUILD_ERR
 
 build_candidate(){
-  local mode="$1" ilp="$2" high="$3" lowrec="$4" highrec="$5"
+  local mode="$1" ilp="$2" high="$3" lowrec="$4" highrec="$5" mainrec="$6"
   local bin="$ONEESAN_BUILD_DIR/b300_forced_pre_${mode}_n27" bout="$LOGDIR/${mode}.pre.build.out" berr="$LOGDIR/${mode}.pre.build.err"
   BINS[$mode]="$bin";BUILD_ERR[$mode]="$berr"
   if [[ "$REBUILD" == 0 && -x "$bin" ]]; then BUILD_OK[$mode]=1;return 0;fi
-  echo "=== staged build $mode ilp=$ilp high=$high lowrec=$lowrec highrec=$highrec ===" >&2
+  echo "=== staged build $mode ilp=$ilp high=$high lowrec=$lowrec highrec=$highrec mainrec=$mainrec ===" >&2
   set +e
-  N=27 ARCH="$ARCH" OUT="$bin" MAIN_PULL_ILP="$ilp" HIGH_DROP_CHUNK="$high" LOW_MAIN_RECURRENCE="$lowrec" HIGH_MAIN_RECURRENCE="$highrec" \
+  N=27 ARCH="$ARCH" OUT="$bin" MAIN_PULL_ILP="$ilp" HIGH_DROP_CHUNK="$high" LOW_MAIN_RECURRENCE="$lowrec" HIGH_MAIN_RECURRENCE="$highrec" MAIN_RECURRENCE="$mainrec" \
     MAIN_MATE_CACHE=1 MAIN_PULL=1 BLOCK_PULL=1 BLOCK_MATE_CACHE=1 FAST_SHARD_ADDRESS8=1 \
     LOW_DROP_CACHE=1 LOW_DROP_CHUNK=1 LOW_BLOCK_CACHE=1 RUNTIME_THREADS=1 PTXAS_VERBOSE=1 \
     bash "$ONEESAN_ROOT/scripts/build/b300-hbm32-batch.sh" >"$bout" 2>"$berr"
   local rc=$?
   set -e
   if ((rc)); then echo "warning: exclude $mode build rc=$rc" >&2;BUILD_OK[$mode]=0;return 0;fi
-  if ! grep -Fq "main_pull_ilp=$ilp" "$bout" || ! grep -Fq "high_drop_chunk=$high" "$bout" || ! grep -Fq "low_main_recurrence=$lowrec" "$bout" || ! grep -Fq "high_main_recurrence=$highrec" "$bout" || ! grep -Fq 'batch_row_limit_env=B300_ROW_LIMIT' "$bout"; then
+  if ! grep -Fq "main_pull_ilp=$ilp" "$bout" || ! grep -Fq "high_drop_chunk=$high" "$bout" || ! grep -Fq "low_main_recurrence=$lowrec" "$bout" || ! grep -Fq "high_main_recurrence=$highrec" "$bout" || ! grep -Fq "main_recurrence=$mainrec" "$bout" || ! grep -Fq 'batch_row_limit_env=B300_ROW_LIMIT' "$bout"; then
     echo "warning: exclude $mode build metadata mismatch" >&2;BUILD_OK[$mode]=0;return 0
   fi
   BUILD_OK[$mode]=1
 }
 
-for spec in "${SPECS[@]}";do IFS='|' read -r mode ilp high lowrec highrec<<<"$spec";build_candidate "$mode" "$ilp" "$high" "$lowrec" "$highrec";done
+for spec in "${SPECS[@]}";do IFS='|' read -r mode ilp high lowrec highrec mainrec<<<"$spec";build_candidate "$mode" "$ilp" "$high" "$lowrec" "$highrec" "$mainrec";done
 
 field(){ local k="$1" l="$2";sed -nE "s/(^|.*[[:space:]])${k}=([^[:space:]]+).*/\\2/p"<<<"$l"|tail -n1;}
 row_smoke(){
