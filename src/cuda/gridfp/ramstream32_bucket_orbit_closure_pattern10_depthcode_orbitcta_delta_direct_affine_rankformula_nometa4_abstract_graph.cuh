@@ -14,8 +14,22 @@ static inline int p10dc_orbitcta_grid_env(const char* name, int fallback) {
     return v;
 }
 
+static inline size_t p10dc_orbitcta_high_smem_bytes(int threads) {
+#if P10DC_RANKFORMULA_CPASYNC_PAIR
+    // cp.async pair staging uses the shared-memory base defined by the direct
+    // pair helper. Its scratch starts after p10dc_direct_pair_scratch_offset_bytes(),
+    // so allocate the same complete region used by the warp-striped path. The
+    // orbit CTA itself occupies only the first resolved context; the extra
+    // context slots in the offset are intentional padding that keeps the common
+    // pair helper ABI unchanged.
+    return p10dc_direct_warpctx_smem_bytes(threads);
+#else
+    return sizeof(P10DCDirectHighResolvedCtx);
+#endif
+}
+
 static void p10dc_orbitcta_report_high_occupancy(int threads) {
-    const size_t smem = sizeof(P10DCDirectHighResolvedCtx);
+    const size_t smem = p10dc_orbitcta_high_smem_bytes(threads);
     int device = 0;
     ck(cudaGetDevice(&device), "orbitcta occupancy get device");
     cudaDeviceProp prop{};
@@ -36,6 +50,7 @@ static void p10dc_orbitcta_report_high_occupancy(int threads) {
     const int fw = fb * (threads / prop.warpSize), rw = rb * (threads / prop.warpSize);
     std::cerr << "rankformula_orbitcta_occupancy device=" << device
               << " threads=" << threads << " dynamic_smem_bytes=" << smem
+              << " cpasync_pair=" << P10DC_RANKFORMULA_CPASYNC_PAIR
               << " forward_regs=" << fa.numRegs << " reverse_regs=" << ra.numRegs
               << " forward_blocks_per_sm=" << fb << " reverse_blocks_per_sm=" << rb
               << " forward_warps_per_sm=" << fw << " reverse_warps_per_sm=" << rw
@@ -50,7 +65,7 @@ static void bucket_enqueue_high_orbit_closure_pattern10_depthcode_orbitcta_rankf
     p10dc_warpstriped_delta_direct_affine_rankformula_nometa4_abstract_require_threads(threads);
     const dim3 block(unsigned(threads));
     const dim3 grid(1u, unsigned(gy), unsigned(layout.main_blocks.size()));
-    const size_t smem = sizeof(P10DCDirectHighResolvedCtx);
+    const size_t smem = p10dc_orbitcta_high_smem_bytes(threads);
     for (int p = TARGET_W - 1; p >= LOW_LUT_K + 1; --p) {
         bucket_high_orbit_closure_pattern10_depthcode_orbitcta_kernel<<<grid, block, smem, stream>>>(p);
         ck(cudaGetLastError(), "bucket high orbitcta rankformula-nometa4-abstract stream");
@@ -63,7 +78,7 @@ static void bucket_enqueue_reverse_high_pattern10_depthcode_orbitcta_rankformula
     p10dc_warpstriped_delta_direct_affine_rankformula_nometa4_abstract_require_threads(threads);
     const dim3 block(unsigned(threads));
     const dim3 grid(1u, unsigned(gy), unsigned(layout.main_blocks.size()));
-    const size_t smem = sizeof(P10DCDirectHighResolvedCtx);
+    const size_t smem = p10dc_orbitcta_high_smem_bytes(threads);
     for (int p = LOW_LUT_K + 1; p < TARGET_W; ++p) {
         bucket_reverse_high_pattern10_depthcode_orbitcta_kernel<<<grid, block, smem, stream>>>(p);
         ck(cudaGetLastError(), "bucket reverse high orbitcta rankformula-nometa4-abstract stream");
@@ -102,7 +117,9 @@ struct BucketPattern10DepthCodeOrbitCtaDirectAffineRankFormulaNometa4AbstractGra
                   << " low_gx=" << low_gx << " low_gy=" << low_gy
                   << " high_gx=1 high_gy=" << orbit_gy
                   << " orbit_context_builds_per_orbit=1"
-                  << " context_smem_bytes=" << sizeof(P10DCDirectHighResolvedCtx) << '\n';
+                  << " context_smem_bytes=" << sizeof(P10DCDirectHighResolvedCtx)
+                  << " launch_smem_bytes=" << p10dc_orbitcta_high_smem_bytes(threads)
+                  << " cpasync_pair=" << P10DC_RANKFORMULA_CPASYNC_PAIR << '\n';
         ck(cudaStreamCreateWithFlags(&stream, cudaStreamNonBlocking), "orbitcta graph stream");
         capture_one(BKOC_GRAPH_FORWARD_LOW, [&] {
             bucket_enqueue_low_orbit_closure_pattern10_depthcode_warpstriped_delta_direct_affine_rankformula_nometa4_abstract(
