@@ -26,6 +26,7 @@ fi
 SRC="$(repo_path "${SRC:-src/cuda/b300/oneesan_cuda_gridfp_b300_hbm32_fullmate_dropN.cu}")"
 GEN="$ONEESAN_ROOT/scripts/build/gen-b300-vmm-production.py"
 PRUNE="$ONEESAN_ROOT/scripts/build/prune-b300-vmm-stale-shard-symbols.py"
+ROW_LIMIT_LOWER="$ONEESAN_ROOT/scripts/build/lower-b300-row-limit.py"
 GENSRC="${GENSRC:-$ONEESAN_BUILD_DIR/generated_b300_hbm32_vmm_n${N}.cu}"
 OUT="$(build_path "${OUT:-oneesan_cuda_gridfp_b300_hbm32_vmm_n${N}}")"
 
@@ -49,6 +50,10 @@ fi
 
 python3 "$GEN" "$BUILD_SRC" "$GENSRC"
 python3 "$PRUNE" "$GENSRC" "$GENSRC"
+# Default runtime semantics stay at W rows. B300_ROW_LIMIT=1..W is only a
+# calibration escape hatch so an n=27 candidate can be measured before paying
+# for a complete 28-row run.
+python3 "$ROW_LIMIT_LOWER" "$GENSRC" "$GENSRC"
 
 TMPDIR="$ONEESAN_TMP_DIR" "$NVCC" \
   -O3 -std=c++17 -lineinfo \
@@ -73,6 +78,7 @@ echo "  logical_shard_views=0"
 echo "  legacy_shard_address_scaffolding=0"
 echo "  stale_shard_symbols=0"
 echo "  stale_width_symbols=0"
+echo "  row_limit_env=B300_ROW_LIMIT default_rows=28"
 if [[ "$MAIN_PULL" == 1 ]]; then
   echo "  p_gt_1_main_update=destination_pull"
   echo "  p_gt_1_main_identity_copy=0"
