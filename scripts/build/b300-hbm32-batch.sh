@@ -21,10 +21,12 @@ MAIN_MATE_CACHE="${MAIN_MATE_CACHE:-1}"
 MAIN_PULL="${MAIN_PULL:-1}"
 BLOCK_PULL="${BLOCK_PULL:-1}"
 BLOCK_MATE_CACHE="${BLOCK_MATE_CACHE:-1}"
+if (( N >= 27 )); then DEFAULT_SHARD8=1; else DEFAULT_SHARD8=0; fi
+FAST_SHARD_ADDRESS8="${FAST_SHARD_ADDRESS8:-$DEFAULT_SHARD8}"
 RUNTIME_THREADS="${RUNTIME_THREADS:-1}"
 PTXAS_VERBOSE="${PTXAS_VERBOSE:-1}"
 
-for name in MAIN_MATE_CACHE MAIN_PULL BLOCK_PULL BLOCK_MATE_CACHE RUNTIME_THREADS PTXAS_VERBOSE; do
+for name in MAIN_MATE_CACHE MAIN_PULL BLOCK_PULL BLOCK_MATE_CACHE FAST_SHARD_ADDRESS8 RUNTIME_THREADS PTXAS_VERBOSE; do
   value="${!name}"
   [[ "$value" == 0 || "$value" == 1 ]] || { echo "$name must be 0 or 1" >&2; exit 2; }
 done
@@ -51,6 +53,9 @@ fi
 if [[ "$BLOCK_PULL" == 1 ]]; then
   bash "$ONEESAN_ROOT/scripts/bench/b300-block-pull-operator-proof.sh"
 fi
+if [[ "$FAST_SHARD_ADDRESS8" == 1 ]]; then
+  bash "$ONEESAN_ROOT/scripts/bench/b300-shard-address8-proof.sh"
+fi
 
 BUILD_SRC="$SRC"
 if [[ "$MAIN_MATE_CACHE" == 1 ]]; then
@@ -72,6 +77,11 @@ if [[ "$BLOCK_MATE_CACHE" == 1 ]]; then
   python3 "$ONEESAN_ROOT/scripts/build/gen-b300-block-mate-cache.py" "$BUILD_SRC" "$BLOCK_CACHE_SRC"
   BUILD_SRC="$BLOCK_CACHE_SRC"
 fi
+if [[ "$FAST_SHARD_ADDRESS8" == 1 ]]; then
+  SHARD_SRC="$ONEESAN_BUILD_DIR/b300_hbm32_batch_n${N}_shard8.cu"
+  python3 "$ONEESAN_ROOT/scripts/build/gen-b300-batch-shard-address8.py" "$BUILD_SRC" "$SHARD_SRC"
+  BUILD_SRC="$SHARD_SRC"
+fi
 if [[ "$RUNTIME_THREADS" == 1 ]]; then
   THREAD_SRC="$ONEESAN_BUILD_DIR/b300_hbm32_batch_n${N}_runtime_threads.cu"
   python3 "$ONEESAN_ROOT/scripts/build/gen-b300-runtime-threads.py" "$BUILD_SRC" "$THREAD_SRC"
@@ -92,4 +102,4 @@ TMPDIR="$ONEESAN_TMP_DIR" nvcc \
 echo "built $OUT"
 echo "  source=$SRC"
 echo "  build_source=$BUILD_SRC"
-echo "  n=$N width=$W arch=$ARCH low_lut_k=$LOW_LUT_K high_lut_k=$HIGH_LUT_K main_mate_cache=$MAIN_MATE_CACHE main_pull=$MAIN_PULL block_pull=$BLOCK_PULL block_mate_cache=$BLOCK_MATE_CACHE runtime_threads=$RUNTIME_THREADS"
+echo "  n=$N width=$W arch=$ARCH low_lut_k=$LOW_LUT_K high_lut_k=$HIGH_LUT_K main_mate_cache=$MAIN_MATE_CACHE main_pull=$MAIN_PULL block_pull=$BLOCK_PULL block_mate_cache=$BLOCK_MATE_CACHE fast_shard_address8=$FAST_SHARD_ADDRESS8 runtime_threads=$RUNTIME_THREADS"
