@@ -48,12 +48,13 @@ run_one(){
   local log="$LOGDIR/${name}.log" memlog="$LOGDIR/${name}.mem"
   echo "=== $name ===" >&2
   set +e
-  "$@" > >(tee "$log") 2>&1 &
+  "$@" >"$log" 2>&1 &
   local pid=$!
   sample_mem "$pid" "$memlog" & local mpid=$!
   wait "$pid"; local rc=$?
   set -e
   wait "$mpid" 2>/dev/null || true
+  cat "$log"
   (( rc==0 )) || return "$rc"
 
   local line residue wall active_max active_sum mem_avg mem_max mem_n regs_max spill_store spill_load row
@@ -130,7 +131,7 @@ bs,ba=bestof(sync),bestof(asyncs)
 if bs and ba:
     print(f"ILP8_ASYNC_COMPARE sync={bs['profile']} sync_wall={bs['wall_s']} sync_mc={bs['mc_avg_pct']} sync_mc_samples={bs['mc_samples']} async={ba['profile']} async_wall={ba['wall_s']} async_mc={ba['mc_avg_pct']} async_mc_samples={ba['mc_samples']} async_speedup={num(bs,'wall_s')/num(ba,'wall_s'):.6f}x exact_gate=1",file=sys.stderr)
 if base:
-    print(f"ILP8_SELECTED profile={best['profile']} residue={common} wall_s={best['wall_s']} speedup={num(base,'wall_s')/num(best,'wall_s'):.6f}x mc_avg_pct={best['mc_avg_pct']} mc_samples={best['mc_samples']} regs_max={best['regs_max']} spill_store_max={best['spill_store_max_bytes']} spill_load_max={best['spill_load_max_bytes']} spill_free_pool={int(bool(clean))} exact_gate=1",file=sys.stderr)
+    print(f"ILP8_SELECTED profile={best['profile']} residue={common} wall_s={best['wall_s']} speedup={num(base,'wall_s')/num(best,'wall_s'):.6f}x mc_avg_pct={best['mc_avg_pct']} mc_samples={best['mc_samples']} regs_max={best['regs_max']} spill_store_max={best['spill_store_max_bytes']} spill_load_max={best['spill_load_bytes'] if 'spill_load_bytes' in best else best['spill_load_max_bytes']} spill_free_pool={int(bool(clean))} exact_gate=1",file=sys.stderr)
 else:
     print(f"ILP8_SELECTED profile={best['profile']} residue={common} wall_s={best['wall_s']} mc_avg_pct={best['mc_avg_pct']} mc_samples={best['mc_samples']} regs_max={best['regs_max']} spill_store_max={best['spill_store_max_bytes']} spill_load_max={best['spill_load_max_bytes']} spill_free_pool={int(bool(clean))} exact_gate=1",file=sys.stderr)
 PY
