@@ -69,10 +69,23 @@ helper=f'''\n\nstatic inline int b300_main_recurrence_ilp{lanes}_blocks(Code n,i
     return int(std::min<Code>(65535,std::max<Code>(1,need)));
 }}'''
 s=s.replace(marker,helper+marker,1)
-old='main_pull_kernel_ilp2<<<bm,threads,0,c.sMain>>>'
+
+# The input can be either the historical unscaled ILP2 launch or the current
+# production-scaled ILP2 launch.  Accept exactly one and replace it with the
+# lane-specific recurrence launch so this transform remains composable after
+# the ILP2 production-grid fix.
+launch_anchors=(
+    'main_pull_kernel_ilp2<<<bm,threads,0,c.sMain>>>',
+    'main_pull_kernel_ilp2<<<b300_main_pull_ilp2_blocks(ms.size,threads),threads,0,c.sMain>>>',
+)
+found=[x for x in launch_anchors if s.count(x)]
+if len(found)!=1 or s.count(found[0])!=1:
+    raise SystemExit(
+        'recurrence ILP launch anchor expected exactly one supported form; '
+        +repr({x:s.count(x) for x in launch_anchors})
+    )
 new_launch=f'main_pull_kernel_ilp2<<<b300_main_recurrence_ilp{lanes}_blocks(ms.size,threads),threads,0,c.sMain>>>'
-if s.count(old)!=1:raise SystemExit(f'recurrence ILP launch anchor expected one match got {s.count(old)}')
-s=s.replace(old,new_launch,1)
+s=s.replace(found[0],new_launch,1)
 
 for req in (
     f'base+=Code({lanes})*grid',f'const Code i{lanes-1}=',
@@ -83,5 +96,7 @@ for req in (
     f'const Code cover=Code(threads)*Code({lanes})'
 ):
     if req not in s:raise SystemExit(f'missing recurrence ILP{lanes} artifact: {req}')
+for stale in launch_anchors:
+    if stale in s:raise SystemExit(f'stale recurrence ILP launch remains: {stale}')
 out.parent.mkdir(parents=True,exist_ok=True);out.write_text(s)
-print(f'generated {out} from {src}: unified_main_recurrence_ilp={lanes} destinations_per_thread={lanes} extra_state_bytes=0 irregular_requests_first=1 recurrent_mate_updates={lanes} low_high_uniform_flags=1 launch_blocks=ceil_n_over_{lanes}threads_capped65535 launch_mlp_fixed=1 register_pressure_high=1 requires_ab=1')
+print(f'generated {out} from {src}: unified_main_recurrence_ilp={lanes} destinations_per_thread={lanes} extra_state_bytes=0 irregular_requests_first=1 recurrent_mate_updates={lanes} low_high_uniform_flags=1 launch_blocks=ceil_n_over_{lanes}threads_capped65535 launch_mlp_fixed=1 accepted_input_launch={"scaled_ilp2" if "b300_main_pull_ilp2_blocks" in found[0] else "legacy_bm"} register_pressure_high=1 requires_ab=1')
