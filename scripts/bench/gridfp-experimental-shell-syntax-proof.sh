@@ -21,6 +21,7 @@ FILES=(
   scripts/bench/gridfp-codec-table-physical-consensus-gate-proof.sh
   scripts/bench/gridfp-codec-table-physical-decision-suite.sh
   scripts/bench/gridfp-codec-table-physical-exact-resume.sh
+  scripts/bench/gridfp-codec-table-w28-motzkin-reachability-proof.sh
   scripts/bench/gridfp-runtime-label-hotpath-proof-suite.sh
   scripts/bench/gridfp-runtime-w28-label-hotpath-suite.sh
   scripts/bench/gridfp-codec-table-layout-suite.sh
