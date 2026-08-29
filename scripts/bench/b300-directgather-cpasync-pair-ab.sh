@@ -47,44 +47,52 @@ sample_process(){
   done
 }
 
-printf 'mode\trepeat\tresidue\twall_s\tforward_high_s\treverse_high_s\thigh_s\tavg_gpu_util_pct\tavg_memctrl_util_pct\tmax_memctrl_util_pct\tforward_warp_occupancy_pct\treverse_warp_occupancy_pct\n' >"$RESULT"
+printf 'mode\tdirectgather64\tcpasync\trepeat\tresidue\twall_s\tforward_high_s\treverse_high_s\thigh_s\tavg_gpu_util_pct\tavg_memctrl_util_pct\tmax_memctrl_util_pct\tforward_warp_occupancy_pct\treverse_warp_occupancy_pct\n' >"$RESULT"
 printf 'backend\tkernel\tregisters\tstack_bytes\tspill_store_bytes\tspill_load_bytes\tsmem_bytes\tcmem0_bytes\n' >"$RESOURCE"
 
-for cp in 0 1; do
-  mode=$([[ "$cp" == 1 ]] && echo cpasync || echo register)
-  bin="$ONEESAN_BUILD_DIR/b300_directgather_pair_${mode}_ab_n${N}"
-  N="$N" ARCH="$ARCH" OUT="$bin" COL_ILP="$COL_ILP" PM_ACCUM="$PM_ACCUM" \
-    DEPTHMAJOR=1 PAIR_MLP=1 MLP_WINDOW4=1 CPASYNC_PAIR="$cp" \
-    FORCE7=0 PREFETCH_NEXT=0 DIRECTGATHER64=0 MAXRREGCOUNT="$MAXRREGCOUNT" PTXAS_VERBOSE=1 \
-    bash "$ONEESAN_ROOT/scripts/build/b300-directgather-colilp-fast.sh" \
-    >"$LOGDIR/$mode.build.out" 2>"$LOGDIR/$mode.build.err"
-  python3 "$PARSER" "$LOGDIR/$mode.build.err" --label "$mode" >>"$RESOURCE"
+for dg64 in 0 1; do
+  for cp in 0 1; do
+    if [[ "$dg64" == 1 && "$cp" == 1 ]]; then mode=cpasync64
+    elif [[ "$dg64" == 1 ]]; then mode=register64
+    elif [[ "$cp" == 1 ]]; then mode=cpasync16
+    else mode=register16
+    fi
+    bin="$ONEESAN_BUILD_DIR/b300_directgather_pair_${mode}_ab_n${N}"
+    N="$N" ARCH="$ARCH" OUT="$bin" COL_ILP="$COL_ILP" PM_ACCUM="$PM_ACCUM" \
+      DEPTHMAJOR=1 PAIR_MLP=1 MLP_WINDOW4=1 CPASYNC_PAIR="$cp" \
+      FORCE7=0 PREFETCH_NEXT=0 DIRECTGATHER64="$dg64" SORTED=0 \
+      MAXRREGCOUNT="$MAXRREGCOUNT" PTXAS_VERBOSE=1 \
+      bash "$ONEESAN_ROOT/scripts/build/b300-directgather-colilp-fast.sh" \
+      >"$LOGDIR/$mode.build.out" 2>"$LOGDIR/$mode.build.err"
+    python3 "$PARSER" "$LOGDIR/$mode.build.err" --label "$mode" >>"$RESOURCE"
 
-  for ((r=1;r<=REPEATS;++r)); do
-    so="$LOGDIR/${mode}_r${r}.out"; se="$LOGDIR/${mode}_r${r}.err"; util="$LOGDIR/${mode}_r${r}.util"
-    BUCKET_THREADS="$BUCKET_THREADS" BUCKET_GRID_X="$BUCKET_GRID_X" BUCKET_GRID_Y="$BUCKET_GRID_Y" \
-      "$bin" "$N" "$TARGET_MIB" "$MAX_WINDOW" "$NGPU" "$MOD" >"$so" 2>"$se" &
-    pid=$!; sample_process "$pid" "$util" & sampler=$!
-    set +e; wait "$pid"; rc=$?; set -e
-    wait "$sampler" || true
-    (( rc == 0 )) || { echo "$mode failed rc=$rc" >&2; exit "$rc"; }
+    for ((r=1;r<=REPEATS;++r)); do
+      so="$LOGDIR/${mode}_r${r}.out"; se="$LOGDIR/${mode}_r${r}.err"; util="$LOGDIR/${mode}_r${r}.util"
+      BUCKET_THREADS="$BUCKET_THREADS" BUCKET_GRID_X="$BUCKET_GRID_X" BUCKET_GRID_Y="$BUCKET_GRID_Y" \
+        "$bin" "$N" "$TARGET_MIB" "$MAX_WINDOW" "$NGPU" "$MOD" >"$so" 2>"$se" &
+      pid=$!; sample_process "$pid" "$util" & sampler=$!
+      set +e; wait "$pid"; rc=$?; set -e
+      wait "$sampler" || true
+      (( rc == 0 )) || { echo "$mode failed rc=$rc" >&2; exit "$rc"; }
 
-    line="$(grep '^residue=' "$so" | tail -n1 || true)"; [[ -n "$line" ]] || { echo "$mode missing residue" >&2; exit 3; }
-    residue="$(field residue "$line")"; [[ "$residue" == "$EXPECT" ]] || {
-      echo "$mode residue mismatch got=$residue expected=$EXPECT" >&2; exit 4;
-    }
-    detail="$(grep 'snake_onepass_graph_batch modulus=' "$se" | tail -n1 || true)"
-    wall="$(field wall_s "$line")"; fh="$(field forward_high_s "$detail")"; rh="$(field reverse_high_s "$detail")"
-    high="$(python3 - "$fh" "$rh" <<'PY'
+      line="$(grep '^residue=' "$so" | tail -n1 || true)"; [[ -n "$line" ]] || { echo "$mode missing residue" >&2; exit 3; }
+      residue="$(field residue "$line")"; [[ "$residue" == "$EXPECT" ]] || {
+        echo "$mode residue mismatch got=$residue expected=$EXPECT" >&2; exit 4;
+      }
+      detail="$(grep 'snake_onepass_graph_batch modulus=' "$se" | tail -n1 || true)"
+      wall="$(field wall_s "$line")"; fh="$(field forward_high_s "$detail")"; rh="$(field reverse_high_s "$detail")"
+      high="$(python3 - "$fh" "$rh" <<'PY'
 import sys
 print(f"{float(sys.argv[1])+float(sys.argv[2]):.9f}")
 PY
 )"
-    read -r ag am mg mm < <(awk '{sg+=$1;sm+=$2;if($3>mg)mg=$3;if($4>mm)mm=$4;n++} END{if(n)printf "%.6f %.6f %d %d\n",sg/n,sm/n,mg,mm;else print "NA NA NA NA"}' "$util")
-    occ="$(grep 'rankformula_high_occupancy' "$se" | head -n1 || true)"
-    focc="$(field forward_warp_occupancy_pct "$occ")"; rocc="$(field reverse_warp_occupancy_pct "$occ")"
-    printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
-      "$mode" "$r" "$residue" "$wall" "$fh" "$rh" "$high" "$ag" "$am" "$mm" "${focc:-NA}" "${rocc:-NA}" >>"$RESULT"
+      read -r ag am mg mm < <(awk '{sg+=$1;sm+=$2;if($3>mg)mg=$3;if($4>mm)mm=$4;n++} END{if(n)printf "%.6f %.6f %d %d\n",sg/n,sm/n,mg,mm;else print "NA NA NA NA"}' "$util")
+      occ="$(grep 'rankformula_high_occupancy' "$se" | head -n1 || true)"
+      focc="$(field forward_warp_occupancy_pct "$occ")"; rocc="$(field reverse_warp_occupancy_pct "$occ")"
+      printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
+        "$mode" "$dg64" "$cp" "$r" "$residue" "$wall" "$fh" "$rh" "$high" \
+        "$ag" "$am" "$mm" "${focc:-NA}" "${rocc:-NA}" >>"$RESULT"
+    done
   done
 done
 
@@ -95,7 +103,8 @@ src,res,dst=sys.argv[1:]
 rows=list(csv.DictReader(open(src),delimiter='\t'))
 resources=list(csv.DictReader(open(res),delimiter='\t'))
 out=[]
-for mode in ('register','cpasync'):
+modes=('register16','cpasync16','register64','cpasync64')
+for mode in modes:
     g=[r for r in rows if r['mode']==mode]
     z={'mode':mode,'repeats':len(g)}
     for k in ('wall_s','high_s','avg_gpu_util_pct','avg_memctrl_util_pct','max_memctrl_util_pct','forward_warp_occupancy_pct','reverse_warp_occupancy_pct'):
@@ -116,10 +125,17 @@ with open(dst,'w') as f:
     for z in out:f.write('\t'.join(str(z.get(k)) for k in keys)+'\n')
 q={z['mode']:z for z in out}
 for z in out: print(z)
-if q['register']['wall_s'] and q['cpasync']['wall_s']:
-    print(f"cpasync_wall_speedup={q['register']['wall_s']/q['cpasync']['wall_s']:.6f}x")
-if q['register']['high_s'] and q['cpasync']['high_s']:
-    print(f"cpasync_high_speedup={q['register']['high_s']/q['cpasync']['high_s']:.6f}x")
+for base,test,name in (
+    ('register16','cpasync16','cpasync16'),
+    ('register16','register64','pair64'),
+    ('register64','cpasync64','cpasync64'),
+    ('cpasync16','cpasync64','cpasync_descriptor64')):
+    if q[base]['high_s'] and q[test]['high_s']:
+        print(f"{name}_high_speedup={q[base]['high_s']/q[test]['high_s']:.6f}x")
+valid=[z for z in out if z['high_s'] is not None]
+if valid:
+    best=min(valid,key=lambda z:z['high_s'])
+    print(f"BEST_HIGH={best['mode']} high_s={best['high_s']:.6f} wall_s={best['wall_s']:.6f} memctrl={best['avg_memctrl_util_pct']}")
 print('selection_metric=high_s correctness_gate=residue remote_peer_gate=cpasync_microprobe')
 PY
 
