@@ -24,6 +24,9 @@
 #ifndef P10DC_RANKFORMULA_PRECTX_REVERSE
 #define P10DC_RANKFORMULA_PRECTX_REVERSE 0
 #endif
+#ifndef P10DC_RANKFORMULA_PRECTX_COMPACT
+#define P10DC_RANKFORMULA_PRECTX_COMPACT 0
+#endif
 #ifndef P10DC_RANKFORMULA_CPASYNC_LOCAL_PAIR
 #define P10DC_RANKFORMULA_CPASYNC_LOCAL_PAIR 0
 #endif
@@ -33,6 +36,13 @@
 #ifndef P10DC_RANKFORMULA_CPASYNC_OVERLAP_LOCAL_PIPE2
 #define P10DC_RANKFORMULA_CPASYNC_OVERLAP_LOCAL_PIPE2 0
 #endif
+static_assert(P10DC_RANKFORMULA_PRECTX_COMPACT == 0 ||
+              P10DC_RANKFORMULA_PRECTX_COMPACT == 1,
+              "P10DC_RANKFORMULA_PRECTX_COMPACT must be 0 or 1");
+static_assert(!P10DC_RANKFORMULA_PRECTX_COMPACT ||
+              P10DC_RANKFORMULA_PRECTX_FORWARD ||
+              P10DC_RANKFORMULA_PRECTX_REVERSE,
+              "compact prectx requires forward and/or reverse prectx");
 static_assert(P10DC_RANKFORMULA_CPASYNC_LOCAL_PAIR == 0 ||
               P10DC_RANKFORMULA_CPASYNC_LOCAL_PAIR == 1,
               "P10DC_RANKFORMULA_CPASYNC_LOCAL_PAIR must be 0 or 1");
@@ -52,7 +62,11 @@ static_assert(!P10DC_RANKFORMULA_CPASYNC_OVERLAP_LOCAL_PIPE2 ||
               P10DC_RANKFORMULA_CPASYNC_OVERLAP_LOCAL_PAIR,
               "overlap-local pipe2 requires overlap-local pair mode");
 #if P10DC_RANKFORMULA_PRECTX_FORWARD || P10DC_RANKFORMULA_PRECTX_REVERSE
+#if P10DC_RANKFORMULA_PRECTX_COMPACT
+#include "ramstream32_bucket_precomputed_high_ctx_compact.cuh"
+#else
 #include "ramstream32_bucket_precomputed_forward_high_ctx.cuh"
+#endif
 #endif
 #if P10DC_RANKFORMULA_CPASYNC_LOCAL_PAIR
 #include "ramstream32_bucket_closure_pattern10_depthcode_rankformula_local_cpasync_pair.cuh"
