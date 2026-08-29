@@ -24,16 +24,17 @@ source "$FORCED_PROFILE_FILE"
 
 # Read the n21 profile to identify the exact bucket binaries that the final
 # selector will use. Keep defaults compatible with profiles generated before
-# flat persistent orbit scheduling was added.
+# flat persistent orbit scheduling was added. psm=0 means occupancy-derived
+# forward/reverse pools and must be preserved as an unset runtime override.
 # shellcheck disable=SC1090
 source "$PROFILE_FILE"
 : "${WARP_PROFILE:?n21 profile missing WARP_PROFILE}"
 : "${ORBIT_PROFILE:?n21 profile missing ORBIT_PROFILE}"
 ORBITCTA_FLAT="${ORBITCTA_FLAT:-0}"
-ORBITCTA_FLAT_BLOCKS_PER_SM="${ORBITCTA_FLAT_BLOCKS_PER_SM:-8}"
+ORBITCTA_FLAT_BLOCKS_PER_SM="${ORBITCTA_FLAT_BLOCKS_PER_SM:-0}"
 [[ "$WARP_PROFILE" =~ ^[A-Za-z0-9_.-]+$ && "$ORBIT_PROFILE" =~ ^[A-Za-z0-9_.-]+$ ]] || { echo 'unsafe profile name' >&2; exit 3; }
 [[ "$ORBITCTA_FLAT" == 0 || "$ORBITCTA_FLAT" == 1 ]] || { echo 'bad ORBITCTA_FLAT in n21 profile' >&2; exit 3; }
-[[ "$ORBITCTA_FLAT_BLOCKS_PER_SM" =~ ^[0-9]+$ ]] && (( ORBITCTA_FLAT_BLOCKS_PER_SM > 0 )) || { echo 'bad ORBITCTA_FLAT_BLOCKS_PER_SM in n21 profile' >&2; exit 3; }
+[[ "$ORBITCTA_FLAT_BLOCKS_PER_SM" =~ ^[0-9]+$ ]] || { echo 'bad ORBITCTA_FLAT_BLOCKS_PER_SM in n21 profile' >&2; exit 3; }
 
 FORCED_FIXED="$ONEESAN_BUILD_DIR/b300_profiled_forced_n27"
 WARP_FIXED="$ONEESAN_BUILD_DIR/b300_profiled_warp_${WARP_PROFILE}_n27"
@@ -44,5 +45,5 @@ ln -sfn "$FORCED_PROFILE_BIN" "$FORCED_FIXED"
 export PROFILE_FILE
 export REBUILD=0
 export PREFIX="${FINAL_PREFIX:-$ONEESAN_ROOT/work/b300_exact_hbm_profiled_staged_n27}"
-echo "profiled staged forced=$FORCED_PROFILE bin=$FORCED_PROFILE_BIN warp=$WARP_PROFILE orbit=$ORBIT_PROFILE flat=$ORBITCTA_FLAT flat_blocks_per_sm=$ORBITCTA_FLAT_BLOCKS_PER_SM rebuild_buckets=$REBUILD_BUCKETS" >&2
+echo "profiled staged forced=$FORCED_PROFILE bin=$FORCED_PROFILE_BIN warp=$WARP_PROFILE orbit=$ORBIT_PROFILE flat=$ORBITCTA_FLAT flat_blocks_per_sm=$ORBITCTA_FLAT_BLOCKS_PER_SM pool_mode=$([[ "$ORBITCTA_FLAT_BLOCKS_PER_SM" == 0 ]] && echo occupancy || echo per_sm) rebuild_buckets=$REBUILD_BUCKETS" >&2
 exec "$ONEESAN_ROOT/scripts/run/b300x8-exact-auto-hbm-profiled.sh" 27 "$@"
