@@ -19,12 +19,14 @@ HEIGHT_CACHE="${HEIGHT_CACHE:-0}"
 RANK_DELTA_CACHE="${RANK_DELTA_CACHE:-0}"
 RANK_STATE_PACKED="${RANK_STATE_PACKED:-0}"
 RANK_STATE_ILP2="${RANK_STATE_ILP2:-0}"
+MAXRREGCOUNT="${MAXRREGCOUNT:-0}"
 PTXAS_VERBOSE="${PTXAS_VERBOSE:-1}"
 
 for name in FAST_SHARD_ADDRESS8 MAIN_MATE_CACHE MAIN_PULL BLOCK_PULL BLOCK_MATE_CACHE MAIN_PULL_ILP2 HEIGHT_CACHE RANK_DELTA_CACHE RANK_STATE_PACKED RANK_STATE_ILP2 PTXAS_VERBOSE; do
   value="${!name}"
   if [[ "$value" != 0 && "$value" != 1 ]]; then echo "$name must be 0 or 1" >&2; exit 2; fi
 done
+[[ "$MAXRREGCOUNT" =~ ^[0-9]+$ ]] && (( MAXRREGCOUNT == 0 || (MAXRREGCOUNT >= 32 && MAXRREGCOUNT <= 255) )) || { echo "MAXRREGCOUNT must be 0 or 32..255" >&2; exit 2; }
 if [[ "$MAIN_PULL" == 1 && "$MAIN_MATE_CACHE" != 1 ]]; then echo "MAIN_PULL=1 currently requires MAIN_MATE_CACHE=1" >&2; exit 2; fi
 if [[ "$BLOCK_PULL" == 1 && "$MAIN_PULL" != 1 ]]; then echo "BLOCK_PULL=1 requires MAIN_PULL=1" >&2; exit 2; fi
 if [[ "$BLOCK_MATE_CACHE" == 1 && "$BLOCK_PULL" != 1 ]]; then echo "BLOCK_MATE_CACHE=1 requires BLOCK_PULL=1" >&2; exit 2; fi
@@ -78,13 +80,14 @@ THREAD_SRC="$ONEESAN_BUILD_DIR/b300_hbm32_n${N}_runtime_threads.cu";python3 "$ON
 PLAN_SRC="$ONEESAN_BUILD_DIR/b300_hbm32_n${N}_plan_target.cu";python3 "$ONEESAN_ROOT/scripts/build/gen-b300-plan-target.py" "$BUILD_SRC" "$PLAN_SRC";BUILD_SRC="$PLAN_SRC"
 
 PTXAS_FLAGS=(); [[ "$PTXAS_VERBOSE" == 1 ]] && PTXAS_FLAGS+=("-Xptxas=-v")
-TMPDIR="$ONEESAN_TMP_DIR" nvcc -O3 -std=c++17 -lineinfo -arch="$ARCH" "${PTXAS_FLAGS[@]}" \
+REG_FLAGS=(); (( MAXRREGCOUNT > 0 )) && REG_FLAGS+=("-maxrregcount=$MAXRREGCOUNT")
+TMPDIR="$ONEESAN_TMP_DIR" nvcc -O3 -std=c++17 -lineinfo -arch="$ARCH" "${PTXAS_FLAGS[@]}" "${REG_FLAGS[@]}" \
   -DTARGET_W="$W" -DLOW_LUT_K="$LOW_LUT_K" -DHIGH_LUT_K="$HIGH_LUT_K" -DB300_FAST_SHARD_ADDRESS8="$FAST_SHARD_ADDRESS8" "$BUILD_SRC" -o "$OUT"
 
 echo "built $OUT"
 echo "  source=$SRC"
 echo "  build_source=$BUILD_SRC"
-echo "  n=$N width=$W arch=$ARCH low_lut_k=$LOW_LUT_K high_lut_k=$HIGH_LUT_K fast_shard_address8=$FAST_SHARD_ADDRESS8 main_mate_cache=$MAIN_MATE_CACHE main_pull=$MAIN_PULL block_pull=$BLOCK_PULL block_mate_cache=$BLOCK_MATE_CACHE main_pull_ilp2=$MAIN_PULL_ILP2 height_cache=$HEIGHT_CACHE rank_delta_cache=$RANK_DELTA_CACHE rank_state_packed=$RANK_STATE_PACKED rank_state_ilp2=$RANK_STATE_ILP2 ptxas_verbose=$PTXAS_VERBOSE"
+echo "  n=$N width=$W arch=$ARCH low_lut_k=$LOW_LUT_K high_lut_k=$HIGH_LUT_K fast_shard_address8=$FAST_SHARD_ADDRESS8 main_mate_cache=$MAIN_MATE_CACHE main_pull=$MAIN_PULL block_pull=$BLOCK_PULL block_mate_cache=$BLOCK_MATE_CACHE main_pull_ilp2=$MAIN_PULL_ILP2 height_cache=$HEIGHT_CACHE rank_delta_cache=$RANK_DELTA_CACHE rank_state_packed=$RANK_STATE_PACKED rank_state_ilp2=$RANK_STATE_ILP2 maxrregcount=$MAXRREGCOUNT ptxas_verbose=$PTXAS_VERBOSE"
 echo "  row_limit_env=B300_ROW_LIMIT default_rows=$W runtime_threads_env=GRIDFP_THREADS default_threads=256 planner_target_env=GRIDFP_PLAN_TARGET_MIB scratch_target_separate=1"
 echo "  block_closure_scan=endpoint_setbits block_closure_candidate_rank=incremental_delta rank_same_calls_per_closure_candidate=0"
 if [[ "$MAIN_PULL_ILP2" == 1 ]]; then echo "  main_pull_destinations_per_thread=2 memory_request_phases=mate,self,pair,block register_pressure_requires_ab=1";fi
