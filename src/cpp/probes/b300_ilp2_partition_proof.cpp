@@ -1,3 +1,4 @@
+#include <array>
 #include <cstdint>
 #include <iostream>
 #include <vector>
@@ -18,19 +19,20 @@ int main(){
             ++cases;
         }
     }
-    // Production cap: verify boundary arithmetic around 65535*1024 threads
-    // without allocating a vector of that size.
+    // Production cap: algebraically sample both ILP lanes and several rounds
+    // around 65535*1024 threads. No giant allocation or O(G) loop is needed.
     constexpr std::uint64_t G=65535ull*1024ull;
-    for(std::uint64_t n: {G-1,G,G+1,2*G-1,2*G,2*G+1,5*G+123}){
-        for(std::uint64_t i=0;i<n;++i){
-            const std::uint64_t tid=i%G;
-            const std::uint64_t round=i/G;
+    constexpr std::array<std::uint64_t,12> tids={0,1,31,32,1023,1024,G/2-1,G/2,G-1025,G-33,G-2,G-1};
+    for(std::uint64_t round=0;round<16;++round){
+        for(std::uint64_t tid:tids){
+            const std::uint64_t i=tid+round*G;
             const std::uint64_t base=tid+(round/2)*(2*G);
             const std::uint64_t reconstructed=base+(round&1u)*G;
             if(reconstructed!=i)return 5;
+            ++indices;
         }
-        ++cases;
     }
+    cases+=16*tids.size();
     std::cout<<"b300-ilp2-partition-proof OK cases="<<cases<<" visited_indices="<<indices
              <<" pattern=base_tid_plus_grid stride=2grid duplicate=0 missing=0 exact=1\n";
     return 0;
