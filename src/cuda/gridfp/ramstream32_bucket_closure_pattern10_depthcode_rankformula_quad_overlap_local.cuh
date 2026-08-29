@@ -14,6 +14,9 @@
 #ifndef P10DC_RANKFORMULA_QUAD_OVERLAP_BYPASS_LOCAL0
 #define P10DC_RANKFORMULA_QUAD_OVERLAP_BYPASS_LOCAL0 0
 #endif
+#ifndef P10DC_RANKFORMULA_QUAD_CPASYNC_PREFETCH_BYTES
+#define P10DC_RANKFORMULA_QUAD_CPASYNC_PREFETCH_BYTES 0
+#endif
 static_assert(P10DC_RANKFORMULA_QUAD_OVERLAP_LOCAL == 0 ||
               P10DC_RANKFORMULA_QUAD_OVERLAP_LOCAL == 1,
               "P10DC_RANKFORMULA_QUAD_OVERLAP_LOCAL must be 0 or 1");
@@ -23,6 +26,11 @@ static_assert(P10DC_RANKFORMULA_QUAD_SPARSE_DESC_MLP == 0 ||
 static_assert(P10DC_RANKFORMULA_QUAD_OVERLAP_BYPASS_LOCAL0 == 0 ||
               P10DC_RANKFORMULA_QUAD_OVERLAP_BYPASS_LOCAL0 == 1,
               "P10DC_RANKFORMULA_QUAD_OVERLAP_BYPASS_LOCAL0 must be 0 or 1");
+static_assert(P10DC_RANKFORMULA_QUAD_CPASYNC_PREFETCH_BYTES == 0 ||
+              P10DC_RANKFORMULA_QUAD_CPASYNC_PREFETCH_BYTES == 64 ||
+              P10DC_RANKFORMULA_QUAD_CPASYNC_PREFETCH_BYTES == 128 ||
+              P10DC_RANKFORMULA_QUAD_CPASYNC_PREFETCH_BYTES == 256,
+              "QUAD_CPASYNC_PREFETCH_BYTES must be 0,64,128,256");
 
 #if P10DC_RANKFORMULA_QUAD_OVERLAP_LOCAL
 static_assert(P10DC_RANKFORMULA_QUAD_MLP,
@@ -128,6 +136,29 @@ p10dc_rankformula_qol_directgather64_quad_rare(
 }
 #endif
 
+__device__ __forceinline__ void p10dc_rankformula_qol_cpasync_u32(
+    Count* dst,const Count* src,bool valid
+) {
+#if P10DC_RANKFORMULA_QUAD_CPASYNC_PREFETCH_BYTES == 0
+    p10dc_rankformula_cpasync_u32(dst,src,valid);
+#else
+    if(!valid){ *dst=Count(0); return; }
+#if __CUDA_ARCH__ >= 800
+    const uint32_t sdst=uint32_t(__cvta_generic_to_shared(dst));
+    const unsigned long long gsrc=reinterpret_cast<unsigned long long>(src);
+#if P10DC_RANKFORMULA_QUAD_CPASYNC_PREFETCH_BYTES == 64
+    asm volatile("cp.async.ca.shared.global.L2::64B [%0], [%1], 4;" :: "r"(sdst),"l"(gsrc));
+#elif P10DC_RANKFORMULA_QUAD_CPASYNC_PREFETCH_BYTES == 128
+    asm volatile("cp.async.ca.shared.global.L2::128B [%0], [%1], 4;" :: "r"(sdst),"l"(gsrc));
+#else
+    asm volatile("cp.async.ca.shared.global.L2::256B [%0], [%1], 4;" :: "r"(sdst),"l"(gsrc));
+#endif
+#else
+    *dst=*src;
+#endif
+#endif
+}
+
 __device__ __forceinline__ void
 p10dc_rankformula_quad_issue_group_preloaded(
     P10DCDirectGather64Word p,P10DCDirectGather64Word q,
@@ -143,7 +174,7 @@ p10dc_rankformula_quad_issue_group_preloaded(
         r5=uint32_t((q>>30)&0x7fffu);r6=uint32_t((q>>45)&0x7fffu);
     }
 #define P10DC_QO_ISSUE(i,r,need) \
-    p10dc_rankformula_cpasync_u32( \
+    p10dc_rankformula_qol_cpasync_u32( \
         p10dc_rankformula_cpasync_slot(slot+(i)),source_row+(r),n>(need))
     P10DC_QO_ISSUE(0,r0,0);P10DC_QO_ISSUE(1,r1,1);
     P10DC_QO_ISSUE(2,r2,2);P10DC_QO_ISSUE(3,r3,3);
