@@ -3,12 +3,13 @@ set -euo pipefail
 source "$(dirname -- "${BASH_SOURCE[0]}")/../lib/common.sh"
 
 GRAND="$ONEESAN_ROOT/scripts/run/b300x8-joint-nextself-hybrid8-select.sh"
+FIRSTPASS="$ONEESAN_ROOT/scripts/run/b300x8-grand-firstpass.sh"
 NEXTSELF="$ONEESAN_ROOT/scripts/run/b300x8-ilp8-nextself-staged-fullprime-race.sh"
 HYBRID="$ONEESAN_ROOT/scripts/run/b300x8-nextgen-hybrid8-staged-fullprime-race.sh"
 RACE="$ONEESAN_ROOT/scripts/run/b300x8-race-external-forced-profiled-once.sh"
 JOINT="$ONEESAN_ROOT/scripts/run/b300x8-joint-calibrated-select.sh"
 
-for f in "$GRAND" "$NEXTSELF" "$HYBRID" "$RACE" "$JOINT"; do
+for f in "$GRAND" "$FIRSTPASS" "$NEXTSELF" "$HYBRID" "$RACE" "$JOINT"; do
   [[ -f "$f" ]] || { echo "missing grand-selector dependency=$f" >&2; exit 2; }
   bash -n "$f"
 done
@@ -50,6 +51,24 @@ for s in \
 done
 
 for s in \
+  'SELECT_ONLY=1 REBUILD_BUCKETS="$REBUILD_BUCKETS"' \
+  'b300-nextgen-preflight.sh' \
+  'b300-joint-nextgen-hybrid8-preflight.sh' \
+  'b300-nextgen-grand-selector-preflight.sh' \
+  'git -C "$ONEESAN_ROOT" status --porcelain=v1 --untracked-files=normal' \
+  'profile_sha256=%s' \
+  'gpu_inventory_begin=1' \
+  'SINGLE PASS SELECTED' \
+  'SELECT_ONLY=1: selected' \
+  'b300x8-grand-firstpass OK'; do
+  grep -Fq "$s" "$FIRSTPASS" || { echo "grand first-pass marker missing: $s" >&2; exit 3; }
+done
+if grep -Eq 'SELECT_ONLY=0|SELECT_ONLY="?0"?' "$FIRSTPASS"; then
+  echo 'guarded grand first-pass contains a SELECT_ONLY=0 path' >&2
+  exit 3
+fi
+
+for s in \
   'FORCED_EXTRA3_BIN="${FORCED_EXTRA3_BIN:-}"' \
   'HAS_FORCED_EXTRA3=0' \
   'HAS_FORCED_EXTRA3=1' \
@@ -72,17 +91,15 @@ python3 - "$GRAND" <<'PY'
 from pathlib import Path
 import re,sys
 s=Path(sys.argv[1]).read_text()
-# Both-transform mode must consume exactly all five forced slots once.
 block=re.search(r'if \(\( NEXTSELF_OK && HYBRID_OK \)\); then(.*?)elif \(\( NEXTSELF_OK \)\); then',s,re.S)
 if not block: raise SystemExit('both-transform candidate block missing')
 b=block.group(1)
 for name in ('P_BIN','B_BIN','E1_BIN','E2_BIN','E3_BIN'):
     if len(re.findall(rf'\b{name}=',b)) != 1:
         raise SystemExit(f'{name} must be assigned exactly once in both-transform mode')
-# The low-priority joint base must not silently steal a slot in both mode.
 if 'JOINT_BASE_BIN' in b:
     raise SystemExit('joint base unexpectedly occupies both-transform candidate block')
 print('grand_candidate_budget=OK forced_slots=5 profiled_slots=2 total=7')
 PY
 
-echo 'b300_nextgen_grand_selector_preflight=OK bash_syntax=OK nextself_prepare=OK hybrid8_prepare=OK fingerprint=OK staged_reject_fallback=OK forced_extra3=OK candidate_budget=7 gpu_work=0 actions_triggered=0'
+echo 'b300_nextgen_grand_selector_preflight=OK bash_syntax=OK firstpass_guard=OK provenance=OK nextself_prepare=OK hybrid8_prepare=OK fingerprint=OK staged_reject_fallback=OK forced_extra3=OK candidate_budget=7 gpu_work=0 actions_triggered=0'
