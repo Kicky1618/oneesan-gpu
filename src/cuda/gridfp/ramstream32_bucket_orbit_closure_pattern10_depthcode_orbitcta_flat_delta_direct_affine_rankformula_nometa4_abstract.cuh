@@ -11,6 +11,9 @@
 #ifndef P10DC_RANKFORMULA_PRECTX_COMPACT
 #define P10DC_RANKFORMULA_PRECTX_COMPACT 0
 #endif
+#ifndef P10DC_ORBITCTA_FLAT_CHUNK
+#define P10DC_ORBITCTA_FLAT_CHUNK 1
+#endif
 static_assert(P10DC_RANKFORMULA_PRECTX_COMPACT == 0 ||
               P10DC_RANKFORMULA_PRECTX_COMPACT == 1,
               "P10DC_RANKFORMULA_PRECTX_COMPACT must be 0 or 1");
@@ -18,6 +21,13 @@ static_assert(!P10DC_RANKFORMULA_PRECTX_COMPACT ||
               P10DC_RANKFORMULA_PRECTX_FORWARD ||
               P10DC_RANKFORMULA_PRECTX_REVERSE,
               "compact prectx requires forward and/or reverse prectx");
+static_assert(P10DC_ORBITCTA_FLAT_CHUNK == 1 ||
+              P10DC_ORBITCTA_FLAT_CHUNK == 2 ||
+              P10DC_ORBITCTA_FLAT_CHUNK == 4 ||
+              P10DC_ORBITCTA_FLAT_CHUNK == 8 ||
+              P10DC_ORBITCTA_FLAT_CHUNK == 16 ||
+              P10DC_ORBITCTA_FLAT_CHUNK == 32,
+              "P10DC_ORBITCTA_FLAT_CHUNK must be 1,2,4,8,16,32");
 #if P10DC_RANKFORMULA_PRECTX_FORWARD || P10DC_RANKFORMULA_PRECTX_REVERSE
 #if P10DC_RANKFORMULA_PRECTX_COMPACT
 #include "ramstream32_bucket_precomputed_high_ctx_compact.cuh"
@@ -31,7 +41,7 @@ static_assert(!P10DC_RANKFORMULA_PRECTX_COMPACT ||
 #define P10DC_ORBITCTA_EARLY_JP_LOCAL 1
 #endif
 #define P10DC_ORBITCTA_CTX P10DCDirectHighResolvedCtx
-// The flat scheduler calls the global stream index q rather than qi.  Keep the
+// The flat scheduler calls the global stream index q rather than qi. Keep the
 // common prectx ABI by binding the flat stream index directly here.
 #if P10DC_RANKFORMULA_PRECTX_FORWARD
 #define P10DC_ORBITCTA_PREPARE_FORWARD(c,payload,loc,p,ss,js,ds,sr,jr,dr) do { \
@@ -62,6 +72,9 @@ static_assert(!P10DC_RANKFORMULA_PRECTX_COMPACT ||
 #define P10DC_ORBITCTA_PLAN_SUM_PAIR_LOCAL 1
 #endif
 #include "ramstream32_bucket_orbit_closure_pattern10_depthcode_orbitcta_flat.cuh"
+#if P10DC_ORBITCTA_FLAT_CHUNK > 1
+#include "ramstream32_bucket_orbit_closure_pattern10_depthcode_orbitcta_flat_chunked.cuh"
+#endif
 #ifdef P10DC_ORBITCTA_PLAN_SUM_PAIR_LOCAL
 #undef P10DC_ORBITCTA_PLAN_SUM_PAIR_LOCAL
 #undef P10DC_ORBITCTA_PLAN_SUM_PAIR
