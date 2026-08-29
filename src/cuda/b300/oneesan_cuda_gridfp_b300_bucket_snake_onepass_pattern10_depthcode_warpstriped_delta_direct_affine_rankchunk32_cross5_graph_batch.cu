@@ -21,8 +21,13 @@
 #include "oneesan_cuda_gridfp_b300_bucket_snake_onepass_graph_batch.cu"
 #undef main
 int main(int argc, char** argv) {
+    bool plan_only = false;
+    for (int i = 1; i < argc; ++i) {
+        if (std::strcmp(argv[i], "--plan-only") == 0) plan_only = true;
+    }
     const int rc = p10dc_rankchunk32_profile_wrapped_main(argc, argv);
-    if (rc == 0) p10dc_rankchunk32_report_rankmask_profile_devices(BUCKET_NGPU);
+    if (rc == 0 && !plan_only)
+        p10dc_rankchunk32_report_rankmask_profile_devices(BUCKET_NGPU);
     return rc;
 }
 #else
