@@ -66,8 +66,8 @@ fi
 
 # Once the n=27 base weight is known, calibrate the column threshold that makes
 # small orbits use weight=1 while large orbits keep that base weight. The
-# canonical profiled selector does not consume the threshold key yet, so export
-# the build-wrapper knob explicitly for every downstream rebuild.
+# canonical profiled selector does not fingerprint the threshold yet, so export
+# the build-wrapper knob explicitly and force the final bucket rebuild below.
 if [[ "$N27_PRODUCER_ADAPTIVE_RACE" == 1 ]];then
   PAC_PROFILE_OUT="${PAC_PROFILE_OUT:-${PREFIX}.producer-adaptive.env}"
   PAC_PREFIX="${PAC_PREFIX:-${PREFIX}.producer-adaptive}"
@@ -83,8 +83,11 @@ PRODUCER_ADAPTIVE_COLS="$(getv ORBIT_N27_PRODUCER_ADAPTIVE_COLS "$PROFILE_FILE")
 PRODUCER_ADAPTIVE_COLS="${PRODUCER_ADAPTIVE_COLS:-0}"
 [[ "$PRODUCER_ADAPTIVE_COLS" =~ ^[0-9]+$ ]]||{ echo "bad selected producer adaptive cols=$PRODUCER_ADAPTIVE_COLS" >&2;exit 4; }
 export PRODUCER_ADAPTIVE_COLS
+# Adaptive threshold is not in the canonical orbit binary fingerprint yet. A
+# stale binary could otherwise carry the last threshold tested by the sweep.
+export REBUILD_BUCKETS=1
 
-echo "JOINT BUCKET PROFILE profile=$PROFILE_FILE producer_adaptive_cols=$PRODUCER_ADAPTIVE_COLS pww_repeats=$PWW_REPEATS pac_repeats=$PAC_REPEATS" >&2
+echo "JOINT BUCKET PROFILE profile=$PROFILE_FILE producer_adaptive_cols=$PRODUCER_ADAPTIVE_COLS pww_repeats=$PWW_REPEATS pac_repeats=$PAC_REPEATS rebuild_buckets=$REBUILD_BUCKETS" >&2
 export SELECT_ONLY FORCED_OVERRIDE_BIN="$BIN" FORCED_OVERRIDE_LABEL="$LABEL" FORCED_OVERRIDE_THREADS="$THREADS" PROFILE_FILE SMOKE_PRIME="$PRIME" FORCED_TARGET_MIB="$TARGET_MIB" MAX_WINDOW
 export PREFIX="${RACE_PREFIX:-${PREFIX}.race}"
 exec "$ONEESAN_ROOT/scripts/run/b300x8-race-external-forced-profiled.sh" 27 "$@"
