@@ -6,6 +6,7 @@ N="${N:-27}"; W=$((N + 1)); ARCH="${ARCH:-native}"
 LOW_LUT_K="${LOW_LUT_K:-$((W / 2))}"; HIGH_LUT_K="${HIGH_LUT_K:-$((W - LOW_LUT_K - 1))}"
 TRANSPOSE_MODE="${TRANSPOSE_MODE:-pipeline}"
 COL_ILP="${COL_ILP:-2}"; PM_ACCUM="${PM_ACCUM:-1}"
+DEPTHMAJOR="${DEPTHMAJOR:-1}"; FORCE7="${FORCE7:-0}"; MLP_WINDOW4="${MLP_WINDOW4:-0}"
 MAXRREGCOUNT="${MAXRREGCOUNT:-0}"; PTXAS_VERBOSE="${PTXAS_VERBOSE:-1}"
 OUT="${OUT:-oneesan_cuda_gridfp_b300_directgather_colilp${COL_ILP}_n${N}}"
 
@@ -13,8 +14,10 @@ if (( LOW_LUT_K <= 0 || HIGH_LUT_K <= 0 || LOW_LUT_K + HIGH_LUT_K + 1 != W || LO
   echo "invalid LOW/HIGH split W=$W low=$LOW_LUT_K high=$HIGH_LUT_K" >&2; exit 2
 fi
 case "$COL_ILP" in 1|2|4) ;; *) echo "COL_ILP must be 1, 2, or 4" >&2; exit 2;; esac
-[[ "$PM_ACCUM" == 0 || "$PM_ACCUM" == 1 ]] || { echo "PM_ACCUM must be 0 or 1" >&2; exit 2; }
-[[ "$PTXAS_VERBOSE" == 0 || "$PTXAS_VERBOSE" == 1 ]] || { echo "PTXAS_VERBOSE must be 0 or 1" >&2; exit 2; }
+for x in PM_ACCUM DEPTHMAJOR FORCE7 MLP_WINDOW4 PTXAS_VERBOSE; do
+  v="${!x}"; [[ "$v" == 0 || "$v" == 1 ]] || { echo "$x must be 0 or 1" >&2; exit 2; }
+done
+if [[ "$FORCE7" == 1 && "$MLP_WINDOW4" == 1 ]]; then echo "FORCE7 and MLP_WINDOW4 are mutually exclusive" >&2; exit 2; fi
 [[ "$MAXRREGCOUNT" =~ ^[0-9]+$ ]] || { echo "MAXRREGCOUNT must be non-negative integer" >&2; exit 2; }
 if (( MAXRREGCOUNT != 0 && (MAXRREGCOUNT < 32 || MAXRREGCOUNT > 255) )); then
   echo "MAXRREGCOUNT must be 0 or 32..255" >&2; exit 2
@@ -44,6 +47,9 @@ TMPDIR="$ONEESAN_TMP_DIR" nvcc -O3 -std=c++17 -lineinfo -arch="$ARCH" \
   -DP10DC_RANKFORMULA_NOMETA_GROUP61=1 \
   -DP10DC_RANKFORMULA_NOMETA_DIRECTMAP=1 \
   -DP10DC_RANKFORMULA_DIRECTGATHER=1 \
+  -DP10DC_RANKFORMULA_DIRECTGATHER_DEPTHMAJOR="$DEPTHMAJOR" \
+  -DP10DC_RANKFORMULA_DIRECTGATHER_FORCE7="$FORCE7" \
+  -DP10DC_RANKFORMULA_MLP_WINDOW4="$MLP_WINDOW4" \
   -DP10DC_RANKFORMULA_ABSTRACT_SELECT8=1 \
   -DP10DC_RANKFORMULA_ABSTRACT_DEPTH4=1 \
   -DP10DC_RANKFORMULA_ABSTRACT_SRCPACK10=1 \
@@ -55,6 +61,6 @@ TMPDIR="$ONEESAN_TMP_DIR" nvcc -O3 -std=c++17 -lineinfo -arch="$ARCH" \
   -DP10DC_RANKFORMULA_BASE_DELTA=0 -DP10DC_RANKFORMULA_SLOTMETA=0 -DP10DC_RANKFORMULA_SLOTROW32=0 \
   "$SRC" -o "$BIN"
 
-echo "built $BIN (directmap=1 directgather=1 gather_mlp=1 group61=1 block=16 col_ilp=$COL_ILP pm_accum=$PM_ACCUM maxrregcount=$MAXRREGCOUNT transpose=$TRANSPOSE_MODE)" >&2
+echo "built $BIN (directmap=1 directgather=1 depthmajor=$DEPTHMAJOR force7=$FORCE7 mlp_window4=$MLP_WINDOW4 gather_mlp=1 group61=1 block=16 col_ilp=$COL_ILP pm_accum=$PM_ACCUM maxrregcount=$MAXRREGCOUNT transpose=$TRANSPOSE_MODE)" >&2
 echo "run example:" >&2
 echo "  BUCKET_THREADS=256 BUCKET_GRID_X=32 BUCKET_GRID_Y=8 $BIN $N <target_mib> <max_window> 8 <mod>" >&2
