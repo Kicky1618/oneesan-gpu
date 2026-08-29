@@ -66,9 +66,26 @@ __global__ void p10dc_fill_forward_prectx_kernel(
         nrnl_out[q] = p10dc_make_forward_prectx(bid, p, D_BKF_HIGH_NRNL[q], false);
 }
 
-__device__ __forceinline__ P10DCDirectHighResolvedCtx
-p10dc_load_forward_prectx(uint32_t qi, bool nn) {
-    return nn ? D_P10DC_PRECTX_FWD_NN[qi] : D_P10DC_PRECTX_FWD_NRNL[qi];
+__device__ __forceinline__ void p10dc_apply_forward_prectx(
+    P10DCDirectHighResolvedCtx& c, uint32_t qi, bool nn
+) {
+    const P10DCDirectHighResolvedCtx z =
+        nn ? D_P10DC_PRECTX_FWD_NN[qi] : D_P10DC_PRECTX_FWD_NRNL[qi];
+    // Preserve c.n0/c.n1/c.total: the warp-striped scheduler reuses those fields
+    // on the next k iteration.  Only the per-orbit execution context is replaced.
+    c.xb = z.xb;
+    c.jb = z.jb;
+    c.db = z.db;
+    c.ip_base = z.ip_base;
+    c.jp_base = z.jp_base;
+    c.dp_base = z.dp_base;
+#pragma unroll
+    for (uint32_t i = 0; i < BKCZ_MAX_LOCAL; ++i) c.local_base[i] = z.local_base[i];
+    c.cross_base = z.cross_base;
+    c.cross_depth = z.cross_depth;
+    c.local_n = z.local_n;
+    c.kind = z.kind;
+    c.valid = z.valid;
 }
 
 template<class BaseTables>
@@ -127,7 +144,8 @@ struct BucketFusedPrecomputedForwardHighCtxTables : BaseTables {
                   << " total_mib="
                   << double((prectx_fwd_nn_count + prectx_fwd_nrnl_count) *
                             sizeof(P10DCDirectHighResolvedCtx)) / double(1 << 20)
-                  << " build_once=1 reuse_across_grid_x=1 reuse_across_moduli=1\n";
+                  << " build_once=1 reuse_across_grid_x=1 reuse_across_moduli=1"
+                  << " scheduler_metadata_preserved=1\n";
     }
 
     void release() {
