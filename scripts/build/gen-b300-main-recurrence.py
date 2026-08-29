@@ -21,8 +21,6 @@ def replace_function(text:str,name:str,new:str)->str:
     if end<0:raise SystemExit(f'function end not found: {name}')
     return text[:start]+new+text[end:]
 
-# Convert the existing low-window cache into a recurrent 64-bit state:
-# 25 trit bits + signed31 current drop delta + 4-bit height + ready bit.
 low_pack=r'''__device__ __forceinline__ uint32_t b300_main_trit3(MateID m,int base,int limit){
     const uint32_t a=base<limit?uint32_t(mget(m,base)):0u;
     const uint32_t b=base+1<limit?uint32_t(mget(m,base+1)):0u;
@@ -58,32 +56,23 @@ __device__ __forceinline__ MateID b300_pack_low_window_main_mate(MateID m){
     return trits|(MateID(delta_mag)<<25)|(MateID(enter_h)<<56);
 }'''
 s=replace_function(s,'b300_pack_low_window_main_mate',low_pack)
-
-low_height=r'''__device__ __forceinline__ int b300_low_cached_height_before(MateID x,int p){
+s=replace_function(s,'b300_low_cached_height_before',r'''__device__ __forceinline__ int b300_low_cached_height_before(MateID x,int p){
     if(b300_low_state_ready(x))return b300_low_state_height(x);
     int h=b300_low_state_height(x);for(int pos=14;pos>p;--pos){const MateValue v=b300_low_state_get(x,pos);h+=(v==L)-(v==R);}return h;
-}'''
-s=replace_function(s,'b300_low_cached_height_before',low_height)
-low_drop=r'''__device__ __forceinline__ Code b300_low_cached_drop_rank(Code main_rank,MateID x,int p){
+}''')
+s=replace_function(s,'b300_low_cached_drop_rank',r'''__device__ __forceinline__ Code b300_low_cached_drop_rank(Code main_rank,MateID x,int p){
     long long d;if(b300_low_state_ready(x))d=b300_low_state_delta(x);else{d=-static_cast<long long>((x>>25)&0x7fffffffULL);int h=b300_low_state_height(x);for(int pos=14;pos>p;--pos)b300_low_state_step(d,h,pos,b300_low_state_get(x,pos));}
     return d>=0?main_rank+Code(d):main_rank-Code(-d);
-}'''
-s=replace_function(s,'b300_low_cached_drop_rank',low_drop)
+}''')
 
-# Change only the two production materialization calls. The helper inserted below
-# intentionally invokes the low packer and must not be rewritten recursively.
 pack_call='b300_pack_low_window_main_mate(m)'
 if s.count(pack_call)!=2:raise SystemExit(f'expected two main cache materialization calls, got {s.count(pack_call)}')
 s=s.replace(pack_call,'b300_pack_main_transition_cache(m)',2)
 
 high_rank='b300_high_chunk_drop_rank(i,m,p)' if 'b300_high_chunk_drop_rank' in s else 'rank_drop_n_t<TARGET_W>(i,m,p)'
-marker='\n\nstatic Code rank_full(MateID m,int width)'
-if marker not in s:raise SystemExit('rank_full marker not found')
-helpers=r'''
-
-// High forced window keeps only transition positions 14..27. Five base-3
-// chunks use 25 bits; signed35 drop delta + 4-bit height fills MateID exactly.
-__device__ __forceinline__ bool b300_high_main_state_active(){
+marker='__global__ void gather_main_kernel('
+if s.count(marker)!=1:raise SystemExit(f'gather_main marker expected once, got {s.count(marker)}')
+helpers=r'''__device__ __forceinline__ bool b300_high_main_state_active(){
     if constexpr(TARGET_W!=28)return false;
     else {constexpr uint32_t HIGH=((uint32_t(1)<<28)-1u)^((uint32_t(1)<<14)-1u);return (D_MAIN_FIXED&HIGH)==0;}
 }
@@ -107,7 +96,7 @@ __device__ __forceinline__ Code b300_main_pair_rank_h(Code dst_rank,int p,MateVa
 }
 __global__ void b300_init_low_main_state_kernel(MateID*mates,Code n,int p){Code i=Code(blockIdx.x)*blockDim.x+threadIdx.x,stride=Code(gridDim.x)*blockDim.x;for(;i<n;i+=stride){MateID x=mates[i];long long d=-static_cast<long long>((x>>25)&0x7fffffffULL);int h=b300_low_state_height(x);for(int pos=14;pos>p;--pos)b300_low_state_step(d,h,pos,b300_low_state_get(x,pos));mates[i]=b300_low_state_pack_current(x,d,h);}}
 '''
-s=s.replace(marker,helpers+marker,1)
+s=s.replace(marker,helpers+'\n'+marker,1)
 
 prepare=f'''__device__ __forceinline__ void b300_main_pull_prepare(
     Code i,MateID m,int p,Code nblock,
@@ -122,7 +111,6 @@ prepare=f'''__device__ __forceinline__ void b300_main_pull_prepare(
 }}'''
 s=replace_function(s,'b300_main_pull_prepare',prepare)
 
-# ILP2 owns all cached main p>1 updates in the exact forced path.
 old='const Count* __restrict__ in,const MateID* __restrict__ mates,Code n,'
 if s.count(old)!=1:raise SystemExit(f'ILP2 mate pointer anchor count={s.count(old)}')
 s=s.replace(old,'const Count* __restrict__ in,MateID* __restrict__ mates,Code n,',1)
@@ -133,8 +121,6 @@ old='if(v1){uint64_t a1=uint64_t(self1)+pair1+block1;if(a1>=mod)a1-=mod;if(a1>=m
 if s.count(old)!=1:raise SystemExit('ILP2 lane1 store anchor not unique')
 s=s.replace(old,'if(v1){uint64_t a1=uint64_t(self1)+pair1+block1;if(a1>=mod)a1-=mod;if(a1>=mod)a1-=mod;out_main[i1]=Count(a1);if(b300_low_window_cache_active())mates[i1]=b300_low_state_advance(m1,p);else if(b300_high_main_state_active())mates[i1]=b300_high_state_advance(m1,p);}',1)
 
-# Low packed cache starts with base delta/enter height; advance it to the current
-# p once after gather. High state naturally starts at p=27 with delta=0,height=1.
 old='ck(cudaGetLastError(),"doubleD gather");ck(cudaDeviceSynchronize(),"doubleD gather sync");\n    Count*cur=c.dA,*nxt=c.dB,*dcur=c.dD,*dnext=c.dE;'
 new='ck(cudaGetLastError(),"doubleD gather");ck(cudaDeviceSynchronize(),"doubleD gather sync");\n    if(wp.p_hi<15&&useMate&&ms.size){b300_init_low_main_state_kernel<<<bm,threads>>>(c.dMate,ms.size,wp.p_hi);ck(cudaGetLastError(),"init unified low main recurrence");ck(cudaDeviceSynchronize(),"init unified low main recurrence sync");}\n    Count*cur=c.dA,*nxt=c.dB,*dcur=c.dD,*dnext=c.dE;'
 if s.count(old)!=1:raise SystemExit(f'gather/init anchor count={s.count(old)}')
@@ -143,7 +129,7 @@ s=s.replace(old,new,1)
 for required in ('b300_pack_main_transition_cache','b300_low_state_advance(m1,p)','b300_high_state_advance(m1,p)','b300_high_state_drop_rank','b300_low_cached_drop_rank(i,m,p)','b300_init_low_main_state_kernel'):
     if required not in s:raise SystemExit(f'missing unified main recurrence artifact: {required}')
 if s.count('b300_pack_main_transition_cache(m)')!=2:raise SystemExit(f'expected two production unified packing calls, got {s.count("b300_pack_main_transition_cache(m)")}')
-for stale in ('const MateID* __restrict__ mates','main_pull_direct_pair_source_rank(i,m,p);'):
-    if stale in s:raise SystemExit(f'stale unified recurrence artifact: {stale}')
+if s.find('b300_pack_main_transition_cache')>s.find('__global__ void gather_main_kernel'):
+    raise SystemExit('unified transition-cache helper emitted after gather_main')
 out.parent.mkdir(parents=True,exist_ok=True);out.write_text(s)
-print(f'generated {out} from {src}: unified_main_recurrence=1 ilp=2 extra_state_bytes=0 low_trit_bits=25 low_delta_bits=31 high_trit_bits=25 high_delta_bits=35 height_bits=4 mate_hbm_store_per_state_step=8 main_drop_walk_or_table_loads_per_state_step=0 main_height_walk_or_popcount_per_state_step=0')
+print(f'generated {out} from {src}: unified_main_recurrence=1 ilp=2 extra_state_bytes=0 helper_before_gather=1 low_trit_bits=25 low_delta_bits=31 high_trit_bits=25 high_delta_bits=35 height_bits=4 mate_hbm_store_per_state_step=8 main_drop_walk_or_table_loads_per_state_step=0 main_height_walk_or_popcount_per_state_step=0')
