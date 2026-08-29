@@ -12,6 +12,7 @@ grep -Fq 'hash_buckets=16' <<<"$out"
 grep -Fq 'hash_buckets=32' <<<"$out"
 grep -Fq 'hash_buckets=64' <<<"$out"
 grep -Fq 'memo_storage=unused_occupancy_high_bits' <<<"$out"
+grep -Fq 'memo_update=miss_only hit_memo_writes=0' <<<"$out"
 grep -Fq 'hash64_fallback=rehash shared_bytes_added=0 exact=1' <<<"$out"
 grep -Fq 'occupancy_low_bits_exact=1 record_bucket_exact=1' <<<"$out"
-echo 'gridfp-runtime-find-index-bucket-reuse-proof OK exact=1 shared_bytes_added=0' >&2
+echo 'gridfp-runtime-find-index-bucket-reuse-proof OK exact=1 miss_only=1 shared_bytes_added=0' >&2
