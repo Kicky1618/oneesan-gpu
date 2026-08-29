@@ -12,6 +12,7 @@ MAX_WINDOW="${MAX_WINDOW:-14}"
 RANDOM_CG="${RANDOM_CG:-1}"
 WARP_SCAN="${WARP_SCAN:-1}"
 ILP8_REGS="${ILP8_REGS:-0 96 128 160}"
+ILP8_PREFETCH_REGS="${ILP8_PREFETCH_REGS:-0 96 128 160}"
 ILP8_CPASYNC_REGS="${ILP8_CPASYNC_REGS:-0 96 128 160}"
 SAMPLE_INTERVAL="${SAMPLE_INTERVAL:-0.15}"
 REBUILD="${REBUILD:-0}"
@@ -74,9 +75,6 @@ run_one(){
     END{if(n)printf "%.3f %.3f %d\n",s/n,m,n;else print "nan nan 0"}
   ' "$memlog")
 
-  # Sync ILP8 and cp.async ILP8 intentionally keep the historical ILP4 kernel
-  # symbol. Score only that changed main recurrence kernel; unrelated block or
-  # closure kernels must not decide whether the main-memory candidate spills.
   : >"$res"
   if python3 "$PARSER" "$log" --label "$name" --contains b300_main_pull_rankstate_ilp4_kernel >"$res" 2>"$res.err"; then
     read -r regs_main spill_store spill_load < <(python3 - "$res" <<'PY'
@@ -98,22 +96,22 @@ PY
   printf '%s\n' "$row" | tee -a "$SUMMARY"
 }
 
-run_one ilp4 \
-  env ROWS="$ROWS" GRIDFP_THREADS="$THREADS" TARGET_MIB="$TARGET_MIB" GRIDFP_PLAN_TARGET_MIB="$PLAN_MIB" MAX_WINDOW="$MAX_WINDOW" \
-      RANDOM_CG="$RANDOM_CG" WARP_SCAN="$WARP_SCAN" REBUILD="$REBUILD" \
-  "$ONEESAN_ROOT/scripts/run/b300x8-saturate-dualmask.sh" "$N" "$MOD"
+common_env=(ROWS="$ROWS" GRIDFP_THREADS="$THREADS" TARGET_MIB="$TARGET_MIB" GRIDFP_PLAN_TARGET_MIB="$PLAN_MIB" MAX_WINDOW="$MAX_WINDOW" RANDOM_CG="$RANDOM_CG" WARP_SCAN="$WARP_SCAN" REBUILD="$REBUILD")
+
+run_one ilp4 env "${common_env[@]}" "$ONEESAN_ROOT/scripts/run/b300x8-saturate-dualmask.sh" "$N" "$MOD"
 
 for r in $ILP8_REGS; do
-  run_one "ilp8_sync_r${r}" \
-    env ROWS="$ROWS" GRIDFP_THREADS="$THREADS" TARGET_MIB="$TARGET_MIB" GRIDFP_PLAN_TARGET_MIB="$PLAN_MIB" MAX_WINDOW="$MAX_WINDOW" \
-        RANDOM_CG="$RANDOM_CG" WARP_SCAN="$WARP_SCAN" CPASYNC=0 MAXRREGCOUNT="$r" REBUILD="$REBUILD" \
+  run_one "ilp8_sync_r${r}" env "${common_env[@]}" PREFETCH_L2=0 CPASYNC=0 MAXRREGCOUNT="$r" \
+    "$ONEESAN_ROOT/scripts/run/b300x8-saturate-ilp8.sh" "$N" "$MOD"
+done
+
+for r in $ILP8_PREFETCH_REGS; do
+  run_one "ilp8_prefetch_r${r}" env "${common_env[@]}" PREFETCH_L2=1 CPASYNC=0 MAXRREGCOUNT="$r" \
     "$ONEESAN_ROOT/scripts/run/b300x8-saturate-ilp8.sh" "$N" "$MOD"
 done
 
 for r in $ILP8_CPASYNC_REGS; do
-  run_one "ilp8_cpasync_r${r}" \
-    env ROWS="$ROWS" GRIDFP_THREADS="$THREADS" TARGET_MIB="$TARGET_MIB" GRIDFP_PLAN_TARGET_MIB="$PLAN_MIB" MAX_WINDOW="$MAX_WINDOW" \
-        RANDOM_CG="$RANDOM_CG" WARP_SCAN="$WARP_SCAN" CPASYNC=1 MAXRREGCOUNT="$r" REBUILD="$REBUILD" \
+  run_one "ilp8_cpasync_r${r}" env "${common_env[@]}" PREFETCH_L2=0 CPASYNC=1 MAXRREGCOUNT="$r" \
     "$ONEESAN_ROOT/scripts/run/b300x8-saturate-ilp8.sh" "$N" "$MOD"
 done
 
@@ -132,21 +130,26 @@ def num(r,k,default=math.inf):
 def spill_known_free(r):
     return num(r,'regs_main',-1)>=0 and num(r,'spill_store_main_bytes',1)==0 and num(r,'spill_load_main_bytes',1)==0
 clean=[r for r in ilp8 if spill_known_free(r)]
-if not clean:
-    raise SystemExit('no ILP8 candidate has known spill-free main-kernel ptxas data; rebuild/resource log required')
+if not clean: raise SystemExit('no ILP8 candidate has known spill-free main-kernel ptxas data; rebuild/resource log required')
 key=lambda r:(num(r,'wall_s'),-num(r,'mc_avg_pct',-math.inf))
 best=min(clean,key=key)
 base=next((r for r in rows if r['profile']=='ilp4' and r['wall_s'] not in ('','nan')),None)
 common=next(iter(res))
-sync=[r for r in clean if r['profile'].startswith('ilp8_sync_')]
-asyncs=[r for r in clean if r['profile'].startswith('ilp8_cpasync_')]
-bs=min(sync,key=key) if sync else None; ba=min(asyncs,key=key) if asyncs else None
+def classbest(prefix):
+    x=[r for r in clean if r['profile'].startswith(prefix)]
+    return min(x,key=key) if x else None
+bs=classbest('ilp8_sync_');bp=classbest('ilp8_prefetch_');ba=classbest('ilp8_cpasync_')
+for label,r in (('sync',bs),('prefetch',bp),('cpasync',ba)):
+    if r: print(f"ILP8_CLASS_BEST class={label} profile={r['profile']} wall_s={r['wall_s']} mc_avg_pct={r['mc_avg_pct']} mc_max_pct={r['mc_max_pct']} mc_samples={r['mc_samples']} regs_main={r['regs_main']} spill_store={r['spill_store_main_bytes']} spill_load={r['spill_load_main_bytes']}",file=sys.stderr)
+if bs and bp:
+    print(f"ILP8_PREFETCH_COMPARE sync={bs['profile']} prefetch={bp['profile']} speedup={num(bs,'wall_s')/num(bp,'wall_s'):.6f}x mc_delta={num(bp,'mc_avg_pct',0)-num(bs,'mc_avg_pct',0):.3f} exact_gate=1",file=sys.stderr)
 if bs and ba:
-    print(f"ILP8_ASYNC_COMPARE sync={bs['profile']} sync_wall={bs['wall_s']} sync_mc={bs['mc_avg_pct']} sync_mc_samples={bs['mc_samples']} async={ba['profile']} async_wall={ba['wall_s']} async_mc={ba['mc_avg_pct']} async_mc_samples={ba['mc_samples']} async_speedup={num(bs,'wall_s')/num(ba,'wall_s'):.6f}x exact_gate=1",file=sys.stderr)
+    print(f"ILP8_ASYNC_COMPARE sync={bs['profile']} async={ba['profile']} speedup={num(bs,'wall_s')/num(ba,'wall_s'):.6f}x mc_delta={num(ba,'mc_avg_pct',0)-num(bs,'mc_avg_pct',0):.3f} exact_gate=1",file=sys.stderr)
 if base:
     print(f"ILP8_SELECTED profile={best['profile']} residue={common} wall_s={best['wall_s']} speedup={num(base,'wall_s')/num(best,'wall_s'):.6f}x mc_avg_pct={best['mc_avg_pct']} mc_samples={best['mc_samples']} regs_main={best['regs_main']} spill_store_main={best['spill_store_main_bytes']} spill_load_main={best['spill_load_main_bytes']} spill_free_pool=1 exact_gate=1",file=sys.stderr)
 else:
     print(f"ILP8_SELECTED profile={best['profile']} residue={common} wall_s={best['wall_s']} mc_avg_pct={best['mc_avg_pct']} mc_samples={best['mc_samples']} regs_main={best['regs_main']} spill_store_main={best['spill_store_main_bytes']} spill_load_main={best['spill_load_main_bytes']} spill_free_pool=1 exact_gate=1",file=sys.stderr)
+prefetch=int(best['profile'].startswith('ilp8_prefetch_'))
 cpasync=int(best['profile'].startswith('ilp8_cpasync_'))
 m=re.search(r'_r(\d+)$',best['profile']); maxr=int(m.group(1)) if m else 0
 def q(x): return shlex.quote(str(x))
@@ -154,6 +157,7 @@ with open(winner,'w') as f:
     f.write('B300_ILP8_WINNER_PROFILE='+q(best['profile'])+'\n')
     f.write('B300_ILP8_WINNER_BIN='+q(best['binary'])+'\n')
     f.write('B300_ILP8_WINNER_THREADS='+q(threads)+'\n')
+    f.write('B300_ILP8_WINNER_PREFETCH_L2='+q(prefetch)+'\n')
     f.write('B300_ILP8_WINNER_CPASYNC='+q(cpasync)+'\n')
     f.write('B300_ILP8_WINNER_MAXRREGCOUNT='+q(maxr)+'\n')
     f.write('B300_ILP8_WINNER_RESIDUE='+q(common)+'\n')
