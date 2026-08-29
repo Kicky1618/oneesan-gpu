@@ -48,6 +48,9 @@ BUILD_SRC="$ROW_SRC"
 THREAD_SRC="$ONEESAN_BUILD_DIR/b300_hbm32_n${N}_runtime_threads.cu"
 python3 "$ONEESAN_ROOT/scripts/build/gen-b300-runtime-threads.py" "$BUILD_SRC" "$THREAD_SRC"
 BUILD_SRC="$THREAD_SRC"
+PLAN_SRC="$ONEESAN_BUILD_DIR/b300_hbm32_n${N}_plan_target.cu"
+python3 "$ONEESAN_ROOT/scripts/build/gen-b300-plan-target.py" "$BUILD_SRC" "$PLAN_SRC"
+BUILD_SRC="$PLAN_SRC"
 
 PTXAS_FLAGS=(); [[ "$PTXAS_VERBOSE" == 1 ]] && PTXAS_FLAGS+=("-Xptxas=-v")
 TMPDIR="$ONEESAN_TMP_DIR" nvcc -O3 -std=c++17 -lineinfo -arch="$ARCH" "${PTXAS_FLAGS[@]}" \
@@ -57,4 +60,4 @@ echo "built $OUT"
 echo "  source=$SRC"
 echo "  build_source=$BUILD_SRC"
 echo "  n=$N width=$W arch=$ARCH low_lut_k=$LOW_LUT_K high_lut_k=$HIGH_LUT_K fast_shard_address8=$FAST_SHARD_ADDRESS8 main_mate_cache=$MAIN_MATE_CACHE main_pull=$MAIN_PULL block_pull=$BLOCK_PULL block_mate_cache=$BLOCK_MATE_CACHE ptxas_verbose=$PTXAS_VERBOSE"
-echo "  row_limit_env=B300_ROW_LIMIT default_rows=$W runtime_threads_env=GRIDFP_THREADS default_threads=256"
+echo "  row_limit_env=B300_ROW_LIMIT default_rows=$W runtime_threads_env=GRIDFP_THREADS default_threads=256 planner_target_env=GRIDFP_PLAN_TARGET_MIB scratch_target_separate=1"
