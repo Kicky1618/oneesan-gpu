@@ -10,9 +10,17 @@ on:
       - 'scripts/build/gen-b300-mainrec-prefetch-l2.py'
       - 'scripts/bench/b300-nextgen-*.sh'
       - 'scripts/bench/b300-main-recurrence-ilp-partition-proof.py'
+      - 'scripts/bench/b300-mainrec-hybrid-ilp8-partition-proof.py'
+      - 'scripts/bench/b300-mainrec-hybrid-ilp8-transform-preflight.sh'
+      - 'scripts/bench/b300-joint-nextgen-hybrid8-preflight.sh'
+      - 'scripts/bench/b300x8-ilp8-nextself-staged-ab.sh'
       - 'scripts/run/b300x8-nextgen-select.sh'
       - 'scripts/run/b300x8-nextgen-hybrid8-staged-fullprime-race.sh'
-      - 'scripts/run/b300x8-race-forced-set-profiled-once.sh'
+      - 'scripts/run/b300x8-joint-nextgen-hybrid8-select.sh'
+      - 'scripts/run/b300x8-joint-calibrated-select.sh'
+      - 'scripts/run/b300x8-ilp8-nextself-staged-fullprime-race.sh'
+      - 'scripts/run/b300x8-race-forced-profiled-once.sh'
+      - 'scripts/run/b300x8-race-external-forced-profiled-once.sh'
       - '.github/workflows/b300-nextgen-preflight.yml'
   pull_request:
     paths:
@@ -23,9 +31,17 @@ on:
       - 'scripts/build/gen-b300-mainrec-prefetch-l2.py'
       - 'scripts/bench/b300-nextgen-*.sh'
       - 'scripts/bench/b300-main-recurrence-ilp-partition-proof.py'
+      - 'scripts/bench/b300-mainrec-hybrid-ilp8-partition-proof.py'
+      - 'scripts/bench/b300-mainrec-hybrid-ilp8-transform-preflight.sh'
+      - 'scripts/bench/b300-joint-nextgen-hybrid8-preflight.sh'
+      - 'scripts/bench/b300x8-ilp8-nextself-staged-ab.sh'
       - 'scripts/run/b300x8-nextgen-select.sh'
       - 'scripts/run/b300x8-nextgen-hybrid8-staged-fullprime-race.sh'
-      - 'scripts/run/b300x8-race-forced-set-profiled-once.sh'
+      - 'scripts/run/b300x8-joint-nextgen-hybrid8-select.sh'
+      - 'scripts/run/b300x8-joint-calibrated-select.sh'
+      - 'scripts/run/b300x8-ilp8-nextself-staged-fullprime-race.sh'
+      - 'scripts/run/b300x8-race-forced-profiled-once.sh'
+      - 'scripts/run/b300x8-race-external-forced-profiled-once.sh'
       - '.github/workflows/b300-nextgen-preflight.yml'
   workflow_dispatch:
 
@@ -40,3 +56,5 @@ jobs:
       - uses: actions/checkout@v4
       - name: Validate nextgen transform chain
         run: bash scripts/bench/b300-nextgen-preflight.sh
+      - name: Validate joint hybrid8 and next-self promotion chain
+        run: bash scripts/bench/b300-joint-nextgen-hybrid8-preflight.sh
