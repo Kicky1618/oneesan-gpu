@@ -7,6 +7,7 @@ PRECTX_PROFILE="${PRECTX_PROFILE:-$ONEESAN_ROOT/work/b300_hbm_profile_prectx21.e
 SCHED_PROFILE="${SCHED_PROFILE:-$ONEESAN_ROOT/work/b300_hbm_profile_scheduler21.env}"
 ADV_PROFILE="${ADV_PROFILE:-$ONEESAN_ROOT/work/b300_hbm_profile_advanced21.env}"
 WARPCOOP_PROFILE="${WARPCOOP_PROFILE:-$ONEESAN_ROOT/work/b300_hbm_profile_warpcoop21.env}"
+WARPCOOP_AUTO_PROFILE="${WARPCOOP_AUTO_PROFILE:-$ONEESAN_ROOT/work/b300_hbm_profile_warpcoop_auto21.env}"
 DESC_PROFILE="${DESC_PROFILE:-$ONEESAN_ROOT/work/b300_hbm_profile_desc21.env}"
 FINAL_PROFILE="${FINAL_PROFILE:-$ONEESAN_ROOT/work/b300_hbm_profile_refined21.env}"
 BASE_PREFIX="${BASE_PREFIX:-$ONEESAN_ROOT/work/b300_hbm_profile_tune21}"
@@ -14,6 +15,7 @@ PRECTX_PREFIX="${PRECTX_PREFIX:-$ONEESAN_ROOT/work/b300_hbm_profile_refine_compa
 SCHED_PREFIX="${SCHED_PREFIX:-$ONEESAN_ROOT/work/b300_hbm_profile_orbit_scheduler21}"
 ADV_PREFIX="${ADV_PREFIX:-$ONEESAN_ROOT/work/b300_hbm_profile_orbit_advanced21}"
 WARPCOOP_PREFIX="${WARPCOOP_PREFIX:-$ONEESAN_ROOT/work/b300_hbm_profile_orbit_warpcoop21}"
+WARPCOOP_AUTO_PREFIX="${WARPCOOP_AUTO_PREFIX:-$ONEESAN_ROOT/work/b300_hbm_profile_orbit_warpcoop_auto21}"
 QUAD_DESC_PREFIX="${QUAD_DESC_PREFIX:-$ONEESAN_ROOT/work/b300_hbm_profile_orbit_quad_desc21}"
 QUAD_LOCAL0_PREFIX="${QUAD_LOCAL0_PREFIX:-$ONEESAN_ROOT/work/b300_hbm_profile_orbit_quad_local021}"
 RUN_PRECTX="${RUN_PRECTX:-1}"
@@ -21,9 +23,10 @@ RUN_ORBIT_SCHEDULER="${RUN_ORBIT_SCHEDULER:-1}"
 # Keep RUN_ORBIT_QUAD as a compatibility alias for older launch commands.
 RUN_ORBIT_ADVANCED="${RUN_ORBIT_ADVANCED:-${RUN_ORBIT_QUAD:-1}}"
 RUN_ORBIT_WARPCOOP="${RUN_ORBIT_WARPCOOP:-1}"
+RUN_ORBIT_WARPCOOP_AUTO="${RUN_ORBIT_WARPCOOP_AUTO:-1}"
 RUN_ORBIT_QUAD_DESC="${RUN_ORBIT_QUAD_DESC:-1}"
 RUN_ORBIT_QUAD_LOCAL0="${RUN_ORBIT_QUAD_LOCAL0:-1}"
-for x in RUN_PRECTX RUN_ORBIT_SCHEDULER RUN_ORBIT_ADVANCED RUN_ORBIT_WARPCOOP RUN_ORBIT_QUAD_DESC RUN_ORBIT_QUAD_LOCAL0; do
+for x in RUN_PRECTX RUN_ORBIT_SCHEDULER RUN_ORBIT_ADVANCED RUN_ORBIT_WARPCOOP RUN_ORBIT_WARPCOOP_AUTO RUN_ORBIT_QUAD_DESC RUN_ORBIT_QUAD_LOCAL0; do
   v="${!x}"; [[ "$v" == 0 || "$v" == 1 ]] || { echo "$x must be 0 or 1" >&2; exit 2; }
 done
 
@@ -70,22 +73,34 @@ else
   cp "$ADV_PROFILE" "$WARPCOOP_PROFILE"
 fi
 
+# A changed register footprint can change the occupancy-derived persistent pool.
+# If the previous comparison inherited an explicit quad pool, give serial and
+# warpcoop one extra exact challenge with their own occupancy-derived pool.
+if [[ "$RUN_ORBIT_WARPCOOP_AUTO" == 1 && "$RUN_ORBIT_ADVANCED" == 1 ]]; then
+  echo "=== HBM tune21 warpcoop occupancy-pool refinement ===" >&2
+  PROFILE_IN="$WARPCOOP_PROFILE" PROFILE_OUT="$WARPCOOP_AUTO_PROFILE" PREFIX="$WARPCOOP_AUTO_PREFIX" \
+    QUAD_WINNER_ENV="${ADV_PREFIX}_quad_winner.env" \
+    bash "$ONEESAN_ROOT/scripts/bench/b300-hbm-profile-refine-orbit-warpcoop-auto21.sh"
+else
+  cp "$WARPCOOP_PROFILE" "$WARPCOOP_AUTO_PROFILE"
+fi
+
 # Descriptor MLP only applies to sparse64 chunked-quad overlap-local. This now
 # preserves ORBIT_PRECTX_WARPCOOP when the previous stage selected it.
 if [[ "$RUN_ORBIT_QUAD_DESC" == 1 ]]; then
   ORBIT_QUAD_MLP=0 ORBIT_QUAD_OVERLAP_LOCAL=0 ORBIT_SPARSE64=0
   # shellcheck disable=SC1090
-  source "$WARPCOOP_PROFILE"
+  source "$WARPCOOP_AUTO_PROFILE"
   if [[ "${ORBIT_QUAD_MLP:-0}" == 1 && "${ORBIT_QUAD_OVERLAP_LOCAL:-0}" == 1 && "${ORBIT_SPARSE64:-0}" == 1 ]]; then
     echo "=== HBM tune21 quad sparse descriptor MLP refinement ===" >&2
-    PROFILE_IN="$WARPCOOP_PROFILE" PROFILE_OUT="$DESC_PROFILE" PREFIX="$QUAD_DESC_PREFIX" \
+    PROFILE_IN="$WARPCOOP_AUTO_PROFILE" PROFILE_OUT="$DESC_PROFILE" PREFIX="$QUAD_DESC_PREFIX" \
       bash "$ONEESAN_ROOT/scripts/bench/b300-hbm-profile-refine-orbit-quad-desc21.sh"
   else
     echo "=== skip quad sparse descriptor MLP: selected orbit path is not sparse QOL ===" >&2
-    cp "$WARPCOOP_PROFILE" "$DESC_PROFILE"
+    cp "$WARPCOOP_AUTO_PROFILE" "$DESC_PROFILE"
   fi
 else
-  cp "$WARPCOOP_PROFILE" "$DESC_PROFILE"
+  cp "$WARPCOOP_AUTO_PROFILE" "$DESC_PROFILE"
 fi
 
 # QOL has nothing useful to overlap when local_n==0. Race a uniform local-zero
@@ -108,4 +123,4 @@ fi
 
 echo "=== final HBM profile ===" >&2
 cat "$FINAL_PROFILE"
-echo "b300 HBM profile auto21 OK base_profile=$BASE_PROFILE prectx_profile=$PRECTX_PROFILE sched_profile=$SCHED_PROFILE advanced_profile=$ADV_PROFILE warpcoop_profile=$WARPCOOP_PROFILE desc_profile=$DESC_PROFILE final_profile=$FINAL_PROFILE" >&2
+echo "b300 HBM profile auto21 OK base_profile=$BASE_PROFILE prectx_profile=$PRECTX_PROFILE sched_profile=$SCHED_PROFILE advanced_profile=$ADV_PROFILE warpcoop_profile=$WARPCOOP_PROFILE warpcoop_auto_profile=$WARPCOOP_AUTO_PROFILE desc_profile=$DESC_PROFILE final_profile=$FINAL_PROFILE" >&2
