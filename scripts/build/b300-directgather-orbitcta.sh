@@ -6,11 +6,13 @@ N="${N:-27}"; W=$((N + 1)); ARCH="${ARCH:-native}"
 LOW_LUT_K="${LOW_LUT_K:-$((W / 2))}"; HIGH_LUT_K=$((W - LOW_LUT_K - 1))
 OUT="${OUT:-oneesan_cuda_gridfp_b300_directgather_orbitcta_n${N}}"
 PM_ACCUM="${PM_ACCUM:-0}"; WINDOW4="${RANKFORMULA_MLP_WINDOW4:-0}"
+DIRECTGATHER64="${DIRECTGATHER64:-1}"
 FORCE7="${RANKFORMULA_DIRECTGATHER_FORCE7:-0}"; PTXAS_VERBOSE="${PTXAS_VERBOSE:-1}"
-[[ "$WINDOW4" == 0 || "$WINDOW4" == 1 ]] || exit 2
-[[ "$FORCE7" == 0 || "$FORCE7" == 1 ]] || exit 2
-[[ "$PM_ACCUM" == 0 || "$PM_ACCUM" == 1 ]] || exit 2
+for x in WINDOW4 DIRECTGATHER64 FORCE7 PM_ACCUM PTXAS_VERBOSE; do
+  v="${!x}"; [[ "$v" == 0 || "$v" == 1 ]] || { echo "$x must be 0 or 1" >&2; exit 2; }
+done
 [[ "$FORCE7" == 0 || "$WINDOW4" == 0 ]] || { echo "FORCE7 and WINDOW4 are isolated" >&2; exit 2; }
+[[ "$DIRECTGATHER64" == 0 || "$FORCE7" == 0 ]] || { echo "DIRECTGATHER64 does not use FORCE7" >&2; exit 2; }
 
 SRC="$(repo_path src/cuda/b300/oneesan_cuda_gridfp_b300_bucket_snake_onepass_pattern10_depthcode_orbitcta_directgather_graph_batch_pipeline.cu)"
 BIN="$(build_path "$OUT")"
@@ -29,6 +31,7 @@ TMPDIR="$ONEESAN_TMP_DIR" nvcc -O3 -std=c++17 -lineinfo -arch="$ARCH" \
   -DP10DC_RANKFORMULA_NOMETA_DIRECTMAP=1 \
   -DP10DC_RANKFORMULA_DIRECTGATHER=1 \
   -DP10DC_RANKFORMULA_DIRECTGATHER_DEPTHMAJOR=1 \
+  -DP10DC_RANKFORMULA_DIRECTGATHER64="$DIRECTGATHER64" \
   -DP10DC_RANKFORMULA_DIRECTGATHER_FORCE7="$FORCE7" \
   -DP10DC_RANKFORMULA_MLP_WINDOW4="$WINDOW4" \
   -DP10DC_RANKFORMULA_PREFETCH_NEXT=0 -DP10DC_RANKFORMULA_PAIR_MLP=0 \
@@ -45,5 +48,5 @@ TMPDIR="$ONEESAN_TMP_DIR" nvcc -O3 -std=c++17 -lineinfo -arch="$ARCH" \
   -DP10DC_RANKFORMULA_SLOTMETA=0 -DP10DC_RANKFORMULA_SLOTROW32=0 \
   "$SRC" -o "$BIN"
 
-echo "built $BIN backend=orbitcta-directgather depthmajor=1 pm_accum=$PM_ACCUM window4=$WINDOW4 force7=$FORCE7" >&2
+echo "built $BIN backend=orbitcta-directgather depthmajor=1 directgather64=$DIRECTGATHER64 pm_accum=$PM_ACCUM window4=$WINDOW4 force7=$FORCE7" >&2
 echo "run: BUCKET_THREADS=${BUCKET_THREADS:-256} BUCKET_ORBITCTA_GRID_Y=${BUCKET_ORBITCTA_GRID_Y:-128} BUCKET_LOW_GRID_X=${BUCKET_LOW_GRID_X:-16} BUCKET_LOW_GRID_Y=${BUCKET_LOW_GRID_Y:-8} $BIN $N <target_mib> <max_window> 8 <mod>" >&2
