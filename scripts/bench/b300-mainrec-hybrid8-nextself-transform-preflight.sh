@@ -32,7 +32,18 @@ using MateID = unsigned long long;
 // high_rec_groups=
 static int b300_main_pull_ilp2_blocks(Code,int){return 1;}
 __global__ void main_pull_kernel_ilp2(
-    const Count*,MateID*,Code,const Count*,Code,Count*,int){}
+    const Count* in,MateID*,Code n,const Count* in_block,Code,Count*,int){
+    const Code i0=0,i1=n>1?1:0;
+    Code pj0=0,pj1=0,bj0=0,bj1=0;
+    bool hp0=false,hp1=false,hb0=false,hb1=false;
+    const Count pair0=hp0?in[pj0]:Count(0);
+    const Count pair1=hp1?in[pj1]:Count(0);
+    const Count block0=hb0?in_block[bj0]:Count(0);
+    const Count block1=hb1?in_block[bj1]:Count(0);
+    const Count self0=in[i0];
+    const Count self1=in[i1];
+    (void)pair0;(void)pair1;(void)block0;(void)block1;(void)self0;(void)self1;
+}
 void production_launch(){
     if(useMate)main_pull_kernel_ilp2<<<b300_main_pull_ilp2_blocks(ms.size,threads),threads,0,c.sMain>>>(cur,c.dMate,ms.size,dcur,ds.size,nxt,p);
 }
@@ -107,4 +118,4 @@ set -e
 ((rc!=0)) || { echo 'next-self transform unexpectedly accepted non-hybrid source' >&2; exit 3; }
 grep -Fq 'hybrid8 next-self prefetch requires artifact' "$TMP/nohybrid.err"
 
-echo 'b300-mainrec-hybrid8-nextself-transform-preflight OK python_ast=1 chains=5 cg_compatible=1 cgl2_compatible=1 generic_prefetch_compatible=1 ordering=1 double_transform_rejected=1 nonhybrid_rejected=1 gpu_work=0'
+echo 'b300-mainrec-hybrid8-nextself-transform-preflight OK python_ast=1 chains=5 ilp2_fixture=production_load_shape cg_compatible=1 cgl2_compatible=1 generic_prefetch_compatible=1 ordering=1 double_transform_rejected=1 nonhybrid_rejected=1 gpu_work=0'
