@@ -14,9 +14,13 @@
 namespace {
 using KeySet = std::set<Key>;
 
-void assert_main_preimage(MateID x, Key dest, int W) {
-    if (!valid_mate(x, W)) std::exit(10);
-    const Vec got = reduced_step_basis(Key{false, x}, W, W - 1, false);
+void assert_preimage(Key src, Key dest, int W) {
+    if (src.blocked) {
+        if (!valid_mate(src.mate, W - 1)) std::exit(10);
+    } else if (!valid_mate(src.mate, W)) {
+        std::exit(10);
+    }
+    const Vec got = reduced_step_basis(src, W, W - 1, false);
     if (got.find(dest) == got.end()) std::exit(11);
 }
 
@@ -25,18 +29,18 @@ KeySet direct_blocked_preimages_high(MateID b, int W,
     KeySet out;
     const int p = W - 1;
     if (is_endpoint(mget(b, p - 1))) {
-        const MateID x = minsert(b, p, N);
-        assert_main_preimage(x, Key{true, b}, W);
-        out.insert(Key{false, x});
+        const Key x{false, minsert(b, p, N)};
+        assert_preimage(x, Key{true, b}, W);
+        out.insert(x);
         ++structural_candidates;
     }
 
     const MateID d = minsert(b, p - 1, N);
     if (mpair(d, p) != NN) return out;
 
-    const MateID rl = msetpair(d, p, RL);
-    assert_main_preimage(rl, Key{true, b}, W);
-    out.insert(Key{false, rl});
+    const Key rl{false, msetpair(d, p, RL)};
+    assert_preimage(rl, Key{true, b}, W);
+    out.insert(rl);
     ++structural_candidates;
 
     int bal = 0;
@@ -45,8 +49,9 @@ KeySet direct_blocked_preimages_high(MateID b, int W,
         if (bal == 0 && v == L) {
             MateID x = msetpair(d, p, LL);
             x = mset(x, q, R);
-            assert_main_preimage(x, Key{true, b}, W);
-            out.insert(Key{false, x});
+            const Key k{false, x};
+            assert_preimage(k, Key{true, b}, W);
+            out.insert(k);
             ++structural_candidates;
         }
         if (v == L) ++bal;
@@ -56,9 +61,10 @@ KeySet direct_blocked_preimages_high(MateID b, int W,
     return out;
 }
 
-KeySet direct_main_only_inverse_high(Key dest, int W,
-                                     std::uint64_t& structural_candidates,
-                                     std::uint64_t& projected_reconstructions) {
+KeySet direct_inverse_high(Key dest, int W,
+                           std::uint64_t& structural_candidates,
+                           std::uint64_t& projected_reconstructions,
+                           std::uint64_t& blocked_source_candidates) {
     if (dest.blocked)
         return direct_blocked_preimages_high(
             dest.mate, W, structural_candidates);
@@ -70,22 +76,23 @@ KeySet direct_main_only_inverse_high(Key dest, int W,
 
     const MateValuePair pair = mpair(d, p);
     if (pair == LR) {
-        const MateID x = msetpair(d, p, NN);
-        assert_main_preimage(x, dest, W);
-        out.insert(Key{false, x});
-        ++structural_candidates;
+        const Key x{false, msetpair(d, p, NN)};
+        assert_preimage(x, dest, W); out.insert(x); ++structural_candidates;
     }
     if (pair == NR) {
-        const MateID x = msetpair(d, p, RN);
-        assert_main_preimage(x, dest, W);
-        out.insert(Key{false, x});
-        ++structural_candidates;
+        const Key x{false, msetpair(d, p, RN)};
+        assert_preimage(x, dest, W); out.insert(x); ++structural_candidates;
     }
     if (pair == NL) {
-        const MateID x = msetpair(d, p, LN);
-        assert_main_preimage(x, dest, W);
-        out.insert(Key{false, x});
-        ++structural_candidates;
+        const Key x{false, msetpair(d, p, LN)};
+        assert_preimage(x, dest, W); out.insert(x); ++structural_candidates;
+    }
+
+    if (mget(d, p) == N && is_endpoint(mget(d, p - 1))) {
+        const Key b{true, mshrink(d, p)};
+        assert_preimage(b, dest, W);
+        out.insert(b);
+        ++blocked_source_candidates;
     }
 
     const int q = p - 1;
@@ -93,8 +100,6 @@ KeySet direct_main_only_inverse_high(Key dest, int W,
     if (qp == NN || qp == LR) {
         const MateID nn = qp == NN ? d : msetpair(d, q, NN);
         const MateID b = mshrink(nn, q);
-        // Reachable Q_{W-2} destinations make the canonical lookahead N
-        // automatic.  Assert it in the proof, but omit it in the CUDA fast path.
         if (!valid_mate(b, W - 1) || mget(b, q - 1) != N) std::exit(12);
         ++projected_reconstructions;
         const KeySet extra = direct_blocked_preimages_high(
@@ -104,11 +109,11 @@ KeySet direct_main_only_inverse_high(Key dest, int W,
     return out;
 }
 
-KeySet old_main_only_inverse_high(Key dest, int W) {
+KeySet old_inverse_high(Key dest, int W) {
     const Vec old = inverse_reduced(dest, W, W - 1, false);
     KeySet out;
     for (const auto& [k, c] : old)
-        if (c && !k.blocked) out.insert(k);
+        if (c) out.insert(k);
     return out;
 }
 
@@ -116,10 +121,12 @@ void check_dest(Key d, int W,
                 std::uint64_t& main_cases,
                 std::uint64_t& blocked_cases,
                 std::uint64_t& structural_candidates,
-                std::uint64_t& projected_reconstructions) {
-    const KeySet want = old_main_only_inverse_high(d, W);
-    const KeySet got = direct_main_only_inverse_high(
-        d, W, structural_candidates, projected_reconstructions);
+                std::uint64_t& projected_reconstructions,
+                std::uint64_t& blocked_source_candidates) {
+    const KeySet want = old_inverse_high(d, W);
+    const KeySet got = direct_inverse_high(
+        d, W, structural_candidates, projected_reconstructions,
+        blocked_source_candidates);
     if (want != got) {
         std::cerr << "mismatch W=" << W << " blocked=" << d.blocked
                   << " mate=" << d.mate << " want=" << want.size()
@@ -163,6 +170,7 @@ int main() {
     std::uint64_t exhaustive_cases = 0, random_cases = 0;
     std::uint64_t main_cases = 0, blocked_cases = 0;
     std::uint64_t structural_candidates = 0, projected_reconstructions = 0;
+    std::uint64_t blocked_source_candidates = 0;
 
     for (int W = 4; W <= 12; ++W) {
         const auto main = gen_words(W);
@@ -170,7 +178,8 @@ int main() {
         const auto dst = layout(main, block, W - 2);
         for (Key d : dst) {
             check_dest(d, W, main_cases, blocked_cases,
-                       structural_candidates, projected_reconstructions);
+                       structural_candidates, projected_reconstructions,
+                       blocked_source_candidates);
             ++exhaustive_cases;
         }
     }
@@ -182,21 +191,23 @@ int main() {
     for (std::uint64_t i = 0; i < RANDOM; ++i) {
         check_dest(Key{false, unrank_valid(28, rng() % f[28][1], f)}, 28,
                    main_cases, blocked_cases,
-                   structural_candidates, projected_reconstructions);
+                   structural_candidates, projected_reconstructions,
+                   blocked_source_candidates);
         ++random_cases;
 
         MateID b;
         do {
             b = unrank_valid(27, rng() % f[27][1], f);
-        } while (mget(b, 25) == N); // Q_{26} canonical blocked basis.
+        } while (mget(b, 25) == N);
         check_dest(Key{true, b}, 28,
                    main_cases, blocked_cases,
-                   structural_candidates, projected_reconstructions);
+                   structural_candidates, projected_reconstructions,
+                   blocked_source_candidates);
         ++random_cases;
     }
 
     if (!main_cases || !blocked_cases || !structural_candidates ||
-        !projected_reconstructions) return 4;
+        !projected_reconstructions || !blocked_source_candidates) return 4;
     std::cout << "gridfp-runtime-turn-direct-high-expand-inverse-proof OK"
               << " exhaustive_width_max=12 exhaustive_cases=" << exhaustive_cases
               << " random_width=28 random_cases=" << random_cases
@@ -204,7 +215,9 @@ int main() {
               << " blocked_cases=" << blocked_cases
               << " structural_candidates=" << structural_candidates
               << " projected_reconstructions=" << projected_reconstructions
-              << " source_scope=main_only forward_p=Wm1"
+              << " blocked_source_candidates=" << blocked_source_candidates
+              << " source_scope=full forward_p=Wm1"
+              << " turn_main_only_filter=exact"
               << " right_closure_candidates=0"
               << " rl_validity_checks=0"
               << " full_validity_scans_per_candidate=0"
