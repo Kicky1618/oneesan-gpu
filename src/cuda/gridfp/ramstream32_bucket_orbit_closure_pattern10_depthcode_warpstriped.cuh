@@ -13,6 +13,12 @@ static inline bool p10dc_warpstriped_threads_ok(int threads) {
     return threads > 0 && threads <= 1024 && (threads & 31) == 0;
 }
 
+#ifndef P10DC_WARPSTRIPED_EARLY_JP_LOAD
+#define P10DC_WARPSTRIPED_EARLY_JP_LOAD 0
+#endif
+static_assert(P10DC_WARPSTRIPED_EARLY_JP_LOAD == 0 || P10DC_WARPSTRIPED_EARLY_JP_LOAD == 1,
+              "P10DC_WARPSTRIPED_EARLY_JP_LOAD must be 0 or 1");
+
 #ifndef P10DC_WARPSTRIPED_CTX
 #define P10DC_WARPSTRIPED_CTX P10DCHighResolvedCtx
 #define P10DC_WARPSTRIPED_CTX_LOCAL 1
@@ -101,13 +107,24 @@ __global__ void bucket_high_orbit_closure_pattern10_depthcode_warpstriped_kernel
                 Count* jp = jp_base + lr;
                 Count* dp = dp_base + lr;
                 Count x = *ip, old = *dp;
+#if P10DC_WARPSTRIPED_EARLY_JP_LOAD
+                // This is the same jp read the update needs later, simply issued
+                // before the long closure gather so its latency can overlap.
+                Count y = *jp;
+#endif
                 Count extra = p10dc_resolved_high_plan_sum(c, db, lr);
                 if (kind == CPU_ORBIT_NN) {
+#if P10DC_WARPSTRIPED_EARLY_JP_LOAD
+                    *jp = gpu_direct_add(y, x);
+#else
                     *jp = gpu_direct_add(*jp, x);
+#endif
                     *ip = gpu_direct_add(x, old);
                     *dp = extra;
                 } else {
+#if !P10DC_WARPSTRIPED_EARLY_JP_LOAD
                     Count y = *jp;
+#endif
                     *ip = gpu_direct_add(gpu_direct_add(x, y), old);
                     *dp = gpu_direct_add(x, extra);
                 }
@@ -193,13 +210,22 @@ __global__ void bucket_reverse_high_pattern10_depthcode_warpstriped_kernel(int p
                 Count* jp = jp_base + lr;
                 Count* dp = dp_base + lr;
                 Count x = *ip, old = *dp;
+#if P10DC_WARPSTRIPED_EARLY_JP_LOAD
+                Count y = *jp;
+#endif
                 Count extra = p10dc_resolved_high_plan_sum(c, edge ? xb : db, lr);
                 if (kind == CPU_ORBIT_NN) {
+#if P10DC_WARPSTRIPED_EARLY_JP_LOAD
+                    *jp = gpu_direct_add(y, x);
+#else
                     *jp = gpu_direct_add(*jp, x);
+#endif
                     *ip = gpu_direct_add(gpu_direct_add(x, old), edge ? extra : 0);
                     *dp = edge ? 0 : extra;
                 } else {
+#if !P10DC_WARPSTRIPED_EARLY_JP_LOAD
                     Count y = *jp;
+#endif
                     *ip = gpu_direct_add(gpu_direct_add(x, y), old);
                     if (edge) {
                         *jp = gpu_direct_add(x, y);
