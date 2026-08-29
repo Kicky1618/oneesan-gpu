@@ -9,5 +9,5 @@ TMPDIR="$ONEESAN_TMP_DIR" nvcc -O3 -std=c++17 -arch="${ARCH:-native}" "$SRC" -o 
 out="$($BIN)"
 printf '%s\n' "$out"
 grep -Fq 'b300-cpasync-gather-proof OK' <<<"$out"
-grep -Fq 'cp_bytes=4 exact=1' <<<"$out"
-echo 'b300-cpasync-gather-proof OK exact=1' >&2
+grep -Fq 'cp_bytes=4 cache_operator=ca exact=1' <<<"$out"
+echo 'b300-cpasync-gather-proof OK cp_bytes=4 cache_operator=ca exact=1' >&2
