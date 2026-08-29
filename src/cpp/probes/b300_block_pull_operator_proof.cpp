@@ -109,7 +109,7 @@ std::map<MateID,Count> pull_block(const std::vector<MateID>& main,const std::vec
 int main(){
     std::mt19937_64 rng(0x626c6f636b70756cULL);
     std::uint64_t positions=0,destinations=0;std::size_t max_terms=0;
-    for(int W=4;W<=11;++W){
+    for(int W=4;W<=12;++W){
         const auto main=gen_valid(W);const auto block=gen_valid(W-1);
         std::vector<Count> mv(main.size());for(auto&x:mv)x=Count(rng()%MOD);
         for(int p=2;p<W;++p){
@@ -119,7 +119,7 @@ int main(){
             ++positions;destinations+=block.size();
         }
     }
-    std::cout<<"b300-block-pull-operator-proof OK exhaustive_width_max=11 positions="<<positions
+    std::cout<<"b300-block-pull-operator-proof OK exhaustive_width_max=12 positions="<<positions
              <<" blocked_destinations="<<destinations
              <<" p_scope=2..Wm1 deferred_drop_position=p"
              <<" block_memset_required=0 block_atomic_updates_required=0"
