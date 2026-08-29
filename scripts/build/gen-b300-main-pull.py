@@ -15,6 +15,30 @@ if marker not in s:
     raise SystemExit('rank_full marker not found')
 insert = r'''
 
+__device__ __forceinline__ Code main_pull_direct_pair_source_rank(Code dst_rank,MateID m,int p){
+    const int h=height_before_rank_pos<TARGET_W>(m,p);
+    switch(mpair(m,p)){
+        case LR:{
+            // Destination LR <- source NN. NN precedes LR by the complete
+            // N branch, the R branch at p, and the N branch at p-1 after L.
+            const Code delta=D_MAIN_DP[p][h]+(h?D_MAIN_DP[p][h-1]:0)+D_MAIN_DP[p-1][h+1];
+            return dst_rank-delta;
+        }
+        case NR:{
+            // Destination NR <- source RN.
+            const Code delta=D_MAIN_DP[p][h]-D_MAIN_DP[p-1][h];
+            return dst_rank+delta;
+        }
+        case NL:{
+            // Destination NL <- source LN.
+            const Code a=D_MAIN_DP[p][h]+(h?D_MAIN_DP[p][h-1]:0);
+            const Code b=D_MAIN_DP[p-1][h]+(h?D_MAIN_DP[p-1][h-1]:0);
+            return dst_rank+(a-b);
+        }
+        default:return dst_rank;
+    }
+}
+
 template<bool CACHED_MATE>
 __global__ void main_pull_kernel(const Count*in,const MateID*mates,Code n,const Count*in_block,Code nblock,Count*out_main,int p){
     Code i=Code(blockIdx.x)*blockDim.x+threadIdx.x,stride=Code(gridDim.x)*blockDim.x;
@@ -23,14 +47,11 @@ __global__ void main_pull_kernel(const Count*in,const MateID*mates,Code n,const 
         if constexpr(CACHED_MATE)m=mates[i];
         else m=unrank_group_t<TARGET_W>(i,D_MAIN_FIXED,D_MAIN_OCC,D_MAIN_DP);
         uint64_t acc=in[i];
-        bool has=false;MateID x=0;
-        switch(mpair(m,p)){
-            case LR:x=msetpair(m,p,NN);has=true;break;
-            case NR:x=msetpair(m,p,RN);has=true;break;
-            case NL:x=msetpair(m,p,LN);has=true;break;
-            default:break;
+        const MateValuePair pair=mpair(m,p);
+        if(pair==LR||pair==NR||pair==NL){
+            const Code j=main_pull_direct_pair_source_rank(i,m,p);
+            acc+=in[j];
         }
-        if(has){Code j=rank_same_t<TARGET_W>(i,m,x,D_MAIN_FIXED,D_MAIN_OCC,D_MAIN_DP);acc+=in[j];}
         // d[p]==N means d is exactly the N-lift of its blocked predecessor.
         // Reuse the production direct drop-rank delta instead of recomputing a
         // full W-1 grouped rank from mshrink(d,p).
@@ -98,4 +119,4 @@ s = s[:a] + new_loop + s[b:]
 
 out.parent.mkdir(parents=True, exist_ok=True)
 out.write_text(s)
-print(f'generated {out} from {src}: b300_main_pull=1 p_scope=2..Wm1 main_atomic=0 main_identity_copy=0 blocked_to_main_scatter=0 block_rank_guard=1 blocked_preimage_rank=direct_drop')
+print(f'generated {out} from {src}: b300_main_pull=1 p_scope=2..Wm1 main_atomic=0 main_identity_copy=0 blocked_to_main_scatter=0 block_rank_guard=1 blocked_preimage_rank=direct_drop pair_preimage_rank=direct_dp rank_same_calls=0')
