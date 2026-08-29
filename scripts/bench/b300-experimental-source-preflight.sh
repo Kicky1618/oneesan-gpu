@@ -34,6 +34,7 @@ sh=(
  scripts/bench/b300-vmm-static-lpt-staged-intervals-production-ab.sh
  scripts/bench/b300-vmm-static-lpt-workerbind-production-ab.sh
  scripts/bench/b300-vmm-static-lpt-control-bundle-ab.sh
+ scripts/bench/b300-vmm-static-lpt-candidate-tournament.sh
  scripts/build/b300-hbm32-vmm-static-lpt-stagedmeta.sh
  scripts/build/b300-hbm32-vmm-static-lpt-metaptr.sh
  scripts/build/b300-hbm32-vmm-static-lpt-metakernelarg.sh
@@ -51,9 +52,6 @@ CXX="${CXX:-g++}" bash "$ONEESAN_ROOT/scripts/bench/b300-staged-group-meta-plan-
 CXX="${CXX:-g++}" bash "$ONEESAN_ROOT/scripts/bench/b300-static-lpt-local-meta-proof.sh"
 CXX="${CXX:-g++}" bash "$ONEESAN_ROOT/scripts/bench/b300-static-lpt-interval-staging-proof.sh"
 
-# These generation proofs intentionally stop before nvcc. They validate that all
-# exact source anchors still match the current production source and that stale
-# dynamic/shard/control paths did not survive lowering.
 bash "$ONEESAN_ROOT/scripts/bench/b300-vmm-static-lpt-stagedmeta-production-generate-proof.sh"
 bash "$ONEESAN_ROOT/scripts/bench/b300-vmm-static-lpt-metaptr-production-generate-proof.sh"
 bash "$ONEESAN_ROOT/scripts/bench/b300-vmm-static-lpt-metakernelarg-production-generate-proof.sh"
