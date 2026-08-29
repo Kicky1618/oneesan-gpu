@@ -15,6 +15,7 @@ from solve_b300_exact import PRIMES, crt_pair, simple_path_upper_bound, primes_f
 
 RESULT_RE = re.compile(r"residue=(\d+).*?modulus=(\d+).*?wall_s=([0-9.eE+-]+)")
 CHECKPOINT_SCHEMA = 2
+RACE_CHECKPOINT_SCHEMA = 3
 
 
 def file_sha256(path: Path) -> str:
@@ -40,10 +41,33 @@ def load_checkpoint(path: Path, n: int, fingerprint: dict) -> dict[int, dict]:
         raise SystemExit(f"checkpoint {path} belongs to n={data.get('n')}")
     stored = data.get("solver_fingerprint")
     if stored != fingerprint:
-        raise SystemExit(
-            f"checkpoint {path} has no compatible solver fingerprint; "
-            "move/remove it or use a separate --work-dir"
+        # The single-pass B300 race intentionally seeds a stronger schema-3
+        # fingerprint containing the selected profile SHA as well as the binary
+        # SHA.  The exact runner historically used schema 2 (binary only), so
+        # strict equality made SELECT_ONLY=0 and later promotion unable to reuse
+        # the already-computed smoke residue.  Accept schema 3 only when its
+        # binary identity exactly matches, then keep that stronger fingerprint
+        # for every subsequent checkpoint write instead of downgrading it.
+        compatible_race_fp = (
+            isinstance(stored, dict)
+            and stored.get("schema") == RACE_CHECKPOINT_SCHEMA
+            and stored.get("binary_sha256") == fingerprint.get("binary_sha256")
+            and isinstance(stored.get("profile_sha256"), str)
+            and len(stored["profile_sha256"]) == 64
         )
+        if compatible_race_fp:
+            fingerprint.clear()
+            fingerprint.update(stored)
+            print(
+                f"checkpoint {path}: adopted race schema-3 fingerprint "
+                f"profile_sha256={stored['profile_sha256']}",
+                file=sys.stderr,
+            )
+        else:
+            raise SystemExit(
+                f"checkpoint {path} has no compatible solver fingerprint; "
+                "move/remove it or use a separate --work-dir"
+            )
     residues = {int(k): v for k, v in data.get("residues", {}).items()}
     for p, rec in residues.items():
         r = int(rec["residue"])
