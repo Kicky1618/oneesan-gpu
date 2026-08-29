@@ -82,6 +82,7 @@ PROFILE_SHA="$(sha256sum "$PROFILE_FILE" | awk '{print $1}')"
   printf 'hybrid_ns_search_repeats=%s\n' "$HYBRID_NS_SEARCH_REPEATS"
   printf 'hybrid_ns_validate_repeats=%s\n' "$HYBRID_NS_VALIDATE_REPEATS"
   printf 'hybrid8_nextself_transform_preflight=1\n'
+  printf 'grand_selector_contract_preflight=1\n'
   printf 'nvcc_version_begin=1\n'
   nvcc --version | sed 's/^/nvcc: /'
   printf 'nvcc_version_end=1\n'
@@ -98,9 +99,8 @@ echo '=== B300 grand first-pass: GPU-free preflight ===' >&2
 bash "$ONEESAN_ROOT/scripts/bench/b300-nextgen-preflight.sh"
 bash "$ONEESAN_ROOT/scripts/bench/b300-mainrec-hybrid8-nextself-transform-preflight.sh"
 bash "$ONEESAN_ROOT/scripts/bench/b300-joint-nextgen-hybrid8-preflight.sh"
-if [[ -f "$ONEESAN_ROOT/scripts/bench/b300-nextgen-grand-selector-preflight.sh" ]]; then
-  bash "$ONEESAN_ROOT/scripts/bench/b300-nextgen-grand-selector-preflight.sh"
-fi
+bash "$ONEESAN_ROOT/scripts/bench/b300-nextgen-grand-selector-preflight.sh"
+bash "$ONEESAN_ROOT/scripts/bench/b300-grand-selector-contract-preflight.sh"
 
 echo "=== B300 grand first-pass: n=27 head=${HEAD_SHA:0:12} GPUs=$GPU_COUNT SELECT_ONLY=1 ===" >&2
 set +e
