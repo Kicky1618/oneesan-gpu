@@ -41,7 +41,6 @@ fi
 if [[ "$DIRECTGATHER64" == 1 ]]; then
   [[ "$DEPTHMAJOR" == 1 ]] || { echo "DIRECTGATHER64 requires DEPTHMAJOR=1 for this B300 path" >&2; exit 2; }
   [[ "$FORCE7" == 0 ]] || { echo "DIRECTGATHER64 does not combine with FORCE7" >&2; exit 2; }
-  [[ "$PAIR_MLP" == 0 ]] || { echo "DIRECTGATHER64 pair path is intentionally isolated; use PAIR_MLP=0" >&2; exit 2; }
   [[ "$PREFETCH_NEXT" == 0 ]] || { echo "DIRECTGATHER64 prefetch path is intentionally isolated; use PREFETCH_NEXT=0" >&2; exit 2; }
 fi
 [[ "$MAXRREGCOUNT" =~ ^[0-9]+$ ]] || { echo "MAXRREGCOUNT must be non-negative integer" >&2; exit 2; }
