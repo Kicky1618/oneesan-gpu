@@ -6,11 +6,11 @@ joint="$ONEESAN_ROOT/scripts/run/b300x8-joint-calibrated-select.sh"
 weight="$ONEESAN_ROOT/scripts/run/b300x8-exact-auto-hbm-profiled-producer-weight-race.sh"
 adaptive="$ONEESAN_ROOT/scripts/run/b300x8-exact-auto-hbm-profiled-producer-adaptive-race.sh"
 adaptive_wrap="$ONEESAN_ROOT/scripts/run/b300x8-exact-auto-hbm-profiled-producer-adaptive.sh"
-external="$ONEESAN_ROOT/scripts/run/b300x8-race-external-forced-profiled.sh"
-canonical="$ONEESAN_ROOT/scripts/run/b300x8-exact-auto-hbm-profiled.sh"
+single="$ONEESAN_ROOT/scripts/run/b300x8-race-external-forced-profiled-once.sh"
+buckets="$ONEESAN_ROOT/scripts/build/b300-profiled-buckets-only.sh"
 build="$ONEESAN_ROOT/scripts/build/b300-directgather-orbitcta-pipe2-producer-warp.sh"
 
-for f in "$joint" "$weight" "$adaptive" "$adaptive_wrap" "$external" "$canonical" "$build"; do
+for f in "$joint" "$weight" "$adaptive" "$adaptive_wrap" "$single" "$buckets" "$build"; do
   [[ -f "$f" ]] || { echo "missing $f" >&2; exit 2; }
   bash -n "$f"
 done
@@ -27,8 +27,8 @@ for s in \
   'b300x8-exact-auto-hbm-profiled-producer-adaptive-race.sh' \
   'ADAPTIVE_RACE_ONLY=1' \
   'ORBIT_N27_PRODUCER_ADAPTIVE_COLS' \
-  'export PRODUCER_ADAPTIVE_COLS' \
-  'export REBUILD_BUCKETS=1'; do
+  'final_race=single_pass' \
+  'b300x8-race-external-forced-profiled-once.sh'; do
   grep -Fq "$s" "$joint" || { echo "joint calibration marker missing: $s" >&2; exit 3; }
 done
 
@@ -61,14 +61,25 @@ for s in \
   grep -Fq "$s" "$adaptive_wrap" || { echo "adaptive wrapper marker missing: $s" >&2; exit 3; }
 done
 
-# Shell environment is inherited across both selector layers. Guard against a
-# future cleanup accidentally deleting the adaptive build knob before nvcc.
-if grep -Eq '(^|[[:space:]])(unset|env[[:space:]]+-u)[[:space:]]+PRODUCER_ADAPTIVE_COLS([[:space:]]|$)' "$external" "$canonical"; then
-  echo 'PRODUCER_ADAPTIVE_COLS is stripped before producer build' >&2
-  exit 4
-fi
-grep -Fq 'b300x8-exact-auto-hbm-profiled.sh' "$external" || { echo 'external race no longer delegates to canonical selector' >&2; exit 4; }
+for s in \
+  'b300-profiled-buckets-only.sh' \
+  'one complete prime per candidate' \
+  'FATAL single-pass residue mismatch' \
+  'profile_sha256'; do
+  grep -Fq "$s" "$single" || { echo "single-pass race marker missing: $s" >&2; exit 4; }
+done
+
+for s in \
+  'ORBITCTA_FLAT_DYNAMIC_PIPE2_PRODUCER_WORKER_WEIGHT' \
+  'ORBITCTA_FLAT_DYNAMIC_PIPE2_PRODUCER_ADAPTIVE_COLS' \
+  '_pww${ORBITCTA_FLAT_DYNAMIC_PIPE2_PRODUCER_WORKER_WEIGHT}_pac${ORBITCTA_FLAT_DYNAMIC_PIPE2_PRODUCER_ADAPTIVE_COLS}_ppw' \
+  'PRODUCER_WORKER_WEIGHT="$ORBITCTA_FLAT_DYNAMIC_PIPE2_PRODUCER_WORKER_WEIGHT"' \
+  'PRODUCER_ADAPTIVE_COLS="$ORBITCTA_FLAT_DYNAMIC_PIPE2_PRODUCER_ADAPTIVE_COLS"' \
+  'PROFILE_SHA256='; do
+  grep -Fq "$s" "$buckets" || { echo "bucket build-only marker missing: $s" >&2; exit 4; }
+done
+
 grep -Fq 'PRODUCER_ADAPTIVE_COLS=' "$build" || { echo 'producer build wrapper lost adaptive knob' >&2; exit 4; }
 grep -Fq 'P10DC_ORBITCTA_FLAT_DYNAMIC_PIPE2_PRODUCER_ADAPTIVE_COLS' "$build" || { echo 'producer build wrapper lost adaptive nvcc macro' >&2; exit 4; }
 
-echo 'b300_joint_producer_calibration_preflight=OK weight=OK adaptive=OK median=OK rebuild_guard=OK env_propagation=OK gpu_work=0 actions_triggered=0'
+echo 'b300_joint_producer_calibration_preflight=OK weight=OK adaptive=OK median=OK pww_pac_fingerprint=OK single_pass=OK gpu_work=0 actions_triggered=0'
