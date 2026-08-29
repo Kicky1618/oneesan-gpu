@@ -1,0 +1,33 @@
+#!/usr/bin/env bash
+set -euo pipefail
+source "$(dirname -- "${BASH_SOURCE[0]}")/../lib/common.sh"
+
+# B300/HGX preset for the HIGH closure when HBM controller utilization is low.
+# Keep the state representation exact, but maximize outstanding source reads:
+# B16 cooperative group resolver + direct GROUP61 fields + compact depth/source
+# LUT + independent gather issue + one final modular reduction.
+N="${N:-21}"
+ARCH="${ARCH:-native}"
+TRANSPOSE_MODE="${TRANSPOSE_MODE:-pipeline}"
+OUT="${OUT:-$ONEESAN_BUILD_DIR/oneesan_cuda_gridfp_b300_rankformula_hbm_fast_n${N}}"
+
+N="$N" ARCH="$ARCH" OUT="$OUT" \
+RANKFORMULA_NOMETA_BLOCK=16 \
+RANKFORMULA_NOMETA_WARPSHARE=1 \
+RANKFORMULA_NOMETA_COOPGROUP=1 \
+RANKFORMULA_NOMETA_COOP_UNROLL=0 \
+RANKFORMULA_NOMETA_GROUP56=0 \
+RANKFORMULA_NOMETA_GROUP61=1 \
+RANKFORMULA_ABSTRACT_SELECT8=1 \
+RANKFORMULA_ABSTRACT_DEPTH4=1 \
+RANKFORMULA_ABSTRACT_SRCPACK10=1 \
+RANKFORMULA_GATHER_MLP=1 \
+PM_ACCUM=1 \
+TERNARY_KEY4=1 \
+DEPTHCODE_DECODE_LOAD=ldg \
+RANKSTREAM_LUT_LOAD=ldg \
+TRANSPOSE_MODE="$TRANSPOSE_MODE" \
+PTXAS_VERBOSE="${PTXAS_VERBOSE:-1}" \
+bash "$ONEESAN_ROOT/scripts/build/b300-bucket-snake-pattern10-depthcode-rankformula-nometa4-abstract.sh"
+
+printf 'b300-rankformula-hbm-fast OK out=%s n=%s block=16 group61=1 depth4=1 srcpack10=1 gather_mlp=1 pm_accum=1\n' "$OUT" "$N" >&2
