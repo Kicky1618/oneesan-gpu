@@ -7,9 +7,10 @@ N="${N:-21}"
 MOD="${MOD:-4294967291}"
 NGPU="${NGPU:-8}"
 PROFILE="${PROFILE:-1}"
+PROFILE_LOG2="${PROFILE_LOG2:-8}"
 MICROBENCH="${MICROBENCH:-1}"
 PTXAS="${PTXAS:-1}"
-PREFIX="${PREFIX:-$ONEESAN_ROOT/work/b300_rankchunk32_direct3_guard_evidence_n${N}}"
+PREFIX="${PREFIX:-$ONEESAN_ROOT/work/b300_rankchunk32_direct3_guard_evidence_n${N}_s${PROFILE_LOG2}}"
 PROFILE_LOG="${PROFILE_LOG:-${PREFIX}.profile.log}"
 MICRO_LOG="${MICRO_LOG:-${PREFIX}.micro.log}"
 PTXAS_LOG="${PTXAS_LOG:-${PREFIX}.ptxas.log}"
@@ -18,11 +19,14 @@ for x in PROFILE MICROBENCH PTXAS; do
   v="${!x}"
   [[ "$v" == 0 || "$v" == 1 ]] || { echo "$x must be 0 or 1" >&2; exit 2; }
 done
+if ! [[ "$PROFILE_LOG2" =~ ^[0-9]+$ ]] || (( PROFILE_LOG2 > 16 )); then
+  echo "PROFILE_LOG2 must be in [0,16]" >&2; exit 2
+fi
 mkdir -p "$(dirname "$PREFIX")"
 
 if [[ "$PROFILE" == 1 ]]; then
-  echo "=== real-traffic rankmask profile ===" >&2
-  ARCH="$ARCH" N="$N" MOD="$MOD" NGPU="$NGPU" \
+  echo "=== real-traffic rankmask profile sample=1/$((1 << PROFILE_LOG2)) warps ===" >&2
+  ARCH="$ARCH" N="$N" MOD="$MOD" NGPU="$NGPU" PROFILE_LOG2="$PROFILE_LOG2" \
     bash "$ONEESAN_ROOT/scripts/bench/b300-depthcode-rankchunk32-rankmask-profile.sh" \
     | tee "$PROFILE_LOG"
 fi
@@ -56,6 +60,8 @@ print('rankchunk32-direct3-guard-evidence')
 if run_profile:
     text = open(profile_path, encoding='utf-8', errors='replace').read()
     for src, dst in (
+        ('sample_log2','profile_sample_log2'),
+        ('sample_one_in','profile_sample_one_in'),
         ('actual_zero_frac','profile_zero_frac'),
         ('actual_nonzero_frac','profile_nonzero_frac'),
         ('actual_avg_popcount','profile_avg_popcount'),
@@ -89,8 +95,8 @@ if run_ptxas:
         if m:
             print(f'ptxas_{key}={m.group(1)}')
 
-print('interpretation=guard_is_promising_when_shuffled_speedup_exceeds_1_and_register_pressure_does_not_regress;real_warp_all_zero_fraction_strengthens_the_case_while_high_mixed_fraction_weakens_it')
+print('interpretation=guard_is_promising_when_shuffled_speedup_exceeds_1_and_register_pressure_does_not_regress;sampled_real_warp_all_zero_fraction_strengthens_the_case_while_high_mixed_fraction_weakens_it')
 print('production_guard_enabled=0')
 PY
 
-echo "b300-depthcode-rankchunk32-direct3-guard-evidence OK profile=$PROFILE microbench=$MICROBENCH ptxas=$PTXAS prefix=$PREFIX" >&2
+echo "b300-depthcode-rankchunk32-direct3-guard-evidence OK profile=$PROFILE profile_log2=$PROFILE_LOG2 microbench=$MICROBENCH ptxas=$PTXAS prefix=$PREFIX" >&2
