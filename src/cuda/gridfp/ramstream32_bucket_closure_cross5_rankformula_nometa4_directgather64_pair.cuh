@@ -18,7 +18,7 @@ p10dc_resolved_low_preimages_cross5_rankformula_nometa4_directgather64_pair_fixe
     P10DCDirectGather64Word p0 = 0, p1 = 0;
 
 #if P10DC_RANKFORMULA_DIRECTGATHER_SPARSE64
-    // Issue both sparse-index words before consuming either result.  They are
+    // Issue both sparse-index words before consuming either result. They are
     // independent even when they land in different 32-entry groups.
     const size_t wi0 = gi0 >> 5;
     const size_t wi1 = gi1 >> 5;
@@ -89,8 +89,59 @@ p10dc_resolved_low_preimages_cross5_rankformula_nometa4_directgather64_pair_fixe
         b6 = uint32_t((q1 >> 45) & 0x7fffu);
     }
 
-    // First window: issue A and B source loads before either reduction.  This
-    // creates up to eight independent 32-bit source requests per lane.
+#if P10DC_RANKFORMULA_CPASYNC_PAIR
+    // Keep descriptor compression while moving all fourteen potentially remote
+    // Count requests out of the register dependency chain. Two async groups are
+    // committed so one lane can expose up to 14 source reads before reduction.
+    p10dc_rankformula_cpasync_u32(p10dc_rankformula_cpasync_slot(0), source_row + a0, n0 > 0u);
+    p10dc_rankformula_cpasync_u32(p10dc_rankformula_cpasync_slot(1), source_row + a1, n0 > 1u);
+    p10dc_rankformula_cpasync_u32(p10dc_rankformula_cpasync_slot(2), source_row + a2, n0 > 2u);
+    p10dc_rankformula_cpasync_u32(p10dc_rankformula_cpasync_slot(3), source_row + a3, n0 > 3u);
+    p10dc_rankformula_cpasync_u32(p10dc_rankformula_cpasync_slot(4), source_row + a4, n0 > 4u);
+    p10dc_rankformula_cpasync_u32(p10dc_rankformula_cpasync_slot(5), source_row + a5, n0 > 5u);
+    p10dc_rankformula_cpasync_u32(p10dc_rankformula_cpasync_slot(6), source_row + a6, n0 > 6u);
+    p10dc_rankformula_cpasync_commit();
+
+    p10dc_rankformula_cpasync_u32(p10dc_rankformula_cpasync_slot(7), source_row + b0, n1 > 0u);
+    p10dc_rankformula_cpasync_u32(p10dc_rankformula_cpasync_slot(8), source_row + b1, n1 > 1u);
+    p10dc_rankformula_cpasync_u32(p10dc_rankformula_cpasync_slot(9), source_row + b2, n1 > 2u);
+    p10dc_rankformula_cpasync_u32(p10dc_rankformula_cpasync_slot(10), source_row + b3, n1 > 3u);
+    p10dc_rankformula_cpasync_u32(p10dc_rankformula_cpasync_slot(11), source_row + b4, n1 > 4u);
+    p10dc_rankformula_cpasync_u32(p10dc_rankformula_cpasync_slot(12), source_row + b5, n1 > 5u);
+    p10dc_rankformula_cpasync_u32(p10dc_rankformula_cpasync_slot(13), source_row + b6, n1 > 6u);
+    p10dc_rankformula_cpasync_commit();
+    p10dc_rankformula_cpasync_wait_all();
+
+    const BkczCrossAccum as03 = p10dc_rankformula_accum_add(
+        p10dc_rankformula_accum_add(
+            BkczCrossAccum(*p10dc_rankformula_cpasync_slot(0)),
+            BkczCrossAccum(*p10dc_rankformula_cpasync_slot(1))),
+        p10dc_rankformula_accum_add(
+            BkczCrossAccum(*p10dc_rankformula_cpasync_slot(2)),
+            BkczCrossAccum(*p10dc_rankformula_cpasync_slot(3))));
+    const BkczCrossAccum as46 = p10dc_rankformula_accum_add(
+        p10dc_rankformula_accum_add(
+            BkczCrossAccum(*p10dc_rankformula_cpasync_slot(4)),
+            BkczCrossAccum(*p10dc_rankformula_cpasync_slot(5))),
+        BkczCrossAccum(*p10dc_rankformula_cpasync_slot(6)));
+    const BkczCrossAccum bs03 = p10dc_rankformula_accum_add(
+        p10dc_rankformula_accum_add(
+            BkczCrossAccum(*p10dc_rankformula_cpasync_slot(7)),
+            BkczCrossAccum(*p10dc_rankformula_cpasync_slot(8))),
+        p10dc_rankformula_accum_add(
+            BkczCrossAccum(*p10dc_rankformula_cpasync_slot(9)),
+            BkczCrossAccum(*p10dc_rankformula_cpasync_slot(10))));
+    const BkczCrossAccum bs46 = p10dc_rankformula_accum_add(
+        p10dc_rankformula_accum_add(
+            BkczCrossAccum(*p10dc_rankformula_cpasync_slot(11)),
+            BkczCrossAccum(*p10dc_rankformula_cpasync_slot(12))),
+        BkczCrossAccum(*p10dc_rankformula_cpasync_slot(13)));
+    return P10DCRankFormulaPairAccum{
+        p10dc_rankformula_accum_add(as03, as46),
+        p10dc_rankformula_accum_add(bs03, bs46)};
+#else
+    // Register path: first source window issues A and B before either reduction,
+    // creating up to eight independent 32-bit source requests per lane.
     BkczCrossAccum av0 = 0, av1 = 0, av2 = 0, av3 = 0;
     BkczCrossAccum bv0 = 0, bv1 = 0, bv2 = 0, bv3 = 0;
     if (n0 > 0u) av0 = BkczCrossAccum(__ldg(source_row + a0));
@@ -124,6 +175,7 @@ p10dc_resolved_low_preimages_cross5_rankformula_nometa4_directgather64_pair_fixe
     return P10DCRankFormulaPairAccum{
         p10dc_rankformula_accum_add(as03, as46),
         p10dc_rankformula_accum_add(bs03, bs46)};
+#endif
 }
 
 #endif
