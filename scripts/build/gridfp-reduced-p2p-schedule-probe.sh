@@ -31,8 +31,14 @@ case "$MODE" in
   segment-major)
     SRC_REL="src/cuda/gridfp/gridfp_reduced_production_p2p_segment_major_microprobe.cu"
     ;;
+  segment-major-count)
+    SRC_REL="src/cuda/gridfp/gridfp_reduced_production_p2p_segment_major_builder_microprobe.cu"
+    ;;
+  segment-major-fill)
+    SRC_REL="src/cuda/gridfp/gridfp_reduced_production_p2p_segment_major_fill_microprobe.cu"
+    ;;
   *)
-    echo "invalid MODE=$MODE (baseline|ownerfirst|tie|worklist|compiled|packed|segmented|segment-major)" >&2
+    echo "invalid MODE=$MODE (baseline|ownerfirst|tie|worklist|compiled|packed|segmented|segment-major|segment-major-count|segment-major-fill)" >&2
     exit 2
     ;;
 esac
