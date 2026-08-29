@@ -13,10 +13,12 @@ THREADS="${GRIDFP_THREADS:-256}"
 ARCH="${ARCH:-native}"
 RANDOM_CG="${RANDOM_CG:-1}"
 WARP_SCAN="${WARP_SCAN:-1}"
+PREFETCH_L2="${PREFETCH_L2:-0}"
 CPASYNC="${CPASYNC:-0}"
 MAXRREGCOUNT="${MAXRREGCOUNT:-0}"
 REBUILD="${REBUILD:-0}"
-for x in RANDOM_CG WARP_SCAN CPASYNC REBUILD; do v="${!x}"; [[ "$v" == 0 || "$v" == 1 ]] || { echo "$x must be 0 or 1" >&2; exit 2; }; done
+for x in RANDOM_CG WARP_SCAN PREFETCH_L2 CPASYNC REBUILD; do v="${!x}"; [[ "$v" == 0 || "$v" == 1 ]] || { echo "$x must be 0 or 1" >&2; exit 2; }; done
+(( PREFETCH_L2 + CPASYNC <= 1 )) || { echo 'PREFETCH_L2 and CPASYNC are separate experiments' >&2; exit 2; }
 [[ "$MAXRREGCOUNT" =~ ^[0-9]+$ ]] && (( MAXRREGCOUNT == 0 || (MAXRREGCOUNT >= 32 && MAXRREGCOUNT <= 255) )) || { echo 'MAXRREGCOUNT must be 0 or 32..255' >&2; exit 2; }
 [[ "$ROWS" =~ ^[0-9]+$ ]] && ((ROWS>=1&&ROWS<=28)) || { echo 'ROWS must be 1..28' >&2; exit 2; }
 [[ "$THREADS" =~ ^[0-9]+$ ]] && ((THREADS>=32&&THREADS<=1024&&THREADS%32==0)) || { echo 'GRIDFP_THREADS must be warp multiple in 32..1024' >&2; exit 2; }
@@ -27,6 +29,7 @@ if [[ "$CPASYNC" == 1 ]] && (( THREADS > 768 )); then echo 'CPASYNC=1 currently 
 TAG="n27_mainilp8_warp_dualmask_closuretab"
 [[ "$RANDOM_CG" == 1 ]] && TAG="${TAG}_cg"
 [[ "$WARP_SCAN" == 1 ]] && TAG="${TAG}_warpscan"
+[[ "$PREFETCH_L2" == 1 ]] && TAG="${TAG}_prel2"
 [[ "$CPASYNC" == 1 ]] && TAG="${TAG}_cpasync"
 (( MAXRREGCOUNT > 0 )) && TAG="${TAG}_r${MAXRREGCOUNT}"
 ISO="${ISO:-$ONEESAN_BUILD_DIR/${TAG}_gen}"
@@ -78,7 +81,11 @@ if [[ "$REBUILD" == 1 || ! -x "$BIN" ]]; then
   ILP8_SRC="$ISO/main_ilp8.cu"
   python3 "$ONEESAN_ROOT/scripts/build/gen-b300-main-rankstate-ilp8.py" "$FINAL_SRC" "$ILP8_SRC"
   FINAL_SRC="$ILP8_SRC"
-  if [[ "$CPASYNC" == 1 ]]; then
+  if [[ "$PREFETCH_L2" == 1 ]]; then
+    PREFETCH_SRC="$ISO/final_main_ilp8_prefetch.cu"
+    python3 "$ONEESAN_ROOT/scripts/build/gen-b300-main-rankstate-ilp8-prefetch.py" "$FINAL_SRC" "$PREFETCH_SRC"
+    FINAL_SRC="$PREFETCH_SRC"
+  elif [[ "$CPASYNC" == 1 ]]; then
     CPASYNC_SRC="$ISO/final_main_ilp8_cpasync.cu"
     python3 "$ONEESAN_ROOT/scripts/build/gen-b300-main-rankstate-ilp8-cpasync.py" "$FINAL_SRC" "$CPASYNC_SRC"
     FINAL_SRC="$CPASYNC_SRC"
@@ -90,6 +97,7 @@ if [[ "$REBUILD" == 1 || ! -x "$BIN" ]]; then
   grep -Fq 'b300_block_closure_warp_kernel' "$FINAL_SRC"
   [[ "$RANDOM_CG" == 0 || "$CPASYNC" == 1 ]] || grep -Fq 'b300_rankstate_random_load_cg(in+pj7)' "$FINAL_SRC"
   [[ "$WARP_SCAN" == 0 ]] || grep -Fq 'const int ql=p-2-int(lane)' "$FINAL_SRC"
+  [[ "$PREFETCH_L2" == 0 ]] || grep -Fq 'prefetch.global.L2' "$FINAL_SRC"
   if [[ "$CPASYNC" == 1 ]]; then
     grep -Fq 'cp.async.ca.shared.global' "$FINAL_SRC"
     grep -Fq 'size_t(threads)*16u*sizeof(Count)' "$FINAL_SRC"
@@ -97,7 +105,7 @@ if [[ "$REBUILD" == 1 || ! -x "$BIN" ]]; then
   fi
 
   REG_FLAGS=(); (( MAXRREGCOUNT > 0 )) && REG_FLAGS+=("-maxrregcount=$MAXRREGCOUNT")
-  echo "=== compile B300 main-ILP8 saturation binary random_cg=$RANDOM_CG warpscan=$WARP_SCAN cpasync=$CPASYNC maxrregcount=$MAXRREGCOUNT ===" >&2
+  echo "=== compile B300 main-ILP8 saturation binary random_cg=$RANDOM_CG warpscan=$WARP_SCAN prefetch_l2=$PREFETCH_L2 cpasync=$CPASYNC maxrregcount=$MAXRREGCOUNT ===" >&2
   TMPDIR="$ISO/tmp" nvcc -O3 -std=c++17 -lineinfo -arch="$ARCH" -Xptxas=-v "${REG_FLAGS[@]}" \
     -DTARGET_W=28 -DLOW_LUT_K=13 -DHIGH_LUT_K=13 \
     -DB300_FAST_SHARD_ADDRESS8=1 -DB300_BLOCK_CLOSURE_QUAD=0 \
@@ -111,8 +119,9 @@ if [[ -f "$ISO/final.build.err" ]]; then
 fi
 
 nvidia-smi --query-gpu=index,name,memory.total,memory.free --format=csv,noheader || true
-echo "B300 x8 saturation-main-ilp8 n=$N rows=$ROWS threads=$THREADS target=${TARGET_MIB}MiB plan=${PLAN_MIB}MiB window=$MAX_WINDOW random_cg=$RANDOM_CG warpscan=$WARP_SCAN cpasync=$CPASYNC maxrregcount=$MAXRREGCOUNT" >&2
+echo "B300 x8 saturation-main-ilp8 n=$N rows=$ROWS threads=$THREADS target=${TARGET_MIB}MiB plan=${PLAN_MIB}MiB window=$MAX_WINDOW random_cg=$RANDOM_CG warpscan=$WARP_SCAN prefetch_l2=$PREFETCH_L2 cpasync=$CPASYNC maxrregcount=$MAXRREGCOUNT" >&2
 features='main_rankstate_ilp8,block_rankstate_ilp4,closure_warp,dualmask,closure_contrib_shift_cross_tables,random_cg_optional,closure_warpscan_optional,concurrent_io'
+[[ "$PREFETCH_L2" == 0 ]] || features="${features},main_prefetch_global_l2"
 [[ "$CPASYNC" == 0 ]] || features="${features},main_cpasync_ca_u32_2x8"
 echo "features=$features" >&2
 echo "BIN=$BIN" >&2
