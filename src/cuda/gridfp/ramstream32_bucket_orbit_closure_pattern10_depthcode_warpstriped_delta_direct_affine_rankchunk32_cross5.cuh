@@ -6,6 +6,17 @@
 static_assert(P10DC_RANKCHUNK32_DIRECTMASK == 0 || P10DC_RANKCHUNK32_DIRECTMASK == 1,
               "P10DC_RANKCHUNK32_DIRECTMASK must be 0 or 1");
 
+#ifndef P10DC_WARPSTRIPED_ILP
+#define P10DC_WARPSTRIPED_ILP 1
+#endif
+static_assert(P10DC_WARPSTRIPED_ILP == 1 || P10DC_WARPSTRIPED_ILP == 2 ||
+              P10DC_WARPSTRIPED_ILP == 4,
+              "P10DC_WARPSTRIPED_ILP must be 1, 2, or 4");
+
+#if P10DC_RANKCHUNK32_DIRECTMASK && P10DC_WARPSTRIPED_ILP > 1
+#include "ramstream32_bucket_orbit_closure_pattern10_depthcode_warpstriped_directmask_ilp.cuh"
+#else
+
 #if P10DC_RANKCHUNK32_DIRECTMASK
 #include "ramstream32_bucket_closure_pattern10_depthcode_delta_direct_affine_rankchunk32_directmask.cuh"
 #else
@@ -33,3 +44,5 @@ static_assert(P10DC_RANKCHUNK32_DIRECTMASK == 0 || P10DC_RANKCHUNK32_DIRECTMASK 
 #undef P10DC_WARPSTRIPED_PREPARE_REVERSE
 #undef P10DC_WARPSTRIPED_PREPARE_FORWARD
 #undef P10DC_WARPSTRIPED_CTX
+
+#endif
