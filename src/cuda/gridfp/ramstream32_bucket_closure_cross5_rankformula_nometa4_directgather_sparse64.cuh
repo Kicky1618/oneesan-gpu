@@ -3,19 +3,53 @@
 #ifndef P10DC_RANKFORMULA_DIRECTGATHER_SPARSE64
 #define P10DC_RANKFORMULA_DIRECTGATHER_SPARSE64 0
 #endif
+#ifndef P10DC_RANKFORMULA_SPARSE64_WARP_INDEX
+#define P10DC_RANKFORMULA_SPARSE64_WARP_INDEX 0
+#endif
 static_assert(P10DC_RANKFORMULA_DIRECTGATHER_SPARSE64 == 0 ||
               P10DC_RANKFORMULA_DIRECTGATHER_SPARSE64 == 1,
               "P10DC_RANKFORMULA_DIRECTGATHER_SPARSE64 must be 0 or 1");
+static_assert(P10DC_RANKFORMULA_SPARSE64_WARP_INDEX == 0 ||
+              P10DC_RANKFORMULA_SPARSE64_WARP_INDEX == 1,
+              "P10DC_RANKFORMULA_SPARSE64_WARP_INDEX must be 0 or 1");
 #if P10DC_RANKFORMULA_DIRECTGATHER_SPARSE64
 static_assert(P10DC_RANKFORMULA_DIRECTGATHER64,
               "SPARSE64 uses the DIRECTGATHER64 descriptor encoding");
 #endif
+static_assert(!P10DC_RANKFORMULA_SPARSE64_WARP_INDEX ||
+              P10DC_RANKFORMULA_DIRECTGATHER_SPARSE64,
+              "warp-shared sparse index requires SPARSE64");
 
 #if P10DC_RANKFORMULA_DIRECTGATHER_SPARSE64
 __constant__ P10DCDirectGather64Word* D_P10DC_RANKFORMULA_DIRECTGATHER_SPARSE64_INDEX;
 __constant__ P10DCDirectGather64Word* D_P10DC_RANKFORMULA_DIRECTGATHER_SPARSE64_PRIMARY;
 __constant__ P10DCDirectGather64Word* D_P10DC_RANKFORMULA_DIRECTGATHER_SPARSE64_RARE;
 #endif
+
+// Depth-major descriptors make ranks handled by neighboring lanes fall into
+// the same 32-rank sparse bitmap word (at most two words at an unaligned warp
+// boundary). The ordinary path lets every lane issue the same __ldg. This
+// optional path has one representative lane per actual word load it and then
+// broadcasts the 64-bit bitmap+prefix with two shuffles. __activemask plus
+// match_any keeps tail-divergent calls exact as well.
+__device__ __forceinline__ P10DCDirectGather64Word
+p10dc_rankformula_sparse64_index_word(size_t wi) {
+#if P10DC_RANKFORMULA_SPARSE64_WARP_INDEX
+    const unsigned active = __activemask();
+    const uint32_t key = uint32_t(wi);
+    const unsigned peers = __match_any_sync(active, key);
+    const int leader = __ffs(int(peers)) - 1;
+    P10DCDirectGather64Word raw = 0;
+    if (int(threadIdx.x & 31u) == leader)
+        raw = __ldg(D_P10DC_RANKFORMULA_DIRECTGATHER_SPARSE64_INDEX + wi);
+    const uint32_t lo = __shfl_sync(active, uint32_t(raw), leader);
+    const uint32_t hi = __shfl_sync(active, uint32_t(raw >> 32), leader);
+    return P10DCDirectGather64Word(lo) |
+           (P10DCDirectGather64Word(hi) << 32);
+#else
+    return __ldg(D_P10DC_RANKFORMULA_DIRECTGATHER_SPARSE64_INDEX + wi);
+#endif
+}
 
 __device__ __forceinline__ BkczCrossAccum
 p10dc_resolved_low_preimages_cross5_rankformula_nometa4_directgather_sparse64_fixed(
@@ -30,8 +64,7 @@ p10dc_resolved_low_preimages_cross5_rankformula_nometa4_directgather_sparse64_fi
     const size_t gi = p10dc_rankformula_directgather_index(h, rank, depth);
     const size_t wi = gi >> 5;
     const uint32_t bit = uint32_t(gi) & 31u;
-    const P10DCDirectGather64Word ix = __ldg(
-        D_P10DC_RANKFORMULA_DIRECTGATHER_SPARSE64_INDEX + wi);
+    const P10DCDirectGather64Word ix = p10dc_rankformula_sparse64_index_word(wi);
     const uint32_t bits = uint32_t(ix);
     const uint32_t flag = 1u << bit;
     if (!(bits & flag)) return BkczCrossAccum(0);
