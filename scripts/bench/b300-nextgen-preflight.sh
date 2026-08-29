@@ -14,6 +14,8 @@ shells=(
   scripts/bench/b300-nextgen-cg-l2size-sweep.sh
   scripts/bench/b300-nextgen-calibrate-cgl2.sh
   scripts/bench/b300-nextgen-hybrid-ilp8-sweep.sh
+  scripts/bench/b300-nextgen-hybrid8-staged-calibrate.sh
+  scripts/run/b300x8-nextgen-hybrid8-staged-fullprime-race.sh
   scripts/run/b300x8-race-forced-set-profiled-once.sh
   scripts/run/b300x8-nextgen-select.sh
 )
@@ -45,6 +47,8 @@ lat="$ONEESAN_ROOT/scripts/bench/b300-nextgen-latency-regcap-sweep.sh"
 cgl2="$ONEESAN_ROOT/scripts/bench/b300-nextgen-cg-l2size-sweep.sh"
 staged="$ONEESAN_ROOT/scripts/bench/b300-nextgen-calibrate-cgl2.sh"
 hybrid8="$ONEESAN_ROOT/scripts/bench/b300-nextgen-hybrid-ilp8-sweep.sh"
+hybrid8_staged="$ONEESAN_ROOT/scripts/bench/b300-nextgen-hybrid8-staged-calibrate.sh"
+hybrid8_race="$ONEESAN_ROOT/scripts/run/b300x8-nextgen-hybrid8-staged-fullprime-race.sh"
 for s in \
   'RECURRENCE_ILP' \
   'RECURRENCE_HYBRID_ILP8' \
@@ -70,9 +74,31 @@ for s in \
   'RECURRENCE_HYBRID_ILP8_MIN_STATES="$threshold"' \
   'main_pull_kernel_ilp8_hybrid' \
   'B300_HYBRID8_WINNER_THRESHOLD' \
-  'b300_nextgen_hybrid8_exact_intermediate_match=1' \
-  'spill_free'; do
+  'B300_HYBRID8_WINNER_SPEEDUP_VS_BASELINE' \
+  'baseline lacks known spill-free recurrence ptxas' \
+  'resource_ok=(len(rv)>=2 if mode=='"'"'hybrid'"'"' else len(rv)>=1)' \
+  'b300_nextgen_hybrid8_exact_intermediate_match=1'; do
   grep -Fq "$s" "$hybrid8" || { echo "hybrid ILP8 sweep marker missing: $s" >&2; exit 3; }
+done
+for s in \
+  'CANONICAL_SWEEP="$ONEESAN_ROOT/scripts/bench/b300-nextgen-hybrid-ilp8-sweep.sh"' \
+  'HYBRID_ILP8_THRESHOLDS' \
+  'VALIDATE_ROWS="${VALIDATE_ROWS:-4 8}"' \
+  'ILP8_THRESHOLDS="$thresholds"' \
+  'B300_HYBRID8_WINNER_SPILL_FREE=1' \
+  'B300_HYBRID8_FINAL_SPILL_FREE' \
+  'canonical_sweep=1'; do
+  grep -Fq "$s" "$hybrid8_staged" || { echo "staged hybrid8 marker missing: $s" >&2; exit 3; }
+done
+for s in \
+  'B300_HYBRID8_STAGED_VALIDATED' \
+  'B300_HYBRID8_FINAL_ENABLED' \
+  'B300_HYBRID8_FINAL_SPILL_FREE' \
+  'B300_HYBRID8_PROMOTION_SPILL_FREE=1' \
+  'FORCED_OVERRIDE_BIN="$B300_HYBRID8_FINAL_BIN"' \
+  'FORCED_BASE_BIN="$B300_HYBRID8_BASE_BIN"' \
+  'b300x8-race-external-forced-profiled-once.sh'; do
+  grep -Fq "$s" "$hybrid8_race" || { echo "hybrid8 full-prime marker missing: $s" >&2; exit 3; }
 done
 for s in \
   'SELECT_ONLY="${SELECT_ONLY:-1}"' \
@@ -118,4 +144,4 @@ for s in \
   grep -Fq "$s" "$staged" || { echo "Stage-D calibration marker missing: $s" >&2; exit 3; }
 done
 
-echo 'b300_nextgen_preflight=OK bash_syntax=OK python_ast=OK ilp_partition=OK transform_order=OK hybrid_ilp8_builder=OK hybrid_cache_policy=OK hybrid_ilp8_sweep=OK uncapped_baseline=OK spill_gate=OK cgl2_stage_d=OK forced_set_single_pass=OK selection_default=only gpu_work=0 actions_triggered=0'
+echo 'b300_nextgen_preflight=OK bash_syntax=OK python_ast=OK ilp_partition=OK transform_order=OK hybrid_ilp8_builder=OK hybrid_cache_policy=OK hybrid_ilp8_sweep=OK hybrid8_staged=OK hybrid8_fullprime_gate=OK uncapped_baseline=OK spill_gate=OK cgl2_stage_d=OK forced_set_single_pass=OK selection_default=only gpu_work=0 actions_triggered=0'
