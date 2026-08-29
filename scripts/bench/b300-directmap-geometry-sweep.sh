@@ -5,7 +5,8 @@ source "$(dirname -- "${BASH_SOURCE[0]}")/../lib/common.sh"
 N="${N:-21}"; MOD="${MOD:-4294967291}"; NGPU="${NGPU:-8}"
 TARGET_MIB="${TARGET_MIB:-16384}"; MAX_WINDOW="${MAX_WINDOW:-14}"
 ARCH="${ARCH:-native}"; TRANSPOSE_MODE="${TRANSPOSE_MODE:-pipeline}"
-REPEATS="${REPEATS:-2}"; PM_ACCUM="${PM_ACCUM:-0}"; TERNARY_KEY4="${TERNARY_KEY4:-1}"
+REPEATS="${REPEATS:-2}"; PM_ACCUM="${PM_ACCUM:-1}"; TERNARY_KEY4="${TERNARY_KEY4:-1}"
+LOW_GX="${LOW_GX:-16}"; LOW_GY="${LOW_GY:-8}"
 if [[ -z "${EXPECT+x}" ]]; then [[ "$N" == 21 && "$MOD" == 4294967291 ]] && EXPECT=998035516 || { echo "EXPECT required" >&2; exit 2; }; fi
 command -v nvcc >/dev/null || exit 2
 command -v nvidia-smi >/dev/null || exit 2
@@ -28,31 +29,36 @@ N="$N" ARCH="$ARCH" OUT="$BIN" \
   >"$LOGDIR/build.out" 2>"$LOGDIR/build.err"
 
 field(){ local key="$1" line="$2"; sed -nE "s/(^|.*[[:space:]])${key}=([^[:space:]]+).*/\\2/p" <<<"$line" | tail -n1; }
-# HIGH uses x for rank columns and y for orbit operations; LOW swaps the useful
-# dimensions. Sweep both axes rather than simply maximizing total CTA count.
+# Warpstriped HIGH assigns whole orbits to warps: with 256 threads a single Y
+# CTA already exposes eight orbits.  Move launch budget from Y to X so more
+# independent column stripes are resident, while LOW keeps its proven geometry.
 CASES=(
   "256 16 8"
-  "256 32 8"
-  "256 64 8"
-  "256 16 16"
-  "128 32 16"
-  "128 64 16"
-  "128 64 32"
+  "256 32 4"
+  "256 64 2"
+  "256 128 1"
+  "256 64 4"
+  "256 128 2"
+  "256 256 1"
+  "128 128 1"
+  "128 256 1"
 )
-printf 'threads\tgx\tgy\trepeat\twall_s\tforward_high_s\tforward_low_s\treverse_low_s\treverse_high_s\ttranspose_s\n' >"$RESULT"
+printf 'threads\thigh_gx\thigh_gy\tlow_gx\tlow_gy\trepeat\twall_s\tforward_high_s\tforward_low_s\treverse_low_s\treverse_high_s\ttranspose_s\n' >"$RESULT"
 
 for spec in "${CASES[@]}"; do
-  read -r threads gx gy <<<"$spec"
+  read -r threads hgx hgy <<<"$spec"
   for ((r=1;r<=REPEATS;++r)); do
-    so="$LOGDIR/t${threads}_x${gx}_y${gy}_r${r}.out"
-    se="$LOGDIR/t${threads}_x${gx}_y${gy}_r${r}.err"
-    BUCKET_THREADS="$threads" BUCKET_GRID_X="$gx" BUCKET_GRID_Y="$gy" \
+    so="$LOGDIR/t${threads}_hx${hgx}_hy${hgy}_r${r}.out"
+    se="$LOGDIR/t${threads}_hx${hgx}_hy${hgy}_r${r}.err"
+    BUCKET_THREADS="$threads" BUCKET_GRID_X="$LOW_GX" BUCKET_GRID_Y="$LOW_GY" \
+    BUCKET_LOW_GRID_X="$LOW_GX" BUCKET_LOW_GRID_Y="$LOW_GY" \
+    BUCKET_HIGH_GRID_X="$hgx" BUCKET_HIGH_GRID_Y="$hgy" \
       "$BIN" "$N" "$TARGET_MIB" "$MAX_WINDOW" "$NGPU" "$MOD" >"$so" 2>"$se"
     line="$(grep '^residue=' "$so" | tail -n1 || true)"; [[ -n "$line" ]] || exit 3
     residue="$(field residue "$line")"; [[ "$residue" == "$EXPECT" ]] || { echo "residue mismatch geometry=$spec got=$residue" >&2; exit 4; }
     detail="$(grep 'snake_onepass_graph_batch modulus=' "$se" | tail -n1 || true)"
-    printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
-      "$threads" "$gx" "$gy" "$r" \
+    printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
+      "$threads" "$hgx" "$hgy" "$LOW_GX" "$LOW_GY" "$r" \
       "$(field wall_s "$line")" "$(field forward_high_s "$detail")" \
       "$(field forward_low_s "$detail")" "$(field reverse_low_s "$detail")" \
       "$(field reverse_high_s "$detail")" "$(field transpose_s "$detail")" >>"$RESULT"
@@ -64,7 +70,7 @@ import csv,statistics,sys
 rows=list(csv.DictReader(open(sys.argv[1]),delimiter='\t'))
 groups={}
 for r in rows:
-    key=(int(r['threads']),int(r['gx']),int(r['gy']))
+    key=(int(r['threads']),int(r['high_gx']),int(r['high_gy']))
     groups.setdefault(key,[]).append(r)
 out=[]
 for key,g in groups.items():
@@ -72,7 +78,7 @@ for key,g in groups.items():
     z['high_total_s']=z['forward_high_s']+z['reverse_high_s']
     out.append((z['wall_s'],key,z))
 for _,key,z in sorted(out):
-    print('geometry',*key,
+    print('high_geometry',*key,
           f"wall={z['wall_s']:.6f}",
           f"high={z['high_total_s']:.6f}",
           f"fh={z['forward_high_s']:.6f}",
@@ -82,4 +88,4 @@ for _,key,z in sorted(out):
 print('BEST',sorted(out)[0][1],f"wall={sorted(out)[0][0]:.6f}")
 PY
 
-echo "result=$RESULT" >&2
+echo "result=$RESULT pm_accum=$PM_ACCUM low_geometry=${LOW_GX}x${LOW_GY}" >&2
