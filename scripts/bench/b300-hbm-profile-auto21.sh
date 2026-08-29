@@ -6,18 +6,21 @@ BASE_PROFILE="${BASE_PROFILE:-$ONEESAN_ROOT/work/b300_hbm_profile_tune21.env}"
 PRECTX_PROFILE="${PRECTX_PROFILE:-$ONEESAN_ROOT/work/b300_hbm_profile_prectx21.env}"
 SCHED_PROFILE="${SCHED_PROFILE:-$ONEESAN_ROOT/work/b300_hbm_profile_scheduler21.env}"
 ADV_PROFILE="${ADV_PROFILE:-$ONEESAN_ROOT/work/b300_hbm_profile_advanced21.env}"
+DESC_PROFILE="${DESC_PROFILE:-$ONEESAN_ROOT/work/b300_hbm_profile_desc21.env}"
 FINAL_PROFILE="${FINAL_PROFILE:-$ONEESAN_ROOT/work/b300_hbm_profile_refined21.env}"
 BASE_PREFIX="${BASE_PREFIX:-$ONEESAN_ROOT/work/b300_hbm_profile_tune21}"
 PRECTX_PREFIX="${PRECTX_PREFIX:-$ONEESAN_ROOT/work/b300_hbm_profile_refine_compact_prectx21}"
 SCHED_PREFIX="${SCHED_PREFIX:-$ONEESAN_ROOT/work/b300_hbm_profile_orbit_scheduler21}"
 ADV_PREFIX="${ADV_PREFIX:-$ONEESAN_ROOT/work/b300_hbm_profile_orbit_advanced21}"
 QUAD_DESC_PREFIX="${QUAD_DESC_PREFIX:-$ONEESAN_ROOT/work/b300_hbm_profile_orbit_quad_desc21}"
+QUAD_LOCAL0_PREFIX="${QUAD_LOCAL0_PREFIX:-$ONEESAN_ROOT/work/b300_hbm_profile_orbit_quad_local021}"
 RUN_PRECTX="${RUN_PRECTX:-1}"
 RUN_ORBIT_SCHEDULER="${RUN_ORBIT_SCHEDULER:-1}"
 # Keep RUN_ORBIT_QUAD as a compatibility alias for older launch commands.
 RUN_ORBIT_ADVANCED="${RUN_ORBIT_ADVANCED:-${RUN_ORBIT_QUAD:-1}}"
 RUN_ORBIT_QUAD_DESC="${RUN_ORBIT_QUAD_DESC:-1}"
-for x in RUN_PRECTX RUN_ORBIT_SCHEDULER RUN_ORBIT_ADVANCED RUN_ORBIT_QUAD_DESC; do
+RUN_ORBIT_QUAD_LOCAL0="${RUN_ORBIT_QUAD_LOCAL0:-1}"
+for x in RUN_PRECTX RUN_ORBIT_SCHEDULER RUN_ORBIT_ADVANCED RUN_ORBIT_QUAD_DESC RUN_ORBIT_QUAD_LOCAL0; do
   v="${!x}"; [[ "$v" == 0 || "$v" == 1 ]] || { echo "$x must be 0 or 1" >&2; exit 2; }
 done
 
@@ -58,16 +61,34 @@ if [[ "$RUN_ORBIT_QUAD_DESC" == 1 ]]; then
   source "$ADV_PROFILE"
   if [[ "${ORBIT_QUAD_MLP:-0}" == 1 && "${ORBIT_QUAD_OVERLAP_LOCAL:-0}" == 1 && "${ORBIT_SPARSE64:-0}" == 1 ]]; then
     echo "=== HBM tune21 quad sparse descriptor MLP refinement ===" >&2
-    PROFILE_IN="$ADV_PROFILE" PROFILE_OUT="$FINAL_PROFILE" PREFIX="$QUAD_DESC_PREFIX" \
+    PROFILE_IN="$ADV_PROFILE" PROFILE_OUT="$DESC_PROFILE" PREFIX="$QUAD_DESC_PREFIX" \
       bash "$ONEESAN_ROOT/scripts/bench/b300-hbm-profile-refine-orbit-quad-desc21.sh"
   else
     echo "=== skip quad sparse descriptor MLP: advanced winner is not sparse QOL ===" >&2
-    cp "$ADV_PROFILE" "$FINAL_PROFILE"
+    cp "$ADV_PROFILE" "$DESC_PROFILE"
   fi
 else
-  cp "$ADV_PROFILE" "$FINAL_PROFILE"
+  cp "$ADV_PROFILE" "$DESC_PROFILE"
+fi
+
+# QOL has nothing useful to overlap when local_n==0. Race a uniform local-zero
+# bypass only after all other advanced/QSD settings are fixed; two runs suffice.
+if [[ "$RUN_ORBIT_QUAD_LOCAL0" == 1 ]]; then
+  ORBIT_QUAD_MLP=0 ORBIT_QUAD_OVERLAP_LOCAL=0
+  # shellcheck disable=SC1090
+  source "$DESC_PROFILE"
+  if [[ "${ORBIT_QUAD_MLP:-0}" == 1 && "${ORBIT_QUAD_OVERLAP_LOCAL:-0}" == 1 ]]; then
+    echo "=== HBM tune21 QOL local_n=0 bypass refinement ===" >&2
+    PROFILE_IN="$DESC_PROFILE" PROFILE_OUT="$FINAL_PROFILE" PREFIX="$QUAD_LOCAL0_PREFIX" \
+      bash "$ONEESAN_ROOT/scripts/bench/b300-hbm-profile-refine-orbit-quad-local0-21.sh"
+  else
+    echo "=== skip QOL local_n=0 bypass: selected orbit path is not QOL ===" >&2
+    cp "$DESC_PROFILE" "$FINAL_PROFILE"
+  fi
+else
+  cp "$DESC_PROFILE" "$FINAL_PROFILE"
 fi
 
 echo "=== final HBM profile ===" >&2
 cat "$FINAL_PROFILE"
-echo "b300 HBM profile auto21 OK base_profile=$BASE_PROFILE prectx_profile=$PRECTX_PROFILE sched_profile=$SCHED_PROFILE advanced_profile=$ADV_PROFILE final_profile=$FINAL_PROFILE" >&2
+echo "b300 HBM profile auto21 OK base_profile=$BASE_PROFILE prectx_profile=$PRECTX_PROFILE sched_profile=$SCHED_PROFILE advanced_profile=$ADV_PROFILE desc_profile=$DESC_PROFILE final_profile=$FINAL_PROFILE" >&2
