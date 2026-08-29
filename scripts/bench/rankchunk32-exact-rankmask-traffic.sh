@@ -21,6 +21,9 @@ if ! command -v nvcc >/dev/null; then
   exit 2
 fi
 
+bash "$ONEESAN_ROOT/scripts/bench/cross5-rankmask-shape-proof.sh"
+bash "$ONEESAN_ROOT/scripts/bench/cross5-rankstream-projection-proof.sh"
+
 SRC="$ONEESAN_ROOT/src/cuda/gridfp/probes/rankchunk32_exact_rankmask_traffic.cu"
 BIN="${BIN:-$ONEESAN_BUILD_DIR/rankchunk32_exact_rankmask_traffic_w${W}}"
 mkdir -p "$(dirname "$BIN")"
@@ -62,4 +65,4 @@ resolved_calls="$(sed -nE 's/.* resolved_calls=([0-9]+).*/\1/p' <<<"$residue_lin
 
 printf 'rankchunk32-exact-rankmask-traffic summary n=%s W=%s chunk_calls=%s resolved_calls=%s exact_zero_frac=%s exact_avg_popcount=%s\n' \
   "$N" "$W" "$chunk_calls" "$resolved_calls" "$zero_frac" "$avg_popcount"
-echo "rankchunk32-exact-rankmask-traffic done n=$N arch=$ARCH host_exact=1 gpu_runtime=0" >&2
+echo "rankchunk32-exact-rankmask-traffic done n=$N arch=$ARCH host_exact=1 gpu_runtime=0 proofs=rankmask-shape,rankstream-projection" >&2
