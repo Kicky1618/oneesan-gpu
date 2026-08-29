@@ -5,10 +5,16 @@
 #ifndef P10DC_RANKFORMULA_NOMETA_BLOCK
 #define P10DC_RANKFORMULA_NOMETA_BLOCK 4
 #endif
+#ifndef P10DC_RANKFORMULA_NOMETA_GROUP56
+#define P10DC_RANKFORMULA_NOMETA_GROUP56 0
+#endif
 static_assert(P10DC_RANKFORMULA_NOMETA_BLOCK == 4 ||
               P10DC_RANKFORMULA_NOMETA_BLOCK == 8 ||
               P10DC_RANKFORMULA_NOMETA_BLOCK == 16,
               "rankformula nometa block must be 4, 8, or 16");
+static_assert(P10DC_RANKFORMULA_NOMETA_GROUP56 == 0 ||
+              P10DC_RANKFORMULA_NOMETA_GROUP56 == 1,
+              "rankformula nometa group56 must be 0 or 1");
 static constexpr uint32_t P10DC_RANKFORMULA_NOMETA4_BLOCK =
     uint32_t(P10DC_RANKFORMULA_NOMETA_BLOCK);
 static constexpr uint32_t P10DC_RANKFORMULA_NOMETA4_MASKS = 1u << LOW_LUT_K;
@@ -16,45 +22,90 @@ static constexpr uint32_t P10DC_RANKFORMULA_NOMETA4_HEIGHTS = LOW_LUT_K + 2u;
 static_assert(LOW_LUT_K <= 14, "rankformula nometa4 assumes LOW_LUT_K<=14");
 static_assert(P10DC_RANKFORMULA_NOMETA4_HEIGHTS <= uint32_t(MAXW + 2));
 
-// Once the owner/height group is resolved, physical support positions no longer
-// affect the abstract ballot word or L->R local ranks.  Production W28 bounds
-// permit a self-indexed 59-bit group entry:
-//   [15:0]  local group start (16 bits; max 29113)
-//   [19:16] support count n (4 bits; max 14)
-//   [34:20] signed source_base-dest_base (15 bits; [-12969,14873])
-//   [44:35] group count (10 bits; max 1001)
-//   [58:45] self group index (14 bits; max 8708)
-//   [63:59] spare.
-// Embedding the self index lets warp-shared resolution broadcast only the 64-bit
-// group entry; lanes crossing a boundary recover the next global group address
-// without a separate gi shuffle.
+static constexpr uint32_t p10dc_rankformula_nometa4_choose_host(int n, int k) {
+    if (k < 0 || k > n) return 0u;
+    if (k > n - k) k = n - k;
+    uint64_t z = 1;
+    for (int i = 1; i <= k; ++i)
+        z = z * uint64_t(n - k + i) / uint64_t(i);
+    return uint32_t(z);
+}
+static constexpr uint32_t p10dc_rankformula_nometa4_ballot_host(int n, int h) {
+    if (n < 0 || h < 0 || h > n || ((n - h) & 1)) return 0u;
+    const int u = (n - h) / 2;
+    return p10dc_rankformula_nometa4_choose_host(n, u) -
+           p10dc_rankformula_nometa4_choose_host(n, u - 1);
+}
+static constexpr uint32_t p10dc_rankformula_nometa4_abstract_off_host(uint32_t n, uint32_t h) {
+    uint32_t off = 0;
+    for (uint32_t nn = 0; nn <= 14u; ++nn) {
+        for (uint32_t hh = 0; hh < 16u; ++hh) {
+            if (nn == n && hh == h) return off;
+            off += p10dc_rankformula_nometa4_ballot_host(int(nn), int(hh));
+        }
+    }
+    return off;
+}
+
+// Default: self-indexed 59-bit group entry.
+// GROUP56: cooperative-only compact entry with abstract offset embedded:
+//   [14:0]  local group start (15 bits; max 29113)
+//   [17:15] L count (3 bits; max 7)
+//   [32:18] signed source_base-dest_base (15 bits)
+//   [42:33] group count (10 bits; max 1001)
+//   [55:43] universal abstract descriptor offset (13 bits; max 7059)
+//   [63:56] spare.
+// The cooperative subgroup leader retains its initial global group index in a
+// register and increments it for successor loads, so no self index is needed.
 __constant__ uint64_t* D_P10DC_LOW_RANKFORMULA_NOMETA4_GROUP64;
 __constant__ uint16_t* D_P10DC_LOW_RANKFORMULA_NOMETA4_BLOCK16;
 __constant__ uint32_t D_P10DC_LOW_RANKFORMULA_NOMETA4_GOFF[MAXW + 2];
 __constant__ uint32_t D_P10DC_LOW_RANKFORMULA_NOMETA4_BOFF[MAXW + 2];
 
 __device__ __forceinline__ uint32_t p10dc_rankformula_nometa4_group_start(uint64_t x) {
+#if P10DC_RANKFORMULA_NOMETA_GROUP56
+    return uint32_t(x) & 0x7fffu;
+#else
     return uint32_t(x) & 0xffffu;
+#endif
 }
+#if P10DC_RANKFORMULA_NOMETA_GROUP56
+__device__ __forceinline__ uint32_t p10dc_rankformula_nometa4_group_lcount(uint64_t x) {
+    return uint32_t(x >> 15) & 0x07u;
+}
+__device__ __forceinline__ uint32_t p10dc_rankformula_nometa4_group_abstract_off(uint64_t x) {
+    return uint32_t(x >> 43) & 0x1fffu;
+}
+#else
 __device__ __forceinline__ uint32_t p10dc_rankformula_nometa4_group_n(uint64_t x) {
     return uint32_t(x >> 16) & 0x0fu;
 }
+__device__ __forceinline__ uint32_t p10dc_rankformula_nometa4_group_index(uint64_t x) {
+    return uint32_t(x >> 45) & 0x3fffu;
+}
+#endif
 __device__ __forceinline__ int p10dc_rankformula_nometa4_group_delta(uint64_t x) {
+#if P10DC_RANKFORMULA_NOMETA_GROUP56
+    uint32_t z = uint32_t(x >> 18) & 0x7fffu;
+#else
     uint32_t z = uint32_t(x >> 20) & 0x7fffu;
+#endif
     if (z & 0x4000u) z |= 0xffff8000u;
     return int(int32_t(z));
 }
 __device__ __forceinline__ uint32_t p10dc_rankformula_nometa4_group_count(uint64_t x) {
+#if P10DC_RANKFORMULA_NOMETA_GROUP56
+    return uint32_t(x >> 33) & 0x03ffu;
+#else
     return uint32_t(x >> 35) & 0x03ffu;
-}
-__device__ __forceinline__ uint32_t p10dc_rankformula_nometa4_group_index(uint64_t x) {
-    return uint32_t(x >> 45) & 0x3fffu;
+#endif
 }
 
 struct P10DCRankFormulaNometa4Resolved {
     uint32_t n = 0;
     uint32_t start = 0;
     int base_delta = 0;
+    uint32_t abstract_off = 0;
 };
 
 __device__ __forceinline__ P10DCRankFormulaNometa4Resolved
@@ -71,10 +122,19 @@ p10dc_low_rankformula_nometa4_resolve(uint32_t h, uint32_t rank) {
         ++gi;
         e = D_P10DC_LOW_RANKFORMULA_NOMETA4_GROUP64[gi];
     }
+#if P10DC_RANKFORMULA_NOMETA_GROUP56
+    const uint32_t lcount = p10dc_rankformula_nometa4_group_lcount(e);
+    return P10DCRankFormulaNometa4Resolved{
+        h + 2u * lcount,
+        p10dc_rankformula_nometa4_group_start(e),
+        p10dc_rankformula_nometa4_group_delta(e),
+        p10dc_rankformula_nometa4_group_abstract_off(e)};
+#else
     return P10DCRankFormulaNometa4Resolved{
         p10dc_rankformula_nometa4_group_n(e),
         p10dc_rankformula_nometa4_group_start(e),
-        p10dc_rankformula_nometa4_group_delta(e)};
+        p10dc_rankformula_nometa4_group_delta(e), 0u};
+#endif
 }
 
 struct BucketFusedDirectHighRowsRankFormulaNometa4Tables
@@ -94,8 +154,24 @@ struct BucketFusedDirectHighRowsRankFormulaNometa4Tables
     }
 
     static uint64_t pack_group(
-        uint32_t start, uint32_t n, int delta, uint32_t count, uint32_t group_index
+        uint32_t start, uint32_t n, uint32_t h, int delta,
+        uint32_t count, uint32_t group_index
     ) {
+#if P10DC_RANKFORMULA_NOMETA_GROUP56
+        if (n < h || ((n - h) & 1u)) std::exit(760);
+        const uint32_t lcount = (n - h) >> 1;
+        const uint32_t aoff = p10dc_rankformula_nometa4_abstract_off_host(n, h);
+        if (start >= (1u << 15) || lcount >= (1u << 3) ||
+            delta < -(1 << 14) || delta >= (1 << 14) ||
+            count == 0u || count >= (1u << 10) || aoff >= (1u << 13))
+            std::exit(760);
+        const uint32_t draw = uint32_t(delta) & 0x7fffu;
+        return uint64_t(start) |
+               (uint64_t(lcount) << 15) |
+               (uint64_t(draw) << 18) |
+               (uint64_t(count) << 33) |
+               (uint64_t(aoff) << 43);
+#else
         if (start >= (1u << 16) || n > uint32_t(LOW_LUT_K) || n >= (1u << 4) ||
             delta < -(1 << 14) || delta >= (1 << 14) ||
             count == 0u || count >= (1u << 10) || group_index >= (1u << 14))
@@ -106,6 +182,7 @@ struct BucketFusedDirectHighRowsRankFormulaNometa4Tables
                (uint64_t(draw) << 20) |
                (uint64_t(count) << 35) |
                (uint64_t(group_index) << 45);
+#endif
     }
 
     void bind_owner(
@@ -166,7 +243,7 @@ struct BucketFusedDirectHighRowsRankFormulaNometa4Tables
         int min_delta = 32767, max_delta = -32768;
         size_t delta_rows = 0;
         uint32_t max_groups_per_block = 0, max_locator_steps = 0, max_group_count = 0;
-        uint32_t max_group_index = 0;
+        uint32_t max_group_index = 0, max_abstract_off = 0;
         uint64_t locator_steps_sum = 0, locator_codes = 0;
 
         for (uint32_t h = 0; h < uint32_t(MAXW + 2); ++h) {
@@ -196,7 +273,10 @@ struct BucketFusedDirectHighRowsRankFormulaNometa4Tables
                 const uint32_t n = uint32_t(__builtin_popcount(uint32_t(z.mask)));
                 const uint32_t self_index = uint32_t(groups.size());
                 max_group_index = std::max(max_group_index, self_index);
-                groups.push_back(pack_group(z.start, n, delta, count, self_index));
+                max_abstract_off = std::max(
+                    max_abstract_off,
+                    p10dc_rankformula_nometa4_abstract_off_host(n, h));
+                groups.push_back(pack_group(z.start, n, h, delta, count, self_index));
                 ++real_groups;
             }
 
@@ -307,12 +387,18 @@ struct BucketFusedDirectHighRowsRankFormulaNometa4Tables
                   << " avg_group_loads_model=" << (1.0 + avg_steps)
                   << " max_group_count=" << max_group_count
                   << " max_group_index=" << max_group_index
+                  << " max_abstract_off=" << max_abstract_off
                   << " delta_rows=" << delta_rows
                   << " min_base_delta=" << (delta_rows ? min_delta : 0)
                   << " max_base_delta=" << (delta_rows ? max_delta : 0)
                   << " group_load_bytes=8 block_load_bytes=2"
-                  << " group_n_bits=4 support_positions_runtime=0"
+#if P10DC_RANKFORMULA_NOMETA_GROUP56
+                  << " group56=1 group_lcount_bits=3 abstract_off_bits=13"
+                  << " group_pack_bits=56 group_spare_bits=8 self_group_index_bits=0"
+#else
+                  << " group56=0 group_n_bits=4 support_positions_runtime=0"
                   << " group_pack_bits=59 group_spare_bits=5 self_group_index_bits=14"
+#endif
                   << " old_prekey_freed=1\n";
     }
 
