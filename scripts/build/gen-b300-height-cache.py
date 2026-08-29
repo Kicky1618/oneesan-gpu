@@ -94,11 +94,11 @@ once(
 }''',
 'block height recurrence store')
 
-# Planner: both one-byte streams are part of the selected group footprint, so
-# enabling the cache never silently falls back to recomputing prefix popcounts.
+# plan_window is defined before the generated HeightCode typedef, so use the
+# already-included fixed-width uint8_t type in the planner expression.
 once(
 '''size_t b=size_t(2*ms.size+2*ds.size)*sizeof(Count)+size_t(ms.size+ds.size)*sizeof(MateID);''',
-'''size_t b=size_t(2*ms.size+2*ds.size)*sizeof(Count)+size_t(ms.size+ds.size)*sizeof(MateID)+size_t(ms.size+ds.size)*sizeof(HeightCode);''',
+'''size_t b=size_t(2*ms.size+2*ds.size)*sizeof(Count)+size_t(ms.size+ds.size)*sizeof(MateID)+size_t(ms.size+ds.size)*sizeof(uint8_t);''',
 'planner height bytes')
 
 once(
@@ -145,8 +145,8 @@ once(
 '''if(ds.size){if(useHeight)block_pull_kernel<true,true><<<bd,threads,0,c.sBlock>>>(cur,c.dBlockMate,ds.size,dnext,p,c.dBlockHeight);else if(useBlockMate)block_pull_kernel<true,false><<<bd,threads,0,c.sBlock>>>(cur,c.dBlockMate,ds.size,dnext,p,nullptr);else block_pull_kernel<false,false><<<bd,threads,0,c.sBlock>>>(cur,nullptr,ds.size,dnext,p,nullptr);}''',
 'block height launch')
 
-for required in ('dMainHeight','b300_init_main_height_kernel','main_pull_kernel<true,true>','block_pull_kernel<true,true>','height[i]=HeightCode'):
+for required in ('sizeof(uint8_t)','dMainHeight','b300_init_main_height_kernel','main_pull_kernel<true,true>','block_pull_kernel<true,true>','height[i]=HeightCode'):
     if required not in s:raise SystemExit(f'missing height-cache artifact: {required}')
 
 out.parent.mkdir(parents=True,exist_ok=True);out.write_text(s)
-print(f'generated {out} from {src}: b300_height_cache=1 bytes_per_state=1 hbm_rw_per_state_step=2 prefix_popcount_per_state_step=0 recurrence=O1 planner_cache_aware=1 exact_fallback=1')
+print(f'generated {out} from {src}: b300_height_cache=1 bytes_per_state=1 hbm_rw_per_state_step=2 prefix_popcount_per_state_step=0 recurrence=O1 planner_cache_aware=1 planner_type_order_safe=1 exact_fallback=1')
