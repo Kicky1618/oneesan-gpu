@@ -22,10 +22,12 @@ RANKFORMULA_ABSTRACT_SELECT8=1 \
 RANKFORMULA_ABSTRACT_DEPTH4=1 \
 RANKFORMULA_ABSTRACT_SRCPACK10=1 \
 RANKFORMULA_GATHER_MLP=1 \
-PM_ACCUM="${PM_ACCUM:-0}" TERNARY_KEY4="${TERNARY_KEY4:-1}" \
+PM_ACCUM="${PM_ACCUM:-1}" TERNARY_KEY4="${TERNARY_KEY4:-1}" \
 PTXAS_VERBOSE="${PTXAS_VERBOSE:-1}" \
 bash "$ONEESAN_ROOT/scripts/build/b300-bucket-snake-pattern10-depthcode-rankformula-nometa4-abstract.sh"
 
-echo "run example:" >&2
+echo "run example (B300 latency-hiding HIGH geometry; LOW remains conservative):" >&2
 echo "  BUCKET_THREADS=${BUCKET_THREADS:-256} BUCKET_GRID_X=${BUCKET_GRID_X:-16} BUCKET_GRID_Y=${BUCKET_GRID_Y:-8} \\" >&2
+echo "  BUCKET_HIGH_GRID_X=${BUCKET_HIGH_GRID_X:-128} BUCKET_HIGH_GRID_Y=${BUCKET_HIGH_GRID_Y:-1} \\" >&2
+echo "  BUCKET_LOW_GRID_X=${BUCKET_LOW_GRID_X:-16} BUCKET_LOW_GRID_Y=${BUCKET_LOW_GRID_Y:-8} \\" >&2
 echo "    $ONEESAN_BUILD_DIR/$OUT $N <target_mib> <max_window> 8 <mod>" >&2
