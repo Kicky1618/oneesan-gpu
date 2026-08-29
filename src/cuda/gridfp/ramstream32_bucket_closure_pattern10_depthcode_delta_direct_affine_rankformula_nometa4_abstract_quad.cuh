@@ -25,6 +25,24 @@ __device__ __forceinline__ const Count* p10dc_rankformula_quad_local_src(
     return row < uint32_t(c.local_n) ? c.local_base[row] + rank : c.ip_base;
 }
 
+#if P10DC_RANKFORMULA_CPASYNC_PAIR
+__device__ __forceinline__ void p10dc_rankformula_quad_wait3() {
+#if __CUDA_ARCH__ >= 800
+    asm volatile("cp.async.wait_group 3;");
+#endif
+}
+__device__ __forceinline__ void p10dc_rankformula_quad_wait2() {
+#if __CUDA_ARCH__ >= 800
+    asm volatile("cp.async.wait_group 2;");
+#endif
+}
+__device__ __forceinline__ void p10dc_rankformula_quad_wait1() {
+#if __CUDA_ARCH__ >= 800
+    asm volatile("cp.async.wait_group 1;");
+#endif
+}
+#endif
+
 __device__ __forceinline__ void
 p10dc_direct_resolved_high_plan_sum_quad_cross5_rankformula_nometa4_abstract(
     const P10DCDirectHighResolvedCtx& c, const BucketPhysicalBlock& db,
@@ -40,10 +58,10 @@ p10dc_direct_resolved_high_plan_sum_quad_cross5_rankformula_nometa4_abstract(
     }
 
 #if P10DC_RANKFORMULA_CPASYNC_PAIR
-    // CROSS quad has already waited, so recycle all 28 source slots. Rows 0..6
-    // from all four columns are staged as four independent async groups. Row 7
-    // uses ordinary LDG requests issued before wait_all(), overlapping the async
-    // traffic without increasing dynamic shared memory beyond 28 slots/thread.
+    // CROSS quad has already waited, so recycle all 28 slots. Commit one group
+    // per column. wait_group 3/2/1 lets each completed column be reduced while
+    // the remaining columns are still in flight instead of paying a wait-all
+    // bubble before doing any useful arithmetic.
 #define P10DC_QUAD_LOCAL_CPASYNC(slot,row,rank) \
     p10dc_rankformula_cpasync_u32( \
         p10dc_rankformula_cpasync_slot(slot), \
@@ -65,29 +83,26 @@ p10dc_direct_resolved_high_plan_sum_quad_cross5_rankformula_nometa4_abstract(
             r73=BkczCrossAccum(__ldg(c.local_base[7]+lr3));
         }
     }
-    p10dc_rankformula_cpasync_wait_all();
 #define P10DC_QUAD_LOCAL_SLOT(i) BkczCrossAccum(*p10dc_rankformula_cpasync_slot(i))
-    const BkczCrossAccum l00=p10dc_rankformula_accum_add(P10DC_QUAD_LOCAL_SLOT(0),P10DC_QUAD_LOCAL_SLOT(1));
-    const BkczCrossAccum l01=p10dc_rankformula_accum_add(P10DC_QUAD_LOCAL_SLOT(2),P10DC_QUAD_LOCAL_SLOT(3));
-    const BkczCrossAccum l02=p10dc_rankformula_accum_add(P10DC_QUAD_LOCAL_SLOT(4),P10DC_QUAD_LOCAL_SLOT(5));
-    const BkczCrossAccum l10=p10dc_rankformula_accum_add(P10DC_QUAD_LOCAL_SLOT(7),P10DC_QUAD_LOCAL_SLOT(8));
-    const BkczCrossAccum l11=p10dc_rankformula_accum_add(P10DC_QUAD_LOCAL_SLOT(9),P10DC_QUAD_LOCAL_SLOT(10));
-    const BkczCrossAccum l12=p10dc_rankformula_accum_add(P10DC_QUAD_LOCAL_SLOT(11),P10DC_QUAD_LOCAL_SLOT(12));
-    const BkczCrossAccum l20=p10dc_rankformula_accum_add(P10DC_QUAD_LOCAL_SLOT(14),P10DC_QUAD_LOCAL_SLOT(15));
-    const BkczCrossAccum l21=p10dc_rankformula_accum_add(P10DC_QUAD_LOCAL_SLOT(16),P10DC_QUAD_LOCAL_SLOT(17));
-    const BkczCrossAccum l22=p10dc_rankformula_accum_add(P10DC_QUAD_LOCAL_SLOT(18),P10DC_QUAD_LOCAL_SLOT(19));
-    const BkczCrossAccum l30=p10dc_rankformula_accum_add(P10DC_QUAD_LOCAL_SLOT(21),P10DC_QUAD_LOCAL_SLOT(22));
-    const BkczCrossAccum l31=p10dc_rankformula_accum_add(P10DC_QUAD_LOCAL_SLOT(23),P10DC_QUAD_LOCAL_SLOT(24));
-    const BkczCrossAccum l32=p10dc_rankformula_accum_add(P10DC_QUAD_LOCAL_SLOT(25),P10DC_QUAD_LOCAL_SLOT(26));
-    const BkczCrossAccum local0=p10dc_rankformula_accum_add(p10dc_rankformula_accum_add(l00,l01),p10dc_rankformula_accum_add(l02,p10dc_rankformula_accum_add(P10DC_QUAD_LOCAL_SLOT(6),r70)));
-    const BkczCrossAccum local1=p10dc_rankformula_accum_add(p10dc_rankformula_accum_add(l10,l11),p10dc_rankformula_accum_add(l12,p10dc_rankformula_accum_add(P10DC_QUAD_LOCAL_SLOT(13),r71)));
-    const BkczCrossAccum local2=p10dc_rankformula_accum_add(p10dc_rankformula_accum_add(l20,l21),p10dc_rankformula_accum_add(l22,p10dc_rankformula_accum_add(P10DC_QUAD_LOCAL_SLOT(20),r72)));
-    const BkczCrossAccum local3=p10dc_rankformula_accum_add(p10dc_rankformula_accum_add(l30,l31),p10dc_rankformula_accum_add(l32,p10dc_rankformula_accum_add(P10DC_QUAD_LOCAL_SLOT(27),r73)));
+#define P10DC_QUAD_LOCAL_REDUCE(base,r7) \
+    p10dc_rankformula_accum_add( \
+        p10dc_rankformula_accum_add( \
+            p10dc_rankformula_accum_add(P10DC_QUAD_LOCAL_SLOT(base),P10DC_QUAD_LOCAL_SLOT((base)+1)), \
+            p10dc_rankformula_accum_add(P10DC_QUAD_LOCAL_SLOT((base)+2),P10DC_QUAD_LOCAL_SLOT((base)+3))), \
+        p10dc_rankformula_accum_add( \
+            p10dc_rankformula_accum_add(P10DC_QUAD_LOCAL_SLOT((base)+4),P10DC_QUAD_LOCAL_SLOT((base)+5)), \
+            p10dc_rankformula_accum_add(P10DC_QUAD_LOCAL_SLOT((base)+6),(r7))))
+
+    p10dc_rankformula_quad_wait3();
+    s0=p10dc_rankformula_accum_add(s0,P10DC_QUAD_LOCAL_REDUCE(0,r70));
+    p10dc_rankformula_quad_wait2();
+    s1=p10dc_rankformula_accum_add(s1,P10DC_QUAD_LOCAL_REDUCE(7,r71));
+    p10dc_rankformula_quad_wait1();
+    s2=p10dc_rankformula_accum_add(s2,P10DC_QUAD_LOCAL_REDUCE(14,r72));
+    p10dc_rankformula_cpasync_wait_all();
+    s3=p10dc_rankformula_accum_add(s3,P10DC_QUAD_LOCAL_REDUCE(21,r73));
+#undef P10DC_QUAD_LOCAL_REDUCE
 #undef P10DC_QUAD_LOCAL_SLOT
-    s0=p10dc_rankformula_accum_add(s0,local0);
-    s1=p10dc_rankformula_accum_add(s1,local1);
-    s2=p10dc_rankformula_accum_add(s2,local2);
-    s3=p10dc_rankformula_accum_add(s3,local3);
 #else
     // Register quad: issue all four ordinary-source loads for each row before
     // consuming any of them.
