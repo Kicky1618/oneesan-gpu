@@ -11,7 +11,8 @@ base="$ONEESAN_ROOT/scripts/build/b300-directgather-orbitcta.sh"
 
 bash -n "$build"; echo "shell_syntax_ok=${build#$ONEESAN_ROOT/}"
 bash -n "$ab"; echo "shell_syntax_ok=${ab#$ONEESAN_ROOT/}"
-python3 -m py_compile <(sed -n "/python3 - \"\$base\" \"\$tmp\" <<'PY'/,/^PY$/p" "$build" | sed '1d;$d') 2>/dev/null || true
+PIPE2_PATCH_ONLY=1 ORBITCTA_FLAT=1 ORBITCTA_FLAT_DYNAMIC=1 ORBITCTA_FLAT_CHUNK=1 \
+  ORBITCTA_FLAT_DYNAMIC_FUSE_LEASE_PREP=0 bash "$build"
 
 for s in \
   'has_item[2]' \
@@ -41,6 +42,7 @@ for s in \
   grep -Fq "$s" "$graph" || { echo "missing pipe2 graph marker: $s" >&2; exit 3; }
 done
 for s in \
+  'PIPE2_PATCH_ONLY' \
   'P10DC_ORBITCTA_FLAT_DYNAMIC_FUSE_LEASE_PREP' \
   'P10DC_ORBITCTA_FLAT_DYNAMIC_PIPE2=1' \
   'dynamic_pipe2=1'; do
@@ -59,7 +61,7 @@ fi
 # and current column execution. Check each kernel text with a lightweight parser.
 python3 - "$pipe" <<'PY'
 from pathlib import Path
-import re,sys
+import sys
 s=Path(sys.argv[1]).read_text()
 for name,call in [
  ('forward','p10dc_orbitcta_flat_forward_columns(current);'),
