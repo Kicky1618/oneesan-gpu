@@ -10,7 +10,7 @@ GPUS=8
 ARCH="${ARCH:-native}"
 ROWS="${ROWS:-1}"
 THREADS_LIST="${THREADS_LIST:-128 256}"
-ILP_LIST="${ILP_LIST:-1 2 4}"
+ILP_LIST="${ILP_LIST:-1 2 3 4}"
 PREFIX="${PREFIX:-$ONEESAN_ROOT/work/b300_main_pull_ilp_batch_row${ROWS}_sweep}"
 mkdir -p "$(dirname "$PREFIX")" "$ONEESAN_BUILD_DIR"
 [[ "$ROWS" =~ ^[0-9]+$ ]] && ((ROWS>=1&&ROWS<=28)) || { echo "ROWS must be 1..28" >&2; exit 2; }
@@ -18,7 +18,7 @@ command -v nvidia-smi >/dev/null || { echo "nvidia-smi is required" >&2; exit 2;
 visible="$(nvidia-smi --query-gpu=index --format=csv,noheader | wc -l)"; ((visible>=GPUS)) || { echo "need $GPUS GPUs, visible=$visible" >&2; exit 2; }
 
 for ilp in $ILP_LIST; do
-  case "$ilp" in 1|2|4) ;; *) echo "ILP_LIST supports only 1 2 4" >&2; exit 2;; esac
+  case "$ilp" in 1|2|3|4) ;; *) echo "ILP_LIST supports only 1 2 3 4" >&2; exit 2;; esac
   bin="$ONEESAN_BUILD_DIR/b300_hbm32_batch_n27_ilp${ilp}_rowsweep"
   bout="${PREFIX}.ilp${ilp}.build.out"; berr="${PREFIX}.ilp${ilp}.build.err"
   echo "=== build ILP=$ilp ===" >&2
@@ -31,7 +31,6 @@ for ilp in $ILP_LIST; do
   grep -Fq 'batch_row_limit_env=B300_ROW_LIMIT' "$bout" || { echo "build lost batch row-limit support" >&2; exit 3; }
 done
 
-# Extract register/spill information for the actual main-pull kernel from ptxas.
 python3 - "$PREFIX" $ILP_LIST <<'PY'
 import re,sys,pathlib
 prefix=sys.argv[1]
@@ -39,12 +38,10 @@ for ilp in map(int,sys.argv[2:]):
     p=pathlib.Path(f'{prefix}.ilp{ilp}.build.err')
     text=p.read_text(errors='replace') if p.exists() else ''
     target='main_pull_kernel' if ilp==1 else f'main_pull_kernel_ilp{ilp}'
-    lines=text.splitlines(); regs=[]; ss=[]; sl=[]
-    active=False
+    lines=text.splitlines(); regs=[]; ss=[]; sl=[]; active=False
     for line in lines:
         if 'Function properties for' in line:
-            active=target in line
-            continue
+            active=target in line; continue
         if active:
             m=re.search(r'Used\s+(\d+)\s+registers',line)
             if m: regs.append(int(m.group(1)))
@@ -88,8 +85,7 @@ mem=[];busy=[];sm=[];power=[]
 with open(sys.argv[1],newline='') as f:
     for r in csv.reader(f):
         if len(r)<5: continue
-        try:
-            s=float(r[2].strip());m=float(r[3].strip());p=float(r[4].strip())
+        try:s=float(r[2].strip());m=float(r[3].strip());p=float(r[4].strip())
         except ValueError: continue
         sm.append(s);mem.append(m);power.append(p)
         if s>=50: busy.append(m)
@@ -102,7 +98,6 @@ PY
 
 TSV="${PREFIX}.summary.tsv"
 printf 'ilp\tthreads\tresidue\twall_s\ttag\tmem_avg_pct\tmem_max_pct\tmem_busy_avg_pct\tsm_avg_pct\tpower_avg_w\tsamples\tbusy_samples\n' >"$TSV"
-# Alternate geometry order to avoid giving the last/highest-ILP variant a systematic warm-GPU advantage.
 for threads in $THREADS_LIST; do
   if [[ "$threads" == "128" ]]; then order="$ILP_LIST"; else order="$(tr ' ' '\n' <<<"$ILP_LIST" | tac | tr '\n' ' ')"; fi
   for ilp in $order; do
@@ -118,19 +113,16 @@ with open(p,newline='') as f: rows=list(csv.DictReader(f,delimiter='\t'))
 if not rows: raise SystemExit('no ILP sweep rows')
 res={r['residue'] for r in rows}
 if len(res)!=1: raise SystemExit('ILP sweep residue mismatch: '+repr(sorted(res)))
-for r in rows:
-    r['wall']=float(r['wall_s']);r['mem']=float(r['mem_busy_avg_pct']);r['sm']=float(r['sm_avg_pct'])
-best=min(rows,key=lambda r:r['wall'])
-base=min((r for r in rows if r['ilp']=='1'),key=lambda r:r['wall'],default=None)
-print(f'b300_ilp_sweep_exact_intermediate_match=1')
+for r in rows:r['wall']=float(r['wall_s']);r['mem']=float(r['mem_busy_avg_pct']);r['sm']=float(r['sm_avg_pct'])
+best=min(rows,key=lambda r:r['wall']);base=min((r for r in rows if r['ilp']=='1'),key=lambda r:r['wall'],default=None)
+print('b300_ilp_sweep_exact_intermediate_match=1')
 print(f'b300_ilp_sweep_residue={next(iter(res))}')
 print(f'b300_ilp_sweep_best_ilp={best["ilp"]}')
 print(f'b300_ilp_sweep_best_threads={best["threads"]}')
 print(f'b300_ilp_sweep_best_wall_s={best["wall"]:.9f}')
 print(f'b300_ilp_sweep_best_memctl_busy_avg_pct={best["mem"]:.3f}')
 print(f'b300_ilp_sweep_best_sm_avg_pct={best["sm"]:.3f}')
-if base:
-    print(f'b300_ilp_sweep_speedup_vs_best_ilp1={base["wall"]/best["wall"]:.9f}x')
+if base: print(f'b300_ilp_sweep_speedup_vs_best_ilp1={base["wall"]/best["wall"]:.9f}x')
 print('b300_ilp_sweep_rows:')
 for r in sorted(rows,key=lambda x:(int(x['ilp']),int(x['threads']))):
     print(f'  ilp={r["ilp"]} threads={r["threads"]} wall_s={r["wall"]:.9f} mem_busy={r["mem"]:.3f}% sm={r["sm"]:.3f}%')
