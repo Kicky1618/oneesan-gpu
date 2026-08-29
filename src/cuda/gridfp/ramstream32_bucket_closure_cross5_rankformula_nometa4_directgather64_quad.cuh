@@ -22,6 +22,24 @@ struct P10DCRankFormulaQuadAccum {
     BkczCrossAccum a, b, c, d;
 };
 
+#if P10DC_RANKFORMULA_CPASYNC_PAIR
+__device__ __forceinline__ void p10dc_rankformula_cross_quad_wait3() {
+#if __CUDA_ARCH__ >= 800
+    asm volatile("cp.async.wait_group 3;");
+#endif
+}
+__device__ __forceinline__ void p10dc_rankformula_cross_quad_wait2() {
+#if __CUDA_ARCH__ >= 800
+    asm volatile("cp.async.wait_group 2;");
+#endif
+}
+__device__ __forceinline__ void p10dc_rankformula_cross_quad_wait1() {
+#if __CUDA_ARCH__ >= 800
+    asm volatile("cp.async.wait_group 1;");
+#endif
+}
+#endif
+
 __device__ __forceinline__ P10DCRankFormulaQuadAccum
 p10dc_resolved_low_preimages_cross5_rankformula_nometa4_directgather64_quad_fixed(
     uint32_t h,
@@ -100,20 +118,26 @@ p10dc_resolved_low_preimages_cross5_rankformula_nometa4_directgather64_quad_fixe
     P10DC_QUAD_CPASYNC(14,c0,n2,0); P10DC_QUAD_CPASYNC(15,c1,n2,1); P10DC_QUAD_CPASYNC(16,c2,n2,2); P10DC_QUAD_CPASYNC(17,c3,n2,3); P10DC_QUAD_CPASYNC(18,c4,n2,4); P10DC_QUAD_CPASYNC(19,c5,n2,5); P10DC_QUAD_CPASYNC(20,c6,n2,6); p10dc_rankformula_cpasync_commit();
     P10DC_QUAD_CPASYNC(21,d0,n3,0); P10DC_QUAD_CPASYNC(22,d1,n3,1); P10DC_QUAD_CPASYNC(23,d2,n3,2); P10DC_QUAD_CPASYNC(24,d3,n3,3); P10DC_QUAD_CPASYNC(25,d4,n3,4); P10DC_QUAD_CPASYNC(26,d5,n3,5); P10DC_QUAD_CPASYNC(27,d6,n3,6); p10dc_rankformula_cpasync_commit();
 #undef P10DC_QUAD_CPASYNC
-    p10dc_rankformula_cpasync_wait_all();
 #define P10DC_QUAD_SLOT(i) BkczCrossAccum(*p10dc_rankformula_cpasync_slot(i))
-    const BkczCrossAccum as03=p10dc_rankformula_accum_add(p10dc_rankformula_accum_add(P10DC_QUAD_SLOT(0),P10DC_QUAD_SLOT(1)),p10dc_rankformula_accum_add(P10DC_QUAD_SLOT(2),P10DC_QUAD_SLOT(3)));
-    const BkczCrossAccum bs03=p10dc_rankformula_accum_add(p10dc_rankformula_accum_add(P10DC_QUAD_SLOT(7),P10DC_QUAD_SLOT(8)),p10dc_rankformula_accum_add(P10DC_QUAD_SLOT(9),P10DC_QUAD_SLOT(10)));
-    const BkczCrossAccum cs03=p10dc_rankformula_accum_add(p10dc_rankformula_accum_add(P10DC_QUAD_SLOT(14),P10DC_QUAD_SLOT(15)),p10dc_rankformula_accum_add(P10DC_QUAD_SLOT(16),P10DC_QUAD_SLOT(17)));
-    const BkczCrossAccum ds03=p10dc_rankformula_accum_add(p10dc_rankformula_accum_add(P10DC_QUAD_SLOT(21),P10DC_QUAD_SLOT(22)),p10dc_rankformula_accum_add(P10DC_QUAD_SLOT(23),P10DC_QUAD_SLOT(24)));
-    const BkczCrossAccum as46=p10dc_rankformula_accum_add(p10dc_rankformula_accum_add(P10DC_QUAD_SLOT(4),P10DC_QUAD_SLOT(5)),P10DC_QUAD_SLOT(6));
-    const BkczCrossAccum bs46=p10dc_rankformula_accum_add(p10dc_rankformula_accum_add(P10DC_QUAD_SLOT(11),P10DC_QUAD_SLOT(12)),P10DC_QUAD_SLOT(13));
-    const BkczCrossAccum cs46=p10dc_rankformula_accum_add(p10dc_rankformula_accum_add(P10DC_QUAD_SLOT(18),P10DC_QUAD_SLOT(19)),P10DC_QUAD_SLOT(20));
-    const BkczCrossAccum ds46=p10dc_rankformula_accum_add(p10dc_rankformula_accum_add(P10DC_QUAD_SLOT(25),P10DC_QUAD_SLOT(26)),P10DC_QUAD_SLOT(27));
+#define P10DC_QUAD_REDUCE(base) \
+    p10dc_rankformula_accum_add( \
+        p10dc_rankformula_accum_add( \
+            p10dc_rankformula_accum_add(P10DC_QUAD_SLOT(base),P10DC_QUAD_SLOT((base)+1)), \
+            p10dc_rankformula_accum_add(P10DC_QUAD_SLOT((base)+2),P10DC_QUAD_SLOT((base)+3))), \
+        p10dc_rankformula_accum_add( \
+            p10dc_rankformula_accum_add(P10DC_QUAD_SLOT((base)+4),P10DC_QUAD_SLOT((base)+5)), \
+            P10DC_QUAD_SLOT((base)+6)))
+    p10dc_rankformula_cross_quad_wait3();
+    const BkczCrossAccum sa=P10DC_QUAD_REDUCE(0);
+    p10dc_rankformula_cross_quad_wait2();
+    const BkczCrossAccum sb=P10DC_QUAD_REDUCE(7);
+    p10dc_rankformula_cross_quad_wait1();
+    const BkczCrossAccum sc=P10DC_QUAD_REDUCE(14);
+    p10dc_rankformula_cpasync_wait_all();
+    const BkczCrossAccum sd=P10DC_QUAD_REDUCE(21);
+#undef P10DC_QUAD_REDUCE
 #undef P10DC_QUAD_SLOT
-    return P10DCRankFormulaQuadAccum{
-        p10dc_rankformula_accum_add(as03,as46),p10dc_rankformula_accum_add(bs03,bs46),
-        p10dc_rankformula_accum_add(cs03,cs46),p10dc_rankformula_accum_add(ds03,ds46)};
+    return P10DCRankFormulaQuadAccum{sa,sb,sc,sd};
 #else
     BkczCrossAccum av0=0,av1=0,av2=0,av3=0,bv0=0,bv1=0,bv2=0,bv3=0;
     BkczCrossAccum cv0=0,cv1=0,cv2=0,cv3=0,dv0=0,dv1=0,dv2=0,dv3=0;
@@ -125,7 +149,6 @@ p10dc_resolved_low_preimages_cross5_rankformula_nometa4_directgather64_quad_fixe
     const BkczCrossAccum bs03=p10dc_rankformula_accum_add(p10dc_rankformula_accum_add(bv0,bv1),p10dc_rankformula_accum_add(bv2,bv3));
     const BkczCrossAccum cs03=p10dc_rankformula_accum_add(p10dc_rankformula_accum_add(cv0,cv1),p10dc_rankformula_accum_add(cv2,cv3));
     const BkczCrossAccum ds03=p10dc_rankformula_accum_add(p10dc_rankformula_accum_add(dv0,dv1),p10dc_rankformula_accum_add(dv2,dv3));
-
     BkczCrossAccum av4=0,av5=0,av6=0,bv4=0,bv5=0,bv6=0,cv4=0,cv5=0,cv6=0,dv4=0,dv5=0,dv6=0;
     if(n0>4)av4=BkczCrossAccum(__ldg(source_row+a4)); if(n0>5)av5=BkczCrossAccum(__ldg(source_row+a5)); if(n0>6)av6=BkczCrossAccum(__ldg(source_row+a6));
     if(n1>4)bv4=BkczCrossAccum(__ldg(source_row+b4)); if(n1>5)bv5=BkczCrossAccum(__ldg(source_row+b5)); if(n1>6)bv6=BkczCrossAccum(__ldg(source_row+b6));
