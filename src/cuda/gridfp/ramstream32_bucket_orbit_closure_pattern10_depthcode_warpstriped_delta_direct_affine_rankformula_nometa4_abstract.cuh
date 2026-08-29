@@ -1,6 +1,13 @@
 #pragma once
 
+#ifndef P10DC_RANKFORMULA_QUAD_MLP
+#define P10DC_RANKFORMULA_QUAD_MLP 0
+#endif
+#if P10DC_RANKFORMULA_QUAD_MLP
+#include "ramstream32_bucket_closure_pattern10_depthcode_delta_direct_affine_rankformula_nometa4_abstract_quad.cuh"
+#else
 #include "ramstream32_bucket_closure_pattern10_depthcode_delta_direct_affine_rankformula_nometa4_abstract.cuh"
+#endif
 
 #ifndef P10DC_RANKFORMULA_PRECTX_FORWARD
 #define P10DC_RANKFORMULA_PRECTX_FORWARD 0
@@ -61,6 +68,14 @@ static_assert(P10DC_WARPSTRIPED_COL_ILP == 2 || P10DC_WARPSTRIPED_COL_ILP == 4,
 #endif
 #define P10DC_WARPSTRIPED_PLAN_SUM_PAIR_LOCAL 1
 #endif
+#if P10DC_RANKFORMULA_QUAD_MLP
+static_assert(P10DC_WARPSTRIPED_COL_ILP == 4,
+              "QUAD_MLP requires COL_ILP=4");
+#define P10DC_WARPSTRIPED_PLAN_SUM_QUAD(c,db,lr0,lr1,lr2,lr3,out0,out1,out2,out3) \
+    p10dc_direct_resolved_high_plan_sum_quad_cross5_rankformula_nometa4_abstract( \
+        (c),(db),(lr0),(lr1),(lr2),(lr3),(out0),(out1),(out2),(out3))
+#define P10DC_WARPSTRIPED_PLAN_SUM_QUAD_LOCAL 1
+#endif
 #define bucket_high_orbit_closure_pattern10_depthcode_warpstriped_kernel \
     bucket_high_orbit_closure_pattern10_depthcode_warpstriped_delta_direct_affine_rankformula_nometa4_abstract_kernel
 #define bucket_reverse_high_pattern10_depthcode_warpstriped_kernel \
@@ -68,6 +83,10 @@ static_assert(P10DC_WARPSTRIPED_COL_ILP == 2 || P10DC_WARPSTRIPED_COL_ILP == 4,
 #include "ramstream32_bucket_orbit_closure_pattern10_depthcode_warpstriped.cuh"
 #undef bucket_reverse_high_pattern10_depthcode_warpstriped_kernel
 #undef bucket_high_orbit_closure_pattern10_depthcode_warpstriped_kernel
+#ifdef P10DC_WARPSTRIPED_PLAN_SUM_QUAD_LOCAL
+#undef P10DC_WARPSTRIPED_PLAN_SUM_QUAD_LOCAL
+#undef P10DC_WARPSTRIPED_PLAN_SUM_QUAD
+#endif
 #ifdef P10DC_WARPSTRIPED_PLAN_SUM_PAIR_LOCAL
 #undef P10DC_WARPSTRIPED_PLAN_SUM_PAIR_LOCAL
 #undef P10DC_WARPSTRIPED_PLAN_SUM_PAIR
