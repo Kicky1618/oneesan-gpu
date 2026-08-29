@@ -100,19 +100,35 @@ disallowed="$(field disallowed "$profile_line")"
 zero_frac="$(field zero_frac "$profile_line")"
 nonzero_frac="$(field nonzero_frac "$profile_line")"
 avg_popcount="$(field avg_popcount "$profile_line")"
-for x in "$total" "$m0" "$m4" "$m6" "$other" "$disallowed" "$zero_frac" "$nonzero_frac" "$avg_popcount"; do
+warp_events="$(field warp_events "$profile_line")"
+warp_all_zero="$(field warp_all_zero "$profile_line")"
+warp_all_nonzero="$(field warp_all_nonzero "$profile_line")"
+warp_mixed="$(field warp_mixed "$profile_line")"
+warp_all_zero_frac="$(field warp_all_zero_frac "$profile_line")"
+warp_all_nonzero_frac="$(field warp_all_nonzero_frac "$profile_line")"
+warp_mixed_frac="$(field warp_mixed_frac "$profile_line")"
+avg_active_lanes="$(field avg_active_lanes "$profile_line")"
+for x in "$total" "$m0" "$m4" "$m6" "$other" "$disallowed" "$zero_frac" "$nonzero_frac" "$avg_popcount" \
+         "$warp_events" "$warp_all_zero" "$warp_all_nonzero" "$warp_mixed" \
+         "$warp_all_zero_frac" "$warp_all_nonzero_frac" "$warp_mixed_frac" "$avg_active_lanes"; do
   [[ -n "$x" ]] || { echo "failed to parse profile output" >&2; exit 6; }
 done
-(( total > 0 )) || { echo "rankmask profile counted no traffic" >&2; exit 7; }
+(( total > 0 && warp_events > 0 )) || { echo "rankmask profile counted no traffic" >&2; exit 7; }
 [[ "$m4" == 0 && "$m6" == 0 && "$other" == 0 && "$disallowed" == 0 ]] || {
   echo "runtime rankmask shape violation m4=$m4 m6=$m6 other=$other disallowed=$disallowed" >&2
   exit 8
 }
+if (( warp_all_zero + warp_all_nonzero + warp_mixed != warp_events )); then
+  echo "warp profile partition mismatch events=$warp_events zero=$warp_all_zero nonzero=$warp_all_nonzero mixed=$warp_mixed" >&2
+  exit 9
+fi
 
 table_zero_frac="$(awk 'BEGIN { printf "%.9f", 5855.0/6075.0 }')"
 zero_ratio="$(awk -v a="$zero_frac" -v b="$table_zero_frac" 'BEGIN { if (b == 0) print "inf"; else printf "%.6f", a / b }')"
 printf 'rankchunk32-rankmask-profile OK n=%s modulus=%s residue=%s total_chunks=%s\n' "$N" "$MOD" "$residue" "$total"
 printf 'actual_zero_frac=%s actual_nonzero_frac=%s actual_avg_popcount=%s\n' "$zero_frac" "$nonzero_frac" "$avg_popcount"
+printf 'warp_events=%s warp_all_zero_frac=%s warp_all_nonzero_frac=%s warp_mixed_frac=%s avg_active_lanes=%s\n' \
+  "$warp_events" "$warp_all_zero_frac" "$warp_all_nonzero_frac" "$warp_mixed_frac" "$avg_active_lanes"
 printf 'table_space_zero_frac=%s actual_to_table_zero_ratio=%s\n' "$table_zero_frac" "$zero_ratio"
 printf 'rankmask_allowed=0,1,2,3,5,7 runtime_disallowed=0 warp_aggregated=1\n'
 printf 'timing_valid_for_ab=0 note=profiling_instrumentation_intentionally_distorts_kernel_time\n'
