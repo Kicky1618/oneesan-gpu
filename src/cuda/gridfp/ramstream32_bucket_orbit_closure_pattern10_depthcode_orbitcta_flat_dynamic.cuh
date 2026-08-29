@@ -15,11 +15,21 @@
 #ifndef P10DC_RANKFORMULA_PRECTX_FLAT_BID_FUSED
 #define P10DC_RANKFORMULA_PRECTX_FLAT_BID_FUSED 0
 #endif
+#ifndef P10DC_ORBITCTA_FLAT_DYNAMIC_BATCH
+#define P10DC_ORBITCTA_FLAT_DYNAMIC_BATCH 1
+#endif
+static_assert(P10DC_ORBITCTA_FLAT_DYNAMIC_BATCH == 1 ||
+              P10DC_ORBITCTA_FLAT_DYNAMIC_BATCH == 2 ||
+              P10DC_ORBITCTA_FLAT_DYNAMIC_BATCH == 4 ||
+              P10DC_ORBITCTA_FLAT_DYNAMIC_BATCH == 8 ||
+              P10DC_ORBITCTA_FLAT_DYNAMIC_BATCH == 16,
+              "dynamic flat queue batch must be 1,2,4,8,16");
 
 // One 32-bit queue head per device. Graph capture inserts a reset kernel before
-// every HIGH position, then resident CTAs pull orbit ids until the queue is
-// exhausted. This trades one uncontended-ish global atomic per orbit for exact
-// dynamic balancing of variable-width orbit work.
+// every HIGH position. Each resident CTA atomically leases BATCH consecutive
+// orbit ids, then processes that lease locally. BATCH=1 is the pure dynamic
+// queue; larger batches reduce atomic contention at the cost of a bounded
+// BATCH-orbit scheduling tail.
 __device__ uint32_t D_P10DC_ORBITCTA_FLAT_NEXT = 0;
 
 __global__ void p10dc_orbitcta_flat_dynamic_reset_kernel() {
@@ -163,6 +173,7 @@ __global__ void bucket_high_orbit_closure_pattern10_depthcode_orbitcta_flat_dyna
     const uint32_t pi = uint32_t((TARGET_W - 1) - p);
     const uint32_t base_off = pi * D_BKF_HIGH_PITCH;
     extern __shared__ unsigned long long storage[];
+    __shared__ uint32_t lease_base;
     P10DC_ORBITCTA_CTX& c = *reinterpret_cast<P10DC_ORBITCTA_CTX*>(storage);
     if (threadIdx.x == 0) {
         const uint32_t nn0 = D_BKF_HIGH_NN_OFF[base_off];
@@ -174,17 +185,24 @@ __global__ void bucket_high_orbit_closure_pattern10_depthcode_orbitcta_flat_dyna
         c.total = c.n0 + (nr1 - nr0);
     }
     __syncthreads();
+    constexpr uint32_t BATCH = uint32_t(P10DC_ORBITCTA_FLAT_DYNAMIC_BATCH);
     for (;;) {
-        if (threadIdx.x == 0) {
-            c.valid = 0;
-            const uint32_t k = atomicAdd(&D_P10DC_ORBITCTA_FLAT_NEXT, 1u);
-            if (k >= c.total) c.valid = 2;
-            else p10dc_orbitcta_flat_dynamic_prepare_forward(c, k, base_off, nblocks, p);
+        if (threadIdx.x == 0)
+            lease_base = atomicAdd(&D_P10DC_ORBITCTA_FLAT_NEXT, BATCH);
+        __syncthreads();
+        if (lease_base >= c.total) break;
+#pragma unroll
+        for (uint32_t j = 0; j < BATCH; ++j) {
+            if (threadIdx.x == 0) {
+                c.valid = 0;
+                const uint32_t k = lease_base + j;
+                if (k < c.total)
+                    p10dc_orbitcta_flat_dynamic_prepare_forward(c, k, base_off, nblocks, p);
+            }
+            __syncthreads();
+            if (c.valid == 1) p10dc_orbitcta_flat_forward_columns(c);
+            __syncthreads();
         }
-        __syncthreads();
-        if (c.valid == 2) break;
-        if (c.valid == 1) p10dc_orbitcta_flat_forward_columns(c);
-        __syncthreads();
     }
 }
 
@@ -195,6 +213,7 @@ __global__ void bucket_reverse_high_pattern10_depthcode_orbitcta_flat_dynamic_ke
     const uint32_t base_off = pi * D_RS54_PITCH;
     const bool edge = p == TARGET_W - 1;
     extern __shared__ unsigned long long storage[];
+    __shared__ uint32_t lease_base;
     P10DC_ORBITCTA_CTX& c = *reinterpret_cast<P10DC_ORBITCTA_CTX*>(storage);
     if (threadIdx.x == 0) {
         const uint32_t nn0 = D_RS54_HIGH_NN_OFF[base_off];
@@ -208,16 +227,23 @@ __global__ void bucket_reverse_high_pattern10_depthcode_orbitcta_flat_dynamic_ke
         c.total = c.n0 + c.n1 + (nl1 - nl0);
     }
     __syncthreads();
+    constexpr uint32_t BATCH = uint32_t(P10DC_ORBITCTA_FLAT_DYNAMIC_BATCH);
     for (;;) {
-        if (threadIdx.x == 0) {
-            c.valid = 0;
-            const uint32_t k = atomicAdd(&D_P10DC_ORBITCTA_FLAT_NEXT, 1u);
-            if (k >= c.total) c.valid = 2;
-            else p10dc_orbitcta_flat_dynamic_prepare_reverse(c, k, base_off, nblocks, p, edge);
+        if (threadIdx.x == 0)
+            lease_base = atomicAdd(&D_P10DC_ORBITCTA_FLAT_NEXT, BATCH);
+        __syncthreads();
+        if (lease_base >= c.total) break;
+#pragma unroll
+        for (uint32_t j = 0; j < BATCH; ++j) {
+            if (threadIdx.x == 0) {
+                c.valid = 0;
+                const uint32_t k = lease_base + j;
+                if (k < c.total)
+                    p10dc_orbitcta_flat_dynamic_prepare_reverse(c, k, base_off, nblocks, p, edge);
+            }
+            __syncthreads();
+            if (c.valid == 1) p10dc_orbitcta_flat_reverse_columns(c, edge);
+            __syncthreads();
         }
-        __syncthreads();
-        if (c.valid == 2) break;
-        if (c.valid == 1) p10dc_orbitcta_flat_reverse_columns(c, edge);
-        __syncthreads();
     }
 }
