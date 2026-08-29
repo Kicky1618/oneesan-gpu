@@ -14,18 +14,19 @@ mkdir -p "$(dirname "$PREFIX")"
 getv(){ local k="$1" f="$2";sed -nE "s/^${k}=([^[:space:]]+).*/\\1/p" "$f"|tail -n1; }
 
 if [[ "$RECALIBRATE" == 1 || ! -s "$CAL_LOG" ]]; then
-  echo '=== nextgen selector: partial-row forced calibration ===' >&2
-  ARCH="$ARCH" MOD="$PRIME" ROWS="${CAL_ROWS:-1}" TARGET_MIB="$TARGET_MIB" MAX_WINDOW="$MAX_WINDOW" THREADS_LIST="${THREADS_LIST:-128 256 512}" HIGHDROP_LIST="${HIGHDROP_LIST:-0 1}" REPEATS="${REPEATS:-1}" MAIN_MIN_SPEEDUP="${MAIN_MIN_SPEEDUP:-1.01}" BLOCK_MIN_SPEEDUP="${BLOCK_MIN_SPEEDUP:-1.01}" PREFIX="$CAL_PREFIX" \
-    bash "$ONEESAN_ROOT/scripts/bench/b300-nextgen-calibrate.sh" | tee "$CAL_LOG"
+  echo '=== nextgen selector: partial-row forced calibration A/B/C ===' >&2
+  ARCH="$ARCH" MOD="$PRIME" ROWS="${CAL_ROWS:-1}" TARGET_MIB="$TARGET_MIB" MAX_WINDOW="$MAX_WINDOW" THREADS_LIST="${THREADS_LIST:-128 256 512}" HIGHDROP_LIST="${HIGHDROP_LIST:-0 1}" REPEATS="${REPEATS:-1}" REGCAP_LIST="${REGCAP_LIST:-0 96 128 160 192 224}" MAIN_MIN_SPEEDUP="${MAIN_MIN_SPEEDUP:-1.01}" BLOCK_MIN_SPEEDUP="${BLOCK_MIN_SPEEDUP:-1.01}" LATENCY_MIN_SPEEDUP="${LATENCY_MIN_SPEEDUP:-1.01}" PREFIX="$CAL_PREFIX" \
+    bash "$ONEESAN_ROOT/scripts/bench/b300-nextgen-calibrate-latency.sh" | tee "$CAL_LOG"
 fi
-[[ "$(getv b300_nextgen_calibrate_exact_gates "$CAL_LOG")" == 1 ]] || { echo 'nextgen calibration exact gate missing' >&2; exit 3; }
-RES="$(getv b300_nextgen_calibrate_residue "$CAL_LOG")"
-FINAL_HIGH="$(getv b300_nextgen_calibrate_final_high_drop "$CAL_LOG")"; FINAL_ILP="$(getv b300_nextgen_calibrate_final_ilp "$CAL_LOG")"; FINAL_CG="$(getv b300_nextgen_calibrate_final_random_cg "$CAL_LOG")"; FINAL_DUAL="$(getv b300_nextgen_calibrate_final_dualmask "$CAL_LOG")"; FINAL_BATCH="$(getv b300_nextgen_calibrate_final_closure_batch "$CAL_LOG")"; FINAL_THREADS="$(getv b300_nextgen_calibrate_final_threads "$CAL_LOG")"
-MAIN_HIGH="$(getv b300_nextgen_calibrate_main_high_drop "$CAL_LOG")"; MAIN_ILP="$(getv b300_nextgen_calibrate_main_ilp "$CAL_LOG")"; MAIN_CG="$(getv b300_nextgen_calibrate_main_random_cg "$CAL_LOG")"; MAIN_THREADS="$(getv b300_nextgen_calibrate_main_only_threads "$CAL_LOG")"
-BASE_HIGH="$(getv b300_nextgen_calibrate_global_base_high_drop "$CAL_LOG")"; BASE_THREADS="$(getv b300_nextgen_calibrate_global_base_threads "$CAL_LOG")"
+[[ "$(getv b300_nextgen_latency_calibrate_exact_gates "$CAL_LOG")" == 1 ]] || { echo 'nextgen latency calibration exact gate missing' >&2; exit 3; }
+RES="$(getv b300_nextgen_latency_calibrate_residue "$CAL_LOG")"
+FINAL_HIGH="$(getv b300_nextgen_latency_calibrate_final_high_drop "$CAL_LOG")"; FINAL_ILP="$(getv b300_nextgen_latency_calibrate_final_ilp "$CAL_LOG")"; FINAL_CG="$(getv b300_nextgen_latency_calibrate_final_random_cg "$CAL_LOG")"; FINAL_PRE="$(getv b300_nextgen_latency_calibrate_final_prefetch_l2 "$CAL_LOG")"; FINAL_DUAL="$(getv b300_nextgen_latency_calibrate_final_dualmask "$CAL_LOG")"; FINAL_BATCH="$(getv b300_nextgen_latency_calibrate_final_closure_batch "$CAL_LOG")"; FINAL_CAP="$(getv b300_nextgen_latency_calibrate_final_maxrregcount "$CAL_LOG")"; FINAL_THREADS="$(getv b300_nextgen_latency_calibrate_final_threads "$CAL_LOG")"
+UNCAP_HIGH="$(getv b300_nextgen_latency_calibrate_uncapped_high_drop "$CAL_LOG")"; UNCAP_ILP="$(getv b300_nextgen_latency_calibrate_uncapped_ilp "$CAL_LOG")"; UNCAP_CG="$(getv b300_nextgen_latency_calibrate_uncapped_random_cg "$CAL_LOG")"; UNCAP_DUAL="$(getv b300_nextgen_latency_calibrate_uncapped_dualmask "$CAL_LOG")"; UNCAP_BATCH="$(getv b300_nextgen_latency_calibrate_uncapped_closure_batch "$CAL_LOG")"; UNCAP_THREADS="$(getv b300_nextgen_latency_calibrate_uncapped_threads "$CAL_LOG")"
+MAIN_HIGH="$(getv b300_nextgen_latency_calibrate_main_high_drop "$CAL_LOG")"; MAIN_ILP="$(getv b300_nextgen_latency_calibrate_main_ilp "$CAL_LOG")"; MAIN_CG="$(getv b300_nextgen_latency_calibrate_main_random_cg "$CAL_LOG")"; MAIN_THREADS="$(getv b300_nextgen_latency_calibrate_main_threads "$CAL_LOG")"
+BASE_HIGH="$(getv b300_nextgen_latency_calibrate_global_base_high_drop "$CAL_LOG")"; BASE_THREADS="$(getv b300_nextgen_latency_calibrate_global_base_threads "$CAL_LOG")"
 
-# Optional expensive n=27 bucket refinements. The final forced-vs-bucket race is
-# still single-pass; these are explicit calibration stages, disabled by default.
+# Optional expensive n=27 bucket refinements. Disabled by default; if enabled,
+# they run before the single-pass final arbitration.
 BUCKET_PROFILE="$PROFILE_FILE"
 if [[ "$N27_PRODUCER_WEIGHT_RACE" == 1 ]]; then
   OUT="${PREFIX}.producer-weight.env"
@@ -40,15 +41,12 @@ if [[ "$N27_PRODUCER_ADAPTIVE_RACE" == 1 ]]; then
   [[ -s "$OUT" ]] || exit 4; BUCKET_PROFILE="$OUT"
 fi
 
-# Normalize the adaptive threshold into the compile-time key consumed by the
-# build-only shim, while preserving the chosen profile verbatim otherwise.
 NORMAL_PROFILE="${PREFIX}.profile.normalized.env"
 python3 - "$BUCKET_PROFILE" "$NORMAL_PROFILE" <<'PY'
 import sys
 src,out=sys.argv[1:];lines=open(src).read().splitlines();vals={}
 for line in lines:
- if '=' in line:
-  k,v=line.split('=',1);vals[k]=v
+ if '=' in line:k,v=line.split('=',1);vals[k]=v
 pac=vals.get('ORBITCTA_FLAT_DYNAMIC_PIPE2_PRODUCER_ADAPTIVE_COLS',vals.get('ORBIT_N27_PRODUCER_ADAPTIVE_COLS','0'))
 try:
  if int(pac)<0:raise ValueError
@@ -66,21 +64,22 @@ BUCKET_PROFILE="$NORMAL_PROFILE"
 FORCED_SET="${PREFIX}.forced.tsv"; printf 'label\tbinary\tthreads\n' >"$FORCED_SET"
 declare -A SEEN_CFG=()
 build_candidate(){
-  local role="$1" h="$2" ilp="$3" cg="$4" dual="$5" batch="$6" t="$7"
-  local cfg="h${h}_i${ilp}_c${cg}_d${dual}_b${batch}"; [[ -z "${SEEN_CFG[$cfg]+x}" ]] || { echo "skip duplicate forced config role=$role cfg=$cfg" >&2; return 0; }; SEEN_CFG[$cfg]=1
+  local role="$1" h="$2" ilp="$3" cg="$4" pre="$5" dual="$6" batch="$7" cap="$8" t="$9"
+  local cfg="h${h}_i${ilp}_c${cg}_p${pre}_d${dual}_b${batch}_r${cap}"; [[ -z "${SEEN_CFG[$cfg]+x}" ]] || { echo "skip duplicate forced config role=$role cfg=$cfg" >&2; return 0; }; SEEN_CFG[$cfg]=1
   local label="${role}_${cfg}_t${t}" bin="$ONEESAN_BUILD_DIR/b300_nextgen_${cfg}_n27" bout="${PREFIX}.${role}.build.out" berr="${PREFIX}.${role}.build.err"
   echo "=== nextgen selector: build $label ===" >&2
-  N=27 ARCH="$ARCH" OUT="$bin" HIGH_DROP_CHUNK="$h" RECURRENCE_ILP="$ilp" RANDOM_CG="$cg" DUALMASK="$dual" CLOSURE_BATCH="$batch" BUILD_ERR="$berr" PTXAS_VERBOSE=1 \
+  N=27 ARCH="$ARCH" OUT="$bin" HIGH_DROP_CHUNK="$h" RECURRENCE_ILP="$ilp" RANDOM_CG="$cg" PREFETCH_L2="$pre" DUALMASK="$dual" CLOSURE_BATCH="$batch" MAXRREGCOUNT="$cap" BUILD_ERR="$berr" PTXAS_VERBOSE=1 \
     bash "$ONEESAN_ROOT/scripts/build/b300-forced-nextgen.sh" >"$bout" 2>"${PREFIX}.${role}.build.driver.err"
   [[ -x "$bin" ]] || { echo "missing built candidate $bin" >&2; exit 5; }
-  grep -Fq "nextgen_forced=1 high_drop_chunk=$h recurrence_ilp=$ilp random_cg=$cg dualmask=$dual closure_batch=$batch" "$bout"
+  grep -Fq "nextgen_forced=1 high_drop_chunk=$h recurrence_ilp=$ilp random_cg=$cg prefetch_l2=$pre dualmask=$dual closure_batch=$batch maxrregcount=$cap" "$bout"
   printf '%s\t%s\t%s\n' "$label" "$bin" "$t" >>"$FORCED_SET"
 }
-# Order matters for deduplication: retain the most transformed/retuned candidate
-# first, then main-only, then the conservative global ILP2 baseline.
-build_candidate final "$FINAL_HIGH" "$FINAL_ILP" "$FINAL_CG" "$FINAL_DUAL" "$FINAL_BATCH" "$FINAL_THREADS"
-build_candidate main "$MAIN_HIGH" "$MAIN_ILP" "$MAIN_CG" 0 0 "$MAIN_THREADS"
-build_candidate base "$BASE_HIGH" 2 0 0 0 "$BASE_THREADS"
+# Priority order provides automatic dedupe while retaining progressively more
+# conservative fallbacks for the complete-prime race.
+build_candidate final "$FINAL_HIGH" "$FINAL_ILP" "$FINAL_CG" "$FINAL_PRE" "$FINAL_DUAL" "$FINAL_BATCH" "$FINAL_CAP" "$FINAL_THREADS"
+build_candidate uncapped "$UNCAP_HIGH" "$UNCAP_ILP" "$UNCAP_CG" 0 "$UNCAP_DUAL" "$UNCAP_BATCH" 0 "$UNCAP_THREADS"
+build_candidate main "$MAIN_HIGH" "$MAIN_ILP" "$MAIN_CG" 0 0 0 0 "$MAIN_THREADS"
+build_candidate base "$BASE_HIGH" 2 0 0 0 0 0 "$BASE_THREADS"
 FORCED_COUNT=$(( $(wc -l <"$FORCED_SET") - 1 )); ((FORCED_COUNT>=1)) || exit 5
 
 echo "NEXTGEN FORCED SET candidates=$FORCED_COUNT calibration_residue=$RES" >&2; cat "$FORCED_SET" >&2
