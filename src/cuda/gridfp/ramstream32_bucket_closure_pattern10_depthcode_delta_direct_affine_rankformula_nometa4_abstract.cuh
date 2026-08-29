@@ -40,6 +40,9 @@ static_assert(!(P10DC_RANKFORMULA_DIRECTGATHER64 && P10DC_RANKFORMULA_PREFETCH_N
 #endif
 #if P10DC_RANKFORMULA_PAIR_MLP
 #include "ramstream32_bucket_closure_cross5_rankformula_nometa4_abstract_pair.cuh"
+#if P10DC_RANKFORMULA_DIRECTGATHER64
+#include "ramstream32_bucket_closure_cross5_rankformula_nometa4_directgather64_pair.cuh"
+#endif
 #endif
 #else
 #include "ramstream32_bucket_closure_cross5_rankformula_nometa4_abstract.cuh"
@@ -251,9 +254,15 @@ p10dc_direct_resolved_high_plan_sum_pair_cross5_rankformula_nometa4_abstract(
 ) {
     BkczCrossAccum cross0 = 0, cross1 = 0;
     if (c.cross_depth) {
+#if P10DC_RANKFORMULA_DIRECTGATHER64
+        const auto cross =
+            p10dc_resolved_low_preimages_cross5_rankformula_nometa4_directgather64_pair_fixed(
+                db.hs, lr0, lr1, c.cross_depth, c.cross_base);
+#else
         const auto cross =
             p10dc_resolved_low_preimages_cross5_rankformula_nometa4_abstract_pair_fixed(
                 db.hs, lr0, lr1, c.cross_depth, c.cross_base);
+#endif
         cross0 = cross.a;
         cross1 = cross.b;
     }
