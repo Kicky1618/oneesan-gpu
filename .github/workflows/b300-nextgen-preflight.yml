@@ -19,6 +19,7 @@ on:
       - 'scripts/bench/b300-grand-selector-contract-preflight.sh'
       - 'scripts/bench/b300-grand-exact-promotion-preflight.sh'
       - 'scripts/bench/b300-exact-checkpoint-compat-preflight.py'
+      - 'scripts/bench/b300-exact-result-verifier-preflight.py'
       - 'scripts/bench/b300-main-recurrence-ilp-partition-proof.py'
       - 'scripts/bench/b300-mainrec-hybrid-ilp8-partition-proof.py'
       - 'scripts/bench/b300-mainrec-hybrid-ilp8-transform-preflight.sh'
@@ -26,6 +27,7 @@ on:
       - 'scripts/bench/b300-joint-nextgen-hybrid8-preflight.sh'
       - 'scripts/bench/b300x8-ilp8-nextself-staged-ab.sh'
       - 'scripts/solve/solve_b300_exact_batch.py'
+      - 'scripts/solve/verify_b300_exact_result.py'
       - 'scripts/run/b300x8-nextgen-select.sh'
       - 'scripts/run/b300x8-nextgen-hybrid8-staged-fullprime-race.sh'
       - 'scripts/run/b300x8-nextgen-hybrid8-nextself-staged-fullprime-race.sh'
@@ -37,6 +39,7 @@ on:
       - 'scripts/run/b300x8-race-external-forced-profiled-once.sh'
       - 'scripts/run/b300x8-grand-firstpass.sh'
       - 'scripts/run/b300x8-grand-promote-exact.sh'
+      - 'scripts/run/b300x8-grand-verify-exact.sh'
       - 'src/cpp/probes/b300_low_window_drop_cache_proof.cpp'
       - '.github/workflows/b300-nextgen-preflight.yml'
   pull_request:
@@ -57,6 +60,7 @@ on:
       - 'scripts/bench/b300-grand-selector-contract-preflight.sh'
       - 'scripts/bench/b300-grand-exact-promotion-preflight.sh'
       - 'scripts/bench/b300-exact-checkpoint-compat-preflight.py'
+      - 'scripts/bench/b300-exact-result-verifier-preflight.py'
       - 'scripts/bench/b300-main-recurrence-ilp-partition-proof.py'
       - 'scripts/bench/b300-mainrec-hybrid-ilp8-partition-proof.py'
       - 'scripts/bench/b300-mainrec-hybrid-ilp8-transform-preflight.sh'
@@ -64,6 +68,7 @@ on:
       - 'scripts/bench/b300-joint-nextgen-hybrid8-preflight.sh'
       - 'scripts/bench/b300x8-ilp8-nextself-staged-ab.sh'
       - 'scripts/solve/solve_b300_exact_batch.py'
+      - 'scripts/solve/verify_b300_exact_result.py'
       - 'scripts/run/b300x8-nextgen-select.sh'
       - 'scripts/run/b300x8-nextgen-hybrid8-staged-fullprime-race.sh'
       - 'scripts/run/b300x8-nextgen-hybrid8-nextself-staged-fullprime-race.sh'
@@ -75,6 +80,7 @@ on:
       - 'scripts/run/b300x8-race-external-forced-profiled-once.sh'
       - 'scripts/run/b300x8-grand-firstpass.sh'
       - 'scripts/run/b300x8-grand-promote-exact.sh'
+      - 'scripts/run/b300x8-grand-verify-exact.sh'
       - 'src/cpp/probes/b300_low_window_drop_cache_proof.cpp'
       - '.github/workflows/b300-nextgen-preflight.yml'
   workflow_dispatch:
@@ -108,3 +114,7 @@ jobs:
         run: bash scripts/bench/b300-grand-selector-contract-preflight.sh
       - name: Validate grand exact promotion and checkpoint compatibility
         run: bash scripts/bench/b300-grand-exact-promotion-preflight.sh
+      - name: Validate independent exact CRT verifier
+        run: |
+          bash -n scripts/run/b300x8-grand-verify-exact.sh
+          python3 scripts/bench/b300-exact-result-verifier-preflight.py
