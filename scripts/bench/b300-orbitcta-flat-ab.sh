@@ -6,7 +6,7 @@ N="${N:-21}"; MOD="${MOD:-4294967291}"; EXPECT="${EXPECT:-998035516}"; NGPU="${N
 ARCH="${ARCH:-sm_103}"; TARGET_MIB="${TARGET_MIB:-16384}"; MAX_WINDOW="${MAX_WINDOW:-14}"
 THREADS="${BUCKET_THREADS:-256}"; ORBIT_GY="${BUCKET_ORBITCTA_GRID_Y:-128}"
 LOW_GX="${BUCKET_LOW_GRID_X:-16}"; LOW_GY="${BUCKET_LOW_GRID_Y:-8}"
-FLAT_PER_SM_LIST="${FLAT_PER_SM_LIST:-1 2 4 8}"; REPEATS="${REPEATS:-1}"
+FLAT_PER_SM_LIST="${FLAT_PER_SM_LIST:-auto 1 2 4 8}"; REPEATS="${REPEATS:-1}"
 SPARSE64="${DIRECTGATHER_SPARSE64:-1}"; SORT_RANKS="${DIRECTGATHER_SORT_RANKS:-0}"
 COL_ILP="${ORBITCTA_COL_ILP:-2}"; PAIR_MLP="${PAIR_MLP:-1}"; CPASYNC_PAIR="${CPASYNC_PAIR:-0}"
 WINDOW4="${RANKFORMULA_MLP_WINDOW4:-1}"; PM_ACCUM="${PM_ACCUM:-1}"
@@ -41,7 +41,7 @@ COMMON=(N="$N" ARCH="$ARCH" DIRECTGATHER64=1 DIRECTGATHER_SPARSE64="$SPARSE64" D
 ORD_BIN="$ONEESAN_BUILD_DIR/b300_orbitcta_flat_ab_ordinary_n${N}"
 FLAT_BIN="$ONEESAN_BUILD_DIR/b300_orbitcta_flat_ab_flat_n${N}"
 env "${COMMON[@]}" ORBITCTA_FLAT=0 OUT="$ORD_BIN" bash "$ONEESAN_ROOT/scripts/build/b300-directgather-orbitcta.sh" >"$LOGDIR/ordinary.build.out" 2>"$LOGDIR/ordinary.build.err"
-env "${COMMON[@]}" ORBITCTA_FLAT=1 OUT="$FLAT_BIN" bash "$ONEESAN_ROOT/scripts/build/b300-directgather-orbitcta.sh" >"$LOGDIR/flat.build.out" 2>"$LOGDIR/flat.build.err"
+env "${COMMON[@]}" ORBITCTA_FLAT=1 ORBITCTA_FLAT_CHUNK=1 OUT="$FLAT_BIN" bash "$ONEESAN_ROOT/scripts/build/b300-directgather-orbitcta.sh" >"$LOGDIR/flat.build.out" 2>"$LOGDIR/flat.build.err"
 
 field(){ local k="$1" l="$2"; sed -nE "s/(^|.*[[:space:]])${k}=([^[:space:]]+).*/\\2/p" <<<"$l" | tail -n1; }
 sample(){ local pid="$1" out="$2"; : >"$out"; while kill -0 "$pid" 2>/dev/null; do nvidia-smi --query-gpu=utilization.gpu,utilization.memory --format=csv,noheader,nounits 2>/dev/null | awk -F',' '{g=$1+0;m=$2+0;sg+=g;sm+=m;if(g>mg)mg=g;if(m>mm)mm=m;n++}END{if(n)printf "%.6f %.6f %d %d\n",sg/n,sm/n,mg,mm}' >>"$out" || true; sleep "$SAMPLE_INTERVAL"; done; }
@@ -50,8 +50,14 @@ printf 'mode\tflat\tblocks_per_sm\trepeat\tresidue\twall_s\tforward_high_s\treve
 run_one(){
   local label="$1" flat="$2" psm="$3" bin="$4" rep="$5"
   local so="$LOGDIR/${label}_r${rep}.out" se="$LOGDIR/${label}_r${rep}.err" util="$LOGDIR/${label}_r${rep}.util"
-  if [[ "$flat" == 1 ]]; then
-    BUCKET_THREADS="$THREADS" BUCKET_ORBITCTA_FLAT_BLOCKS_PER_SM="$psm" BUCKET_GRID_X="$LOW_GX" BUCKET_GRID_Y="$LOW_GY" BUCKET_LOW_GRID_X="$LOW_GX" BUCKET_LOW_GRID_Y="$LOW_GY" "$bin" "$N" "$TARGET_MIB" "$MAX_WINDOW" "$NGPU" "$MOD" >"$so" 2>"$se" &
+  if [[ "$flat" == 1 && "$psm" == auto ]]; then
+    env -u BUCKET_ORBITCTA_FLAT_BLOCKS -u BUCKET_ORBITCTA_FLAT_BLOCKS_PER_SM \
+      BUCKET_THREADS="$THREADS" BUCKET_GRID_X="$LOW_GX" BUCKET_GRID_Y="$LOW_GY" BUCKET_LOW_GRID_X="$LOW_GX" BUCKET_LOW_GRID_Y="$LOW_GY" \
+      "$bin" "$N" "$TARGET_MIB" "$MAX_WINDOW" "$NGPU" "$MOD" >"$so" 2>"$se" &
+  elif [[ "$flat" == 1 ]]; then
+    env -u BUCKET_ORBITCTA_FLAT_BLOCKS BUCKET_THREADS="$THREADS" BUCKET_ORBITCTA_FLAT_BLOCKS_PER_SM="$psm" \
+      BUCKET_GRID_X="$LOW_GX" BUCKET_GRID_Y="$LOW_GY" BUCKET_LOW_GRID_X="$LOW_GX" BUCKET_LOW_GRID_Y="$LOW_GY" \
+      "$bin" "$N" "$TARGET_MIB" "$MAX_WINDOW" "$NGPU" "$MOD" >"$so" 2>"$se" &
   else
     BUCKET_THREADS="$THREADS" BUCKET_ORBITCTA_GRID_Y="$ORBIT_GY" BUCKET_GRID_X="$LOW_GX" BUCKET_GRID_Y="$LOW_GY" BUCKET_LOW_GRID_X="$LOW_GX" BUCKET_LOW_GRID_Y="$LOW_GY" "$bin" "$N" "$TARGET_MIB" "$MAX_WINDOW" "$NGPU" "$MOD" >"$so" 2>"$se" &
   fi
@@ -60,6 +66,7 @@ run_one(){
   local line="$(grep '^residue=' "$so" | tail -n1 || true)"; [[ -n "$line" ]] || { echo "$label missing residue" >&2; exit 3; }
   local residue="$(field residue "$line")"; [[ "$residue" == "$EXPECT" ]] || { echo "$label residue=$residue expected=$EXPECT" >&2; exit 4; }
   local detail="$(grep 'snake_onepass_graph_batch modulus=' "$se" | tail -n1 || true)"; local fh="$(field forward_high_s "$detail")"; local rh="$(field reverse_high_s "$detail")"
+  [[ -n "$fh" && -n "$rh" ]] || { echo "$label missing HIGH phase timing" >&2; exit 6; }
   local high="$(python3 - "$fh" "$rh" <<'PY'
 import sys
 print(f'{float(sys.argv[1])+float(sys.argv[2]):.9f}')
@@ -71,8 +78,9 @@ PY
 
 for ((r=1;r<=REPEATS;++r)); do run_one ordinary 0 0 "$ORD_BIN" "$r"; done
 for psm in $FLAT_PER_SM_LIST; do
-  [[ "$psm" =~ ^[0-9]+$ ]] && (( psm > 0 )) || { echo "bad flat blocks/SM: $psm" >&2; exit 2; }
-  for ((r=1;r<=REPEATS;++r)); do run_one "flat${psm}" 1 "$psm" "$FLAT_BIN" "$r"; done
+  [[ "$psm" == auto || ( "$psm" =~ ^[0-9]+$ && "$psm" -gt 0 ) ]] || { echo "bad flat blocks/SM: $psm" >&2; exit 2; }
+  label="flat${psm}"
+  for ((r=1;r<=REPEATS;++r)); do run_one "$label" 1 "$psm" "$FLAT_BIN" "$r"; done
 done
 
 python3 - "$RESULT" "$SUMMARY" "$WINNER_ENV" <<'PY'
@@ -92,11 +100,12 @@ with open(summary,'w') as f:
 for z in sorted(out,key=lambda z:z['high_s']):
  print('ORBIT_SCHED',z['mode'],f"wall_s={z['wall_s']:.6f}",f"high_s={z['high_s']:.6f}",f"mc={z['avg_memctrl_util_pct']:.3f}")
 b=min(out,key=lambda z:z['wall_s'])
+psm='0' if b['blocks_per_sm']=='auto' else b['blocks_per_sm']
 with open(winner,'w') as f:
  f.write(f'ORBITCTA_FLAT={b["flat"]}\n')
- f.write(f'BUCKET_ORBITCTA_FLAT_BLOCKS_PER_SM={b["blocks_per_sm"]}\n')
+ f.write(f'BUCKET_ORBITCTA_FLAT_BLOCKS_PER_SM={psm}\n')
  f.write(f'ORBITCTA_SCHEDULER_PROFILE={b["mode"]}\n')
-print('WINNER='+b['mode'],f"wall_s={b['wall_s']:.6f}",f"high_s={b['high_s']:.6f}",f"winner_env={winner}")
+print('WINNER='+b['mode'],f"wall_s={b['wall_s']:.6f}",f"high_s={b['high_s']:.6f}",f"blocks_per_sm_profile={psm}",f"winner_env={winner}")
 PY
 cat "$RESULT"
 echo "orbitcta flat A/B OK result=$RESULT summary=$SUMMARY winner_env=$WINNER_ENV" >&2
