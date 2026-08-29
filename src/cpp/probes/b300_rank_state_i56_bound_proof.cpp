@@ -2,7 +2,6 @@
 
 #include <cstdint>
 #include <iostream>
-#include <limits>
 
 using Code = std::uint64_t;
 using Delta = std::int64_t;
@@ -11,6 +10,7 @@ namespace {
 constexpr int MAXW = 28;
 constexpr std::uint64_t DELTA_MASK = (std::uint64_t(1) << 56) - 1;
 constexpr std::uint64_t DELTA_SIGN = std::uint64_t(1) << 55;
+constexpr std::uint64_t DELTA_MOD = std::uint64_t(1) << 56;
 constexpr Delta DELTA_MIN = -(Delta(1) << 55);
 constexpr Delta DELTA_MAX = (Delta(1) << 55) - 1;
 
@@ -32,17 +32,14 @@ std::uint64_t pack(Delta d, std::uint8_t h) {
     return (std::uint64_t(d) & DELTA_MASK) | (std::uint64_t(h) << 56);
 }
 Delta unpack_delta(std::uint64_t s) {
-    std::uint64_t raw = s & DELTA_MASK;
-    if (raw & DELTA_SIGN) raw |= ~DELTA_MASK;
-    return Delta(raw);
+    const std::uint64_t raw = s & DELTA_MASK;
+    return (raw & DELTA_SIGN) ? Delta(raw - DELTA_MOD) : Delta(raw);
 }
 std::uint8_t unpack_height(std::uint64_t s) { return std::uint8_t(s >> 56); }
 }
 
 int main() {
     const Code max_full = full_count(MAXW);
-    // Any grouped local rank is in [0, group_size), and every group is a subset
-    // of the complete W-state set. Therefore |b-a| < full_count(W) <= this bound.
     if (max_full > Code(DELTA_MAX)) return 2;
     if (max_full != 385719506620ULL) return 3;
 
@@ -61,6 +58,7 @@ int main() {
     std::cout << "b300-rank-state-i56-bound-proof OK width_max=28"
               << " full_state_bound=" << max_full
               << " signed_delta_bits=56 height_bits=8 storage_bytes=8"
+              << " signed_decode=defined_subtract"
               << " fallback_required=0 roundtrips=" << roundtrips
               << " exact=1\n";
     return 0;
