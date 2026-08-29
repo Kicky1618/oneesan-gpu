@@ -12,6 +12,7 @@ FILES=(
   scripts/bench/gridfp-reduced-runtime-primitive-sym-u32-ab.sh
   scripts/bench/gridfp-reduced-runtime-choose-sym-u32-ab.sh
   scripts/bench/gridfp-reduced-runtime-codec-tables-sym-u32-ab.sh
+  scripts/bench/gridfp-reduced-runtime-codec-tables-physical-ab.sh
 )
 
 checked=0
@@ -40,5 +41,5 @@ for rel in "${FILES[@]}"; do
   ((checked += 1))
 done
 
-[[ "$checked" == 9 ]] || { echo "unexpected isolated A/B count: $checked" >&2; exit 9; }
+[[ "$checked" == 10 ]] || { echo "unexpected isolated A/B count: $checked" >&2; exit 9; }
 echo "gridfp-runtime-experimental-ab-isolation-proof OK files=$checked canonical_env=1 build_assert=1 no_local_runtime_knobs=1 exact=1"
