@@ -1,0 +1,62 @@
+#!/usr/bin/env bash
+set -euo pipefail
+source "$(dirname -- "${BASH_SOURCE[0]}")/../lib/common.sh"
+
+N="${N:-21}"; MOD="${MOD:-4294967291}"; NGPU="${NGPU:-8}"
+ARCH="${ARCH:-sm_103}"; TARGET_MIB="${TARGET_MIB:-16384}"; MAX_WINDOW="${MAX_WINDOW:-14}"
+REPEATS="${REPEATS:-2}"; PIPE2="${PIPE2:-0}"; SORTED="${SORTED:-1}"; SPARSE64="${SPARSE64:-1}"
+BUCKET_THREADS="${BUCKET_THREADS:-256}"; BUCKET_GRID_X="${BUCKET_GRID_X:-32}"; BUCKET_GRID_Y="${BUCKET_GRID_Y:-8}"
+SAMPLE_INTERVAL="${SAMPLE_INTERVAL:-0.10}"
+if [[ -z "${EXPECT+x}" ]]; then [[ "$N" == 21 && "$MOD" == 4294967291 ]] && EXPECT=998035516 || { echo 'EXPECT required' >&2; exit 2; }; fi
+for x in PIPE2 SORTED SPARSE64; do v="${!x}"; [[ "$v" == 0 || "$v" == 1 ]] || { echo "$x must be 0/1" >&2; exit 2; }; done
+command -v nvcc >/dev/null || { echo 'nvcc required' >&2; exit 2; }
+command -v nvidia-smi >/dev/null || { echo 'nvidia-smi required' >&2; exit 2; }
+
+PREFIX="${PREFIX:-$ONEESAN_ROOT/work/b300_overlap_local_cache_n${N}_pipe${PIPE2}}"
+LOGDIR="${LOGDIR:-${PREFIX}_logs}"; RESULT="${RESULT:-${PREFIX}.tsv}"; RESOURCE="${RESOURCE:-${PREFIX}_ptxas.tsv}"
+PARSER="$ONEESAN_ROOT/scripts/bench/parse-ptxas-resources.py"; mkdir -p "$LOGDIR" "$(dirname "$RESULT")"
+field(){ local key="$1" line="$2"; sed -nE "s/(^|.*[[:space:]])${key}=([^[:space:]]+).*/\\2/p" <<<"$line" | tail -n1; }
+sample_process(){ local pid="$1" out="$2"; : >"$out"; while kill -0 "$pid" 2>/dev/null; do nvidia-smi --query-gpu=utilization.gpu,utilization.memory --format=csv,noheader,nounits 2>/dev/null | awk -F',' '{g=$1+0;m=$2+0;sg+=g;sm+=m;if(g>mg)mg=g;if(m>mm)mm=m;n++} END{if(n)printf "%.6f %.6f %d %d\n",sg/n,sm/n,mg,mm}' >>"$out" || true; sleep "$SAMPLE_INTERVAL"; done; }
+
+printf 'cg\trepeat\tresidue\twall_s\tforward_high_s\treverse_high_s\thigh_s\tavg_gpu_util_pct\tavg_memctrl_util_pct\tmax_memctrl_util_pct\n' >"$RESULT"
+printf 'backend\tkernel\tregisters\tstack_bytes\tspill_store_bytes\tspill_load_bytes\tsmem_bytes\tcmem0_bytes\n' >"$RESOURCE"
+for cg in 0 1; do
+  mode="cg${cg}"; bin="$ONEESAN_BUILD_DIR/b300_overlap_local_${mode}_pipe${PIPE2}_n${N}"
+  N="$N" ARCH="$ARCH" OUT="$bin" COL_ILP=2 PM_ACCUM=1 DEPTHMAJOR=1 \
+    PAIR_MLP=1 QUAD_MLP=0 MLP_WINDOW4=1 CPASYNC_PAIR=1 CPASYNC_LOCAL_PAIR=0 \
+    CPASYNC_OVERLAP_LOCAL_PAIR=1 CPASYNC_OVERLAP_LOCAL_PIPE2="$PIPE2" OVERLAP_LOCAL_CG="$cg" \
+    DIRECTGATHER64=1 DIRECTGATHER_SPARSE64="$SPARSE64" SORTED="$SORTED" \
+    FORCE7=0 PREFETCH_NEXT=0 PRECTX_FORWARD=0 PRECTX_REVERSE=0 PTXAS_VERBOSE=1 \
+    bash "$ONEESAN_ROOT/scripts/build/b300-directgather-colilp-fast.sh" >"$LOGDIR/$mode.build.out" 2>"$LOGDIR/$mode.build.err"
+  python3 "$PARSER" "$LOGDIR/$mode.build.err" --label "$mode" >>"$RESOURCE" || true
+  for ((r=1;r<=REPEATS;++r)); do
+    so="$LOGDIR/${mode}_r${r}.out"; se="$LOGDIR/${mode}_r${r}.err"; util="$LOGDIR/${mode}_r${r}.util"
+    BUCKET_THREADS="$BUCKET_THREADS" BUCKET_GRID_X="$BUCKET_GRID_X" BUCKET_GRID_Y="$BUCKET_GRID_Y" \
+      BUCKET_HIGH_GRID_X="$BUCKET_GRID_X" BUCKET_HIGH_GRID_Y="$BUCKET_GRID_Y" \
+      "$bin" "$N" "$TARGET_MIB" "$MAX_WINDOW" "$NGPU" "$MOD" >"$so" 2>"$se" &
+    pid=$!; sample_process "$pid" "$util" & sampler=$!; set +e; wait "$pid"; rc=$?; set -e; wait "$sampler" || true
+    ((rc==0)) || exit "$rc"
+    line="$(grep '^residue=' "$so" | tail -n1)"; residue="$(field residue "$line")"; [[ "$residue" == "$EXPECT" ]] || { echo "$mode residue mismatch" >&2; exit 4; }
+    detail="$(grep 'snake_onepass_graph_batch modulus=' "$se" | tail -n1)"; wall="$(field wall_s "$line")"; fh="$(field forward_high_s "$detail")"; rh="$(field reverse_high_s "$detail")"
+    high="$(python3 - "$fh" "$rh" <<'PY'
+import sys
+print(f'{float(sys.argv[1])+float(sys.argv[2]):.9f}')
+PY
+)"
+    read -r ag am mg mm < <(awk '{sg+=$1;sm+=$2;if($3>mg)mg=$3;if($4>mm)mm=$4;n++} END{if(n)printf "%.6f %.6f %d %d\n",sg/n,sm/n,mg,mm;else print "NA NA NA NA"}' "$util")
+    printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' "$cg" "$r" "$residue" "$wall" "$fh" "$rh" "$high" "$ag" "$am" "$mm" >>"$RESULT"
+  done
+done
+cat "$RESULT"
+python3 - "$RESULT" <<'PY'
+import csv,statistics,sys
+r=list(csv.DictReader(open(sys.argv[1]),delimiter='\t')); q={}
+for c in ('0','1'):
+ g=[x for x in r if x['cg']==c]; q[c]={k:statistics.median(float(x[k]) for x in g) for k in ('wall_s','high_s','avg_memctrl_util_pct')}
+ print('SUMMARY',c,q[c])
+print(f'cg_high_speedup={q["0"]["high_s"]/q["1"]["high_s"]:.6f}x')
+print(f'cg_wall_speedup={q["0"]["wall_s"]/q["1"]["wall_s"]:.6f}x')
+print(f'cg_memctrl_delta={q["1"]["avg_memctrl_util_pct"]-q["0"]["avg_memctrl_util_pct"]:.6f}pp')
+PY
+
+echo "b300-overlap-local-cache-ab OK result=$RESULT resource=$RESOURCE pipe2=$PIPE2" >&2
