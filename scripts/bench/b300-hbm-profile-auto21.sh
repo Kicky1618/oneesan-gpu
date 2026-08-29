@@ -6,6 +6,7 @@ BASE_PROFILE="${BASE_PROFILE:-$ONEESAN_ROOT/work/b300_hbm_profile_tune21.env}"
 PRECTX_PROFILE="${PRECTX_PROFILE:-$ONEESAN_ROOT/work/b300_hbm_profile_prectx21.env}"
 SCHED_PROFILE="${SCHED_PROFILE:-$ONEESAN_ROOT/work/b300_hbm_profile_scheduler21.env}"
 ADV_PROFILE="${ADV_PROFILE:-$ONEESAN_ROOT/work/b300_hbm_profile_advanced21.env}"
+DYNAMIC_PROFILE="${DYNAMIC_PROFILE:-$ONEESAN_ROOT/work/b300_hbm_profile_dynamic21.env}"
 WARPCOOP_PROFILE="${WARPCOOP_PROFILE:-$ONEESAN_ROOT/work/b300_hbm_profile_warpcoop21.env}"
 WARPCOOP_AUTO_PROFILE="${WARPCOOP_AUTO_PROFILE:-$ONEESAN_ROOT/work/b300_hbm_profile_warpcoop_auto21.env}"
 DESC_PROFILE="${DESC_PROFILE:-$ONEESAN_ROOT/work/b300_hbm_profile_desc21.env}"
@@ -16,6 +17,7 @@ BASE_PREFIX="${BASE_PREFIX:-$ONEESAN_ROOT/work/b300_hbm_profile_tune21}"
 PRECTX_PREFIX="${PRECTX_PREFIX:-$ONEESAN_ROOT/work/b300_hbm_profile_refine_compact_prectx21}"
 SCHED_PREFIX="${SCHED_PREFIX:-$ONEESAN_ROOT/work/b300_hbm_profile_orbit_scheduler21}"
 ADV_PREFIX="${ADV_PREFIX:-$ONEESAN_ROOT/work/b300_hbm_profile_orbit_advanced21}"
+DYNAMIC_PREFIX="${DYNAMIC_PREFIX:-$ONEESAN_ROOT/work/b300_hbm_profile_orbit_dynamic21}"
 WARPCOOP_PREFIX="${WARPCOOP_PREFIX:-$ONEESAN_ROOT/work/b300_hbm_profile_orbit_warpcoop21}"
 WARPCOOP_AUTO_PREFIX="${WARPCOOP_AUTO_PREFIX:-$ONEESAN_ROOT/work/b300_hbm_profile_orbit_warpcoop_auto21}"
 QUAD_DESC_PREFIX="${QUAD_DESC_PREFIX:-$ONEESAN_ROOT/work/b300_hbm_profile_orbit_quad_desc21}"
@@ -26,13 +28,14 @@ RUN_PRECTX="${RUN_PRECTX:-1}"
 RUN_ORBIT_SCHEDULER="${RUN_ORBIT_SCHEDULER:-1}"
 # Keep RUN_ORBIT_QUAD as a compatibility alias for older launch commands.
 RUN_ORBIT_ADVANCED="${RUN_ORBIT_ADVANCED:-${RUN_ORBIT_QUAD:-1}}"
+RUN_ORBIT_DYNAMIC="${RUN_ORBIT_DYNAMIC:-1}"
 RUN_ORBIT_WARPCOOP="${RUN_ORBIT_WARPCOOP:-1}"
 RUN_ORBIT_WARPCOOP_AUTO="${RUN_ORBIT_WARPCOOP_AUTO:-1}"
 RUN_ORBIT_QUAD_DESC="${RUN_ORBIT_QUAD_DESC:-1}"
 RUN_ORBIT_QUAD_LOCAL0="${RUN_ORBIT_QUAD_LOCAL0:-1}"
 RUN_ORBIT_QUAD_GROUP="${RUN_ORBIT_QUAD_GROUP:-1}"
 RUN_ORBIT_QUAD_PREFETCH="${RUN_ORBIT_QUAD_PREFETCH:-1}"
-for x in RUN_PRECTX RUN_ORBIT_SCHEDULER RUN_ORBIT_ADVANCED RUN_ORBIT_WARPCOOP RUN_ORBIT_WARPCOOP_AUTO RUN_ORBIT_QUAD_DESC RUN_ORBIT_QUAD_LOCAL0 RUN_ORBIT_QUAD_GROUP RUN_ORBIT_QUAD_PREFETCH; do
+for x in RUN_PRECTX RUN_ORBIT_SCHEDULER RUN_ORBIT_ADVANCED RUN_ORBIT_DYNAMIC RUN_ORBIT_WARPCOOP RUN_ORBIT_WARPCOOP_AUTO RUN_ORBIT_QUAD_DESC RUN_ORBIT_QUAD_LOCAL0 RUN_ORBIT_QUAD_GROUP RUN_ORBIT_QUAD_PREFETCH; do
   v="${!x}"; [[ "$v" == 0 || "$v" == 1 ]] || { echo "$x must be 0 or 1" >&2; exit 2; }
 done
 
@@ -64,25 +67,38 @@ else
   cp "$SCHED_PROFILE" "$ADV_PROFILE"
 fi
 
-# Warp-cooperative compact prectx is a chunked-QOL branch. The advanced stage
-# always leaves its exact quad-sweep sidecar behind, so compare its current
-# winner against compact-both serial/warpcoop using that same winning chunk/pool.
-if [[ "$RUN_ORBIT_WARPCOOP" == 1 && "$RUN_ORBIT_ADVANCED" == 1 ]]; then
+# Dynamic flat queue is mutually exclusive with the chunked-quad path. Race the
+# best lease batch against the completed advanced selection, using the same
+# pre-advanced scheduler root. Promote only a genuinely dynamic winner.
+if [[ "$RUN_ORBIT_DYNAMIC" == 1 && "$RUN_ORBIT_ADVANCED" == 1 ]]; then
+  echo "=== HBM tune21 dynamic flat queue refinement ===" >&2
+  PROFILE_BASE="$SCHED_PROFILE" PROFILE_ADV="$ADV_PROFILE" ADV_SUMMARY="${ADV_PREFIX}_summary.tsv" \
+    PROFILE_OUT="$DYNAMIC_PROFILE" PREFIX="$DYNAMIC_PREFIX" \
+    bash "$ONEESAN_ROOT/scripts/bench/b300-hbm-profile-refine-orbit-dynamic21.sh"
+else
+  cp "$ADV_PROFILE" "$DYNAMIC_PROFILE"
+fi
+
+ORBITCTA_FLAT_DYNAMIC=0
+# shellcheck disable=SC1090
+source "$DYNAMIC_PROFILE"
+DYNAMIC_SELECTED="${ORBITCTA_FLAT_DYNAMIC:-0}"
+[[ "$DYNAMIC_SELECTED" == 0 || "$DYNAMIC_SELECTED" == 1 ]] || { echo 'bad ORBITCTA_FLAT_DYNAMIC after dynamic refinement' >&2; exit 2; }
+
+# Warp-cooperative compact prectx is a chunked-QOL branch. It cannot compose
+# with the dynamic queue, so skip this entire family when dynamic won.
+if [[ "$RUN_ORBIT_WARPCOOP" == 1 && "$RUN_ORBIT_ADVANCED" == 1 && "$DYNAMIC_SELECTED" == 0 ]]; then
   echo "=== HBM tune21 warp-cooperative compact prectx refinement ===" >&2
-  PROFILE_IN="$ADV_PROFILE" PROFILE_OUT="$WARPCOOP_PROFILE" PREFIX="$WARPCOOP_PREFIX" \
+  PROFILE_IN="$DYNAMIC_PROFILE" PROFILE_OUT="$WARPCOOP_PROFILE" PREFIX="$WARPCOOP_PREFIX" \
     QUAD_WINNER_ENV="${ADV_PREFIX}_quad_winner.env" \
     bash "$ONEESAN_ROOT/scripts/bench/b300-hbm-profile-refine-orbit-warpcoop21.sh"
 else
-  if [[ "$RUN_ORBIT_WARPCOOP" == 1 && "$RUN_ORBIT_ADVANCED" == 0 ]]; then
-    echo "=== skip warpcoop refine: advanced stage disabled, no exact quad sidecar ===" >&2
-  fi
-  cp "$ADV_PROFILE" "$WARPCOOP_PROFILE"
+  [[ "$DYNAMIC_SELECTED" == 0 ]] || echo "=== skip warpcoop refine: dynamic queue selected ===" >&2
+  cp "$DYNAMIC_PROFILE" "$WARPCOOP_PROFILE"
 fi
 
 # A changed register footprint can change the occupancy-derived persistent pool.
-# If the previous comparison inherited an explicit quad pool, give serial and
-# warpcoop one extra exact challenge with their own occupancy-derived pool.
-if [[ "$RUN_ORBIT_WARPCOOP_AUTO" == 1 && "$RUN_ORBIT_ADVANCED" == 1 ]]; then
+if [[ "$RUN_ORBIT_WARPCOOP_AUTO" == 1 && "$RUN_ORBIT_ADVANCED" == 1 && "$DYNAMIC_SELECTED" == 0 ]]; then
   echo "=== HBM tune21 warpcoop occupancy-pool refinement ===" >&2
   PROFILE_IN="$WARPCOOP_PROFILE" PROFILE_OUT="$WARPCOOP_AUTO_PROFILE" PREFIX="$WARPCOOP_AUTO_PREFIX" \
     QUAD_WINNER_ENV="${ADV_PREFIX}_quad_winner.env" \
@@ -91,8 +107,7 @@ else
   cp "$WARPCOOP_PROFILE" "$WARPCOOP_AUTO_PROFILE"
 fi
 
-# Descriptor MLP only applies to sparse64 chunked-quad overlap-local. This now
-# preserves ORBIT_PRECTX_WARPCOOP when the previous stage selected it.
+# Descriptor MLP only applies to sparse64 chunked-quad overlap-local.
 if [[ "$RUN_ORBIT_QUAD_DESC" == 1 ]]; then
   ORBIT_QUAD_MLP=0 ORBIT_QUAD_OVERLAP_LOCAL=0 ORBIT_SPARSE64=0
   # shellcheck disable=SC1090
@@ -109,8 +124,7 @@ else
   cp "$WARPCOOP_AUTO_PROFILE" "$DESC_PROFILE"
 fi
 
-# QOL has nothing useful to overlap when local_n==0. Race a uniform local-zero
-# bypass only after all other advanced/QSD settings are fixed; two runs suffice.
+# QOL has nothing useful to overlap when local_n==0.
 if [[ "$RUN_ORBIT_QUAD_LOCAL0" == 1 ]]; then
   ORBIT_QUAD_MLP=0 ORBIT_QUAD_OVERLAP_LOCAL=0
   # shellcheck disable=SC1090
@@ -127,9 +141,7 @@ else
   cp "$DESC_PROFILE" "$LOCAL0_PROFILE"
 fi
 
-# commit_group granularity changes only the number of outstanding cp.async
-# groups, not descriptors, source terms, or modular reduction. Tune 1/2/4
-# columns per group before prefetch so the final prefetch race preserves it.
+# Tune cp.async commit_group granularity 1/2/4 columns per group.
 if [[ "$RUN_ORBIT_QUAD_GROUP" == 1 ]]; then
   ORBIT_QUAD_MLP=0 ORBIT_QUAD_OVERLAP_LOCAL=0
   # shellcheck disable=SC1090
@@ -146,9 +158,7 @@ else
   cp "$LOCAL0_PROFILE" "$GROUP_PROFILE"
 fi
 
-# QOL source loads are 4-byte cp.async.ca operations. Keep the selected
-# algorithm, persistent pool, QSD, local0, warpcoop and commit-group width fixed
-# while varying only the L2 prefetch-size hint.
+# Finally tune the L2 prefetch-size hint while preserving all selected QOL knobs.
 if [[ "$RUN_ORBIT_QUAD_PREFETCH" == 1 ]]; then
   ORBIT_QUAD_MLP=0 ORBIT_QUAD_OVERLAP_LOCAL=0
   # shellcheck disable=SC1090
@@ -167,4 +177,4 @@ fi
 
 echo "=== final HBM profile ===" >&2
 cat "$FINAL_PROFILE"
-echo "b300 HBM profile auto21 OK base_profile=$BASE_PROFILE prectx_profile=$PRECTX_PROFILE sched_profile=$SCHED_PROFILE advanced_profile=$ADV_PROFILE warpcoop_profile=$WARPCOOP_PROFILE warpcoop_auto_profile=$WARPCOOP_AUTO_PROFILE desc_profile=$DESC_PROFILE local0_profile=$LOCAL0_PROFILE group_profile=$GROUP_PROFILE final_profile=$FINAL_PROFILE" >&2
+echo "b300 HBM profile auto21 OK base_profile=$BASE_PROFILE prectx_profile=$PRECTX_PROFILE sched_profile=$SCHED_PROFILE advanced_profile=$ADV_PROFILE dynamic_profile=$DYNAMIC_PROFILE dynamic_selected=$DYNAMIC_SELECTED warpcoop_profile=$WARPCOOP_PROFILE warpcoop_auto_profile=$WARPCOOP_AUTO_PROFILE desc_profile=$DESC_PROFILE local0_profile=$LOCAL0_PROFILE group_profile=$GROUP_PROFILE final_profile=$FINAL_PROFILE" >&2
