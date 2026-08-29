@@ -131,12 +131,28 @@ static void p10dc_verify_directmask_tables(
                   << " masks=" << dt.low_rankdirectmask_count << '\n';
         std::exit(676);
     }
+#if P10DC_RANKCHUNK32_RANKPLANE
+    constexpr size_t NRANK = size_t(P10DC_RANKCHUNK32_MAX_L_PER_LEGAL_CODE);
+    constexpr size_t RANK_STORAGE = NRANK ? NRANK : 1u;
+    if (dt.low_rankdirectplane_count != RANK_STORAGE * stride) {
+        std::cerr << "p10dc directplane count mismatch owner=" << fixed
+                  << " got=" << dt.low_rankdirectplane_count
+                  << " expected=" << RANK_STORAGE * stride << '\n';
+        std::exit(680);
+    }
+#endif
+
     std::vector<uint32_t> got_off(stride);
     std::vector<uint8_t> got_mask(size_t(16) * stride);
     if (!got_off.empty()) ck(cudaMemcpy(got_off.data(), dt.low_rankdirectoff,
         got_off.size()*sizeof(uint32_t), cudaMemcpyDeviceToHost), "p10dc directoff verify D2H");
     if (!got_mask.empty()) ck(cudaMemcpy(got_mask.data(), dt.low_rankdirectmask,
         got_mask.size()*sizeof(uint8_t), cudaMemcpyDeviceToHost), "p10dc directmask verify D2H");
+#if P10DC_RANKCHUNK32_RANKPLANE
+    std::vector<uint16_t> got_plane(dt.low_rankdirectplane_count);
+    if (!got_plane.empty()) ck(cudaMemcpy(got_plane.data(), dt.low_rankdirectplane,
+        got_plane.size()*sizeof(uint16_t), cudaMemcpyDeviceToHost), "p10dc directplane verify D2H");
+#endif
 
     constexpr size_t P = size_t(MAXW + 2);
     const size_t owner_base = size_t(fixed) * P;
@@ -175,8 +191,30 @@ static void p10dc_verify_directmask_tables(
                     std::exit(678);
                 }
             }
-            for (int pos = 0; pos < LOW_LUT_K; ++pos)
-                if (((code >> (2 * pos)) & 3u) == uint32_t(::L)) ++stream_ix;
+
+            uint32_t ordinal = 0;
+            uint32_t weight = bkcz_pow3_const(LOW_LUT_K - 1);
+            for (int pos = LOW_LUT_K - 1; pos >= 0; --pos) {
+                if (((code >> (2 * pos)) & 3u) == uint32_t(::L)) {
+#if P10DC_RANKCHUNK32_RANKPLANE
+                    const uint32_t x = bf.low_direct[key - weight];
+                    const uint32_t loc = x & BKF_LOC_MASK;
+                    const uint16_t expected_rank = uint16_t(bkf_loc_rank(loc));
+                    const uint16_t got_rank = got_plane[size_t(ordinal) * stride + compact];
+                    if (x == BKF_DIRECT_INVALID || bkf_loc_owner(loc) != fixed ||
+                        got_rank != expected_rank) {
+                        std::cerr << "p10dc directplane mismatch owner=" << fixed
+                                  << " h=" << h << " compact=" << compact
+                                  << " ordinal=" << ordinal << " got=" << got_rank
+                                  << " expected=" << expected_rank << '\n';
+                        std::exit(681);
+                    }
+#endif
+                    ++ordinal;
+                    ++stream_ix;
+                }
+                if (pos) weight /= 3u;
+            }
         }
     }
     if (compact != stride || stream_ix != dt.low_rankstream_count ||
@@ -280,9 +318,13 @@ int main() {
               << " control=resolved experiment=warpstriped_delta_direct_affine_rankchunk32_cross5"
               << " forward_exact=1 reverse_exact=1 rankchunk32_table_exact=1 padding_exact=1"
               << " directmask=" << P10DC_RANKCHUNK32_DIRECTMASK
+              << " rankplane=" << P10DC_RANKCHUNK32_RANKPLANE
               << " ilp=" << P10DC_WARPSTRIPED_ILP
 #if P10DC_RANKCHUNK32_DIRECTMASK
               << " directmask_table_exact=1 directoff_table_exact=1"
+#if P10DC_RANKCHUNK32_RANKPLANE
+              << " directrankplane_exact=1 offset_runtime=0"
+#endif
               << " rankchunk_meta_runtime=0 blockbase_shuffle_runtime=0"
 #endif
               << " chunk_bits=" << P10DC_RANKCHUNK32_CHUNK_BITS
