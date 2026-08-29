@@ -6,6 +6,8 @@
 #if P10DC_RANKFORMULA_NOMETA_DIRECTMAP
 #if P10DC_RANKFORMULA_DIRECTGATHER64
 #include "../gridfp/ramstream32_bucket_low_rankformula_directgather64.cuh"
+#elif P10DC_RANKFORMULA_DIRECTGATHER_SORTED
+#include "../gridfp/ramstream32_bucket_low_rankformula_nometa_directmap_sorted.cuh"
 #elif P10DC_RANKFORMULA_DIRECTGATHER_DEPTHMAJOR
 #include "../gridfp/ramstream32_bucket_low_rankformula_nometa_directmap_depthmajor.cuh"
 #else
@@ -18,6 +20,8 @@
 #if P10DC_RANKFORMULA_NOMETA_DIRECTMAP
 #if P10DC_RANKFORMULA_DIRECTGATHER64
 #define BucketFusedDeviceTables BucketFusedDirectHighRowsRankFormulaNometa4DirectGather64Tables
+#elif P10DC_RANKFORMULA_DIRECTGATHER_SORTED
+#define BucketFusedDeviceTables BucketFusedDirectHighRowsRankFormulaNometa4DirectMapSortedTables
 #elif P10DC_RANKFORMULA_DIRECTGATHER_DEPTHMAJOR
 #define BucketFusedDeviceTables BucketFusedDirectHighRowsRankFormulaNometa4DirectMapDepthMajorTables
 #else
