@@ -40,12 +40,14 @@ ORBIT_QUAD_OVERLAP_LOCAL="${ORBIT_QUAD_OVERLAP_LOCAL:-0}"
 ORBIT_QUAD_LOCAL_DIRECT_MAX="${ORBIT_QUAD_LOCAL_DIRECT_MAX:-0}"
 ORBIT_QUAD_SPARSE_DESC_MLP="${ORBIT_QUAD_SPARSE_DESC_MLP:-0}"
 ORBIT_QUAD_OVERLAP_BYPASS_LOCAL0="${ORBIT_QUAD_OVERLAP_BYPASS_LOCAL0:-0}"
+ORBIT_QUAD_CPASYNC_PREFETCH_BYTES="${ORBIT_QUAD_CPASYNC_PREFETCH_BYTES:-0}"
 ORBIT_PRECTX_FORWARD="${ORBIT_PRECTX_FORWARD:-0}"
 ORBIT_PRECTX_REVERSE="${ORBIT_PRECTX_REVERSE:-0}"
 [[ "$WARP_PROFILE" =~ ^[A-Za-z0-9_.-]+$ && "$ORBIT_PROFILE" =~ ^[A-Za-z0-9_.-]+$ ]] || { echo 'unsafe profile name' >&2; exit 3; }
 for x in ORBIT_PRECTX_COMPACT ORBIT_PRECTX_FLAT_BID ORBIT_PRECTX_FLAT_BID_FUSED ORBIT_PRECTX_WARPCOOP ORBITCTA_FLAT ORBIT_QUAD_MLP ORBIT_QUAD_OVERLAP_LOCAL ORBIT_QUAD_SPARSE_DESC_MLP ORBIT_QUAD_OVERLAP_BYPASS_LOCAL0 ORBIT_PRECTX_FORWARD ORBIT_PRECTX_REVERSE; do
   v="${!x}"; [[ "$v" == 0 || "$v" == 1 ]] || { echo "bad $x in n21 profile" >&2; exit 3; }
 done
+case "$ORBIT_QUAD_CPASYNC_PREFETCH_BYTES" in 0|64|128|256) ;; *) echo 'bad ORBIT_QUAD_CPASYNC_PREFETCH_BYTES in n21 profile' >&2; exit 3;; esac
 case "$ORBITCTA_FLAT_CHUNK" in 1|2|4|8|16|32) ;; *) echo 'bad ORBITCTA_FLAT_CHUNK in n21 profile' >&2; exit 3;; esac
 [[ "$ORBITCTA_FLAT_BLOCKS_PER_SM" =~ ^[0-9]+$ ]] || { echo 'bad ORBITCTA_FLAT_BLOCKS_PER_SM in n21 profile' >&2; exit 3; }
 [[ "$ORBIT_QUAD_LOCAL_DIRECT_MAX" =~ ^[0-9]+$ ]] && (( ORBIT_QUAD_LOCAL_DIRECT_MAX <= 8 )) || { echo 'bad ORBIT_QUAD_LOCAL_DIRECT_MAX in n21 profile' >&2; exit 3; }
@@ -66,7 +68,7 @@ if [[ "$ORBIT_QUAD_MLP" == 1 ]]; then
   [[ "$ORBITCTA_FLAT" == 1 ]] && (( ORBITCTA_FLAT_CHUNK > 1 )) || { echo 'quad n21 profile requires chunked flat orbit CTA' >&2; exit 3; }
   [[ "$ORBIT_PRECTX_FLAT_BID" == 0 && "$ORBIT_PRECTX_FLAT_BID_FUSED" == 0 ]] || { echo 'quad and flat-bid n21 profile are mutually exclusive' >&2; exit 3; }
 else
-  [[ "$ORBIT_QUAD_OVERLAP_LOCAL" == 0 ]] && (( ORBIT_QUAD_LOCAL_DIRECT_MAX == 0 )) && [[ "$ORBIT_QUAD_SPARSE_DESC_MLP" == 0 && "$ORBIT_QUAD_OVERLAP_BYPASS_LOCAL0" == 0 ]] || { echo 'quad suboptions require ORBIT_QUAD_MLP=1' >&2; exit 3; }
+  [[ "$ORBIT_QUAD_OVERLAP_LOCAL" == 0 ]] && (( ORBIT_QUAD_LOCAL_DIRECT_MAX == 0 )) && [[ "$ORBIT_QUAD_SPARSE_DESC_MLP" == 0 && "$ORBIT_QUAD_OVERLAP_BYPASS_LOCAL0" == 0 ]] && [[ "$ORBIT_QUAD_CPASYNC_PREFETCH_BYTES" == 0 ]] || { echo 'quad suboptions require ORBIT_QUAD_MLP=1' >&2; exit 3; }
 fi
 if [[ "$ORBIT_QUAD_SPARSE_DESC_MLP" == 1 ]]; then
   [[ "$ORBIT_QUAD_OVERLAP_LOCAL" == 1 ]] || { echo 'quad sparse descriptor MLP requires overlap-local' >&2; exit 3; }
@@ -74,15 +76,18 @@ fi
 if [[ "$ORBIT_QUAD_OVERLAP_BYPASS_LOCAL0" == 1 ]]; then
   [[ "$ORBIT_QUAD_OVERLAP_LOCAL" == 1 ]] || { echo 'quad local0 bypass requires overlap-local' >&2; exit 3; }
 fi
+if (( ORBIT_QUAD_CPASYNC_PREFETCH_BYTES != 0 )); then
+  [[ "$ORBIT_QUAD_OVERLAP_LOCAL" == 1 ]] || { echo 'quad prefetch hint requires overlap-local' >&2; exit 3; }
+fi
 
 FORCED_FIXED="$ONEESAN_BUILD_DIR/b300_profiled_forced_n27"
 WARP_FIXED="$ONEESAN_BUILD_DIR/b300_profiled_warp_${WARP_PROFILE}_n27"
-ORBIT_FIXED="$ONEESAN_BUILD_DIR/b300_profiled_orbit_${ORBIT_PROFILE}_flat${ORBITCTA_FLAT}_chunk${ORBITCTA_FLAT_CHUNK}_psm${ORBITCTA_FLAT_BLOCKS_PER_SM}_bid${ORBIT_PRECTX_FLAT_BID}_bf${ORBIT_PRECTX_FLAT_BID_FUSED}_wc${ORBIT_PRECTX_WARPCOOP}_quad${ORBIT_QUAD_MLP}_qol${ORBIT_QUAD_OVERLAP_LOCAL}_qld${ORBIT_QUAD_LOCAL_DIRECT_MAX}_qsd${ORBIT_QUAD_SPARSE_DESC_MLP}_ql0${ORBIT_QUAD_OVERLAP_BYPASS_LOCAL0}_n27"
+ORBIT_FIXED="$ONEESAN_BUILD_DIR/b300_profiled_orbit_${ORBIT_PROFILE}_flat${ORBITCTA_FLAT}_chunk${ORBITCTA_FLAT_CHUNK}_psm${ORBITCTA_FLAT_BLOCKS_PER_SM}_bid${ORBIT_PRECTX_FLAT_BID}_bf${ORBIT_PRECTX_FLAT_BID_FUSED}_wc${ORBIT_PRECTX_WARPCOOP}_quad${ORBIT_QUAD_MLP}_qol${ORBIT_QUAD_OVERLAP_LOCAL}_qld${ORBIT_QUAD_LOCAL_DIRECT_MAX}_qsd${ORBIT_QUAD_SPARSE_DESC_MLP}_ql0${ORBIT_QUAD_OVERLAP_BYPASS_LOCAL0}_qpf${ORBIT_QUAD_CPASYNC_PREFETCH_BYTES}_n27"
 if [[ "$REBUILD_BUCKETS" == 1 ]]; then rm -f "$WARP_FIXED" "$ORBIT_FIXED"; fi
 ln -sfn "$FORCED_PROFILE_BIN" "$FORCED_FIXED"
 
 export PROFILE_FILE
 export REBUILD=0
 export PREFIX="${FINAL_PREFIX:-$ONEESAN_ROOT/work/b300_exact_hbm_profiled_staged_n27}"
-echo "profiled staged forced=$FORCED_PROFILE bin=$FORCED_PROFILE_BIN warp=$WARP_PROFILE orbit=$ORBIT_PROFILE flat=$ORBITCTA_FLAT chunk=$ORBITCTA_FLAT_CHUNK flat_blocks_per_sm=$ORBITCTA_FLAT_BLOCKS_PER_SM pool_mode=$([[ "$ORBITCTA_FLAT_BLOCKS_PER_SM" == 0 ]] && echo occupancy || echo per_sm) bid=$ORBIT_PRECTX_FLAT_BID bid_fused=$ORBIT_PRECTX_FLAT_BID_FUSED warpcoop=$ORBIT_PRECTX_WARPCOOP quad=$ORBIT_QUAD_MLP quad_overlap_local=$ORBIT_QUAD_OVERLAP_LOCAL quad_local_direct_max=$ORBIT_QUAD_LOCAL_DIRECT_MAX quad_sparse_desc_mlp=$ORBIT_QUAD_SPARSE_DESC_MLP quad_local0=$ORBIT_QUAD_OVERLAP_BYPASS_LOCAL0 rebuild_buckets=$REBUILD_BUCKETS" >&2
+echo "profiled staged forced=$FORCED_PROFILE bin=$FORCED_PROFILE_BIN warp=$WARP_PROFILE orbit=$ORBIT_PROFILE flat=$ORBITCTA_FLAT chunk=$ORBITCTA_FLAT_CHUNK flat_blocks_per_sm=$ORBITCTA_FLAT_BLOCKS_PER_SM pool_mode=$([[ "$ORBITCTA_FLAT_BLOCKS_PER_SM" == 0 ]] && echo occupancy || echo per_sm) bid=$ORBIT_PRECTX_FLAT_BID bid_fused=$ORBIT_PRECTX_FLAT_BID_FUSED warpcoop=$ORBIT_PRECTX_WARPCOOP quad=$ORBIT_QUAD_MLP quad_overlap_local=$ORBIT_QUAD_OVERLAP_LOCAL quad_local_direct_max=$ORBIT_QUAD_LOCAL_DIRECT_MAX quad_sparse_desc_mlp=$ORBIT_QUAD_SPARSE_DESC_MLP quad_local0=$ORBIT_QUAD_OVERLAP_BYPASS_LOCAL0 quad_prefetch_bytes=$ORBIT_QUAD_CPASYNC_PREFETCH_BYTES rebuild_buckets=$REBUILD_BUCKETS" >&2
 exec "$ONEESAN_ROOT/scripts/run/b300x8-exact-auto-hbm-profiled.sh" 27 "$@"
