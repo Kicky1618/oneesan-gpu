@@ -2,15 +2,41 @@
 
 #include "ramstream32_bucket_closure_pattern10_depthcode_delta_direct_affine_rankformula_nometa4_abstract.cuh"
 
+#ifndef P10DC_RANKFORMULA_PRECTX_FORWARD
+#define P10DC_RANKFORMULA_PRECTX_FORWARD 0
+#endif
+#ifndef P10DC_RANKFORMULA_PRECTX_REVERSE
+#define P10DC_RANKFORMULA_PRECTX_REVERSE 0
+#endif
+#if P10DC_RANKFORMULA_PRECTX_FORWARD || P10DC_RANKFORMULA_PRECTX_REVERSE
+#include "ramstream32_bucket_precomputed_forward_high_ctx.cuh"
+#endif
+
 #if P10DC_RANKFORMULA_GATHER_MLP
 #define P10DC_ORBITCTA_EARLY_JP 1
 #define P10DC_ORBITCTA_EARLY_JP_LOCAL 1
 #endif
 #define P10DC_ORBITCTA_CTX P10DCDirectHighResolvedCtx
+#if P10DC_RANKFORMULA_PRECTX_FORWARD
+#define P10DC_ORBITCTA_PREPARE_FORWARD(c,payload,loc,p,ss,js,ds,sr,jr,dr) do { \
+    (void)(payload); (void)(loc); (void)(p); \
+    p10dc_direct_resolve_high_io((c),(ss),(js),(ds),(sr),(jr),(dr)); \
+    p10dc_apply_forward_prectx((c), qi, nn); \
+} while(0)
+#else
 #define P10DC_ORBITCTA_PREPARE_FORWARD(c,payload,loc,p,ss,js,ds,sr,jr,dr) \
     p10dc_prepare_forward_high_delta_direct_affine((c),(payload),(loc),(p),(ss),(js),(ds),(sr),(jr),(dr))
+#endif
+#if P10DC_RANKFORMULA_PRECTX_REVERSE
+#define P10DC_ORBITCTA_PREPARE_REVERSE(c,payload,loc,plan_db,p,edge,ss,js,ds,sr,jr,dr) do { \
+    (void)(payload); (void)(loc); (void)(plan_db); (void)(p); (void)(edge); \
+    p10dc_direct_resolve_high_io((c),(ss),(js),(ds),(sr),(jr),(dr)); \
+    p10dc_apply_reverse_prectx((c), qi, kind); \
+} while(0)
+#else
 #define P10DC_ORBITCTA_PREPARE_REVERSE(c,payload,loc,plan_db,p,edge,ss,js,ds,sr,jr,dr) \
     p10dc_prepare_reverse_high_delta_direct_affine((c),(payload),(loc),(plan_db),(p),(edge),(ss),(js),(ds),(sr),(jr),(dr))
+#endif
 #define P10DC_ORBITCTA_PLAN_SUM(c,db,lr) \
     p10dc_direct_resolved_high_plan_sum_cross5_rankformula_nometa4_abstract((c),(db),(lr))
 #if P10DC_RANKFORMULA_PAIR_MLP
