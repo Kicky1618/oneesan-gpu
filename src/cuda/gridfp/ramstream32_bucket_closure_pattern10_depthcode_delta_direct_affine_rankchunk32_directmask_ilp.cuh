@@ -15,7 +15,9 @@ static_assert(P10DC_RANKCHUNK32_MAX_L_PER_LEGAL_CODE <= 7u,
 
 // Batch independent memory chains in lock-step. Directmask mode carries an
 // absolute rankstream offset per LOW rank, so the ILP path no longer touches
-// rankchunk metadata, block-base tables, or warp shuffles at all.
+// rankchunk metadata, block-base tables, or warp shuffles at all. All selected
+// rank16 entries are prefetched before beginning source32 gathers, removing the
+// rank16 latency from the source-gather issue loop at the cost of registers.
 template<int ILP>
 __device__ __forceinline__ void p10dc_direct_resolved_high_plan_sum_rankchunk32_directmask_ilp(
     const P10DCDirectHighResolvedCtx& c, const BucketPhysicalBlock& db,
@@ -61,21 +63,27 @@ __device__ __forceinline__ void p10dc_direct_resolved_high_plan_sum_rankchunk32_
             if (pending[j])
                 rank_row[j] = p10dc_low_rankchunk32_directoff_row(db.hs, lr[j]);
 
+        constexpr uint32_t MAXR = P10DC_RANKCHUNK32_MAX_L_PER_LEGAL_CODE;
+        uint16_t source_rank[ILP][MAXR]{};
 #pragma unroll
-        for (uint32_t ordinal = 0;
-             ordinal < P10DC_RANKCHUNK32_MAX_L_PER_LEGAL_CODE; ++ordinal) {
-            uint16_t source_rank[ILP]{};
+        for (uint32_t ordinal = 0; ordinal < MAXR; ++ordinal) {
+#pragma unroll
+            for (int j = 0; j < ILP; ++j) {
+                if (pending[j] & uint8_t(1u << ordinal))
+                    source_rank[j][ordinal] = rank_row[j][ordinal];
+            }
+        }
+
+#pragma unroll
+        for (uint32_t ordinal = 0; ordinal < MAXR; ++ordinal) {
+            Count v[ILP]{};
             uint8_t take[ILP]{};
 #pragma unroll
             for (int j = 0; j < ILP; ++j) {
                 take[j] = uint8_t((pending[j] & uint8_t(1u << ordinal)) != 0u);
-                if (take[j]) source_rank[j] = rank_row[j][ordinal];
+                if (take[j])
+                    v[j] = c.cross_base[uint32_t(source_rank[j][ordinal])];
             }
-
-            Count v[ILP]{};
-#pragma unroll
-            for (int j = 0; j < ILP; ++j)
-                if (take[j]) v[j] = c.cross_base[uint32_t(source_rank[j])];
 #pragma unroll
             for (int j = 0; j < ILP; ++j) {
                 if (!take[j]) continue;
