@@ -31,13 +31,17 @@ int main(int argc, char** argv) {
     const int max_cluster = argc > 2 ? std::atoi(argv[2]) : 8;
     const std::uint64_t shared_kib = argc > 3
         ? std::strtoull(argv[3], nullptr, 10) : 228ULL;
+    const int force_cluster = argc > 4 ? std::atoi(argv[4]) : 0;
     if (W < 6 || W > 10 || (W & 1) ||
         (max_cluster != 1 && max_cluster != 2 &&
-         max_cluster != 4 && max_cluster != 8) || !shared_kib)
+         max_cluster != 4 && max_cluster != 8) || !shared_kib ||
+        (force_cluster != 0 && force_cluster != 2 &&
+         force_cluster != 4 && force_cluster != 8))
         return 2;
 
     constexpr std::uint32_t mod = static_cast<std::uint32_t>(kMod);
     const std::uint64_t shared_bytes = shared_kib * 1024ULL;
+    const bool force_remote = force_cluster != 0;
 
     const auto rt = oneesan::twocell::make_rank_tables();
     const auto st = oneesan::twocell::make_stationary_rank_tables(rt);
@@ -55,7 +59,6 @@ int main(int argc, char** argv) {
         input[static_cast<std::size_t>(r)] = static_cast<std::uint32_t>(x);
     }
 
-    // Independent exact CPU reference: ordinary one-step transfers and turns.
     for (int i = 0; i <= W - 4; ++i)
         exact = exact_forward(exact, W, i);
     exact = exact_turn(exact, W, true);
@@ -92,20 +95,36 @@ int main(int argc, char** argv) {
         using Kind = oneesan::twocell::SnakePairKind;
         switch (item.kind) {
             case Kind::ForwardFusion2:
-                rc = oneesan_two_cell_forward2_stage(
-                    d_values, W, item.start, max_cluster, shared_bytes, mod);
+                rc = force_remote
+                    ? oneesan_two_cell_forward2_stage_forced(
+                          d_values, W, item.start, force_cluster,
+                          shared_bytes, mod)
+                    : oneesan_two_cell_forward2_stage(
+                          d_values, W, item.start, max_cluster,
+                          shared_bytes, mod);
                 break;
             case Kind::RightBoundary:
-                rc = oneesan_two_cell_right_boundary_stage(
-                    d_values, W, max_cluster, shared_bytes, mod);
+                rc = force_remote
+                    ? oneesan_two_cell_right_boundary_stage_forced(
+                          d_values, W, force_cluster, shared_bytes, mod)
+                    : oneesan_two_cell_right_boundary_stage(
+                          d_values, W, max_cluster, shared_bytes, mod);
                 break;
             case Kind::ReverseFusion2:
-                rc = oneesan_two_cell_reverse2_stage(
-                    d_values, W, item.start, max_cluster, shared_bytes, mod);
+                rc = force_remote
+                    ? oneesan_two_cell_reverse2_stage_forced(
+                          d_values, W, item.start, force_cluster,
+                          shared_bytes, mod)
+                    : oneesan_two_cell_reverse2_stage(
+                          d_values, W, item.start, max_cluster,
+                          shared_bytes, mod);
                 break;
             case Kind::LeftBoundary:
-                rc = oneesan_two_cell_left_boundary_stage(
-                    d_values, W, max_cluster, shared_bytes, mod);
+                rc = force_remote
+                    ? oneesan_two_cell_left_boundary_stage_forced(
+                          d_values, W, force_cluster, shared_bytes, mod)
+                    : oneesan_two_cell_left_boundary_stage(
+                          d_values, W, max_cluster, shared_bytes, mod);
                 break;
         }
         if (rc != 0) {
@@ -113,7 +132,8 @@ int main(int argc, char** argv) {
                       << " pair=" << q
                       << " kind=" << oneesan::twocell::snake_pair_kind_name(item.kind)
                       << " start=" << item.start
-                      << " rc=" << rc << '\n';
+                      << " rc=" << rc
+                      << " forced_cluster=" << force_cluster << '\n';
             cudaFree(d_values);
             return 6;
         }
@@ -121,7 +141,8 @@ int main(int argc, char** argv) {
         std::cout << "snake-stage OK"
                   << " pair=" << q
                   << " kind=" << oneesan::twocell::snake_pair_kind_name(item.kind)
-                  << " start=" << item.start << '\n';
+                  << " start=" << item.start
+                  << " forced_cluster=" << force_cluster << '\n';
     }
     ck_snake(cudaDeviceSynchronize(), "snake final sync");
 
@@ -159,6 +180,8 @@ int main(int argc, char** argv) {
               << " global_vectors=1"
               << " layout_conversions=0"
               << " max_cluster=" << max_cluster
+              << " forced_cluster=" << force_cluster
+              << " remote_DSM_fullcycle=" << (force_remote ? 1 : 0)
               << '\n';
     return 0;
 }
