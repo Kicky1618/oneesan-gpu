@@ -14,28 +14,24 @@ MAIN_MATE_CACHE="${MAIN_MATE_CACHE:-1}"
 MAIN_PULL="${MAIN_PULL:-0}"
 BLOCK_PULL="${BLOCK_PULL:-0}"
 BLOCK_MATE_CACHE="${BLOCK_MATE_CACHE:-$BLOCK_PULL}"
+MAIN_PULL_ILP2="${MAIN_PULL_ILP2:-0}"
 HEIGHT_CACHE="${HEIGHT_CACHE:-0}"
 RANK_DELTA_CACHE="${RANK_DELTA_CACHE:-0}"
 PTXAS_VERBOSE="${PTXAS_VERBOSE:-1}"
 
-for name in FAST_SHARD_ADDRESS8 MAIN_MATE_CACHE MAIN_PULL BLOCK_PULL BLOCK_MATE_CACHE HEIGHT_CACHE RANK_DELTA_CACHE PTXAS_VERBOSE; do
+for name in FAST_SHARD_ADDRESS8 MAIN_MATE_CACHE MAIN_PULL BLOCK_PULL BLOCK_MATE_CACHE MAIN_PULL_ILP2 HEIGHT_CACHE RANK_DELTA_CACHE PTXAS_VERBOSE; do
   value="${!name}"
   if [[ "$value" != 0 && "$value" != 1 ]]; then echo "$name must be 0 or 1" >&2; exit 2; fi
 done
 if [[ "$MAIN_PULL" == 1 && "$MAIN_MATE_CACHE" != 1 ]]; then echo "MAIN_PULL=1 currently requires MAIN_MATE_CACHE=1" >&2; exit 2; fi
 if [[ "$BLOCK_PULL" == 1 && "$MAIN_PULL" != 1 ]]; then echo "BLOCK_PULL=1 requires MAIN_PULL=1" >&2; exit 2; fi
 if [[ "$BLOCK_MATE_CACHE" == 1 && "$BLOCK_PULL" != 1 ]]; then echo "BLOCK_MATE_CACHE=1 requires BLOCK_PULL=1" >&2; exit 2; fi
-if [[ "$HEIGHT_CACHE" == 1 && ( "$MAIN_PULL" != 1 || "$BLOCK_PULL" != 1 || "$MAIN_MATE_CACHE" != 1 || "$BLOCK_MATE_CACHE" != 1 ) ]]; then
-  echo "HEIGHT_CACHE=1 requires full-pull plus both MateID caches" >&2; exit 2
-fi
-# Keep the two arithmetic-for-HBM experiments isolated until B300 row-1 A/B
-# establishes each one's value. A fused rank+height state can follow later.
-if [[ "$HEIGHT_CACHE" == 1 && "$RANK_DELTA_CACHE" == 1 ]]; then
-  echo "HEIGHT_CACHE=1 and RANK_DELTA_CACHE=1 are separate A/B experiments for now" >&2; exit 2
-fi
-if [[ "$RANK_DELTA_CACHE" == 1 && ( "$MAIN_PULL" != 1 || "$BLOCK_PULL" != 1 || "$MAIN_MATE_CACHE" != 1 || "$BLOCK_MATE_CACHE" != 1 ) ]]; then
-  echo "RANK_DELTA_CACHE=1 requires MAIN_PULL=BLOCK_PULL=MAIN_MATE_CACHE=BLOCK_MATE_CACHE=1" >&2; exit 2
-fi
+if [[ "$MAIN_PULL_ILP2" == 1 && ( "$MAIN_PULL" != 1 || "$BLOCK_PULL" != 1 || "$MAIN_MATE_CACHE" != 1 || "$BLOCK_MATE_CACHE" != 1 ) ]]; then echo "MAIN_PULL_ILP2=1 requires full-pull plus both MateID caches" >&2; exit 2; fi
+if [[ "$HEIGHT_CACHE" == 1 && ( "$MAIN_PULL" != 1 || "$BLOCK_PULL" != 1 || "$MAIN_MATE_CACHE" != 1 || "$BLOCK_MATE_CACHE" != 1 ) ]]; then echo "HEIGHT_CACHE=1 requires full-pull plus both MateID caches" >&2; exit 2; fi
+if [[ "$RANK_DELTA_CACHE" == 1 && ( "$MAIN_PULL" != 1 || "$BLOCK_PULL" != 1 || "$MAIN_MATE_CACHE" != 1 || "$BLOCK_MATE_CACHE" != 1 ) ]]; then echo "RANK_DELTA_CACHE=1 requires full-pull plus both MateID caches" >&2; exit 2; fi
+# Keep register-ILP and the two extra-HBM state streams as independent B300 A/B
+# axes first; this makes PTXAS/register and wall-time attribution unambiguous.
+if (( MAIN_PULL_ILP2 + HEIGHT_CACHE + RANK_DELTA_CACHE > 1 )); then echo "MAIN_PULL_ILP2, HEIGHT_CACHE and RANK_DELTA_CACHE are separate A/B experiments for now" >&2; exit 2; fi
 
 if [[ -z "$LOW_LUT_K" ]]; then if (( N >= 24 )); then LOW_LUT_K=13; else LOW_LUT_K=0; fi; fi
 if [[ -z "$HIGH_LUT_K" ]]; then if (( N >= 24 )); then HIGH_LUT_K=13; else HIGH_LUT_K=0; fi; fi
@@ -48,6 +44,7 @@ if [[ "$BLOCK_PULL" == 1 ]]; then
   bash "$ONEESAN_ROOT/scripts/bench/b300-group-rank-drop-insert-proof.sh"
   bash "$ONEESAN_ROOT/scripts/bench/b300-block-closure-rank-incremental-proof.sh"
 fi
+if [[ "$MAIN_PULL_ILP2" == 1 ]]; then bash "$ONEESAN_ROOT/scripts/bench/b300-ilp2-partition-proof.sh"; fi
 if [[ "$HEIGHT_CACHE" == 1 ]]; then bash "$ONEESAN_ROOT/scripts/bench/b300-height-recurrence-proof.sh"; fi
 if [[ "$RANK_DELTA_CACHE" == 1 ]]; then
   bash "$ONEESAN_ROOT/scripts/bench/b300-rank-delta-recurrence-proof.sh"
@@ -59,9 +56,8 @@ if [[ "$MAIN_MATE_CACHE" == 1 ]]; then BUILD_SRC="$ONEESAN_BUILD_DIR/b300_hbm32_
 if [[ "$MAIN_PULL" == 1 ]]; then PULL_SRC="$ONEESAN_BUILD_DIR/b300_hbm32_n${N}_main_pull.cu";python3 "$ONEESAN_ROOT/scripts/build/gen-b300-main-pull.py" "$BUILD_SRC" "$PULL_SRC";BUILD_SRC="$PULL_SRC";fi
 if [[ "$BLOCK_PULL" == 1 ]]; then BLOCK_PULL_SRC="$ONEESAN_BUILD_DIR/b300_hbm32_n${N}_full_pull.cu";python3 "$ONEESAN_ROOT/scripts/build/gen-b300-block-pull.py" "$BUILD_SRC" "$BLOCK_PULL_SRC";BUILD_SRC="$BLOCK_PULL_SRC";fi
 if [[ "$BLOCK_MATE_CACHE" == 1 ]]; then BLOCK_MATE_SRC="$ONEESAN_BUILD_DIR/b300_hbm32_n${N}_full_pull_block_mate.cu";python3 "$ONEESAN_ROOT/scripts/build/gen-b300-block-mate-cache.py" "$BUILD_SRC" "$BLOCK_MATE_SRC";BUILD_SRC="$BLOCK_MATE_SRC";fi
-if [[ "$HEIGHT_CACHE" == 1 ]]; then
-  HEIGHT_SRC="$ONEESAN_BUILD_DIR/b300_hbm32_n${N}_height_cache.cu";python3 "$ONEESAN_ROOT/scripts/build/gen-b300-height-cache.py" "$BUILD_SRC" "$HEIGHT_SRC";BUILD_SRC="$HEIGHT_SRC"
-fi
+if [[ "$MAIN_PULL_ILP2" == 1 ]]; then ILP_SRC="$ONEESAN_BUILD_DIR/b300_hbm32_n${N}_main_ilp2.cu";python3 "$ONEESAN_ROOT/scripts/build/gen-b300-main-pull-ilp2.py" "$BUILD_SRC" "$ILP_SRC";BUILD_SRC="$ILP_SRC";fi
+if [[ "$HEIGHT_CACHE" == 1 ]]; then HEIGHT_SRC="$ONEESAN_BUILD_DIR/b300_hbm32_n${N}_height_cache.cu";python3 "$ONEESAN_ROOT/scripts/build/gen-b300-height-cache.py" "$BUILD_SRC" "$HEIGHT_SRC";BUILD_SRC="$HEIGHT_SRC";fi
 if [[ "$RANK_DELTA_CACHE" == 1 ]]; then
   RANK_DELTA_INPUT_SRC="$ONEESAN_BUILD_DIR/b300_hbm32_n${N}_rank_delta_input.cu";python3 "$ONEESAN_ROOT/scripts/build/normalize-b300-rank-delta-input.py" "$BUILD_SRC" "$RANK_DELTA_INPUT_SRC"
   RANK_DELTA_SRC="$ONEESAN_BUILD_DIR/b300_hbm32_n${N}_rank_delta_cache.cu";python3 "$ONEESAN_ROOT/scripts/build/gen-b300-rank-delta-cache.py" "$RANK_DELTA_INPUT_SRC" "$RANK_DELTA_SRC"
@@ -69,16 +65,9 @@ if [[ "$RANK_DELTA_CACHE" == 1 ]]; then
   RANK_DELTA_REPORT_SRC="$ONEESAN_BUILD_DIR/b300_hbm32_n${N}_rank_delta_report.cu";python3 "$ONEESAN_ROOT/scripts/build/gen-b300-rank-delta-report.py" "$RANK_DELTA_FREE_SRC" "$RANK_DELTA_REPORT_SRC";BUILD_SRC="$RANK_DELTA_REPORT_SRC"
 fi
 
-ROW_SRC="$ONEESAN_BUILD_DIR/b300_hbm32_n${N}_rowlimit.cu"
-cp "$BUILD_SRC" "$ROW_SRC"
-python3 "$ONEESAN_ROOT/scripts/build/lower-b300-row-limit.py" "$ROW_SRC" "$ROW_SRC"
-BUILD_SRC="$ROW_SRC"
-THREAD_SRC="$ONEESAN_BUILD_DIR/b300_hbm32_n${N}_runtime_threads.cu"
-python3 "$ONEESAN_ROOT/scripts/build/gen-b300-runtime-threads.py" "$BUILD_SRC" "$THREAD_SRC"
-BUILD_SRC="$THREAD_SRC"
-PLAN_SRC="$ONEESAN_BUILD_DIR/b300_hbm32_n${N}_plan_target.cu"
-python3 "$ONEESAN_ROOT/scripts/build/gen-b300-plan-target.py" "$BUILD_SRC" "$PLAN_SRC"
-BUILD_SRC="$PLAN_SRC"
+ROW_SRC="$ONEESAN_BUILD_DIR/b300_hbm32_n${N}_rowlimit.cu";cp "$BUILD_SRC" "$ROW_SRC";python3 "$ONEESAN_ROOT/scripts/build/lower-b300-row-limit.py" "$ROW_SRC" "$ROW_SRC";BUILD_SRC="$ROW_SRC"
+THREAD_SRC="$ONEESAN_BUILD_DIR/b300_hbm32_n${N}_runtime_threads.cu";python3 "$ONEESAN_ROOT/scripts/build/gen-b300-runtime-threads.py" "$BUILD_SRC" "$THREAD_SRC";BUILD_SRC="$THREAD_SRC"
+PLAN_SRC="$ONEESAN_BUILD_DIR/b300_hbm32_n${N}_plan_target.cu";python3 "$ONEESAN_ROOT/scripts/build/gen-b300-plan-target.py" "$BUILD_SRC" "$PLAN_SRC";BUILD_SRC="$PLAN_SRC"
 
 PTXAS_FLAGS=(); [[ "$PTXAS_VERBOSE" == 1 ]] && PTXAS_FLAGS+=("-Xptxas=-v")
 TMPDIR="$ONEESAN_TMP_DIR" nvcc -O3 -std=c++17 -lineinfo -arch="$ARCH" "${PTXAS_FLAGS[@]}" \
@@ -87,8 +76,9 @@ TMPDIR="$ONEESAN_TMP_DIR" nvcc -O3 -std=c++17 -lineinfo -arch="$ARCH" "${PTXAS_F
 echo "built $OUT"
 echo "  source=$SRC"
 echo "  build_source=$BUILD_SRC"
-echo "  n=$N width=$W arch=$ARCH low_lut_k=$LOW_LUT_K high_lut_k=$HIGH_LUT_K fast_shard_address8=$FAST_SHARD_ADDRESS8 main_mate_cache=$MAIN_MATE_CACHE main_pull=$MAIN_PULL block_pull=$BLOCK_PULL block_mate_cache=$BLOCK_MATE_CACHE height_cache=$HEIGHT_CACHE rank_delta_cache=$RANK_DELTA_CACHE ptxas_verbose=$PTXAS_VERBOSE"
+echo "  n=$N width=$W arch=$ARCH low_lut_k=$LOW_LUT_K high_lut_k=$HIGH_LUT_K fast_shard_address8=$FAST_SHARD_ADDRESS8 main_mate_cache=$MAIN_MATE_CACHE main_pull=$MAIN_PULL block_pull=$BLOCK_PULL block_mate_cache=$BLOCK_MATE_CACHE main_pull_ilp2=$MAIN_PULL_ILP2 height_cache=$HEIGHT_CACHE rank_delta_cache=$RANK_DELTA_CACHE ptxas_verbose=$PTXAS_VERBOSE"
 echo "  row_limit_env=B300_ROW_LIMIT default_rows=$W runtime_threads_env=GRIDFP_THREADS default_threads=256 planner_target_env=GRIDFP_PLAN_TARGET_MIB scratch_target_separate=1"
 echo "  block_closure_scan=endpoint_setbits block_closure_candidate_rank=incremental_delta rank_same_calls_per_closure_candidate=0"
+if [[ "$MAIN_PULL_ILP2" == 1 ]]; then echo "  main_pull_destinations_per_thread=2 memory_request_phases=mate,self,pair,block register_pressure_requires_ab=1";fi
 if [[ "$HEIGHT_CACHE" == 1 ]]; then echo "  height_cache_bytes_per_state=1 height_cache_hbm_rw_per_step_bytes=2 prefix_height_popcounts_removed=main_pair,block_closure recurrence_step=O1";fi
 if [[ "$RANK_DELTA_CACHE" == 1 ]]; then echo "  rank_delta_bytes_per_state=8 rank_delta_hbm_rw_per_step_bytes=16 prefix_rank_walk_removed=main_drop,block_lift moving_fixed_checks=0 conditional_scratch=1 coverage_report=1 input_compat_normalized=1";fi
