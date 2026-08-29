@@ -4,11 +4,13 @@ from __future__ import annotations
 import hashlib
 import importlib.util
 import json
+import sys
 import tempfile
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
 MOD_PATH = ROOT / "scripts" / "solve" / "solve_b300_exact_batch.py"
+sys.path.insert(0, str(MOD_PATH.parent))
 spec = importlib.util.spec_from_file_location("solve_b300_exact_batch", MOD_PATH)
 assert spec and spec.loader
 mod = importlib.util.module_from_spec(spec)
