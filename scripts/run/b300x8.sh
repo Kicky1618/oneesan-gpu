@@ -4,8 +4,13 @@ source "$(dirname -- "${BASH_SOURCE[0]}")/../lib/common.sh"
 
 N="${1:-27}"
 MOD="${2:-4294967291}"
+# Keep the large scratch budget for mate caches, but do not let the planner
+# widen n=27 beyond the 14-row split.  With a 27-row window cap and 64GiB target
+# it chooses 27..11 / 10..1, leaving only ten fixed bits and disabling the K=13
+# LOW/HIGH rank LUT fast paths.  A 14-row cap yields 27..14 / 13..1: LOW K=13
+# is exact for the first window and HIGH K=13 for the second.
 TARGET_MIB="${TARGET_MIB:-65536}"
-MAX_WINDOW="${MAX_WINDOW:-$N}"
+MAX_WINDOW="${MAX_WINDOW:-14}"
 NGPU="${NGPU:-8}"
 ROWS="${ROWS:-$((N+1))}"
 FAST_SHARD_ADDRESS8="${FAST_SHARD_ADDRESS8:-1}"
@@ -50,7 +55,7 @@ nvidia-smi -L
 nvidia-smi topo -m || true
 nvidia-smi --query-gpu=index,name,memory.total,memory.free --format=csv,noheader || true
 
-echo "N=$N MOD=$MOD GPUs=$NGPU rows=$ROWS requested_scratch=${TARGET_MIB}MiB reserve=${GRIDFP_VRAM_RESERVE_MIB}MiB max_window=$MAX_WINDOW fast_shard_address8=$FAST_SHARD_ADDRESS8 main_mate_cache=$MAIN_MATE_CACHE main_pull=$MAIN_PULL block_pull=$BLOCK_PULL block_mate_cache=$BLOCK_MATE_CACHE"
+echo "N=$N MOD=$MOD GPUs=$NGPU rows=$ROWS requested_scratch=${TARGET_MIB}MiB reserve=${GRIDFP_VRAM_RESERVE_MIB}MiB max_window=$MAX_WINDOW fast_shard_address8=$FAST_SHARD_ADDRESS8 main_mate_cache=$MAIN_MATE_CACHE main_pull=$MAIN_PULL block_pull=$BLOCK_PULL block_mate_cache=$BLOCK_MATE_CACHE GRIDFP_THREADS=${GRIDFP_THREADS:-256}"
 echo "BIN=$BIN"
 export GRIDFP_VRAM_RESERVE_MIB
 export B300_ROW_LIMIT="$ROWS"
