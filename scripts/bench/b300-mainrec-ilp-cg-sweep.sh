@@ -3,7 +3,7 @@ set -euo pipefail
 source "$(dirname -- "${BASH_SOURCE[0]}")/../lib/common.sh"
 
 ARCH="${ARCH:-native}";MOD="${MOD:-4294967291}";ROWS="${ROWS:-1}";TARGET_MIB="${TARGET_MIB:-65536}";MAX_WINDOW="${MAX_WINDOW:-14}";HIGH_DROP_CHUNK="${HIGH_DROP_CHUNK:-0}"
-THREADS_LIST="${THREADS_LIST:-128 256 512}";REPEATS="${REPEATS:-1}";PREFIX="${PREFIX:-$ONEESAN_ROOT/work/b300_mainrec_ilpcg_hd${HIGH_DROP_CHUNK}_row${ROWS}}";LOGDIR="${LOGDIR:-${PREFIX}_logs}";RESULT="${RESULT:-${PREFIX}.tsv}";RESOURCE="${RESOURCE:-${PREFIX}_ptxas.tsv}"
+THREADS_LIST="${THREADS_LIST:-128 256 512}";REPEATS="${REPEATS:-1}";PREFIX="${PREFIX:-$ONEESAN_ROOT/work/b300_mainrec_ilpcg_hd${HIGH_DROP_CHUNK}_row${ROWS}}";LOGDIR="${LOGDIR:-${PREFIX}_logs}";RESULT="${RESULT:-${PREFIX}.tsv}";RESOURCE="${RESOURCE:-${PREFIX}_ptxas.tsv}";WINNER_ENV="${WINNER_ENV:-${PREFIX}_winner.env}"
 mkdir -p "$LOGDIR" "$ONEESAN_BUILD_DIR" "$(dirname "$RESULT")"
 [[ "$HIGH_DROP_CHUNK" == 0 || "$HIGH_DROP_CHUNK" == 1 ]]||exit 2
 command -v nvcc >/dev/null||{ echo 'nvcc required' >&2;exit 2; };command -v nvidia-smi >/dev/null||{ echo 'nvidia-smi required' >&2;exit 2; };(( $(nvidia-smi --query-gpu=index --format=csv,noheader|wc -l)>=8 ))||{ echo 'need 8 visible GPUs' >&2;exit 2; }
@@ -35,13 +35,15 @@ run_one(){
   printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' "$mode" "$t" "$r" "$(field residue "$line")" "$(field wall_s "$line")" "$hg" "$hf" "$mc_avg" "$mc_max" >>"$RESULT"
 }
 for t in $THREADS_LIST;do [[ "$t" =~ ^[0-9]+$ ]]&&((t>=32&&t<=1024&&t%32==0))||exit 2;while IFS=$'\t' read -r mode bin;do for((r=1;r<=REPEATS;++r));do echo "=== $mode threads=$t repeat=$r ===" >&2;run_one "$mode" "$bin" "$t" "$r";done;done<"$LOGDIR/binaries.tsv";done
-python3 - "$RESULT" "$HIGH_DROP_CHUNK" "$RESOURCE" <<'PY'
-import csv,math,statistics,sys
-rows=list(csv.DictReader(open(sys.argv[1]),delimiter='\t'));hd=sys.argv[2]
-resources=list(csv.DictReader(open(sys.argv[3]),delimiter='\t'))
+python3 - "$RESULT" "$HIGH_DROP_CHUNK" "$RESOURCE" "$LOGDIR/binaries.tsv" "$WINNER_ENV" <<'PY'
+import csv,math,statistics,sys,shlex
+result,hd,resource,bins_path,winner=sys.argv[1:]
+rows=list(csv.DictReader(open(result),delimiter='\t'))
+resources=list(csv.DictReader(open(resource),delimiter='\t'))
 if not rows:raise SystemExit('no mainrec ILP/CG results')
 res={r['residue'] for r in rows}
 if len(res)!=1:raise SystemExit('FATAL mainrec ILP/CG residue mismatch '+repr({(r['mode'],r['threads']):r['residue'] for r in rows}))
+bins={m:p for m,p in csv.reader(open(bins_path),delimiter='\t')}
 rb={}
 for r in resources:
     try: regs=int(r['registers']); ss=int(r['spill_store_bytes']); sl=int(r['spill_load_bytes'])
@@ -78,6 +80,25 @@ print(f'b300_mainrec_ilpcg_best_spill_load_bytes={best[6]}')
 print(f'b300_mainrec_ilpcg_spill_free_pool={int(bool(clean))}')
 print(f'b300_mainrec_ilpcg_speedup_vs_ilp2={base[0]/best[0]:.9f}x')
 print(f'b300_mainrec_ilpcg_mc_delta_vs_ilp2={best[3]-base[3]:.3f}pp')
+if best[1] not in bins or base[1] not in bins: raise SystemExit('winner binary lookup failed')
+def q(v): return shlex.quote(str(v))
+lanes=int(best[1][3]) if best[1].startswith('ilp') and best[1][3].isdigit() else 2
+cg=int(best[1].endswith('cg'))
+with open(winner,'w') as f:
+    f.write('B300_MAINREC_WINNER_MODE='+q(best[1])+'\n')
+    f.write('B300_MAINREC_WINNER_BIN='+q(bins[best[1]])+'\n')
+    f.write('B300_MAINREC_WINNER_THREADS='+q(best[2])+'\n')
+    f.write('B300_MAINREC_WINNER_ILP='+q(lanes)+'\n')
+    f.write('B300_MAINREC_WINNER_RANDOM_CG='+q(cg)+'\n')
+    f.write('B300_MAINREC_BASE_BIN='+q(bins[base[1]])+'\n')
+    f.write('B300_MAINREC_BASE_THREADS='+q(base[2])+'\n')
+    f.write('B300_MAINREC_HIGH_DROP_CHUNK='+q(hd)+'\n')
+    f.write('B300_MAINREC_WINNER_WALL_S='+q(f'{best[0]:.9f}')+'\n')
+    f.write('B300_MAINREC_WINNER_MC_AVG_PCT='+q(f'{best[3]:.3f}')+'\n')
+    f.write('B300_MAINREC_WINNER_REGISTERS='+q(best[4])+'\n')
+    f.write('B300_MAINREC_WINNER_SPILL_STORE_BYTES='+q(best[5])+'\n')
+    f.write('B300_MAINREC_WINNER_SPILL_LOAD_BYTES='+q(best[6])+'\n')
+print(f'b300_mainrec_ilpcg_winner_env={winner}')
 PY
 cat "$RESOURCE"
-echo "b300-mainrec-ilp-cg-sweep OK result=$RESULT resources=$RESOURCE" >&2
+echo "b300-mainrec-ilp-cg-sweep OK result=$RESULT resources=$RESOURCE winner_env=$WINNER_ENV" >&2
