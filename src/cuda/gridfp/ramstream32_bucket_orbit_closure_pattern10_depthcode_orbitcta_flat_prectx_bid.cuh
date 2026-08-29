@@ -7,10 +7,11 @@
 #error "flat prectx-bid scheduler requires compact forward+reverse prectx"
 #endif
 
-// Exact flat scheduler with no q->bucket offset search. The existing compact
-// prectx padding byte carries the source main bid. One compact context is
-// loaded once per orbit, then reused both for bid selection and closure-row
-// restoration. Runtime depthcode decoding is unnecessary on this path.
+// Exact flat scheduler with no q->bucket offset search. The compact prectx
+// padding byte carries the source main bid. FUSED=0 reads the pad first and
+// reloads the context only after xb/jb/db are resolved, minimizing live
+// registers. FUSED=1 loads the complete compact context once and reuses it for
+// both bid and closure rows. Both paths skip runtime depthcode decoding.
 __global__ void bucket_high_orbit_closure_pattern10_depthcode_orbitcta_flat_prectx_bid_kernel(int p) {
     const uint32_t nblocks = D_BKF_MAIN_NBLOCKS;
     if (!nblocks) return;
@@ -37,9 +38,13 @@ __global__ void bucket_high_orbit_closure_pattern10_depthcode_orbitcta_flat_prec
             const uint32_t q = nn
                 ? D_BKF_HIGH_NN_OFF[base_off] + k
                 : c.n1 + k - c.n0;
+#if P10DC_RANKFORMULA_PRECTX_FLAT_BID_FUSED
             const P10DCHighClosureCompactPreCtx z =
                 p10dc_load_forward_compact_prectx_flat(q, nn);
             const uint32_t bid = uint32_t(z.pad);
+#else
+            const uint32_t bid = p10dc_forward_compact_prectx_flat_bid(q, nn);
+#endif
             if (bid < nblocks) {
                 const BucketOrbitOp op = nn ? D_BKF_HIGH_NN[q] : D_BKF_HIGH_NRNL[q];
                 const uint32_t sl = bkf_orbit_src(op), jl = bkf_orbit_partner(op), dl = bkf_orbit_drop(op);
@@ -57,7 +62,11 @@ __global__ void bucket_high_orbit_closure_pattern10_depthcode_orbitcta_flat_prec
                     p10dc_direct_resolve_high_io(
                         c, ss, js, ds,
                         bkf_loc_rank(sl), bkf_loc_rank(jl), bkf_loc_rank(dl));
+#if P10DC_RANKFORMULA_PRECTX_FLAT_BID_FUSED
                     p10dc_apply_loaded_compact_prectx(c, z);
+#else
+                    p10dc_apply_forward_prectx(c, q, nn);
+#endif
                     c.kind = uint8_t(nn ? CPU_ORBIT_NN : CPU_ORBIT_NR);
                     c.valid = 1;
                 }
@@ -109,9 +118,13 @@ __global__ void bucket_reverse_high_pattern10_depthcode_orbitcta_flat_prectx_bid
                 q = D_RS54_HIGH_NL_OFF[base_off] + k - c.n0 - c.n1;
                 op = D_RS54_HIGH_NL[q];
             }
+#if P10DC_RANKFORMULA_PRECTX_FLAT_BID_FUSED
             const P10DCHighClosureCompactPreCtx z =
                 p10dc_load_reverse_compact_prectx_flat(q, kind);
             const uint32_t bid = uint32_t(z.pad);
+#else
+            const uint32_t bid = p10dc_reverse_compact_prectx_flat_bid(q, kind);
+#endif
             if (bid < nblocks) {
                 const uint32_t sl = bkf_orbit_src(op), jl = bkf_orbit_partner(op), dl = bkf_orbit_drop(op);
                 const uint32_t ss = bkf_loc_owner(sl), js = bkf_loc_owner(jl), ds = bkf_loc_owner(dl);
@@ -122,7 +135,11 @@ __global__ void bucket_reverse_high_pattern10_depthcode_orbitcta_flat_prectx_bid
                     p10dc_direct_resolve_high_io(
                         c, ss, js, ds,
                         bkf_loc_rank(sl), bkf_loc_rank(jl), bkf_loc_rank(dl));
+#if P10DC_RANKFORMULA_PRECTX_FLAT_BID_FUSED
                     p10dc_apply_loaded_compact_prectx(c, z);
+#else
+                    p10dc_apply_reverse_prectx(c, q, kind);
+#endif
                     c.kind = uint8_t(kind);
                     c.valid = 1;
                 }
