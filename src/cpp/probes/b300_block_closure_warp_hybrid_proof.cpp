@@ -29,6 +29,10 @@ static bool valid_mate(MateID m,int W){
     return h==0;
 }
 static int endpoint_count(MateID m,int W){int n=0;for(int p=0;p<W;++p){auto v=mget(m,p);n+=(v==R||v==L);}return n;}
+static int endpoint_count_fast(MateID m){
+    constexpr std::uint64_t EVEN=0x5555555555555555ULL;
+    return __builtin_popcountll((std::uint64_t(m)|(std::uint64_t(m)>>1))&EVEN);
+}
 static Count addm(Count a,Count b){std::uint64_t z=std::uint64_t(a)+b;if(z>=MOD)z-=MOD;return Count(z);}
 
 int main(){
@@ -44,15 +48,19 @@ int main(){
                 ++closures;
                 const MateID d=minsert(b,p-1,N);
                 const int ep=endpoint_count(d,W);
+                const int fast=endpoint_count_fast(b);
+                if(ep!=fast||fast!=endpoint_count(b,W-1)){
+                    std::cerr<<"endpoint-count invariant mismatch W="<<W<<" p="<<p<<" ep="<<ep<<" fast="<<fast<<"\n";return 2;
+                }
                 MateID cand[32]{};const int n=ordinary_closure_preimages_partial(d,W,p,cand);
-                if(n<0||n>32)return 2;
+                if(n<0||n>32)return 3;
                 Count seq=0;std::array<Count,32> vals{};int nv=0;
                 for(int k=0;k<n;++k){
                     if(!valid_mate(cand[k],W)){++rejected;continue;}
                     vals[nv]=Count(rng()%MOD);seq=addm(seq,vals[nv]);++nv;++candidates;
                 }
                 for(std::size_t ti=0;ti<THRESH.size();++ti){
-                    const int t=THRESH[ti];const bool use_warp=(t==0)||ep>=t;
+                    const int t=THRESH[ti];const bool use_warp=(t==0)||fast>=t;
                     if(use_warp)++warp[ti];else ++scalar[ti];
                     Count got=0;
                     if(use_warp){
@@ -62,17 +70,17 @@ int main(){
                     }else{
                         for(int k=0;k<nv;++k)got=addm(got,vals[k]);
                     }
-                    if(got!=seq){std::cerr<<"hybrid sum mismatch W="<<W<<" p="<<p<<" threshold="<<t<<"\n";return 3;}
+                    if(got!=seq){std::cerr<<"hybrid sum mismatch W="<<W<<" p="<<p<<" threshold="<<t<<"\n";return 4;}
                 }
             }
         }
     }
-    if(!closures||!candidates||!rejected)return 4;
+    if(!closures||!candidates||!rejected)return 5;
     bool mixed=false;for(std::size_t i=1;i<THRESH.size();++i)mixed|=scalar[i]&&warp[i];
-    if(!mixed)return 5;
+    if(!mixed)return 6;
     std::cout<<"b300-block-closure-warp-hybrid-proof OK exhaustive_width_max=12 closures="<<closures
              <<" valid_candidates="<<candidates<<" rejected_candidates="<<rejected;
     for(std::size_t i=0;i<THRESH.size();++i)std::cout<<" t"<<THRESH[i]<<"_scalar="<<scalar[i]<<" t"<<THRESH[i]<<"_warp="<<warp[i];
-    std::cout<<" disjoint_partition=1 scalar_sum_exact=1 warp_sum_exact=1 rl_filter=valid_source_only exact=1\n";
+    std::cout<<" endpoint_count_insert_n_invariant=1 endpoint_count_fast_popcount=1 disjoint_partition=1 scalar_sum_exact=1 warp_sum_exact=1 rl_filter=valid_source_only exact=1\n";
     return 0;
 }
