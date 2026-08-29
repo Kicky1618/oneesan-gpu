@@ -8,10 +8,13 @@ PREFIX="${PREFIX:-$ONEESAN_ROOT/work/b300_hbm_profile_orbit_scheduler21}"
 [[ -f "$PROFILE_IN" ]] || { echo "missing PROFILE_IN=$PROFILE_IN" >&2; exit 2; }
 # shellcheck disable=SC1090
 source "$PROFILE_IN"
+ORBIT_PRECTX_COMPACT="${ORBIT_PRECTX_COMPACT:-0}"
 
-for n in ORBIT_PROFILE ORBIT_COL_ILP ORBIT_SPARSE64 ORBIT_SORTED ORBIT_CPASYNC_PAIR ORBIT_PRECTX_FORWARD ORBIT_PRECTX_REVERSE ORBIT_PRECTX_COMPACT; do
+for n in ORBIT_PROFILE ORBIT_COL_ILP ORBIT_SPARSE64 ORBIT_SORTED ORBIT_CPASYNC_PAIR ORBIT_PRECTX_FORWARD ORBIT_PRECTX_REVERSE; do
   [[ -n "${!n+x}" ]] || { echo "profile missing $n" >&2; exit 2; }
 done
+[[ "$ORBIT_PRECTX_COMPACT" == 0 || "$ORBIT_PRECTX_COMPACT" == 1 ]] || { echo 'ORBIT_PRECTX_COMPACT must be 0 or 1' >&2; exit 2; }
+[[ "$ORBIT_PRECTX_COMPACT" == 0 || "$ORBIT_PRECTX_FORWARD" == 1 || "$ORBIT_PRECTX_REVERSE" == 1 ]] || { echo 'compact orbit prectx requires prectx' >&2; exit 2; }
 [[ "$ORBIT_SORTED" == 0 ]] || { echo 'flat orbit scheduler currently uses the unsorted orbit-CTA table path' >&2; exit 2; }
 WINNER_ENV="${WINNER_ENV:-${PREFIX}_winner.env}"
 
@@ -28,9 +31,9 @@ source "$WINNER_ENV"
 [[ "$ORBITCTA_FLAT" == 0 || "$ORBITCTA_FLAT" == 1 ]] || { echo 'bad ORBITCTA_FLAT winner' >&2; exit 3; }
 [[ "$BUCKET_ORBITCTA_FLAT_BLOCKS_PER_SM" =~ ^[0-9]+$ ]] && (( BUCKET_ORBITCTA_FLAT_BLOCKS_PER_SM > 0 )) || { echo 'bad flat blocks/SM winner' >&2; exit 3; }
 
-python3 - "$PROFILE_IN" "$PROFILE_OUT" "$ORBITCTA_FLAT" "$BUCKET_ORBITCTA_FLAT_BLOCKS_PER_SM" "$ORBITCTA_SCHEDULER_PROFILE" <<'PY'
+python3 - "$PROFILE_IN" "$PROFILE_OUT" "$ORBITCTA_FLAT" "$BUCKET_ORBITCTA_FLAT_BLOCKS_PER_SM" "$ORBITCTA_SCHEDULER_PROFILE" "$ORBIT_PRECTX_COMPACT" <<'PY'
 import sys,re
-src,out,flat,psm,sched=sys.argv[1:]
+src,out,flat,psm,sched,compact=sys.argv[1:]
 kv={}
 order=[]
 for line in open(src):
@@ -39,6 +42,8 @@ for line in open(src):
  k,v=s.split('=',1)
  if k not in kv: order.append(k)
  kv[k]=v.strip('"')
+kv.setdefault('ORBIT_PRECTX_COMPACT',compact)
+if 'ORBIT_PRECTX_COMPACT' not in order: order.append('ORBIT_PRECTX_COMPACT')
 root=re.sub(r'_sched_.*$','',kv['ORBIT_PROFILE'])
 kv['ORBIT_PROFILE']=f'{root}_sched_{sched}'
 kv['ORBITCTA_FLAT']=flat
