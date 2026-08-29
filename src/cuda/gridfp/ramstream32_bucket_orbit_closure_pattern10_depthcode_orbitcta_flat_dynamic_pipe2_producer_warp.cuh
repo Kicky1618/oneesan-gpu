@@ -9,6 +9,10 @@
 static_assert(P10DC_ORBITCTA_COL_ILP == 1 || P10DC_ORBITCTA_COL_ILP == 2 ||
               P10DC_ORBITCTA_COL_ILP == 4,
               "pipe2 producer-warp columns require ILP 1,2,4");
+#ifdef P10DC_ORBITCTA_PLAN_SUM_QUAD
+static_assert(P10DC_ORBITCTA_COL_ILP == 4,
+              "producer-warp quad plan sum requires ILP=4");
+#endif
 
 // Warp 0 is the producer. Remaining whole warps cover every column with a
 // compact logical thread id, preserving 32-lane contiguous accesses inside each
@@ -16,6 +20,11 @@ static_assert(P10DC_ORBITCTA_COL_ILP == 1 || P10DC_ORBITCTA_COL_ILP == 2 ||
 // 1/8 share only after lane 0 finishes preparing the next orbit. A partial last
 // warp would violate that contract for warp-level plan-sum helpers, so non-warp-
 // aligned block sizes fall back to the ordinary exact column executor.
+//
+// When the enclosing rankformula path exposes a native four-column plan sum,
+// keep that MLP here too: producer-warp used to silently degrade ILP4 into two
+// pair calls. Full groups now issue one quad gather; only the final partial
+// group falls back to pair/single exact handling.
 __device__ __forceinline__ void p10dc_orbitcta_flat_forward_columns_pipe2_producer_warp(
     P10DC_ORBITCTA_CTX& c
 ) {
@@ -49,7 +58,30 @@ __device__ __forceinline__ void p10dc_orbitcta_flat_forward_columns_pipe2_produc
 #endif
             }
         }
+#ifdef P10DC_ORBITCTA_PLAN_SUM_QUAD
+        if (valid[0] && valid[1] && valid[2] && valid[3]) {
+            P10DC_ORBITCTA_PLAN_SUM_QUAD(
+                c, c.db, lr[0], lr[1], lr[2], lr[3],
+                extra[0], extra[1], extra[2], extra[3]);
+        } else {
 #ifdef P10DC_ORBITCTA_PLAN_SUM_PAIR
+#pragma unroll
+            for (int j = 0; j < 4; j += 2) {
+                if (valid[j] && valid[j + 1]) {
+                    P10DC_ORBITCTA_PLAN_SUM_PAIR(
+                        c, c.db, lr[j], lr[j + 1], extra[j], extra[j + 1]);
+                } else {
+                    if (valid[j]) extra[j] = P10DC_ORBITCTA_PLAN_SUM(c, c.db, lr[j]);
+                    if (valid[j + 1]) extra[j + 1] = P10DC_ORBITCTA_PLAN_SUM(c, c.db, lr[j + 1]);
+                }
+            }
+#else
+#pragma unroll
+            for (int j = 0; j < 4; ++j)
+                if (valid[j]) extra[j] = P10DC_ORBITCTA_PLAN_SUM(c, c.db, lr[j]);
+#endif
+        }
+#elif defined(P10DC_ORBITCTA_PLAN_SUM_PAIR)
 #pragma unroll
         for (int j = 0; j < ILP; j += 2) {
             if constexpr (ILP > 1) {
@@ -125,7 +157,30 @@ __device__ __forceinline__ void p10dc_orbitcta_flat_reverse_columns_pipe2_produc
 #endif
             }
         }
+#ifdef P10DC_ORBITCTA_PLAN_SUM_QUAD
+        if (valid[0] && valid[1] && valid[2] && valid[3]) {
+            P10DC_ORBITCTA_PLAN_SUM_QUAD(
+                c, sum_db, lr[0], lr[1], lr[2], lr[3],
+                extra[0], extra[1], extra[2], extra[3]);
+        } else {
 #ifdef P10DC_ORBITCTA_PLAN_SUM_PAIR
+#pragma unroll
+            for (int j = 0; j < 4; j += 2) {
+                if (valid[j] && valid[j + 1]) {
+                    P10DC_ORBITCTA_PLAN_SUM_PAIR(
+                        c, sum_db, lr[j], lr[j + 1], extra[j], extra[j + 1]);
+                } else {
+                    if (valid[j]) extra[j] = P10DC_ORBITCTA_PLAN_SUM(c, sum_db, lr[j]);
+                    if (valid[j + 1]) extra[j + 1] = P10DC_ORBITCTA_PLAN_SUM(c, sum_db, lr[j + 1]);
+                }
+            }
+#else
+#pragma unroll
+            for (int j = 0; j < 4; ++j)
+                if (valid[j]) extra[j] = P10DC_ORBITCTA_PLAN_SUM(c, sum_db, lr[j]);
+#endif
+        }
+#elif defined(P10DC_ORBITCTA_PLAN_SUM_PAIR)
 #pragma unroll
         for (int j = 0; j < ILP; j += 2) {
             if constexpr (ILP > 1) {
