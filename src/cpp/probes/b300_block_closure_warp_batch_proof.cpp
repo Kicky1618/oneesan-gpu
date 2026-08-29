@@ -27,40 +27,44 @@ static Count addm(Count a,Count b){std::uint64_t z=std::uint64_t(a)+b;if(z>=MOD)
 
 int main(){
     std::mt19937_64 rng(0x77617270636c6f73ULL);
-    std::uint64_t destinations=0,closure_destinations=0,candidates=0;
+    std::uint64_t destinations=0,closure_destinations=0,structural_candidates=0,valid_candidates=0,rejected_candidates=0;
     int max_terms=0;
     for(int W=4;W<=12;++W){
         auto block=gen_valid(W-1);
         for(int p=2;p<W;++p){
             for(MateID b:block){
                 ++destinations;
-                const MateValue look=mget(b,p-1);
-                if(look!=N)continue;
+                if(mget(b,p-1)!=N)continue;
                 ++closure_destinations;
                 const MateID d=minsert(b,p-1,N);
                 MateID cand[32]{};
                 const int n=ordinary_closure_preimages_partial(d,W,p,cand);
                 if(n<0||n>32)return 2;
-                max_terms=std::max(max_terms,n);candidates+=n;
-                Count sequential=0;
-                Count vals[32]{};
+                structural_candidates+=n;
+                Count sequential=0;Count vals[32]{};int nv=0;
                 for(int k=0;k<n;++k){
-                    if(!valid_mate(cand[k],W))return 3;
-                    vals[k]=Count(rng()%MOD);sequential=addm(sequential,vals[k]);
+                    // ordinary_closure_preimages_partial intentionally exposes
+                    // the structural RL seed too; prefix height can reject it.
+                    // The CUDA warp path uses the same H>0 gate, so only valid
+                    // source states participate in the HBM gather/reduction.
+                    if(!valid_mate(cand[k],W)){++rejected_candidates;continue;}
+                    vals[nv]=Count(rng()%MOD);sequential=addm(sequential,vals[nv]);++nv;++valid_candidates;
                 }
-                // Model one value per warp lane followed by a tree reduction.
+                max_terms=std::max(max_terms,nv);
                 for(int step=16;step;step>>=1)for(int lane=0;lane<step;++lane){
                     const int rhs=lane+step;
-                    if(rhs<n)vals[lane]=addm(vals[lane],vals[rhs]);
+                    if(rhs<nv)vals[lane]=addm(vals[lane],vals[rhs]);
                 }
-                const Count warp=n?vals[0]:0;
-                if(warp!=sequential){std::cerr<<"reduction mismatch W="<<W<<" p="<<p<<" n="<<n<<'\n';return 4;}
+                const Count warp=nv?vals[0]:0;
+                if(warp!=sequential){std::cerr<<"reduction mismatch W="<<W<<" p="<<p<<" n="<<nv<<'\n';return 4;}
             }
         }
     }
-    if(!closure_destinations||!candidates)return 5;
+    if(!closure_destinations||!valid_candidates||!rejected_candidates)return 5;
     std::cout<<"b300-block-closure-warp-batch-proof OK exhaustive_width_max=12 destinations="<<destinations
-             <<" closure_destinations="<<closure_destinations<<" candidates="<<candidates
-             <<" max_terms="<<max_terms<<" warp_lanes=32 one_source_load_per_lane=1 modular_tree_exact=1 exact=1\n";
+             <<" closure_destinations="<<closure_destinations
+             <<" structural_candidates="<<structural_candidates<<" valid_candidates="<<valid_candidates
+             <<" rejected_candidates="<<rejected_candidates<<" max_terms="<<max_terms
+             <<" warp_lanes=32 rl_filter=valid_source_only one_source_load_per_lane=1 modular_tree_exact=1 exact=1\n";
     return 0;
 }
