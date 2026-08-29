@@ -93,8 +93,10 @@ rc="${FAKE_STAGEF_RC:-0}"
 : "${PREPARE_ENV:?}"
 cat >"$PREPARE_ENV" <<EOT
 B300_HYBRID8_NEXTSELF_PREPARED=1
+B300_HYBRID8_NEXTSELF_PREPARED_WIDTH=4
+B300_HYBRID8_NEXTSELF_PREPARED_DISTANCE=2
 B300_HYBRID8_NEXTSELF_PREPARED_BIN=$ONEESAN_ROOT/bin/composed
-B300_HYBRID8_NEXTSELF_PREPARED_LABEL=composed
+B300_HYBRID8_NEXTSELF_PREPARED_LABEL=composed_w4_d2
 B300_HYBRID8_NEXTSELF_PREPARED_THREADS=512
 B300_HYBRID8_NEXTSELF_PREPARED_CONTROL_BIN=$ONEESAN_ROOT/bin/stagef-control
 B300_HYBRID8_NEXTSELF_PREPARED_CONTROL_LABEL=stagef_control
@@ -145,6 +147,7 @@ run_case(){
   local prefix="$root/work/$name" capture="$root/work/$name.capture" out="$root/work/$name.out" err="$root/work/$name.err"
   FAKE_NEXTSELF_RC="$next_rc" FAKE_HYBRID_RC="$hybrid_rc" FAKE_STAGEF_RC="$stagef_rc" FAKE_CAPTURE="$capture" \
     PROFILE_FILE="$profile" PREFIX="$prefix" RUN_NEXTSELF_STAGE=1 RUN_HYBRID_STAGE=1 RUN_HYBRID_NS_STAGE=1 \
+    HYBRID_NS_WIDTH_LIST='1 2 4 8' HYBRID_NS_DISTANCE_LIST='1 2 4' \
     bash "$grand" 27 >"$out" 2>"$err"
   [[ -s "$capture" ]] || { echo "$name missing fake race capture" >&2; exit 4; }
   local summary="${prefix}.race_grand.env"
@@ -152,6 +155,13 @@ run_case(){
   # shellcheck disable=SC1090
   source "$summary"
   [[ "$B300_GRAND_MODE" == "$expected_mode" ]] || { echo "$name mode=$B300_GRAND_MODE expected=$expected_mode" >&2; exit 4; }
+  [[ "$B300_GRAND_HYBRID8_NEXTSELF_SEARCH_WIDTHS" == '1 2 4 8' ]] || { echo "$name width search provenance lost" >&2; exit 4; }
+  [[ "$B300_GRAND_HYBRID8_NEXTSELF_SEARCH_DISTANCES" == '1 2 4' ]] || { echo "$name distance search provenance lost" >&2; exit 4; }
+  if [[ "$expected_mode" == hybrid8_nextself_composed_* ]]; then
+    [[ "$B300_GRAND_HYBRID8_NEXTSELF_WIDTH" == 4 && "$B300_GRAND_HYBRID8_NEXTSELF_DISTANCE" == 2 ]] || { echo "$name prepared geometry lost" >&2; exit 4; }
+  else
+    [[ "$B300_GRAND_HYBRID8_NEXTSELF_WIDTH" == 0 && "$B300_GRAND_HYBRID8_NEXTSELF_DISTANCE" == 0 ]] || { echo "$name rejected geometry leaked" >&2; exit 4; }
+  fi
   python3 - "$name" "$capture" "$root" "$@" <<'PY'
 from pathlib import Path
 import sys
@@ -173,7 +183,6 @@ print(f'grand_contract_case={name} OK')
 PY
 }
 
-# P, B, E1, E2, E3 expected binary basenames.
 run_case composed_all 0 0 0 hybrid8_nextself_composed_grand \
   composed stagef-control hybrid-base sat-nextself joint-primary
 run_case stagef_rejected 0 0 4 nextself_hybrid8_joint \
@@ -185,4 +194,4 @@ run_case hybrid_rejected 0 4 0 nextself_joint \
 run_case transforms_rejected 4 4 0 joint_fallback \
   joint-primary joint-base '' '' ''
 
-echo 'b300_grand_selector_contract_preflight=OK cases=5 composed=OK stagef_reject=OK nextself_reject=OK hybrid_reject=OK joint_fallback=OK candidate_env=OK select_only=OK gpu_work=0'
+echo 'b300_grand_selector_contract_preflight=OK cases=5 composed=OK geometry=w4d2 stagef_reject=OK nextself_reject=OK hybrid_reject=OK joint_fallback=OK candidate_env=OK select_only=OK gpu_work=0'
