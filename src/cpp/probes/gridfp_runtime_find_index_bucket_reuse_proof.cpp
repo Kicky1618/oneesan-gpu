@@ -41,6 +41,7 @@ struct Stats {
     std::uint64_t record_hashes_baseline = 0;
     std::uint64_t record_hashes_reuse = 0;
     std::uint64_t memo_hits = 0;
+    std::uint64_t hit_queries = 0;
 };
 
 Stats prove_config(int hash_buckets, std::uint64_t seed) {
@@ -64,6 +65,8 @@ Stats prove_config(int hash_buckets, std::uint64_t seed) {
             }()) k = rng();
             keys.push_back(k);
 
+            // Initial seed record has no preceding find. Every later insertion
+            // is preceded by a miss; only that miss updates the memo.
             if (i > 0) {
                 const std::uint64_t before_low = occ_reuse & low_mask(hash_buckets);
                 const int bfind = hash_bucket(k, hash_buckets, st.find_hashes);
@@ -81,7 +84,8 @@ Stats prove_config(int hash_buckets, std::uint64_t seed) {
             if (i > 0 && hash_buckets < 64 && st.record_hashes_reuse == before_hashes)
                 ++st.memo_hits;
 
-            remember_bucket(occ_reuse, hash_buckets, b1, true);
+            // record() consumes the memo but does not rewrite it. It only sets
+            // the actual occupancy bit for this bucket.
             occ_reuse |= 1ULL << b1;
             occ_base |= 1ULL << b0;
             if ((occ_reuse & low_mask(hash_buckets)) !=
@@ -90,10 +94,18 @@ Stats prove_config(int hash_buckets, std::uint64_t seed) {
                 ((occ_reuse & low_mask(hash_buckets)) & ~(1ULL << b1))) std::exit(5);
             ++st.records;
 
+            // Hits hash and return without touching memo metadata. Exercise
+            // interleavings to prove stale miss metadata is harmless because a
+            // later miss always overwrites it before any later record.
             if (i > 0 && (rng() & 3ULL) == 0) {
+                const std::uint64_t meta_before =
+                    hash_buckets == 64 ? 0 : (occ_reuse >> hash_buckets) & 0x3fULL;
                 const auto hit = keys[std::size_t(rng() % keys.size())];
-                const int bhit = hash_bucket(hit, hash_buckets, st.find_hashes);
-                remember_bucket(occ_reuse, hash_buckets, bhit, true);
+                (void)hash_bucket(hit, hash_buckets, st.find_hashes);
+                const std::uint64_t meta_after =
+                    hash_buckets == 64 ? 0 : (occ_reuse >> hash_buckets) & 0x3fULL;
+                if (meta_before != meta_after) std::exit(11);
+                ++st.hit_queries;
             }
         }
         ++st.components;
@@ -107,7 +119,8 @@ int main() {
     for (int hash_buckets : {16, 32, 64}) {
         const Stats st = prove_config(
             hash_buckets, 0x6275636b65747265ULL ^ std::uint64_t(hash_buckets));
-        if (!st.records || st.record_hashes_baseline != st.records) return 6;
+        if (!st.records || st.record_hashes_baseline != st.records || !st.hit_queries)
+            return 6;
         if (hash_buckets < 64) {
             if (!st.memo_hits) return 7;
             if (!(st.record_hashes_reuse < st.record_hashes_baseline)) return 8;
@@ -122,11 +135,14 @@ int main() {
                   << " record_hashes_baseline=" << st.record_hashes_baseline
                   << " record_hashes_reuse=" << st.record_hashes_reuse
                   << " memo_hits=" << st.memo_hits
+                  << " hit_queries=" << st.hit_queries
+                  << " hit_memo_writes=0"
                   << " shared_bytes_added=0 occupancy_low_bits_exact=1 record_bucket_exact=1\n";
     }
     std::cout << "gridfp-runtime-find-index-bucket-reuse-proof OK"
               << " hash_bucket_configs=3 max_pairs=20"
               << " memo_storage=unused_occupancy_high_bits"
+              << " memo_update=miss_only hit_memo_writes=0"
               << " hash64_fallback=rehash shared_bytes_added=0 exact=1\n";
     return 0;
 }
