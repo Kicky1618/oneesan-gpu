@@ -51,48 +51,54 @@ __device__ __forceinline__ void p10dc_direct_resolved_high_plan_sum_rankchunk32_
 
     if (c.cross_depth) {
         uint8_t pending[ILP]{};
+        uint8_t lane_any = 0u;
 #pragma unroll
-        for (int j = 0; j < ILP; ++j)
+        for (int j = 0; j < ILP; ++j) {
             if (valid[j])
                 pending[j] = p10dc_low_rankchunk32_directmask_load(
                     db.hs, lr[j], c.cross_depth);
-
-        const uint16_t* rank_row[ILP]{};
-#pragma unroll
-        for (int j = 0; j < ILP; ++j)
-            if (pending[j])
-                rank_row[j] = p10dc_low_rankchunk32_directoff_row(db.hs, lr[j]);
-
-        constexpr uint32_t NRANK = P10DC_RANKCHUNK32_MAX_L_PER_LEGAL_CODE;
-        constexpr uint32_t RANK_STORAGE = NRANK ? NRANK : 1u;
-        uint16_t source_rank[ILP][RANK_STORAGE]{};
-#pragma unroll
-        for (uint32_t ordinal = 0; ordinal < NRANK; ++ordinal) {
-#pragma unroll
-            for (int j = 0; j < ILP; ++j) {
-                if (pending[j] & uint8_t(1u << ordinal))
-                    source_rank[j][ordinal] = rank_row[j][ordinal];
-            }
+            lane_any = uint8_t(lane_any | uint8_t(pending[j] != 0u));
         }
 
+        const unsigned active = __activemask();
+        if (__any_sync(active, lane_any != 0u)) {
+            const uint16_t* rank_row[ILP]{};
 #pragma unroll
-        for (uint32_t ordinal = 0; ordinal < NRANK; ++ordinal) {
-            Count v[ILP]{};
-            uint8_t take[ILP]{};
+            for (int j = 0; j < ILP; ++j)
+                if (pending[j])
+                    rank_row[j] = p10dc_low_rankchunk32_directoff_row(db.hs, lr[j]);
+
+            constexpr uint32_t NRANK = P10DC_RANKCHUNK32_MAX_L_PER_LEGAL_CODE;
+            constexpr uint32_t RANK_STORAGE = NRANK ? NRANK : 1u;
+            uint16_t source_rank[ILP][RANK_STORAGE]{};
 #pragma unroll
-            for (int j = 0; j < ILP; ++j) {
-                take[j] = uint8_t((pending[j] & uint8_t(1u << ordinal)) != 0u);
-                if (take[j])
-                    v[j] = c.cross_base[uint32_t(source_rank[j][ordinal])];
+            for (uint32_t ordinal = 0; ordinal < NRANK; ++ordinal) {
+#pragma unroll
+                for (int j = 0; j < ILP; ++j) {
+                    if (pending[j] & uint8_t(1u << ordinal))
+                        source_rank[j][ordinal] = rank_row[j][ordinal];
+                }
             }
+
 #pragma unroll
-            for (int j = 0; j < ILP; ++j) {
-                if (!take[j]) continue;
+            for (uint32_t ordinal = 0; ordinal < NRANK; ++ordinal) {
+                Count v[ILP]{};
+                uint8_t take[ILP]{};
+#pragma unroll
+                for (int j = 0; j < ILP; ++j) {
+                    take[j] = uint8_t((pending[j] & uint8_t(1u << ordinal)) != 0u);
+                    if (take[j])
+                        v[j] = c.cross_base[uint32_t(source_rank[j][ordinal])];
+                }
+#pragma unroll
+                for (int j = 0; j < ILP; ++j) {
+                    if (!take[j]) continue;
 #if GPU_DIRECT_PM_ACCUM
-                accum[j] += uint64_t(v[j]);
+                    accum[j] += uint64_t(v[j]);
 #else
-                accum[j] = gpu_direct_add(accum[j], v[j]);
+                    accum[j] = gpu_direct_add(accum[j], v[j]);
 #endif
+                }
             }
         }
     }
