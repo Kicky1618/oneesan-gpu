@@ -16,6 +16,7 @@ bash "$ONEESAN_ROOT/scripts/bench/rankformula-abstract-lazy-load-proof.sh"
 bash "$ONEESAN_ROOT/scripts/bench/rankformula-abstract-select8-proof.sh"
 bash "$ONEESAN_ROOT/scripts/bench/rankformula-abstract-depth4-proof.sh"
 bash "$ONEESAN_ROOT/scripts/bench/rankformula-abstract-srcpack10-proof.sh"
+bash "$ONEESAN_ROOT/scripts/bench/rankformula-abstract-compact-proof.sh"
 
 for spec in \
   '4 0 0 1 0 0 0' \
@@ -44,4 +45,4 @@ if [[ "$RUN_BUILD_SMOKE" == 1 ]]; then
     bash "$ONEESAN_ROOT/scripts/build/b300-bucket-snake-pattern10-depthcode-rankformula-nometa4-abstract.sh"
 fi
 
-echo "rankformula-nometa4-abstract-preflight OK w=$W n=$N metadata_bytes_per_code=0 exact_modes=b4_scalar,b8_scalar,b8_warpshare,b8_coopgroup,b16_coop_unrolled,b16_coop_rolled,b16_coop_rolled_select8,b16_coop_rolled_select8_srcpack10,b16_coop_rolled_depth4_srcpack10 packed_group64_bits=59 self_group_index=1 support_positions_runtime=0 b16_aux_bytes_all=707406 b16_coopgroup_table_loads_model=215509 b16_avg_early_ballots=2.251382 base_abstract_lut_bytes=94206 select8_abstract_lut_bytes=171866 select8_srcpack10_lut_bytes=149598 depth4_srcpack10_lut_bytes=86058 select8_table_bytes=91780 depth4_table_bytes=28240 srcpack10_source_bytes=57338 srcpack10_dynamic_source_bytes=7668848 depth14_15_fast_zero=1 ballot_runtime_loads=0 build_smoke_b16_rolled_depth4_srcpack10=$RUN_BUILD_SMOKE" >&2
+echo "rankformula-nometa4-abstract-preflight OK w=$W n=$N metadata_bytes_per_code=0 exact_modes=b4_scalar,b8_scalar,b8_warpshare,b8_coopgroup,b16_coop_unrolled,b16_coop_rolled,b16_coop_rolled_select8,b16_coop_rolled_select8_srcpack10,b16_coop_rolled_depth4_srcpack10 packed_group64_bits=59 self_group_index=1 support_positions_runtime=0 b16_aux_bytes_all=707406 b16_coopgroup_table_loads_model=215509 b16_avg_early_ballots=2.251382 base_abstract_lut_bytes=94206 select8_abstract_lut_bytes=171866 select8_srcpack10_lut_bytes=149598 depth4_srcpack10_lut_bytes=86058 select8_table_bytes=91780 depth4_table_bytes=28240 srcpack10_source_bytes=57338 srcpack10_dynamic_source_bytes=7668848 compact_e2e_proof=1 compact_production_selected=2492769 depth14_15_fast_zero=1 ballot_runtime_loads=0 build_smoke_b16_rolled_depth4_srcpack10=$RUN_BUILD_SMOKE" >&2
