@@ -35,12 +35,18 @@ run_one(){
   printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' "$mode" "$t" "$r" "$(field residue "$line")" "$(field wall_s "$line")" "$hg" "$hf" "$mc_avg" "$mc_max" >>"$RESULT"
 }
 for t in $THREADS_LIST;do [[ "$t" =~ ^[0-9]+$ ]]&&((t>=32&&t<=1024&&t%32==0))||exit 2;while IFS=$'\t' read -r mode bin;do for((r=1;r<=REPEATS;++r));do echo "=== $mode threads=$t repeat=$r ===" >&2;run_one "$mode" "$bin" "$t" "$r";done;done<"$LOGDIR/binaries.tsv";done
-python3 - "$RESULT" "$HIGH_DROP_CHUNK" <<'PY'
-import csv,statistics,sys
+python3 - "$RESULT" "$HIGH_DROP_CHUNK" "$RESOURCE" <<'PY'
+import csv,math,statistics,sys
 rows=list(csv.DictReader(open(sys.argv[1]),delimiter='\t'));hd=sys.argv[2]
+resources=list(csv.DictReader(open(sys.argv[3]),delimiter='\t'))
 if not rows:raise SystemExit('no mainrec ILP/CG results')
 res={r['residue'] for r in rows}
 if len(res)!=1:raise SystemExit('FATAL mainrec ILP/CG residue mismatch '+repr({(r['mode'],r['threads']):r['residue'] for r in rows}))
+rb={}
+for r in resources:
+    try: regs=int(r['registers']); ss=int(r['spill_store_bytes']); sl=int(r['spill_load_bytes'])
+    except (ValueError,TypeError,KeyError): continue
+    old=rb.get(r['mode'],(0,0,0)); rb[r['mode']]=(max(old[0],regs),max(old[1],ss),max(old[2],sl))
 by={}
 for r in rows:by.setdefault((r['mode'],int(r['threads'])),[]).append(r)
 med=[]
@@ -48,9 +54,14 @@ for (m,t),rs in by.items():
     wall=statistics.median(float(r['wall_s']) for r in rs)
     mc=[float(r['mc_avg_pct']) for r in rs if r['mc_avg_pct']!='nan']
     mc_med=statistics.median(mc) if mc else float('nan')
-    med.append((wall,m,t,mc_med))
-for w,m,t,mc in sorted(med):print(f'{m} threads={t} median_wall_s={w:.9f} median_mc_avg_pct={mc:.3f}',file=sys.stderr)
-base=min(x for x in med if x[1]=='ilp2');best=min(med,key=lambda x:(x[0],-x[3] if x[3]==x[3] else float('inf')))
+    regs,ss,sl=rb.get(m,(-1,-1,-1))
+    med.append((wall,m,t,mc_med,regs,ss,sl))
+for w,m,t,mc,regs,ss,sl in sorted(med):print(f'{m} threads={t} median_wall_s={w:.9f} median_mc_avg_pct={mc:.3f} regs={regs} spill_store={ss} spill_load={sl}',file=sys.stderr)
+def spill_free(x): return x[4]>=0 and x[5]==0 and x[6]==0
+clean=[x for x in med if spill_free(x)]
+pool=clean or med
+key=lambda x:(x[0],-x[3] if not math.isnan(x[3]) else math.inf)
+base=min((x for x in med if x[1]=='ilp2'),key=key);best=min(pool,key=key)
 print('b300_mainrec_ilpcg_exact_intermediate_match=1')
 print(f'b300_mainrec_ilpcg_high_drop_chunk={hd}')
 print(f'b300_mainrec_ilpcg_residue={next(iter(res))}')
@@ -61,6 +72,10 @@ print(f'b300_mainrec_ilpcg_best_mode={best[1]}')
 print(f'b300_mainrec_ilpcg_best_threads={best[2]}')
 print(f'b300_mainrec_ilpcg_best_wall_s={best[0]:.9f}')
 print(f'b300_mainrec_ilpcg_best_mc_avg_pct={best[3]:.3f}')
+print(f'b300_mainrec_ilpcg_best_registers={best[4]}')
+print(f'b300_mainrec_ilpcg_best_spill_store_bytes={best[5]}')
+print(f'b300_mainrec_ilpcg_best_spill_load_bytes={best[6]}')
+print(f'b300_mainrec_ilpcg_spill_free_pool={int(bool(clean))}')
 print(f'b300_mainrec_ilpcg_speedup_vs_ilp2={base[0]/best[0]:.9f}x')
 print(f'b300_mainrec_ilpcg_mc_delta_vs_ilp2={best[3]-base[3]:.3f}pp')
 PY
