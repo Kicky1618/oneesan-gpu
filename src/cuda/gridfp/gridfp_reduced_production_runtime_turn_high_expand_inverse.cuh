@@ -24,7 +24,7 @@ __device__ __forceinline__ bool runtime_turn_discover_expand_high_blocked_direct
         if (!sink.emit(DeviceKey{minsert(b, p, N), 0})) return false;
     }
 
-    // At p=W-1 there is no right closure family.  If the inserted high pair is
+    // At p=W-1 there is no right closure family. If the inserted high pair is
     // NN, the RL seed is automatically valid and only the left LL family can
     // produce additional main preimages.
     const MateID d = minsert(b, p - 1, N);
@@ -83,7 +83,7 @@ __device__ __forceinline__ bool runtime_turn_discover_expand_high_direct(
     if (pair == NL && !sink.emit(DeviceKey{msetpair(d, p, LN), 0})) return false;
 
     // The ordinary blocked predecessor branch is intentionally absent: turn
-    // expansion source components are main-only.  The Q_{W-2} reconstruction
+    // expansion source components are main-only. The Q_{W-2} reconstruction
     // below can still generate main preimages of a projected blocked branch.
     const int q = p - 1;
     const MateValuePair qp = mpair(d, q);
@@ -98,4 +98,25 @@ __device__ __forceinline__ bool runtime_turn_discover_expand_high_direct(
     return true;
 }
 
+// runtime_turn.cuh already routes high expansion through the optimized runtime
+// forward-discovery function when RP_RUNTIME_FAST_DISCOVERY_VALIDITY=1.  Wrap
+// that call here so the boundary p=W-1 case uses the smaller turn-specific
+// inverse while every other p keeps the generic structural implementation.
+template<class Sink>
+__device__ __forceinline__ bool runtime_turn_discover_forward_dispatch(
+    DeviceKey dest, int W, int p, Sink& sink
+) {
+#if RP_RUNTIME_TURN_DIRECT_HIGH_EXPAND_INVERSE
+    if (p == W - 1)
+        return runtime_turn_discover_expand_high_direct(dest, W, sink);
+#endif
+    return runtime_discover_inverse_reduced_forward(dest, W, p, sink);
+}
+
 } // namespace oneesan::gridfp::reducedprod
+
+#ifndef RP_RUNTIME_TURN_FORWARD_DISCOVERY_DISPATCH_ACTIVE
+#define RP_RUNTIME_TURN_FORWARD_DISCOVERY_DISPATCH_ACTIVE 1
+#define runtime_discover_inverse_reduced_forward(...) \
+    runtime_turn_discover_forward_dispatch(__VA_ARGS__)
+#endif
