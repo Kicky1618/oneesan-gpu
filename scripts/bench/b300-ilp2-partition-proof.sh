@@ -11,4 +11,8 @@ out="$($BIN)"
 printf '%s\n' "$out"
 grep -Fq 'b300-ilp2-partition-proof OK' <<<"$out"
 grep -Fq 'pattern=base_tid_plus_grid stride=2grid duplicate=0 missing=0 exact=1' <<<"$out"
-echo 'b300-ilp2-partition-proof OK exact=1' >&2
+launch_out="$(python3 "$ONEESAN_ROOT/scripts/bench/b300-main-pull-ilp-production-launch-proof.py")"
+printf '%s\n' "$launch_out"
+grep -Fq 'b300-main-pull-ilp-production-launch-proof OK scaled_launch=1 exact=1' <<<"$launch_out"
+grep -Fq 'lanes=2 ' <<<"$launch_out"
+echo 'b300-ilp2-partition-proof OK exact=1 production_launch_scaled=1' >&2
