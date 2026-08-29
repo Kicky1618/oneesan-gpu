@@ -14,11 +14,13 @@ MAX_WINDOW="${MAX_WINDOW:-14}"
 RUN_STAGED="${RUN_STAGED:-1}"
 SELECT_ONLY="${SELECT_ONLY:-1}"
 REBUILD_BUCKETS="${REBUILD_BUCKETS:-1}"
+PREPARE_ONLY="${PREPARE_ONLY:-0}"
 STAGED_PREFIX="${STAGED_PREFIX:-$ONEESAN_ROOT/work/b300_nextgen_hybrid8_staged}"
 WINNER_ENV="${WINNER_ENV:-${STAGED_PREFIX}_winner.env}"
 MANIFEST="${MANIFEST:-${WINNER_ENV%.env}_promotion-inputs.sha256}"
 RACE_PREFIX="${RACE_PREFIX:-$ONEESAN_ROOT/work/b300_nextgen_hybrid8_staged_fullprime_n27}"
-for x in RUN_STAGED SELECT_ONLY REBUILD_BUCKETS; do
+PREPARE_ENV="${PREPARE_ENV:-${RACE_PREFIX}_prepared.env}"
+for x in RUN_STAGED SELECT_ONLY REBUILD_BUCKETS PREPARE_ONLY; do
   v="${!x}"; [[ "$v" == 0 || "$v" == 1 ]] || { echo "$x must be 0/1" >&2; exit 2; }
 done
 command -v sha256sum >/dev/null || { echo 'sha256sum required' >&2; exit 2; }
@@ -61,9 +63,6 @@ speed,need=map(float,sys.argv[1:])
 if speed<need: raise SystemExit(f'staged hybrid8 speedup {speed:.9f}x below {need:.9f}x')
 PY
 
-# Reusing an old staged winner is allowed only when the env and both executable
-# byte streams are exactly the artifacts that were calibrated together. This
-# prevents a same-path rebuild from silently invalidating the promotion proof.
 if [[ "$RUN_STAGED" == 1 ]]; then
   tmp="${MANIFEST}.tmp"
   mkdir -p "$(dirname "$MANIFEST")"
@@ -81,7 +80,8 @@ FINAL_SHA="$(sha256sum "$B300_HYBRID8_FINAL_BIN" | awk '{print $1}')"
 BASE_SHA="$(sha256sum "$B300_HYBRID8_BASE_BIN" | awk '{print $1}')"
 ENV_SHA="$(sha256sum "$WINNER_ENV" | awk '{print $1}')"
 MANIFEST_SHA="$(sha256sum "$MANIFEST" | awk '{print $1}')"
-cat >"${RACE_PREFIX}_promotion.env" <<EOF
+PROMOTION_ENV="${RACE_PREFIX}_promotion.env"
+cat >"$PROMOTION_ENV" <<EOF
 B300_HYBRID8_PROMOTION_VALIDATED=1
 B300_HYBRID8_PROMOTION_SPILL_FREE=1
 B300_HYBRID8_PROMOTION_THRESHOLD=$B300_HYBRID8_FINAL_THRESHOLD
@@ -102,12 +102,34 @@ B300_HYBRID8_PROMOTION_STAGED_SPEEDUP=$B300_HYBRID8_FINAL_SPEEDUP_VS_BASE
 EOF
 
 label="nextgen_hybrid8_t${B300_HYBRID8_FINAL_THRESHOLD}"
-echo "=== full-prime race: $label vs nextgen A-D base vs profiled warp/orbit ===" >&2
+base_label="nextgen_abcd_base"
+if [[ "$PREPARE_ONLY" == 1 ]]; then
+  mkdir -p "$(dirname "$PREPARE_ENV")"
+  {
+    printf 'B300_HYBRID8_PREPARED=1\n'
+    printf 'B300_HYBRID8_PREPARED_BIN=%q\n' "$B300_HYBRID8_FINAL_BIN"
+    printf 'B300_HYBRID8_PREPARED_LABEL=%q\n' "$label"
+    printf 'B300_HYBRID8_PREPARED_THREADS=%q\n' "$B300_HYBRID8_FINAL_THREADS"
+    printf 'B300_HYBRID8_PREPARED_BASE_BIN=%q\n' "$B300_HYBRID8_BASE_BIN"
+    printf 'B300_HYBRID8_PREPARED_BASE_LABEL=%q\n' "$base_label"
+    printf 'B300_HYBRID8_PREPARED_BASE_THREADS=%q\n' "$B300_HYBRID8_BASE_THREADS"
+    printf 'B300_HYBRID8_PREPARED_STAGED_SPEEDUP=%q\n' "$B300_HYBRID8_FINAL_SPEEDUP_VS_BASE"
+    printf 'B300_HYBRID8_PREPARED_FINAL_STAGE_ROWS=%q\n' "$B300_HYBRID8_FINAL_STAGE_ROWS"
+    printf 'B300_HYBRID8_PREPARED_FINAL_STAGE_RESIDUE=%q\n' "$B300_HYBRID8_FINAL_STAGE_RESIDUE"
+    printf 'B300_HYBRID8_PREPARED_MANIFEST=%q\n' "$MANIFEST"
+    printf 'B300_HYBRID8_PREPARED_PROMOTION_ENV=%q\n' "$PROMOTION_ENV"
+  } >"$PREPARE_ENV"
+  cat "$PREPARE_ENV"
+  echo "HYBRID8 PREPARED env=$PREPARE_ENV label=$label base=$base_label staged_speedup=${B300_HYBRID8_FINAL_SPEEDUP_VS_BASE}x" >&2
+  exit 0
+fi
+
+echo "=== full-prime race: $label vs $base_label vs profiled warp/orbit ===" >&2
 echo "staged_speedup=${B300_HYBRID8_FINAL_SPEEDUP_VS_BASE}x final_stage_rows=$B300_HYBRID8_FINAL_STAGE_ROWS hybrid_sha=${FINAL_SHA:0:12} base_sha=${BASE_SHA:0:12} manifest_sha=${MANIFEST_SHA:0:12}" >&2
 
 exec env \
   PROFILE_FILE="$PROFILE_FILE" ARCH="$ARCH" MAX_WINDOW="$MAX_WINDOW" FORCED_TARGET_MIB="$TARGET_MIB" \
   FORCED_OVERRIDE_BIN="$B300_HYBRID8_FINAL_BIN" FORCED_OVERRIDE_LABEL="$label" FORCED_OVERRIDE_THREADS="$B300_HYBRID8_FINAL_THREADS" \
-  FORCED_BASE_BIN="$B300_HYBRID8_BASE_BIN" FORCED_BASE_LABEL=nextgen_abcd_base FORCED_BASE_THREADS="$B300_HYBRID8_BASE_THREADS" \
+  FORCED_BASE_BIN="$B300_HYBRID8_BASE_BIN" FORCED_BASE_LABEL="$base_label" FORCED_BASE_THREADS="$B300_HYBRID8_BASE_THREADS" \
   REBUILD_BUCKETS="$REBUILD_BUCKETS" SELECT_ONLY="$SELECT_ONLY" PREFIX="$RACE_PREFIX" \
   "$ONEESAN_ROOT/scripts/run/b300x8-race-external-forced-profiled-once.sh" 27 "$@"
