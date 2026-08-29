@@ -21,22 +21,20 @@ def replace_function(text:str,name:str,new:str)->str:
     if end<0:raise SystemExit(f'function end not found: {name}')
     return text[:start]+new+text[end:]
 
-# Rewrite only the two production materialization calls before inserting a helper
-# which itself intentionally calls the low-window packer.
 pack_call='b300_pack_low_window_main_mate(m)'
 if s.count(pack_call)!=2:raise SystemExit(f'expected two main mate packing calls before helper insertion, got {s.count(pack_call)}')
 s=s.replace(pack_call,'b300_pack_main_transition_cache(m)',2)
 
 high_rank='b300_high_chunk_drop_rank(i,m,p)' if 'b300_high_chunk_drop_rank' in s else 'rank_drop_n_t<TARGET_W>(i,m,p)'
-# gather_main/materialize kernels call b300_pack_main_transition_cache, so all
-# helper definitions must appear before the first gather_main kernel definition.
 marker='__global__ void gather_main_kernel('
 if s.count(marker)!=1:raise SystemExit(f'gather_main marker expected once, got {s.count(marker)}')
 helper=r'''
 __device__ __forceinline__ bool b300_high_main_state_active(){
     if constexpr(TARGET_W!=28)return false;
     else {
-        constexpr uint32_t HIGH=((uint32_t(1)<<28)-1u)^((uint32_t(1)<<14)-1u);
+        // MAX_WINDOW=14 can execute p=27..14. Pair access at p=14 needs
+        // position 13, so the recurrent state must retain every symbol 13..27.
+        constexpr uint32_t HIGH=((uint32_t(1)<<28)-1u)^((uint32_t(1)<<13)-1u);
         return (D_MAIN_FIXED&HIGH)==0;
     }
 }
@@ -47,7 +45,7 @@ __device__ __forceinline__ uint32_t b300_high_trit_chunk(MateID m,int base){
     return a+3u*b+9u*c;
 }
 __device__ __forceinline__ MateValue b300_high_state_get(MateID x,int p){
-    const int q=p-14,c=q/3,r=q-c*3;const uint32_t z=uint32_t((x>>(5*c))&31ULL);
+    const int q=p-13,c=q/3,r=q-c*3;const uint32_t z=uint32_t((x>>(5*c))&31ULL);
     uint32_t v;if(r==0){uint32_t a=z/3;v=z-a*3;}else if(r==1){uint32_t a=z/3;v=a-(a/3)*3;}else v=z/9;
     return MateValue(v);
 }
@@ -65,7 +63,7 @@ __device__ __forceinline__ MateID b300_high_state_pack_current(MateID x,long lon
 __device__ __forceinline__ MateID b300_pack_high_main_state(MateID m){
     MateID trits=0;
 #pragma unroll
-    for(int c=0;c<5;++c)trits|=MateID(b300_high_trit_chunk(m,14+3*c))<<(5*c);
+    for(int c=0;c<5;++c)trits|=MateID(b300_high_trit_chunk(m,13+3*c))<<(5*c);
     return b300_high_state_pack_current(trits,0,1);
 }
 __device__ __forceinline__ MateID b300_pack_main_transition_cache(MateID m){
@@ -120,10 +118,10 @@ old='if(v1){uint64_t a1=uint64_t(self1)+pair1+block1;if(a1>=mod)a1-=mod;if(a1>=m
 if s.count(old)!=1:raise SystemExit('ILP2 lane1 store anchor not unique')
 s=s.replace(old,'if(v1){uint64_t a1=uint64_t(self1)+pair1+block1;if(a1>=mod)a1-=mod;if(a1>=mod)a1-=mod;out_main[i1]=Count(a1);if(b300_high_main_state_active())mates[i1]=b300_high_state_advance(m1,p);}',1)
 
-for required in ('b300_high_main_state_active','b300_high_state_drop_rank','b300_main_pair_rank_h','b300_pack_main_transition_cache','b300_high_state_advance(m1,p)','return b300_pack_low_window_main_mate(m);'):
+for required in ('b300_high_main_state_active','b300_high_state_drop_rank','b300_main_pair_rank_h','b300_pack_main_transition_cache','b300_high_state_advance(m1,p)','return b300_pack_low_window_main_mate(m);','p-13','13+3*c'):
     if required not in s:raise SystemExit(f'missing high-main recurrence artifact: {required}')
 if s.count('b300_pack_main_transition_cache(m)')!=2:raise SystemExit(f'expected exactly two production transition-cache packing calls, got {s.count("b300_pack_main_transition_cache(m)")}')
 if s.find('b300_pack_main_transition_cache',s.find('__global__ void gather_main_kernel'))>=0 and s.find('b300_pack_main_transition_cache')>s.find('__global__ void gather_main_kernel'):
     raise SystemExit('transition-cache helper was emitted after gather_main')
 out.parent.mkdir(parents=True,exist_ok=True);out.write_text(s)
-print(f'generated {out} from {src}: high_main_recurrence=1 ilp=2 extra_state_bytes=0 trit_bits=25 signed_delta_bits=35 height_bits=4 helper_before_gather=1 mate_hbm_store_per_state_step=8 high_drop_walk_or_table_loads_per_state_step=0 high_height_walk_per_state_step=0')
+print(f'generated {out} from {src}: high_main_recurrence=1 ilp=2 extra_state_bytes=0 trit_positions=15 trit_range=13..27 trit_bits=25 signed_delta_bits=35 height_bits=4 helper_before_gather=1 mate_hbm_store_per_state_step=8 high_drop_walk_or_table_loads_per_state_step=0 high_height_walk_per_state_step=0')
