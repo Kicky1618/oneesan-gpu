@@ -78,6 +78,15 @@ if [[ "$BLOCK_MATE_CACHE" == 1 ]]; then
   BUILD_SRC="$BLOCK_MATE_SRC"
 fi
 
+# Add a calibration-only row limit after all source transforms. The default is
+# still W rows, so ordinary production behavior is unchanged. This is useful on
+# expensive B300x8 rentals: B300_ROW_LIMIT=1 can validate a new memory path
+# before committing to a complete n=27 run.
+ROW_SRC="$ONEESAN_BUILD_DIR/b300_hbm32_n${N}_rowlimit.cu"
+cp "$BUILD_SRC" "$ROW_SRC"
+python3 "$ONEESAN_ROOT/scripts/build/lower-b300-row-limit.py" "$ROW_SRC" "$ROW_SRC"
+BUILD_SRC="$ROW_SRC"
+
 PTXAS_FLAGS=()
 if [[ "$PTXAS_VERBOSE" == 1 ]]; then
   PTXAS_FLAGS+=("-Xptxas=-v")
@@ -97,3 +106,4 @@ echo "built $OUT"
 echo "  source=$SRC"
 echo "  build_source=$BUILD_SRC"
 echo "  n=$N width=$W arch=$ARCH low_lut_k=$LOW_LUT_K high_lut_k=$HIGH_LUT_K fast_shard_address8=$FAST_SHARD_ADDRESS8 main_mate_cache=$MAIN_MATE_CACHE main_pull=$MAIN_PULL block_pull=$BLOCK_PULL block_mate_cache=$BLOCK_MATE_CACHE ptxas_verbose=$PTXAS_VERBOSE"
+echo "  row_limit_env=B300_ROW_LIMIT default_rows=$W"
