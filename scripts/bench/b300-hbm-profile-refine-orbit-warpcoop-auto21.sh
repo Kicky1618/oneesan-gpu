@@ -40,19 +40,9 @@ done
 [[ "$ORBITCTA_FLAT_BLOCKS_PER_SM" =~ ^[0-9]+$ ]] || { echo 'bad ORBITCTA_FLAT_BLOCKS_PER_SM' >&2; exit 2; }
 [[ "$ORBIT_QUAD_SPARSE_DESC_MLP" == 0 ]] || { echo 'warpcoop auto refine must precede qsd' >&2; exit 2; }
 
-# If the previous quad/warpcoop comparison already used occupancy mode, there is
-# no new scheduler point to test.
-if [[ "$ORBITCTA_FLAT_BLOCKS_PER_SM" == 0 ]]; then
-  cp "$PROFILE_IN" "$PROFILE_OUT"
-  echo "warpcoop auto refine SKIP already_occupancy=1 output=$PROFILE_OUT" >&2
-  exit 0
-fi
-
-command -v nvcc >/dev/null || { echo 'nvcc required' >&2; exit 2; }
-command -v nvidia-smi >/dev/null || { echo 'nvidia-smi required' >&2; exit 2; }
-(( $(nvidia-smi --query-gpu=index --format=csv,noheader | wc -l) >= 8 )) || { echo 'need 8 visible GPUs' >&2; exit 2; }
-
-# Snapshot current winner, then read the exact quad sidecar only for the chunk.
+# Snapshot the current overall winner before the quad sidecar overwrites shell
+# variables. The auto challenge is needed whenever the *quad sweep* used an
+# explicit pool, even if the current overall winner itself happens to use auto.
 CUR_COL_ILP="$ORBIT_COL_ILP"; CUR_SPARSE64="$ORBIT_SPARSE64"; CUR_CPASYNC_PAIR="$ORBIT_CPASYNC_PAIR"
 CUR_PRE_F="$ORBIT_PRECTX_FORWARD"; CUR_PRE_R="$ORBIT_PRECTX_REVERSE"; CUR_PRE_C="$ORBIT_PRECTX_COMPACT"
 CUR_BID="$ORBIT_PRECTX_FLAT_BID"; CUR_BF="$ORBIT_PRECTX_FLAT_BID_FUSED"; CUR_WC="$ORBIT_PRECTX_WARPCOOP"
@@ -60,8 +50,21 @@ CUR_FLAT="$ORBITCTA_FLAT"; CUR_CHUNK="$ORBITCTA_FLAT_CHUNK"; CUR_PSM="$ORBITCTA_
 CUR_QUAD="$ORBIT_QUAD_MLP"; CUR_QOL="$ORBIT_QUAD_OVERLAP_LOCAL"; CUR_QLD="$ORBIT_QUAD_LOCAL_DIRECT_MAX"
 # shellcheck disable=SC1090
 source "$QUAD_WINNER_ENV"
-Q_CHUNK="$ORBITCTA_FLAT_CHUNK"
+Q_CHUNK="$ORBITCTA_FLAT_CHUNK"; Q_PSM="$ORBITCTA_FLAT_BLOCKS_PER_SM"
 case "$Q_CHUNK" in 2|4|8|16|32) ;; *) echo "bad quad sidecar chunk=$Q_CHUNK" >&2; exit 7;; esac
+[[ "$Q_PSM" =~ ^[0-9]+$ ]] || { echo "bad quad sidecar psm=$Q_PSM" >&2; exit 7; }
+
+# The previous warpcoop stage already used occupancy mode when the quad sidecar
+# says psm=0. In that case this stage would be a duplicate exact run.
+if [[ "$Q_PSM" == 0 ]]; then
+  cp "$PROFILE_IN" "$PROFILE_OUT"
+  echo "warpcoop auto refine SKIP quad_sidecar_already_occupancy=1 output=$PROFILE_OUT" >&2
+  exit 0
+fi
+
+command -v nvcc >/dev/null || { echo 'nvcc required' >&2; exit 2; }
+command -v nvidia-smi >/dev/null || { echo 'nvidia-smi required' >&2; exit 2; }
+(( $(nvidia-smi --query-gpu=index --format=csv,noheader | wc -l) >= 8 )) || { echo 'need 8 visible GPUs' >&2; exit 2; }
 
 if [[ "$CUR_CPASYNC_PAIR" == 1 ]]; then
   ARCH="$ARCH" NGPU=8 THREADS="$THREADS" bash "$ONEESAN_ROOT/scripts/bench/b300-cpasync-remote-peer-microprobe.sh" >"$LOGDIR/current-cpasync.out" 2>"$LOGDIR/current-cpasync.err"
@@ -83,9 +86,19 @@ sample(){ local pid="$1" out="$2"; : >"$out"; while kill -0 "$pid" 2>/dev/null; 
 printf 'repeat\tresidue\twall_s\tforward_high_s\treverse_high_s\thigh_s\tavg_gpu_util_pct\tavg_memctrl_util_pct\tmax_memctrl_util_pct\n' >"$CURRENT_RESULT"
 for ((r=1;r<=REPEATS;++r)); do
   so="$LOGDIR/current_r${r}.out"; se="$LOGDIR/current_r${r}.err"; util="$LOGDIR/current_r${r}.util"
-  env -u BUCKET_ORBITCTA_FLAT_BLOCKS BUCKET_ORBITCTA_FLAT_BLOCKS_PER_SM="$CUR_PSM" \
-    BUCKET_THREADS="$THREADS" BUCKET_ORBITCTA_GRID_Y="$ORBIT_GY" BUCKET_GRID_X="$LOW_GX" BUCKET_GRID_Y="$LOW_GY" BUCKET_LOW_GRID_X="$LOW_GX" BUCKET_LOW_GRID_Y="$LOW_GY" \
-    "$CURRENT_BIN" 21 "$TARGET_MIB" "$MAX_WINDOW" 8 "$MOD" >"$so" 2>"$se" &
+  if [[ "$CUR_FLAT" == 1 && "$CUR_PSM" == 0 ]]; then
+    env -u BUCKET_ORBITCTA_FLAT_BLOCKS -u BUCKET_ORBITCTA_FLAT_BLOCKS_PER_SM \
+      BUCKET_THREADS="$THREADS" BUCKET_ORBITCTA_GRID_Y="$ORBIT_GY" BUCKET_GRID_X="$LOW_GX" BUCKET_GRID_Y="$LOW_GY" BUCKET_LOW_GRID_X="$LOW_GX" BUCKET_LOW_GRID_Y="$LOW_GY" \
+      "$CURRENT_BIN" 21 "$TARGET_MIB" "$MAX_WINDOW" 8 "$MOD" >"$so" 2>"$se" &
+  elif [[ "$CUR_FLAT" == 1 ]]; then
+    env -u BUCKET_ORBITCTA_FLAT_BLOCKS BUCKET_THREADS="$THREADS" BUCKET_ORBITCTA_FLAT_BLOCKS_PER_SM="$CUR_PSM" \
+      BUCKET_ORBITCTA_GRID_Y="$ORBIT_GY" BUCKET_GRID_X="$LOW_GX" BUCKET_GRID_Y="$LOW_GY" BUCKET_LOW_GRID_X="$LOW_GX" BUCKET_LOW_GRID_Y="$LOW_GY" \
+      "$CURRENT_BIN" 21 "$TARGET_MIB" "$MAX_WINDOW" 8 "$MOD" >"$so" 2>"$se" &
+  else
+    env -u BUCKET_ORBITCTA_FLAT_BLOCKS -u BUCKET_ORBITCTA_FLAT_BLOCKS_PER_SM \
+      BUCKET_THREADS="$THREADS" BUCKET_ORBITCTA_GRID_Y="$ORBIT_GY" BUCKET_GRID_X="$LOW_GX" BUCKET_GRID_Y="$LOW_GY" BUCKET_LOW_GRID_X="$LOW_GX" BUCKET_LOW_GRID_Y="$LOW_GY" \
+      "$CURRENT_BIN" 21 "$TARGET_MIB" "$MAX_WINDOW" 8 "$MOD" >"$so" 2>"$se" &
+  fi
   pid=$!; sample "$pid" "$util" & sp=$!; set +e; wait "$pid"; rc=$?; set -e; wait "$sp" || true
   ((rc==0)) || { echo "current repeat=$r failed rc=$rc" >&2; exit "$rc"; }
   line="$(grep '^residue=' "$so" | tail -n1 || true)"; [[ -n "$line" ]] || { echo 'current missing residue' >&2; exit 3; }
