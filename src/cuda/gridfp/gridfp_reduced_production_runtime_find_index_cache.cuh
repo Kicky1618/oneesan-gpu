@@ -47,7 +47,8 @@ namespace oneesan::gridfp::reducedprod {
 // index+1 and bit 7 of way 0 records overflow beyond the retained ways. The
 // low HASH_BUCKETS bits of occupancy guard stale shared bytes. When fewer than
 // 64 hash buckets are used, six otherwise-unused high occupancy bits memoize
-// the most recent find bucket so a miss followed by record does not hash twice.
+// the bucket of the most recent miss so the immediately-following record does
+// not hash the same key twice. Hits never update the memo.
 struct RuntimeFindIndexCache {
     std::uint8_t slot[RP_RUNTIME_FIND_INDEX_HASH_BUCKETS]
                      [RP_RUNTIME_FIND_INDEX_WAYS];
@@ -132,9 +133,11 @@ __device__ __forceinline__ int runtime_find_shared_key_indexed(
     const RuntimeFindIndexCache& cache
 ) {
     const int bucket = runtime_find_index_bucket(k);
-    runtime_find_index_remember_bucket(occupancy, bucket);
     const std::uint64_t bit = 1ULL << bucket;
-    if ((occupancy & bit) == 0) return -1;
+    if ((occupancy & bit) == 0) {
+        runtime_find_index_remember_bucket(occupancy, bucket);
+        return -1;
+    }
 
     const bool overflow =
         (cache.slot[bucket][0] & RP_RUNTIME_FIND_INDEX_OVERFLOW) != 0;
@@ -143,12 +146,19 @@ __device__ __forceinline__ int runtime_find_shared_key_indexed(
         const int v = int(cache.slot[bucket][way] & RP_RUNTIME_FIND_INDEX_VALUE_MASK);
         if (!v) break;
         const int candidate = v - 1;
-        if (candidate < 0 || candidate >= n)
-            return runtime_find_shared_key(a, n, k);
+        if (candidate < 0 || candidate >= n) {
+            const int found = runtime_find_shared_key(a, n, k);
+            if (found < 0)
+                runtime_find_index_remember_bucket(occupancy, bucket);
+            return found;
+        }
         if (runtime_shared_key_matches(a[candidate], k)) return candidate;
     }
 
-    if (!overflow) return -1;
+    if (!overflow) {
+        runtime_find_index_remember_bucket(occupancy, bucket);
+        return -1;
+    }
 #if RP_RUNTIME_FIND_RECENT_FIRST
     for (int i = n - 1; i >= 0; --i) {
         if (runtime_find_index_is_cached(cache, bucket, i)) continue;
@@ -160,6 +170,7 @@ __device__ __forceinline__ int runtime_find_shared_key_indexed(
         if (runtime_shared_key_matches(a[i], k)) return i;
     }
 #endif
+    runtime_find_index_remember_bucket(occupancy, bucket);
     return -1;
 }
 
@@ -170,7 +181,6 @@ __device__ __forceinline__ void runtime_find_index_record(
     int index
 ) {
     const int bucket = runtime_find_index_record_bucket(k, occupancy);
-    runtime_find_index_remember_bucket(occupancy, bucket);
     const std::uint64_t bit = 1ULL << bucket;
     if ((occupancy & bit) == 0) {
         cache.slot[bucket][0] = std::uint8_t(index + 1);
