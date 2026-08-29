@@ -20,7 +20,9 @@ build_one(){
     bash "$ONEESAN_ROOT/scripts/build/b300-hbm32-batch.sh" >"${PREFIX}.${mode}.build.out" 2>"${PREFIX}.${mode}.build.err"
   grep -Fq 'main_pull_ilp=2' "${PREFIX}.${mode}.build.out"
   grep -Fq "main_recurrence=$rec" "${PREFIX}.${mode}.build.out"
-  if [[ "$rec" == 1 ]]; then grep -Fq 'unified_main_state_extra_bytes=0' "${PREFIX}.${mode}.build.out";fi
+  if [[ "$rec" == 1 ]]; then
+    grep -Fq 'unified_main_state_extra_bytes=0 low_delta_bits=31 high_delta_bits=35 high_p_lo=14 high_symbol_range=13..27 high_trit_positions=15 high_min_fixed=7' "${PREFIX}.${mode}.build.out"
+  fi
 }
 BASE_BIN="$ONEESAN_BUILD_DIR/b300_batch_n27_mainrec0_high${HIGH_DROP_CHUNK}"
 CAND_BIN="$ONEESAN_BUILD_DIR/b300_batch_n27_mainrec1_high${HIGH_DROP_CHUNK}"
@@ -77,4 +79,5 @@ printf 'b300_main_recurrence_threads=%s\n' "$THREADS"
 printf 'b300_main_recurrence_high_drop_chunk=%s\n' "$HIGH_DROP_CHUNK"
 printf 'b300_main_recurrence_rows=%s\n' "$ROWS"
 printf 'b300_main_recurrence_residue=%s\n' "$BR"
+printf 'b300_main_recurrence_layout=high_p27..14_symbols13..27_trits15_fixed_gate7_low_recurrent=1\n'
 printf 'b300_main_recurrence_note=one existing 8B Mate cache carries both windows; adopt only on exact match plus wall-time win\n'
