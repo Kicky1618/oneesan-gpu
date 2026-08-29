@@ -43,8 +43,11 @@ case "$MODE" in
   two-row-segment-major)
     SRC_REL="src/cuda/gridfp/gridfp_reduced_production_two_row_segment_major_multigpu_microprobe.cu"
     ;;
+  two-row-segment-major-built)
+    SRC_REL="src/cuda/gridfp/gridfp_reduced_production_two_row_segment_major_built_multigpu_microprobe.cu"
+    ;;
   *)
-    echo "invalid MODE=$MODE (baseline|ownerfirst|tie|worklist|compiled|packed|segmented|segment-major|segment-major-count|segment-major-fill|segment-major-plan|two-row-segment-major)" >&2
+    echo "invalid MODE=$MODE (baseline|ownerfirst|tie|worklist|compiled|packed|segmented|segment-major|segment-major-count|segment-major-fill|segment-major-plan|two-row-segment-major|two-row-segment-major-built)" >&2
     exit 2
     ;;
 esac
