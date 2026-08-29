@@ -67,6 +67,11 @@ for s in \
   grep -Fq "$s" "$auto" || { echo "missing auto producer marker: $s" >&2; exit 3; }
 done
 for s in \
+ 'ORBITCTA_FLAT_DYNAMIC_PIPE2_PRODUCER_WORKER_WEIGHT=' \
+ 'PRODUCER_WORKER_WEIGHT="$ORBITCTA_FLAT_DYNAMIC_PIPE2_PRODUCER_WORKER_WEIGHT"'; do
+  grep -Fq "$s" "$producer_prectx_refine" || { echo "missing producer-prectx worker-weight propagation marker: $s" >&2; exit 3; }
+done
+for s in \
  'ORBITCTA_FLAT_DYNAMIC_PIPE2_PRODUCER_WARP=' \
  'ORBITCTA_FLAT_DYNAMIC_PIPE2_PRODUCER_WORKER_WEIGHT=' \
  'ORBITCTA_FLAT_DYNAMIC_PIPE2_PRODUCER_PRECTX_WARPCOOP=' \
