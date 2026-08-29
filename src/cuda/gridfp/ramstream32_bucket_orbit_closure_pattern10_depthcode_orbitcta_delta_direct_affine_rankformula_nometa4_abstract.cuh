@@ -8,8 +8,22 @@
 #ifndef P10DC_RANKFORMULA_PRECTX_REVERSE
 #define P10DC_RANKFORMULA_PRECTX_REVERSE 0
 #endif
+#ifndef P10DC_RANKFORMULA_PRECTX_COMPACT
+#define P10DC_RANKFORMULA_PRECTX_COMPACT 0
+#endif
+static_assert(P10DC_RANKFORMULA_PRECTX_COMPACT == 0 ||
+              P10DC_RANKFORMULA_PRECTX_COMPACT == 1,
+              "P10DC_RANKFORMULA_PRECTX_COMPACT must be 0 or 1");
+static_assert(!P10DC_RANKFORMULA_PRECTX_COMPACT ||
+              P10DC_RANKFORMULA_PRECTX_FORWARD ||
+              P10DC_RANKFORMULA_PRECTX_REVERSE,
+              "compact prectx requires forward and/or reverse prectx");
 #if P10DC_RANKFORMULA_PRECTX_FORWARD || P10DC_RANKFORMULA_PRECTX_REVERSE
+#if P10DC_RANKFORMULA_PRECTX_COMPACT
+#include "ramstream32_bucket_precomputed_high_ctx_compact.cuh"
+#else
 #include "ramstream32_bucket_precomputed_forward_high_ctx.cuh"
+#endif
 #endif
 
 #if P10DC_RANKFORMULA_GATHER_MLP
