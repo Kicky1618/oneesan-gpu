@@ -13,9 +13,11 @@ PREFIX="${PREFIX:-$ONEESAN_ROOT/work/b300_orbitcta_ab_n${N}}"
 LOGDIR="${LOGDIR:-${PREFIX}_logs}"; RESULT="${RESULT:-${PREFIX}.tsv}"; RESOURCE="${RESOURCE:-${PREFIX}_ptxas.tsv}"
 PARSER="$ONEESAN_ROOT/scripts/bench/parse-ptxas-resources.py"
 mkdir -p "$LOGDIR" "$(dirname "$RESULT")"
-WARP_BIN="$ONEESAN_BUILD_DIR/b300_orbitcta_ab_warp_n${N}"
-ORBIT_BIN="$ONEESAN_BUILD_DIR/b300_orbitcta_ab_orbit_n${N}"
+WARP_BIN="$ONEESAN_BUILD_DIR/b300_orbitcta_ab_warp16_n${N}"
+ORBIT16_BIN="$ONEESAN_BUILD_DIR/b300_orbitcta_ab_orbit16_n${N}"
+ORBIT64_BIN="$ONEESAN_BUILD_DIR/b300_orbitcta_ab_orbit64_n${N}"
 
+# 16-byte depth-major warpstriped reference.
 N="$N" ARCH="$ARCH" OUT="$WARP_BIN" \
   RANKFORMULA_NOMETA_BLOCK=16 RANKFORMULA_NOMETA_WARPSHARE=1 \
   RANKFORMULA_NOMETA_COOPGROUP=1 RANKFORMULA_NOMETA_COOP_UNROLL=0 \
@@ -28,21 +30,25 @@ N="$N" ARCH="$ARCH" OUT="$WARP_BIN" \
   RANKFORMULA_GATHER_MLP=1 DEPTHCODE_DECODE_LOAD=ldg RANKSTREAM_LUT_LOAD=ldg \
   PM_ACCUM="$PM_ACCUM" TRANSPOSE_MODE=pipeline PTXAS_VERBOSE=1 \
   bash "$ONEESAN_ROOT/scripts/build/b300-bucket-snake-pattern10-depthcode-rankformula-nometa4-abstract.sh" \
-  >"$LOGDIR/warp.build.out" 2>"$LOGDIR/warp.build.err"
+  >"$LOGDIR/warp16.build.out" 2>"$LOGDIR/warp16.build.err"
 
-N="$N" ARCH="$ARCH" OUT="$ORBIT_BIN" PM_ACCUM="$PM_ACCUM" PTXAS_VERBOSE=1 \
+N="$N" ARCH="$ARCH" OUT="$ORBIT16_BIN" PM_ACCUM="$PM_ACCUM" DIRECTGATHER64=0 PTXAS_VERBOSE=1 \
   bash "$ONEESAN_ROOT/scripts/build/b300-directgather-orbitcta.sh" \
-  >"$LOGDIR/orbit.build.out" 2>"$LOGDIR/orbit.build.err"
+  >"$LOGDIR/orbit16.build.out" 2>"$LOGDIR/orbit16.build.err"
+N="$N" ARCH="$ARCH" OUT="$ORBIT64_BIN" PM_ACCUM="$PM_ACCUM" DIRECTGATHER64=1 PTXAS_VERBOSE=1 \
+  bash "$ONEESAN_ROOT/scripts/build/b300-directgather-orbitcta.sh" \
+  >"$LOGDIR/orbit64.build.out" 2>"$LOGDIR/orbit64.build.err"
 
 printf 'backend\tkernel\tregisters\tstack_bytes\tspill_store_bytes\tspill_load_bytes\tsmem_bytes\tcmem0_bytes\n' >"$RESOURCE"
-python3 "$PARSER" "$LOGDIR/warp.build.err" --label warp >>"$RESOURCE" || true
-python3 "$PARSER" "$LOGDIR/orbit.build.err" --label orbitcta >>"$RESOURCE" || true
+python3 "$PARSER" "$LOGDIR/warp16.build.err" --label warp16 >>"$RESOURCE" || true
+python3 "$PARSER" "$LOGDIR/orbit16.build.err" --label orbit16 >>"$RESOURCE" || true
+python3 "$PARSER" "$LOGDIR/orbit64.build.err" --label orbit64 >>"$RESOURCE" || true
 
 field(){ local key="$1" line="$2"; sed -nE "s/(^|.*[[:space:]])${key}=([^[:space:]]+).*/\\2/p" <<<"$line" | tail -n1; }
-printf 'mode\tthreads\thigh_x\thigh_y\trepeat\tresidue\twall_s\tforward_high_s\treverse_high_s\tforward_low_s\treverse_low_s\ttranspose_s\n' >"$RESULT"
+printf 'mode\tdesc_bytes\tthreads\thigh_x\thigh_y\trepeat\tresidue\twall_s\tforward_high_s\treverse_high_s\tforward_low_s\treverse_low_s\ttranspose_s\n' >"$RESULT"
 
 run_case(){
-  local mode="$1" bin="$2" threads="$3" gx="$4" gy="$5" orbit="$6"
+  local mode="$1" bin="$2" desc="$3" threads="$4" gx="$5" gy="$6" orbit="$7"
   for ((rep=1;rep<=REPEATS;++rep)); do
     local so="$LOGDIR/${mode}_r${rep}.out" se="$LOGDIR/${mode}_r${rep}.err"
     if [[ "$orbit" == 1 ]]; then
@@ -60,24 +66,26 @@ run_case(){
     line="$(grep '^residue=' "$so" | tail -n1 || true)"; [[ -n "$line" ]] || { echo "$mode missing residue" >&2; exit 3; }
     residue="$(field residue "$line")"; [[ "$residue" == "$EXPECT" ]] || { echo "$mode residue mismatch got=$residue expected=$EXPECT" >&2; exit 4; }
     detail="$(grep 'snake_onepass_graph_batch modulus=' "$se" | tail -n1 || true)"
-    printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
-      "$mode" "$threads" "$gx" "$gy" "$rep" "$residue" "$(field wall_s "$line")" \
+    printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
+      "$mode" "$desc" "$threads" "$gx" "$gy" "$rep" "$residue" "$(field wall_s "$line")" \
       "$(field forward_high_s "$detail")" "$(field reverse_high_s "$detail")" \
       "$(field forward_low_s "$detail")" "$(field reverse_low_s "$detail")" \
       "$(field transpose_s "$detail")" >>"$RESULT"
   done
 }
 
-run_case warp_16x8 "$WARP_BIN" 256 16 8 0
-run_case warp_1x128 "$WARP_BIN" 256 1 128 0
-run_case warp_1x256 "$WARP_BIN" 256 1 256 0
-run_case orbit_t128_y64 "$ORBIT_BIN" 128 1 64 1
-run_case orbit_t128_y128 "$ORBIT_BIN" 128 1 128 1
-run_case orbit_t256_y64 "$ORBIT_BIN" 256 1 64 1
-run_case orbit_t256_y128 "$ORBIT_BIN" 256 1 128 1
-run_case orbit_t256_y256 "$ORBIT_BIN" 256 1 256 1
-run_case orbit_t512_y64 "$ORBIT_BIN" 512 1 64 1
-run_case orbit_t512_y128 "$ORBIT_BIN" 512 1 128 1
+# Scheduler isolation: same 16-byte descriptor.
+run_case warp16_16x8 "$WARP_BIN" 16 256 16 8 0
+run_case warp16_1x128 "$WARP_BIN" 16 256 1 128 0
+run_case orbit16_t128_y128 "$ORBIT16_BIN" 16 128 1 128 1
+run_case orbit16_t256_y64 "$ORBIT16_BIN" 16 256 1 64 1
+run_case orbit16_t256_y128 "$ORBIT16_BIN" 16 256 1 128 1
+run_case orbit16_t512_y64 "$ORBIT16_BIN" 16 512 1 64 1
+# Descriptor isolation on the same orbit scheduler.
+run_case orbit64_t128_y128 "$ORBIT64_BIN" 8 128 1 128 1
+run_case orbit64_t256_y64 "$ORBIT64_BIN" 8 256 1 64 1
+run_case orbit64_t256_y128 "$ORBIT64_BIN" 8 256 1 128 1
+run_case orbit64_t512_y64 "$ORBIT64_BIN" 8 512 1 64 1
 
 python3 - "$RESULT" <<'PY'
 import csv,statistics,sys
@@ -92,10 +100,13 @@ for mode,g in by.items():
 for _,mode,z in sorted(out):
     print(mode,f"wall={z['wall_s']:.6f}",f"high={z['high']:.6f}",f"fh={z['forward_high_s']:.6f}",f"rh={z['reverse_high_s']:.6f}")
 q={m:z for _,m,z in out}
-base=q.get('warp_16x8')
+base=q.get('warp16_16x8')
 if base:
     for _,m,z in sorted(out):
         print(f"speedup_vs_warp16x8 {m} wall={base['wall_s']/z['wall_s']:.6f} high={base['high']/z['high']:.6f}")
+if 'orbit16_t256_y128' in q and 'orbit64_t256_y128' in q:
+    a=q['orbit16_t256_y128']; b=q['orbit64_t256_y128']
+    print(f"DIRECTGATHER64_t256_y128 wall_speedup={a['wall_s']/b['wall_s']:.6f} high_speedup={a['high']/b['high']:.6f}")
 print('BEST',sorted(out)[0][1],f"wall={sorted(out)[0][0]:.6f}")
 PY
 
