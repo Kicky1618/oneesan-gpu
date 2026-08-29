@@ -72,7 +72,10 @@ if [[ "$RANK_DELTA_CACHE" == 1 ]]; then
   RANK_DELTA_FREE_SRC="$ONEESAN_BUILD_DIR/b300_hbm32_n${N}_rank_delta_free_step.cu";python3 "$ONEESAN_ROOT/scripts/build/gen-b300-rank-delta-free-step.py" "$RANK_DELTA_SRC" "$RANK_DELTA_FREE_SRC"
   RANK_DELTA_REPORT_SRC="$ONEESAN_BUILD_DIR/b300_hbm32_n${N}_rank_delta_report.cu";python3 "$ONEESAN_ROOT/scripts/build/gen-b300-rank-delta-report.py" "$RANK_DELTA_FREE_SRC" "$RANK_DELTA_REPORT_SRC";BUILD_SRC="$RANK_DELTA_REPORT_SRC"
   if [[ "$RANK_STATE_PACKED" == 1 ]]; then RANK_STATE_SRC="$ONEESAN_BUILD_DIR/b300_hbm32_n${N}_rank_state_packed.cu";python3 "$ONEESAN_ROOT/scripts/build/gen-b300-rank-state-packed.py" "$BUILD_SRC" "$RANK_STATE_SRC";BUILD_SRC="$RANK_STATE_SRC";fi
-  if [[ "$RANK_STATE_ILP2" == 1 ]]; then RANK_STATE_ILP2_SRC="$ONEESAN_BUILD_DIR/b300_hbm32_n${N}_rank_state_ilp2.cu";python3 "$ONEESAN_ROOT/scripts/build/gen-b300-rank-state-ilp2.py" "$BUILD_SRC" "$RANK_STATE_ILP2_SRC";BUILD_SRC="$RANK_STATE_ILP2_SRC";fi
+  if [[ "$RANK_STATE_ILP2" == 1 ]]; then
+    RANK_STATE_ILP2_SRC="$ONEESAN_BUILD_DIR/b300_hbm32_n${N}_rank_state_ilp2.cu";python3 "$ONEESAN_ROOT/scripts/build/gen-b300-rank-state-ilp2.py" "$BUILD_SRC" "$RANK_STATE_ILP2_SRC";BUILD_SRC="$RANK_STATE_ILP2_SRC"
+    BLOCK_RANK_STATE_ILP2_SRC="$ONEESAN_BUILD_DIR/b300_hbm32_n${N}_rank_state_ilp2_block.cu";python3 "$ONEESAN_ROOT/scripts/build/gen-b300-block-rank-state-ilp2.py" "$BUILD_SRC" "$BLOCK_RANK_STATE_ILP2_SRC";BUILD_SRC="$BLOCK_RANK_STATE_ILP2_SRC"
+  fi
 fi
 
 ROW_SRC="$ONEESAN_BUILD_DIR/b300_hbm32_n${N}_rowlimit.cu";cp "$BUILD_SRC" "$ROW_SRC";python3 "$ONEESAN_ROOT/scripts/build/lower-b300-row-limit.py" "$ROW_SRC" "$ROW_SRC";BUILD_SRC="$ROW_SRC"
@@ -94,4 +97,4 @@ if [[ "$MAIN_PULL_ILP2" == 1 ]]; then echo "  main_pull_destinations_per_thread=
 if [[ "$HEIGHT_CACHE" == 1 ]]; then echo "  height_cache_bytes_per_state=1 height_cache_hbm_rw_per_step_bytes=2 prefix_height_popcounts_removed=main_pair,block_closure recurrence_step=O1";fi
 if [[ "$RANK_DELTA_CACHE" == 1 ]]; then echo "  rank_delta_bytes_per_state=8 rank_delta_hbm_rw_per_step_bytes=16 prefix_rank_walk_removed=main_drop,block_lift moving_fixed_checks=0 conditional_scratch=1 coverage_report=1 input_compat_normalized=1";fi
 if [[ "$RANK_STATE_PACKED" == 1 ]]; then echo "  rank_state_storage_bytes=8 delta_bits=56 height_bits=8 rank_state_hbm_rw_per_step_bytes=16 prefix_height_popcounts_removed=main_pair,block_closure width_max=28 full_state_bound=385719506620 fallback_required=0";fi
-if [[ "$RANK_STATE_ILP2" == 1 ]]; then echo "  rank_state_main_destinations_per_thread=2 rank_state_index_first=1 rank_state_hbm_request_overlap=pair,block,two_destinations register_pressure_requires_ab=1";fi
+if [[ "$RANK_STATE_ILP2" == 1 ]]; then echo "  rank_state_main_destinations_per_thread=2 rank_state_block_destinations_per_thread=2 rank_state_index_first=1 rank_state_hbm_request_overlap=pair,block,endpoint,closure,two_destinations register_pressure_requires_ab=1";fi
