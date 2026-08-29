@@ -1,0 +1,11 @@
+#define main gridfp_b300_hbm32_factorized_batch_cas_main_unused
+#include "oneesan_cuda_gridfp_b300_hbm32_factorized_batch.cu"
+#undef main
+
+#include "oneesan_cuda_gridfp_b300_hbm32_factorized_batch_pm32_part0.cuh"
+#include "oneesan_cuda_gridfp_b300_hbm32_factorized_batch_pm32_part1.cuh"
+#include "oneesan_cuda_gridfp_b300_hbm32_factorized_batch_pm32_part2.cuh"
+#include "oneesan_cuda_gridfp_b300_hbm32_factorized_batch_pm32_part3.cuh"
+#include "oneesan_cuda_gridfp_b300_hbm32_factorized_batch_pm32_part4.cuh"
+#include "oneesan_cuda_gridfp_b300_hbm32_factorized_batch_pm32_part5.cuh"
+#include "oneesan_cuda_gridfp_b300_hbm32_factorized_batch_pm32_part6.cuh"
