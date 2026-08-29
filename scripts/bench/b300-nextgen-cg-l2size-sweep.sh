@@ -55,7 +55,12 @@ field(){ local k="$1" l="$2"; sed -nE "s/(^|.*[[:space:]])${k}=([^[:space:]]+).*
 printf 'profile\trandom_cg\tl2_fetch_bytes\tthreads\trepeat\tresidue\twall_s\thigh_rec_groups\thigh_rec_fallback_groups\tmc_avg_pct\tmc_max_pct\tmc_samples\n' >"$RESULT"
 run_one(){
   local profile="$1" cg="$2" l2="$3" bin="$4" t="$5" r="$6" so="$LOGDIR/${profile}_t${t}_r${r}.out" se="$LOGDIR/${profile}_t${t}_r${r}.err" mem="$LOGDIR/${profile}_t${t}_r${r}.mem"
-  set +e; B300_ROW_LIMIT="$ROWS" GRIDFP_THREADS="$t" "$bin" 27 "$TARGET_MIB" "$MAX_WINDOW" 8 "$MOD" >"$so" 2>"$se" & local pid=$!; sample_mem "$pid" "$mem" & local sp=$!; wait "$pid"; local rc=$?; set -e; wait "$sp" 2>/dev/null || true
+  set +e
+  B300_ROW_LIMIT="$ROWS" GRIDFP_THREADS="$t" "$bin" 27 "$TARGET_MIB" "$MAX_WINDOW" 8 "$MOD" >"$so" 2>"$se" & local pid=$!
+  sample_mem "$pid" "$mem" & local sp=$!
+  wait "$pid"; local rc=$?
+  set -e
+  wait "$sp" 2>/dev/null || true
   ((rc==0)) || { echo "$profile t=$t failed rc=$rc" >&2; tail -n 100 "$se" >&2 || true; return "$rc"; }
   local line="$(grep '^backend=gridfp-b300-hbm32-forced2window-opt-batch ' "$so" | tail -n1 || true)"; [[ -n "$line" ]] || return 4
   local hg="$(field high_rec_groups "$line")" hf="$(field high_rec_fallback_groups "$line")"; [[ "$hg" =~ ^[0-9]+$ ]] && ((hg>0)) || return 5
@@ -70,9 +75,9 @@ for t in $THREADS_LIST; do
   done <"$LOGDIR/binaries.tsv"
 done
 
-python3 - "$RESULT" "$RESOURCE" "$LOGDIR/binaries.tsv" "$WINNER_ENV" <<'PY'
+python3 - "$RESULT" "$RESOURCE" "$LOGDIR/binaries.tsv" "$WINNER_ENV" "$HIGH_DROP_CHUNK" "$RECURRENCE_ILP" "$PREFETCH_L2" "$DUALMASK" "$CLOSURE_BATCH" "$MAXRREGCOUNT" <<'PY'
 import csv,math,statistics,sys,shlex
-result,resource,bins_path,winner=sys.argv[1:]
+result,resource,bins_path,winner,high,ilp,prefetch,dual,batch,cap=sys.argv[1:]
 rows=list(csv.DictReader(open(result),delimiter='\t')); rr=list(csv.DictReader(open(resource),delimiter='\t'))
 if not rows: raise SystemExit('no CG L2 results')
 res={r['residue'] for r in rows}
@@ -80,34 +85,31 @@ if len(res)!=1: raise SystemExit('FATAL CG L2 partial residue mismatch '+repr({(
 bins={r['profile']:r for r in csv.DictReader(open(bins_path),delimiter='\t')}
 resources={}
 for r in rr:
-    try:
-        z=(int(r['registers']),int(r['spill_store_bytes']),int(r['spill_load_bytes']))
+    try: z=(int(r['registers']),int(r['spill_store_bytes']),int(r['spill_load_bytes']))
     except (ValueError,TypeError,KeyError): continue
-    old=resources.get(r['profile'],(-1,-1,-1)); resources[r['profile']=(max(old[0],z[0]),max(old[1],z[1]),max(old[2],z[2]))
+    old=resources.get(r['profile'],(-1,-1,-1))
+    resources[r['profile']] = (max(old[0],z[0]),max(old[1],z[1]),max(old[2],z[2]))
 by={}
 for r in rows: by.setdefault((r['profile'],int(r['random_cg']),int(r['l2_fetch_bytes']),int(r['threads'])),[]).append(r)
 med=[]
 for (p,cg,l2,t),rs in by.items():
-    wall=statistics.median(float(r['wall_s']) for r in rs); mv=[float(r['mc_avg_pct']) for r in rs if r['mc_avg_pct']!='nan']; mc=statistics.median(mv) if mv else math.nan
+    wall=statistics.median(float(r['wall_s']) for r in rs)
+    mv=[float(r['mc_avg_pct']) for r in rs if r['mc_avg_pct']!='nan']; mc=statistics.median(mv) if mv else math.nan
     regs,ss,sl=resources.get(p,(-1,-1,-1)); med.append((wall,p,cg,l2,t,mc,regs,ss,sl))
 for x in sorted(med): print(f'CG_L2 profile={x[1]} cg={x[2]} l2={x[3]} threads={x[4]} wall_s={x[0]:.9f} mc={x[5]:.3f} regs={x[6]} spill_store={x[7]} spill_load={x[8]}',file=sys.stderr)
 clean=[x for x in med if x[6]>=0 and x[7]==0 and x[8]==0]
 if not clean: raise SystemExit('no CG L2 candidate has known spill-free main recurrence ptxas')
 key=lambda x:(x[0],-x[5] if not math.isnan(x[5]) else math.inf)
-best=min(clean,key=key)
+best=min(clean,key=key); b=bins[best[1]]
 def q(x): return shlex.quote(str(x))
-b=bins[best[1]]
 with open(winner,'w') as f:
-    f.write('B300_CGL2_WINNER_PROFILE='+q(best[1])+'\n')
-    f.write('B300_CGL2_WINNER_BIN='+q(b['binary'])+'\n')
-    f.write('B300_CGL2_WINNER_THREADS='+q(best[4])+'\n')
-    f.write('B300_CGL2_WINNER_RANDOM_CG='+q(best[2])+'\n')
-    f.write('B300_CGL2_WINNER_L2_FETCH_BYTES='+q(best[3])+'\n')
-    f.write('B300_CGL2_WINNER_WALL_S='+q(f'{best[0]:.9f}')+'\n')
-    f.write('B300_CGL2_WINNER_MC_AVG_PCT='+q(f'{best[5]:.3f}')+'\n')
-    f.write('B300_CGL2_WINNER_REGISTERS='+q(best[6])+'\n')
-    f.write('B300_CGL2_WINNER_SPILL_STORE_BYTES='+q(best[7])+'\n')
-    f.write('B300_CGL2_WINNER_SPILL_LOAD_BYTES='+q(best[8])+'\n')
+    for k,v in (
+        ('B300_CGL2_WINNER_PROFILE',best[1]),('B300_CGL2_WINNER_BIN',b['binary']),('B300_CGL2_WINNER_THREADS',best[4]),
+        ('B300_CGL2_WINNER_RANDOM_CG',best[2]),('B300_CGL2_WINNER_L2_FETCH_BYTES',best[3]),('B300_CGL2_HIGH_DROP_CHUNK',high),
+        ('B300_CGL2_RECURRENCE_ILP',ilp),('B300_CGL2_PREFETCH_L2',prefetch),('B300_CGL2_DUALMASK',dual),('B300_CGL2_CLOSURE_BATCH',batch),
+        ('B300_CGL2_MAXRREGCOUNT',cap),('B300_CGL2_WINNER_WALL_S',f'{best[0]:.9f}'),('B300_CGL2_WINNER_MC_AVG_PCT',f'{best[5]:.3f}'),
+        ('B300_CGL2_WINNER_REGISTERS',best[6]),('B300_CGL2_WINNER_SPILL_STORE_BYTES',best[7]),('B300_CGL2_WINNER_SPILL_LOAD_BYTES',best[8])):
+        f.write(k+'='+q(v)+'\n')
 print('b300_nextgen_cgl2_exact_intermediate_match=1')
 print('b300_nextgen_cgl2_residue='+next(iter(res)))
 print(f'b300_nextgen_cgl2_best_profile={best[1]}')
