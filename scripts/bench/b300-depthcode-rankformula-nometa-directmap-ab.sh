@@ -25,7 +25,7 @@ mkdir -p "$LOGDIR" "$(dirname "$RESULT")"
 field(){ local key="$1" line="$2"; sed -nE "s/(^|.*[[:space:]])${key}=([^[:space:]]+).*/\\2/p" <<<"$line" | tail -n1; }
 
 build_one(){
-  local direct="$1" label="$2" bin="$3"
+  local direct="$1" gather="$2" label="$3" bin="$4"
   N="$N" ARCH="$ARCH" OUT="$bin" \
     RANKFORMULA_NOMETA_BLOCK=16 \
     RANKFORMULA_NOMETA_WARPSHARE=1 \
@@ -34,6 +34,7 @@ build_one(){
     RANKFORMULA_NOMETA_GROUP56=0 \
     RANKFORMULA_NOMETA_GROUP61=1 \
     RANKFORMULA_NOMETA_DIRECTMAP="$direct" \
+    RANKFORMULA_DIRECTGATHER="$gather" \
     RANKFORMULA_ABSTRACT_SELECT8=1 \
     RANKFORMULA_ABSTRACT_DEPTH4=1 \
     RANKFORMULA_ABSTRACT_SRCPACK10=1 \
@@ -64,16 +65,11 @@ run_one(){
 printf 'mode\trepeat\tresidue\twall_s\tforward_high_s\tforward_low_s\treverse_low_s\treverse_high_s\ttranspose_s\n' >"$RESULT"
 [[ "$RUN_PTXAS" == 1 ]] && printf 'backend\tkernel\tregisters\tstack_bytes\tspill_store_bytes\tspill_load_bytes\tsmem_bytes\tcmem0_bytes\n' >"$RESOURCE"
 
-for spec in 'coop 0' 'directmap 1'; do
-  read -r label direct <<<"$spec"
+for spec in 'coop 0 0' 'directmap 1 0' 'directgather 1 1'; do
+  read -r label direct gather <<<"$spec"
   bin="$ONEESAN_BUILD_DIR/ab_group61_${label}_n${N}"
-  build_one "$direct" "$label" "$bin"
+  build_one "$direct" "$gather" "$label" "$bin"
   if [[ "$RUN_PTXAS" == 1 ]]; then python3 "$PARSER" "$LOGDIR/$label.build.err" --label "$label" >>"$RESOURCE"; fi
-  if [[ "$RUN_SELFTEST" == 1 ]]; then
-    # Build itself exercises the same compile-time invariants.  Run a short full
-    # n=21 residue as the exact end-to-end check; no GitHub Actions are used.
-    :
-  fi
   for ((r=1;r<=REPEATS;++r)); do run_one "$label" "$bin" "$r"; done
 done
 
@@ -84,7 +80,7 @@ src,dst=sys.argv[1:]
 rows=list(csv.DictReader(open(src),delimiter='\t'))
 keys=('wall_s','forward_high_s','forward_low_s','reverse_low_s','reverse_high_s','transpose_s')
 out=[]
-for mode in ('coop','directmap'):
+for mode in ('coop','directmap','directgather'):
     g=[r for r in rows if r['mode']==mode]
     z={'mode':mode,'repeats':len(g)}
     for k in keys:
@@ -97,12 +93,13 @@ with open(dst,'w') as f:
     for z in out:
         f.write('\t'.join(str(z[k]) for k in ('mode','repeats','wall_s','forward_high_s','forward_low_s','reverse_low_s','reverse_high_s','high_total_s','transpose_s'))+'\n')
 q={z['mode']:z for z in out}
-for k in ('wall_s','forward_high_s','reverse_high_s','high_total_s'):
-    a,b=q['coop'][k],q['directmap'][k]
-    if a and b:
-        print(f'{k}_speedup={a/b:.6f} coop={a:.6f} directmap={b:.6f}')
+for mode in ('directmap','directgather'):
+    for k in ('wall_s','forward_high_s','reverse_high_s','high_total_s'):
+        a,b=q['coop'][k],q[mode][k]
+        if a and b:
+            print(f'{mode}_{k}_speedup={a/b:.6f} coop={a:.6f} candidate={b:.6f}')
 print('summary='+dst)
 PY
 cat "$SUMMARY"
 
-echo "directmap removes runtime block16 lookup, successor loop, ballots, and group shuffles; inspect p10dc_low_rankformula_directmap lines in stderr for exact table size" >&2
+echo "directmap: 1 rank descriptor load; directgather: 1 16-byte gather descriptor then Count loads. Inspect p10dc_low_rankformula_direct* lines for exact table sizes." >&2
