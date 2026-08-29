@@ -35,12 +35,13 @@ __global__ void block_pull_kernel(const Count*in_main,Code n,Count*out_block,int
         Count acc=0;
         MateValue look=mget(b,p-1);
         if(look==R||look==L){
-            // Legacy forced2window deferred NR/NL channel removes physical p-1.
-            MateID x=minsert(b,p-1,N);
+            // NR/NL has N at physical p. The push path's rank_drop_n_t(...,p)
+            // is exactly rank(mshrink(source,p)), so reconstruct the source by
+            // reinserting N at p while retaining the endpoint at p-1.
+            MateID x=minsert(b,p,N);
             block_pull_add_source<TARGET_W>(acc,in_main,x);
         }else if(look==N){
-            // Closure channel removes physical p-1 after producing NN. Restore
-            // that NN destination and enumerate the exact LL/RR/RL preimages.
+            // LL/RR/RL closure removes physical p-1 after producing NN.
             MateID d=minsert(b,p-1,N);
             MateID x=msetpair(d,p,RL);
             block_pull_add_source<TARGET_W>(acc,in_main,x);
@@ -75,8 +76,8 @@ s = s.replace(marker, insert + marker, 1)
 old = '''        if(p>1){
             if(ds.size)ck(cudaMemsetAsync(dnext,0,size_t(ds.size)*sizeof(Count),c.sBlock),"clear next D pull");
             if(ms.size){
-                if(useMate)main_pull_kernel<true><<<bm,threads,0,c.sMain>>>(cur,c.dMate,ms.size,dcur,nxt,p);
-                else main_pull_kernel<false><<<bm,threads,0,c.sMain>>>(cur,nullptr,ms.size,dcur,nxt,p);
+                if(useMate)main_pull_kernel<true><<<bm,threads,0,c.sMain>>>(cur,c.dMate,ms.size,dcur,ds.size,nxt,p);
+                else main_pull_kernel<false><<<bm,threads,0,c.sMain>>>(cur,nullptr,ms.size,dcur,ds.size,nxt,p);
                 if(ds.size){
                     if(useMate)main_to_block_kernel<true><<<bm,threads,0,c.sBlock>>>(cur,c.dMate,ms.size,dnext,p);
                     else main_to_block_kernel<false><<<bm,threads,0,c.sBlock>>>(cur,nullptr,ms.size,dnext,p);
@@ -86,8 +87,8 @@ old = '''        if(p>1){
 '''
 new = '''        if(p>1){
             if(ms.size){
-                if(useMate)main_pull_kernel<true><<<bm,threads,0,c.sMain>>>(cur,c.dMate,ms.size,dcur,nxt,p);
-                else main_pull_kernel<false><<<bm,threads,0,c.sMain>>>(cur,nullptr,ms.size,dcur,nxt,p);
+                if(useMate)main_pull_kernel<true><<<bm,threads,0,c.sMain>>>(cur,c.dMate,ms.size,dcur,ds.size,nxt,p);
+                else main_pull_kernel<false><<<bm,threads,0,c.sMain>>>(cur,nullptr,ms.size,dcur,ds.size,nxt,p);
             }
             if(ds.size)block_pull_kernel<<<bd,threads,0,c.sBlock>>>(cur,ds.size,dnext,p);
             ck(cudaGetLastError(),"doubleD full pull transition");
@@ -98,4 +99,4 @@ s = s.replace(old, new, 1)
 
 out.parent.mkdir(parents=True, exist_ok=True)
 out.write_text(s)
-print(f'generated {out} from {src}: b300_block_pull=1 p_scope=2..Wm1 block_atomic=0 block_memset=0')
+print(f'generated {out} from {src}: b300_block_pull=1 p_scope=2..Wm1 block_atomic=0 block_memset=0 deferred_insert=p')
