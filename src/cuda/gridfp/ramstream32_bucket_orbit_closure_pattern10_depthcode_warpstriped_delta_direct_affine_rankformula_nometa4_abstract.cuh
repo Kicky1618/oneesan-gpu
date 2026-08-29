@@ -16,6 +16,7 @@
 #else
 #include "ramstream32_bucket_closure_pattern10_depthcode_delta_direct_affine_rankformula_nometa4_abstract.cuh"
 #endif
+#include "ramstream32_bucket_rankformula_high_plan_profile.cuh"
 
 #ifndef P10DC_RANKFORMULA_PRECTX_FORWARD
 #define P10DC_RANKFORMULA_PRECTX_FORWARD 0
@@ -73,20 +74,26 @@ static_assert(!P10DC_RANKFORMULA_CPASYNC_OVERLAP_LOCAL_PIPE2 ||
     (void)(payload); (void)(loc); (void)(p); \
     p10dc_direct_resolve_high_io((c),(ss),(js),(ds),(sr),(jr),(dr)); \
     p10dc_apply_forward_prectx((c), qi, nn); \
+    p10dc_rankformula_profile_high_plan((c), 0u); \
 } while(0)
 #else
-#define P10DC_WARPSTRIPED_PREPARE_FORWARD(c,payload,loc,p,ss,js,ds,sr,jr,dr) \
-    p10dc_prepare_forward_high_delta_direct_affine((c),(payload),(loc),(p),(ss),(js),(ds),(sr),(jr),(dr))
+#define P10DC_WARPSTRIPED_PREPARE_FORWARD(c,payload,loc,p,ss,js,ds,sr,jr,dr) do { \
+    p10dc_prepare_forward_high_delta_direct_affine((c),(payload),(loc),(p),(ss),(js),(ds),(sr),(jr),(dr)); \
+    p10dc_rankformula_profile_high_plan((c), 0u); \
+} while(0)
 #endif
 #if P10DC_RANKFORMULA_PRECTX_REVERSE
 #define P10DC_WARPSTRIPED_PREPARE_REVERSE(c,payload,loc,plan_db,p,edge,ss,js,ds,sr,jr,dr) do { \
     (void)(payload); (void)(loc); (void)(plan_db); (void)(p); (void)(edge); \
     p10dc_direct_resolve_high_io((c),(ss),(js),(ds),(sr),(jr),(dr)); \
     p10dc_apply_reverse_prectx((c), qi, kind); \
+    p10dc_rankformula_profile_high_plan((c), 1u); \
 } while(0)
 #else
-#define P10DC_WARPSTRIPED_PREPARE_REVERSE(c,payload,loc,plan_db,p,edge,ss,js,ds,sr,jr,dr) \
-    p10dc_prepare_reverse_high_delta_direct_affine((c),(payload),(loc),(plan_db),(p),(edge),(ss),(js),(ds),(sr),(jr),(dr))
+#define P10DC_WARPSTRIPED_PREPARE_REVERSE(c,payload,loc,plan_db,p,edge,ss,js,ds,sr,jr,dr) do { \
+    p10dc_prepare_reverse_high_delta_direct_affine((c),(payload),(loc),(plan_db),(p),(edge),(ss),(js),(ds),(sr),(jr),(dr)); \
+    p10dc_rankformula_profile_high_plan((c), 1u); \
+} while(0)
 #endif
 #define p10dc_resolved_high_plan_sum p10dc_direct_resolved_high_plan_sum_cross5_rankformula_nometa4_abstract
 #if P10DC_RANKFORMULA_PAIR_MLP
