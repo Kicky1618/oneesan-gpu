@@ -94,4 +94,22 @@ with tempfile.TemporaryDirectory() as td:
     cp_bad_n.write_text(json.dumps(d) + "\n")
     expect_fail(lambda: mod.load_checkpoint(cp_bad_n, 27, dict(fp2)), "belongs to n=26")
 
-print("b300-exact-checkpoint-compat-preflight OK schema2=1 race_schema3=1 schema3_preserved=1 binary_mismatch_rejected=1 malformed_profile_rejected=1 n_mismatch_rejected=1 gpu_work=0")
+    # A completed CRT result must bind exact.txt to the final checkpoint and,
+    # for race-seeded runs, to the selected profile fingerprint as well.
+    final_work = t / "final"
+    final_work.mkdir()
+    final_residues = {11: {"residue": 3, "wall_s": 2.5}}
+    mod.save_checkpoint(final_work / "checkpoint.json", 27, fp3, final_residues)
+    rc = mod.finish(final_work, 27, 10, [11], final_residues, dict(fp3))
+    assert rc == 0
+    fields = {}
+    for line in (final_work / "exact.txt").read_text().splitlines():
+        k, v = line.split("=", 1)
+        fields[k] = v
+    assert fields["exact"] == "3"
+    assert fields["checkpoint_schema"] == "3"
+    assert fields["solver_binary_sha256"] == bsha
+    assert fields["solver_profile_sha256"] == profile_sha
+    assert fields["checkpoint_sha256"] == sha(final_work / "checkpoint.json")
+
+print("b300-exact-checkpoint-compat-preflight OK schema2=1 race_schema3=1 schema3_preserved=1 binary_mismatch_rejected=1 malformed_profile_rejected=1 n_mismatch_rejected=1 exact_provenance=1 gpu_work=0")
