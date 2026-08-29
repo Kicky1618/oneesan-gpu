@@ -19,10 +19,11 @@ HEIGHT_CACHE="${HEIGHT_CACHE:-0}"
 RANK_DELTA_CACHE="${RANK_DELTA_CACHE:-0}"
 RANK_STATE_PACKED="${RANK_STATE_PACKED:-0}"
 RANK_STATE_ILP2="${RANK_STATE_ILP2:-0}"
+CONCURRENT_GROUP_IO="${CONCURRENT_GROUP_IO:-0}"
 MAXRREGCOUNT="${MAXRREGCOUNT:-0}"
 PTXAS_VERBOSE="${PTXAS_VERBOSE:-1}"
 
-for name in FAST_SHARD_ADDRESS8 MAIN_MATE_CACHE MAIN_PULL BLOCK_PULL BLOCK_MATE_CACHE MAIN_PULL_ILP2 HEIGHT_CACHE RANK_DELTA_CACHE RANK_STATE_PACKED RANK_STATE_ILP2 PTXAS_VERBOSE; do
+for name in FAST_SHARD_ADDRESS8 MAIN_MATE_CACHE MAIN_PULL BLOCK_PULL BLOCK_MATE_CACHE MAIN_PULL_ILP2 HEIGHT_CACHE RANK_DELTA_CACHE RANK_STATE_PACKED RANK_STATE_ILP2 CONCURRENT_GROUP_IO PTXAS_VERBOSE; do
   value="${!name}"
   if [[ "$value" != 0 && "$value" != 1 ]]; then echo "$name must be 0 or 1" >&2; exit 2; fi
 done
@@ -77,6 +78,7 @@ if [[ "$RANK_DELTA_CACHE" == 1 ]]; then
     BLOCK_RANK_STATE_ILP2_SRC="$ONEESAN_BUILD_DIR/b300_hbm32_n${N}_rank_state_ilp2_block.cu";python3 "$ONEESAN_ROOT/scripts/build/gen-b300-block-rank-state-ilp2.py" "$BUILD_SRC" "$BLOCK_RANK_STATE_ILP2_SRC";BUILD_SRC="$BLOCK_RANK_STATE_ILP2_SRC"
   fi
 fi
+if [[ "$CONCURRENT_GROUP_IO" == 1 ]]; then CONCURRENT_SRC="$ONEESAN_BUILD_DIR/b300_hbm32_n${N}_concurrent_group_io.cu";python3 "$ONEESAN_ROOT/scripts/build/gen-b300-concurrent-group-io.py" "$BUILD_SRC" "$CONCURRENT_SRC";BUILD_SRC="$CONCURRENT_SRC";fi
 
 ROW_SRC="$ONEESAN_BUILD_DIR/b300_hbm32_n${N}_rowlimit.cu";cp "$BUILD_SRC" "$ROW_SRC";python3 "$ONEESAN_ROOT/scripts/build/lower-b300-row-limit.py" "$ROW_SRC" "$ROW_SRC";BUILD_SRC="$ROW_SRC"
 THREAD_SRC="$ONEESAN_BUILD_DIR/b300_hbm32_n${N}_runtime_threads.cu";python3 "$ONEESAN_ROOT/scripts/build/gen-b300-runtime-threads.py" "$BUILD_SRC" "$THREAD_SRC";BUILD_SRC="$THREAD_SRC"
@@ -90,11 +92,8 @@ TMPDIR="$ONEESAN_TMP_DIR" nvcc -O3 -std=c++17 -lineinfo -arch="$ARCH" "${PTXAS_F
 echo "built $OUT"
 echo "  source=$SRC"
 echo "  build_source=$BUILD_SRC"
-echo "  n=$N width=$W arch=$ARCH low_lut_k=$LOW_LUT_K high_lut_k=$HIGH_LUT_K fast_shard_address8=$FAST_SHARD_ADDRESS8 main_mate_cache=$MAIN_MATE_CACHE main_pull=$MAIN_PULL block_pull=$BLOCK_PULL block_mate_cache=$BLOCK_MATE_CACHE main_pull_ilp2=$MAIN_PULL_ILP2 height_cache=$HEIGHT_CACHE rank_delta_cache=$RANK_DELTA_CACHE rank_state_packed=$RANK_STATE_PACKED rank_state_ilp2=$RANK_STATE_ILP2 maxrregcount=$MAXRREGCOUNT ptxas_verbose=$PTXAS_VERBOSE"
+echo "  n=$N width=$W arch=$ARCH low_lut_k=$LOW_LUT_K high_lut_k=$HIGH_LUT_K fast_shard_address8=$FAST_SHARD_ADDRESS8 main_mate_cache=$MAIN_MATE_CACHE main_pull=$MAIN_PULL block_pull=$BLOCK_PULL block_mate_cache=$BLOCK_MATE_CACHE main_pull_ilp2=$MAIN_PULL_ILP2 height_cache=$HEIGHT_CACHE rank_delta_cache=$RANK_DELTA_CACHE rank_state_packed=$RANK_STATE_PACKED rank_state_ilp2=$RANK_STATE_ILP2 concurrent_group_io=$CONCURRENT_GROUP_IO maxrregcount=$MAXRREGCOUNT ptxas_verbose=$PTXAS_VERBOSE"
 echo "  row_limit_env=B300_ROW_LIMIT default_rows=$W runtime_threads_env=GRIDFP_THREADS default_threads=256 planner_target_env=GRIDFP_PLAN_TARGET_MIB scratch_target_separate=1"
 echo "  block_closure_scan=endpoint_setbits block_closure_candidate_rank=incremental_delta rank_same_calls_per_closure_candidate=0"
-if [[ "$MAIN_PULL_ILP2" == 1 ]]; then echo "  main_pull_destinations_per_thread=2 memory_request_phases=mate,self,pair,block register_pressure_requires_ab=1";fi
-if [[ "$HEIGHT_CACHE" == 1 ]]; then echo "  height_cache_bytes_per_state=1 height_cache_hbm_rw_per_step_bytes=2 prefix_height_popcounts_removed=main_pair,block_closure recurrence_step=O1";fi
-if [[ "$RANK_DELTA_CACHE" == 1 ]]; then echo "  rank_delta_bytes_per_state=8 rank_delta_hbm_rw_per_step_bytes=16 prefix_rank_walk_removed=main_drop,block_lift moving_fixed_checks=0 conditional_scratch=1 coverage_report=1 input_compat_normalized=1";fi
-if [[ "$RANK_STATE_PACKED" == 1 ]]; then echo "  rank_state_storage_bytes=8 delta_bits=56 height_bits=8 rank_state_hbm_rw_per_step_bytes=16 prefix_height_popcounts_removed=main_pair,block_closure width_max=28 full_state_bound=385719506620 fallback_required=0";fi
 if [[ "$RANK_STATE_ILP2" == 1 ]]; then echo "  rank_state_main_destinations_per_thread=2 rank_state_block_destinations_per_thread=2 rank_state_index_first=1 rank_state_hbm_request_overlap=pair,block,endpoint,closure,two_destinations register_pressure_requires_ab=1";fi
+if [[ "$CONCURRENT_GROUP_IO" == 1 ]]; then echo "  group_io_main_block_overlap=1 mate_materialize_overlap=1 rank_state_init_overlap=1 scatter_overlap=1 devicewide_group_io_sync=0";fi
