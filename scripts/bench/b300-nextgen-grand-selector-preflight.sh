@@ -4,6 +4,7 @@ source "$(dirname -- "${BASH_SOURCE[0]}")/../lib/common.sh"
 
 GRAND="$ONEESAN_ROOT/scripts/run/b300x8-joint-nextself-hybrid8-select.sh"
 FIRSTPASS="$ONEESAN_ROOT/scripts/run/b300x8-grand-firstpass.sh"
+CONTRACT="$ONEESAN_ROOT/scripts/bench/b300-grand-selector-contract-preflight.sh"
 NEXTSELF="$ONEESAN_ROOT/scripts/run/b300x8-ilp8-nextself-staged-fullprime-race.sh"
 HYBRID="$ONEESAN_ROOT/scripts/run/b300x8-nextgen-hybrid8-staged-fullprime-race.sh"
 HYBRID_NS_STAGE="$ONEESAN_ROOT/scripts/bench/b300-nextgen-hybrid8-nextself-staged-calibrate.sh"
@@ -12,7 +13,7 @@ HYBRID_NS_PREFLIGHT="$ONEESAN_ROOT/scripts/bench/b300-mainrec-hybrid8-nextself-t
 RACE="$ONEESAN_ROOT/scripts/run/b300x8-race-external-forced-profiled-once.sh"
 JOINT="$ONEESAN_ROOT/scripts/run/b300x8-joint-calibrated-select.sh"
 
-for f in "$GRAND" "$FIRSTPASS" "$NEXTSELF" "$HYBRID" "$HYBRID_NS_STAGE" "$HYBRID_NS_RUN" "$HYBRID_NS_PREFLIGHT" "$RACE" "$JOINT"; do
+for f in "$GRAND" "$FIRSTPASS" "$CONTRACT" "$NEXTSELF" "$HYBRID" "$HYBRID_NS_STAGE" "$HYBRID_NS_RUN" "$HYBRID_NS_PREFLIGHT" "$RACE" "$JOINT"; do
   [[ -f "$f" ]] || { echo "missing grand-selector dependency=$f" >&2; exit 2; }
   bash -n "$f"
 done
@@ -44,7 +45,8 @@ for s in \
   'B300_HYBRID8_NEXTSELF_FINAL_SPILL_FREE=1' \
   'B300_HYBRID8_NEXTSELF_CONTROL_SPILL_FREE=1' \
   'B300_HYBRID8_NEXTSELF_FINAL_STAGE_ROWS' \
-  'B300_HYBRID8_NEXTSELF_FINAL_STAGE_RESIDUE'; do
+  'B300_HYBRID8_NEXTSELF_FINAL_STAGE_RESIDUE' \
+  'stage_e_crosscheck=1'; do
   grep -Fq "$s" "$HYBRID_NS_STAGE" || { echo "Stage F marker missing: $s" >&2; exit 3; }
 done
 
@@ -61,6 +63,9 @@ done
 
 grep -Fq 'b300-mainrec-hybrid8-nextself-transform-preflight OK' "$HYBRID_NS_PREFLIGHT" || {
   echo 'hybrid8 next-self transform preflight marker missing' >&2; exit 3;
+}
+grep -Fq 'b300_grand_selector_contract_preflight=OK' "$CONTRACT" || {
+  echo 'grand functional contract marker missing' >&2; exit 3;
 }
 
 for s in \
@@ -93,8 +98,18 @@ for s in \
   'b300-mainrec-hybrid8-nextself-transform-preflight.sh' \
   'b300-joint-nextgen-hybrid8-preflight.sh' \
   'b300-nextgen-grand-selector-preflight.sh' \
+  'b300-grand-selector-contract-preflight.sh' \
   'git -C "$ONEESAN_ROOT" status --porcelain=v1 --untracked-files=normal' \
   'profile_sha256=%s' \
+  'run_hybrid_ns_stage=%s' \
+  'hybrid_ns_min_speedup=%s' \
+  'hybrid_ns_search_repeats=%s' \
+  'hybrid_ns_validate_repeats=%s' \
+  'grand_selector_contract_preflight=1' \
+  'RUN_HYBRID_NS_STAGE="$RUN_HYBRID_NS_STAGE"' \
+  'HYBRID_NS_MIN_SPEEDUP="$HYBRID_NS_MIN_SPEEDUP"' \
+  'HYBRID_NS_SEARCH_REPEATS="$HYBRID_NS_SEARCH_REPEATS"' \
+  'HYBRID_NS_VALIDATE_REPEATS="$HYBRID_NS_VALIDATE_REPEATS"' \
   'gpu_inventory_begin=1' \
   'SINGLE PASS SELECTED' \
   'SELECT_ONLY=1: selected' \
@@ -164,4 +179,4 @@ if 'JOINT_BASE_BIN' in b2: raise SystemExit('separate transform branch unexpecte
 print('grand_candidate_budget=OK forced_slots=5 profiled_slots=2 total=7 composed_mapping=OK')
 PY
 
-echo 'b300_nextgen_grand_selector_preflight=OK bash_syntax=OK firstpass_guard=OK provenance=OK nextself_prepare=OK hybrid8_prepare=OK hybrid8_nextself_stageF=OK hybrid8_nextself_prepare=OK hybrid8_nextself_fingerprint=OK no_binary_identity_gate=OK staged_reject_fallback=OK forced_extra3=OK candidate_budget=7 gpu_work=0 actions_triggered=0'
+echo 'b300_nextgen_grand_selector_preflight=OK bash_syntax=OK firstpass_guard=OK firstpass_stagef_provenance=OK provenance=OK nextself_prepare=OK hybrid8_prepare=OK hybrid8_nextself_stageF=OK hybrid8_nextself_prepare=OK hybrid8_nextself_fingerprint=OK stage_e_crosscheck=OK no_binary_identity_gate=OK staged_reject_fallback=OK forced_extra3=OK functional_contract_present=OK candidate_budget=7 gpu_work=0 actions_triggered=0'
