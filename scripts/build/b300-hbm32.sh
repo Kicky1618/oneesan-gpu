@@ -46,7 +46,8 @@ if [[ "$MAIN_PULL" == 1 ]]; then PULL_SRC="$ONEESAN_BUILD_DIR/b300_hbm32_n${N}_m
 if [[ "$BLOCK_PULL" == 1 ]]; then BLOCK_PULL_SRC="$ONEESAN_BUILD_DIR/b300_hbm32_n${N}_full_pull.cu";python3 "$ONEESAN_ROOT/scripts/build/gen-b300-block-pull.py" "$BUILD_SRC" "$BLOCK_PULL_SRC";BUILD_SRC="$BLOCK_PULL_SRC";fi
 if [[ "$BLOCK_MATE_CACHE" == 1 ]]; then BLOCK_MATE_SRC="$ONEESAN_BUILD_DIR/b300_hbm32_n${N}_full_pull_block_mate.cu";python3 "$ONEESAN_ROOT/scripts/build/gen-b300-block-mate-cache.py" "$BUILD_SRC" "$BLOCK_MATE_SRC";BUILD_SRC="$BLOCK_MATE_SRC";fi
 if [[ "$RANK_DELTA_CACHE" == 1 ]]; then
-  RANK_DELTA_SRC="$ONEESAN_BUILD_DIR/b300_hbm32_n${N}_rank_delta_cache.cu";python3 "$ONEESAN_ROOT/scripts/build/gen-b300-rank-delta-cache.py" "$BUILD_SRC" "$RANK_DELTA_SRC"
+  RANK_DELTA_INPUT_SRC="$ONEESAN_BUILD_DIR/b300_hbm32_n${N}_rank_delta_input.cu";python3 "$ONEESAN_ROOT/scripts/build/normalize-b300-rank-delta-input.py" "$BUILD_SRC" "$RANK_DELTA_INPUT_SRC"
+  RANK_DELTA_SRC="$ONEESAN_BUILD_DIR/b300_hbm32_n${N}_rank_delta_cache.cu";python3 "$ONEESAN_ROOT/scripts/build/gen-b300-rank-delta-cache.py" "$RANK_DELTA_INPUT_SRC" "$RANK_DELTA_SRC"
   RANK_DELTA_REPORT_SRC="$ONEESAN_BUILD_DIR/b300_hbm32_n${N}_rank_delta_report.cu";python3 "$ONEESAN_ROOT/scripts/build/gen-b300-rank-delta-report.py" "$RANK_DELTA_SRC" "$RANK_DELTA_REPORT_SRC";BUILD_SRC="$RANK_DELTA_REPORT_SRC"
 fi
 
@@ -70,4 +71,4 @@ echo "  source=$SRC"
 echo "  build_source=$BUILD_SRC"
 echo "  n=$N width=$W arch=$ARCH low_lut_k=$LOW_LUT_K high_lut_k=$HIGH_LUT_K fast_shard_address8=$FAST_SHARD_ADDRESS8 main_mate_cache=$MAIN_MATE_CACHE main_pull=$MAIN_PULL block_pull=$BLOCK_PULL block_mate_cache=$BLOCK_MATE_CACHE rank_delta_cache=$RANK_DELTA_CACHE ptxas_verbose=$PTXAS_VERBOSE"
 echo "  row_limit_env=B300_ROW_LIMIT default_rows=$W runtime_threads_env=GRIDFP_THREADS default_threads=256 planner_target_env=GRIDFP_PLAN_TARGET_MIB scratch_target_separate=1"
-if [[ "$RANK_DELTA_CACHE" == 1 ]]; then echo "  rank_delta_bytes_per_state=8 rank_delta_hbm_rw_per_step_bytes=16 prefix_rank_walk_removed=main_drop,block_lift conditional_scratch=1 coverage_report=1";fi
+if [[ "$RANK_DELTA_CACHE" == 1 ]]; then echo "  rank_delta_bytes_per_state=8 rank_delta_hbm_rw_per_step_bytes=16 prefix_rank_walk_removed=main_drop,block_lift conditional_scratch=1 coverage_report=1 input_compat_normalized=1";fi
