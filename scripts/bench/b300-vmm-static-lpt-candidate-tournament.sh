@@ -1,11 +1,13 @@
 #!/usr/bin/env bash
 set -euo pipefail
 source "$(dirname -- "${BASH_SOURCE[0]}")/../lib/common.sh"
-NVCC="${NVCC:-nvcc}";ARCH="${ARCH:-native}";CAL_RUNS="${CAL_RUNS:-1}";RUNS="${RUNS:-1}";MIN_SPEEDUP="${MIN_SPEEDUP:-1.005}";MIN_ACTIVE="${MIN_ACTIVE:-0.995}"
+NVCC="${NVCC:-nvcc}";ARCH="${ARCH:-native}";PTX_ARCH="${PTX_ARCH:-sm_103}";CAL_RUNS="${CAL_RUNS:-2}";RUNS="${RUNS:-1}";MIN_SPEEDUP="${MIN_SPEEDUP:-1.005}";MIN_ACTIVE="${MIN_ACTIVE:-0.995}"
 MOD="${MOD:-4294967291}";TARGET_MIB="${TARGET_MIB:-16384}";MAX_WINDOW="${MAX_WINDOW:-14}";RESERVE="${GRIDFP_VRAM_RESERVE_MIB:-8192}";META_CAP="${B300_STAGED_META_MAX_MIB:-512}";INT_CAP="${B300_STAGED_INTERVAL_MAX_MIB:-256}"
 PREFIX="${PREFIX:-$ONEESAN_ROOT/work/b300_static_lpt_tournament}";LOGDIR="${LOGDIR:-${PREFIX}_logs}";CAL="$PREFIX.cal.tsv";FULL="$PREFIX.full.tsv";mkdir -p "$LOGDIR"
 require_nvcc_version_at_least "$NVCC" 13 0 "B300 static LPT tournament";[[ "$(nvidia-smi --query-gpu=index --format=csv,noheader|wc -l)" -ge 8 ]]||exit 2
 bash "$ONEESAN_ROOT/scripts/bench/b300-experimental-source-preflight.sh" >"$LOGDIR/source-preflight.out" 2>&1
+NVCC="$NVCC" GPUS=8 ARCH="$ARCH" PTX_ARCH="$PTX_ARCH" bash "$ONEESAN_ROOT/scripts/bench/b300-vmm-production-preflight.sh" >"$LOGDIR/vmm-preflight.out" 2>&1
+NVCC="$NVCC" ARCH="$PTX_ARCH" bash "$ONEESAN_ROOT/scripts/bench/b300-vmm-static-lpt-control-bundle-integration-ptx-proof.sh" >"$LOGDIR/bundle-ptx.out" 2>&1
 modes=(base metaptr metaarg intervals workerbind bundle persistent concurrent async windowbatch);declare -A build bin
 build[base]=b300-hbm32-vmm-static-lpt-stagedmeta.sh;build[metaptr]=b300-hbm32-vmm-static-lpt-metaptr.sh;build[metaarg]=b300-hbm32-vmm-static-lpt-metakernelarg.sh;build[intervals]=b300-hbm32-vmm-static-lpt-staged-intervals.sh;build[workerbind]=b300-hbm32-vmm-static-lpt-workerbind.sh;build[bundle]=b300-hbm32-vmm-static-lpt-control-bundle.sh;build[persistent]=b300-hbm32-vmm-static-lpt-persistent-workers.sh;build[concurrent]=b300-hbm32-vmm-static-lpt-persistent-concurrent.sh;build[async]=b300-hbm32-vmm-static-lpt-persistent-async.sh;build[windowbatch]=b300-hbm32-vmm-static-lpt-windowbatch.sh
 for m in "${modes[@]}";do bin[$m]="$ONEESAN_BUILD_DIR/b300_tournament_$m";NVCC="$NVCC" ARCH="$ARCH" OUT="${bin[$m]}" bash "$ONEESAN_ROOT/scripts/build/${build[$m]}" >"$LOGDIR/$m.build" 2>&1;done
@@ -26,7 +28,7 @@ if len(res['base'])!=1 or any(v!=res['base'] for v in res.values()):raise System
 med=lambda m,k:statistics.median(float(x[k]) for x in r if x['mode']==m);bw,ba=med('base','wall_s'),med('base','active_max_s');ok=[m for m in modes if ba/med(m,'active_max_s')>=amin];win=min(ok,key=lambda m:med(m,'wall_s'));print(win,f'{bw/med(win,"wall_s"):.9f}',f'{ba/med(win,"active_max_s"):.9f}')
 PY
 )
-echo "tournament_cal_winner=$WIN wall_speedup=${SPEED}x active_speedup=${ACTIVE}x"
+echo "tournament_cal_winner=$WIN wall_speedup=${SPEED}x active_speedup=${ACTIVE}x cal_runs=$CAL_RUNS"
 set +e;python3 - "$WIN" "$SPEED" "$MIN_SPEEDUP" <<'PY'
 import sys
 raise SystemExit(0 if sys.argv[1]!='base' and float(sys.argv[2])>=float(sys.argv[3]) else 9)
@@ -38,5 +40,5 @@ python3 - "$FULL" "$WIN" <<'PY'
 import csv,statistics,sys
 r=list(csv.DictReader(open(sys.argv[1]),delimiter='\t'));w=sys.argv[2];med=lambda m,k:statistics.median(float(x[k]) for x in r if x['mode']==m);res={m:{x['residue'] for x in r if x['mode']==m} for m in ('base',w)}
 if res['base']!=res[w]:raise SystemExit(f'full residue mismatch {res}')
-bw,ww=med('base','wall_s'),med(w,'wall_s');bt=med('base','wall_s')+med('base','prepare_s');wt=med(w,'wall_s')+med(w,'prepare_s');print(f'winner={w} full_wall_speedup={bw/ww:.6f}x full_total_speedup={bt/wt:.6f}x residue={next(iter(res["base"]))}')
+bw,ww=med('base','wall_s'),med(w,'wall_s');bt=statistics.median(float(x['wall_s'])+float(x['prepare_s']) for x in r if x['mode']=='base');wt=statistics.median(float(x['wall_s'])+float(x['prepare_s']) for x in r if x['mode']==w);print(f'winner={w} full_wall_speedup={bw/ww:.6f}x full_total_speedup={bt/wt:.6f}x residue={next(iter(res["base"]))}')
 PY
