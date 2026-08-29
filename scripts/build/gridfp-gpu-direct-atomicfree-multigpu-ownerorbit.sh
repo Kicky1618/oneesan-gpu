@@ -13,7 +13,7 @@ if (( LOW_LUT_K <= 0 || HIGH_LUT_K <= 0 || LOW_LUT_K + HIGH_LUT_K + 1 != W )); t
   exit 2
 fi
 
-SRC="$(repo_path "src/cuda/gridfp/oneesan_cuda_gridfp_gpu_direct_atomicfree_multigpu_ownerorbit.cu")"
+SRC="$(repo_path "src/cuda/gridfp/oneesan_cuda_gridfp_gpu_direct_atomicfree_multigpu_ownerorbit_safe.cu")"
 OUT="$(build_path "${OUT:-oneesan_cuda_gridfp_gpu_direct_atomicfree_multigpu_ownerorbit_n${N}}")"
 
 TMPDIR="$ONEESAN_TMP_DIR" nvcc \
@@ -22,4 +22,4 @@ TMPDIR="$ONEESAN_TMP_DIR" nvcc \
   "$SRC" -o "$OUT"
 
 echo "built $OUT"
-echo "  n=$N width=$W arch=$ARCH low_lut_k=$LOW_LUT_K high_lut_k=$HIGH_LUT_K"
+echo "  n=$N width=$W arch=$ARCH low_lut_k=$LOW_LUT_K high_lut_k=$HIGH_LUT_K ownerorbit_safe=1"
