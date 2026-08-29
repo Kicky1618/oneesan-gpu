@@ -8,6 +8,46 @@ src=pathlib.Path(sys.argv[1]);out=pathlib.Path(sys.argv[2]);s=src.read_text()
 for req in ('b300_block_pull_rankstate_ilp4_kernel','b300_block_rankstate_ilp4_closure','block_pull_rank_contrib','block_pull_endpoint_mask','block_pull_apply_delta'):
     if req not in s:raise SystemExit(f'closure-warp transform requires generated artifact: {req}')
 
+def replace_function(text:str,name:str,new:str)->str:
+    p=text.find(name+'(')
+    if p<0:raise SystemExit(f'function not found: {name}')
+    start=text.rfind('\n',0,p)+1;brace=text.find('{',p)
+    depth=0;end=-1
+    for k in range(brace,len(text)):
+        if text[k]=='{':depth+=1
+        elif text[k]=='}':
+            depth-=1
+            if depth==0:end=k+1;break
+    if end<0:raise SystemExit(f'function end not found: {name}')
+    return text[:start]+new+text[end:]
+
+# Replace the mixed ILP4 block kernel with a lean endpoint-only path. Closure
+# states pay only the MateID classification load here; their rank-state and HBM
+# source work is owned by the warp-cooperative kernel below.
+s=replace_function(s,'b300_block_pull_rankstate_ilp4_kernel',r'''__global__ void b300_block_pull_rankstate_ilp4_kernel(
+    const Count* __restrict__ in_main,const MateID* __restrict__ block_mates,
+    Code n,Count* __restrict__ out_block,int p,RankState* __restrict__ rank_state
+){
+    const Code tid=Code(blockIdx.x)*blockDim.x+threadIdx.x;
+    const Code grid=Code(gridDim.x)*blockDim.x;
+    for(Code base=tid;base<n;base+=4*grid){
+        const Code i0=base,i1=base+grid,i2=base+2*grid,i3=base+3*grid;
+        const bool v1=i1<n,v2=i2<n,v3=i3<n;
+        const MateID b0=block_mates[i0],b1=v1?block_mates[i1]:MateID(0),b2=v2?block_mates[i2]:MateID(0),b3=v3?block_mates[i3]:MateID(0);
+        const MateValue l0=mget(b0,p-1),l1=v1?mget(b1,p-1):N,l2=v2?mget(b2,p-1):N,l3=v3?mget(b3,p-1):N;
+        const bool ep0=(l0==R||l0==L),ep1=v1&&(l1==R||l1==L),ep2=v2&&(l2==R||l2==L),ep3=v3&&(l3==R||l3==L);
+        const RankState s0=ep0?rank_state[i0]:RankState(0),s1=ep1?rank_state[i1]:RankState(0),s2=ep2?rank_state[i2]:RankState(0),s3=ep3?rank_state[i3]:RankState(0);
+        const RankDelta rd0=ep0?b300_unpack_rank_delta(s0):RankDelta(0),rd1=ep1?b300_unpack_rank_delta(s1):RankDelta(0),rd2=ep2?b300_unpack_rank_delta(s2):RankDelta(0),rd3=ep3?b300_unpack_rank_delta(s3):RankDelta(0);
+        const int h0=ep0?b300_unpack_rank_height(s0):0,h1=ep1?b300_unpack_rank_height(s1):0,h2=ep2?b300_unpack_rank_height(s2):0,h3=ep3?b300_unpack_rank_height(s3):0;
+        const Code j0=ep0?b300_sub_rank_delta(i0,rd0):Code(0),j1=ep1?b300_sub_rank_delta(i1,rd1):Code(0),j2=ep2?b300_sub_rank_delta(i2,rd2):Code(0),j3=ep3?b300_sub_rank_delta(i3,rd3):Code(0);
+        const Count x0=ep0?in_main[j0]:Count(0),x1=ep1?in_main[j1]:Count(0),x2=ep2?in_main[j2]:Count(0),x3=ep3?in_main[j3]:Count(0);
+        if(ep0){const RankDelta nr=rd0+b300_rank_delta_step(l0,p,h0);out_block[i0]=x0;rank_state[i0]=b300_pack_rank_state(nr,b300_rank_height_advance(h0,l0));}
+        if(ep1){const RankDelta nr=rd1+b300_rank_delta_step(l1,p,h1);out_block[i1]=x1;rank_state[i1]=b300_pack_rank_state(nr,b300_rank_height_advance(h1,l1));}
+        if(ep2){const RankDelta nr=rd2+b300_rank_delta_step(l2,p,h2);out_block[i2]=x2;rank_state[i2]=b300_pack_rank_state(nr,b300_rank_height_advance(h2,l2));}
+        if(ep3){const RankDelta nr=rd3+b300_rank_delta_step(l3,p,h3);out_block[i3]=x3;rank_state[i3]=b300_pack_rank_state(nr,b300_rank_height_advance(h3,l3));}
+    }
+}''')
+
 marker='\n\nstatic Code rank_full(MateID m,int width)'
 if marker not in s:raise SystemExit('rank_full marker not found')
 insert=r'''
@@ -87,31 +127,12 @@ __global__ void b300_block_closure_warp_kernel(
 '''
 s=s.replace(marker,insert+marker,1)
 
-old=r'''        Count a0=endpoint0,a1=endpoint1,a2=endpoint2,a3=endpoint3;
-        if(!ep0&&l0==N)a0=b300_block_rankstate_ilp4_closure(in_main,i0,b0,p,h0,nr0);
-        if(v1&&!ep1&&l1==N)a1=b300_block_rankstate_ilp4_closure(in_main,i1,b1,p,h1,nr1);
-        if(v2&&!ep2&&l2==N)a2=b300_block_rankstate_ilp4_closure(in_main,i2,b2,p,h2,nr2);
-        if(v3&&!ep3&&l3==N)a3=b300_block_rankstate_ilp4_closure(in_main,i3,b3,p,h3,nr3);
-        out_block[i0]=a0;rank_state[i0]=b300_pack_rank_state(nr0,b300_rank_height_advance(h0,l0));
-        if(v1){out_block[i1]=a1;rank_state[i1]=b300_pack_rank_state(nr1,b300_rank_height_advance(h1,l1));}
-        if(v2){out_block[i2]=a2;rank_state[i2]=b300_pack_rank_state(nr2,b300_rank_height_advance(h2,l2));}
-        if(v3){out_block[i3]=a3;rank_state[i3]=b300_pack_rank_state(nr3,b300_rank_height_advance(h3,l3));}'''
-new=r'''        // Endpoint states remain on the high-throughput per-thread ILP4 path.
-        // N/closure states are deliberately untouched here and are completed by
-        // the ballot-filtered warp closure kernel immediately afterwards.
-        if(ep0){out_block[i0]=endpoint0;rank_state[i0]=b300_pack_rank_state(nr0,b300_rank_height_advance(h0,l0));}
-        if(ep1){out_block[i1]=endpoint1;rank_state[i1]=b300_pack_rank_state(nr1,b300_rank_height_advance(h1,l1));}
-        if(ep2){out_block[i2]=endpoint2;rank_state[i2]=b300_pack_rank_state(nr2,b300_rank_height_advance(h2,l2));}
-        if(ep3){out_block[i3]=endpoint3;rank_state[i3]=b300_pack_rank_state(nr3,b300_rank_height_advance(h3,l3));}'''
-if s.count(old)!=1:raise SystemExit(f'ILP4 closure body anchor expected one match got {s.count(old)}')
-s=s.replace(old,new,1)
-
 old='''if(ds.size){if(useRankDelta)b300_block_pull_rankstate_ilp4_kernel<<<bd,threads,0,c.sBlock>>>(cur,c.dBlockMate,ds.size,dnext,p,c.dBlockRankDelta);'''
 new='''if(ds.size){if(useRankDelta){b300_block_pull_rankstate_ilp4_kernel<<<bd,threads,0,c.sBlock>>>(cur,c.dBlockMate,ds.size,dnext,p,c.dBlockRankDelta);b300_block_closure_warp_kernel<<<bd,threads,0,c.sBlock>>>(cur,c.dBlockMate,ds.size,dnext,p,c.dBlockRankDelta);}'''
 if s.count(old)!=1:raise SystemExit(f'ILP4 launch anchor expected one match got {s.count(old)}')
 s=s.replace(old,new,1)
 
-for req in ('b300_block_closure_warp_kernel','__shared__ Code ranks[MAX_WARPS][MAX_TERMS]','__ballot_sync','closure_mask&=closure_mask-1u','lane<unsigned(cnt)?in_main','__shfl_down_sync','Endpoint states remain','b300_block_pull_rankstate_ilp4_kernel<<<','b300_block_closure_warp_kernel<<<','}else if(useBlockMate)'):
+for req in ('b300_block_closure_warp_kernel','__shared__ Code ranks[MAX_WARPS][MAX_TERMS]','__ballot_sync','closure_mask&=closure_mask-1u','lane<unsigned(cnt)?in_main','__shfl_down_sync','const RankState s0=ep0?rank_state[i0]','b300_block_pull_rankstate_ilp4_kernel<<<','b300_block_closure_warp_kernel<<<','}else if(useBlockMate)'):
     if req not in s:raise SystemExit(f'missing closure-warp artifact: {req}')
 out.parent.mkdir(parents=True,exist_ok=True);out.write_text(s)
-print(f'generated {out} from {src}: b300_block_closure_warp=1 warp_classification_batch=32 closure_ballot=1 rank_generation_lane0=1 source_loads_parallel_lanes=32 shared_bytes_per_block=8192 endpoint_kernel_split=1 closure_kernel_split=1 duplicate_mate_read_bytes_per_state=8 same_stream_exact_order=1')
+print(f'generated {out} from {src}: b300_block_closure_warp=1 endpoint_kernel=mate_classify_then_endpoint_only closure_rankstate_duplicate_read=0 warp_classification_batch=32 closure_ballot=1 rank_generation_lane0=1 source_loads_parallel_lanes=32 shared_bytes_per_block=8192 endpoint_kernel_split=1 closure_kernel_split=1 duplicate_mate_read_bytes_per_state=8 same_stream_exact_order=1')
