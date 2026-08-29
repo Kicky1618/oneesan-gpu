@@ -24,8 +24,7 @@ struct DeviceTerm {
     std::int8_t coef = 0;
 };
 
-__constant__ Rank64 RP_CHOOSE[RP_MAX_W + 1][RP_MAX_W + 1];
-__constant__ Rank64 RP_PRIMITIVE[RP_MAX_W + 1][RP_MAX_W + 2];
+#include "gridfp_reduced_production_codec_physical_device.cuh"
 __constant__ Rank64 RP_MOTZKIN[RP_MAX_W + 1][RP_MAX_W + 2];
 __constant__ Rank64 RP_SECTOR_OFFSET[RP_MAX_SECTORS + 1];
 __constant__ Rank64 RP_SECTOR_MAIN[RP_MAX_SECTORS];
