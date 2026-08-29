@@ -17,19 +17,6 @@
 #define bucket_onepass_graph_sync_devices bucket_pattern10_depthcode_warpstriped_delta_direct_affine_rankchunk32_cross5_graph_sync_devices
 
 #if P10DC_RANKCHUNK32_RANKMASK_PROFILE
-#define main p10dc_rankchunk32_profile_wrapped_main
-#include "oneesan_cuda_gridfp_b300_bucket_snake_onepass_graph_batch.cu"
-#undef main
-int main(int argc, char** argv) {
-    bool plan_only = false;
-    for (int i = 1; i < argc; ++i) {
-        if (std::strcmp(argv[i], "--plan-only") == 0) plan_only = true;
-    }
-    const int rc = p10dc_rankchunk32_profile_wrapped_main(argc, argv);
-    if (rc == 0 && !plan_only)
-        p10dc_rankchunk32_report_rankmask_profile_devices(BUCKET_NGPU);
-    return rc;
-}
-#else
-#include "oneesan_cuda_gridfp_b300_bucket_snake_onepass_graph_batch.cu"
+#define BSN_GRAPH_BATCH_POST_RUN_HOOK() p10dc_rankchunk32_report_rankmask_profile_devices(BUCKET_NGPU)
 #endif
+#include "oneesan_cuda_gridfp_b300_bucket_snake_onepass_graph_batch.cu"
