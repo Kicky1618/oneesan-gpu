@@ -11,6 +11,10 @@ out="$($BIN)"
 printf '%s\n' "$out"
 grep -Fq 'b300-closure-contrib-table-proof OK' <<<"$out"
 grep -Fq 'semantics=lexicographic_prefix_mass exact=1' <<<"$out"
+grep -Fq 'packed32=1 shift2_i32=1' <<<"$out"
+grep -Fq 'production_width=28 production_fixed_low_bits=13 production_occ_patterns=8192' <<<"$out"
+grep -Fq 'production_contrib_max=1615814681' <<<"$out"
+grep -Fq 'production_shift_abs_max=928513911' <<<"$out"
 grep -Fq 'table_bytes=13920' <<<"$out"
 grep -Fq 'known_constant_bytes=34800' <<<"$out"
-echo 'b300-closure-contrib-table-proof OK exact=1 constant_budget=OK' >&2
+echo 'b300-closure-contrib-table-proof OK exact=1 packed32=1 shift2=1 constant_budget=OK' >&2
