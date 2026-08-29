@@ -12,10 +12,12 @@ ROWS="${ROWS:-28}"
 THREADS="${GRIDFP_THREADS:-256}"
 ARCH="${ARCH:-native}"
 RANDOM_CG="${RANDOM_CG:-0}"
+WARP_SCAN="${WARP_SCAN:-1}"
 REBUILD="${REBUILD:-0}"
-for x in RANDOM_CG REBUILD; do v="${!x}"; [[ "$v" == 0 || "$v" == 1 ]] || { echo "$x must be 0 or 1" >&2; exit 2; }; done
+for x in RANDOM_CG WARP_SCAN REBUILD; do v="${!x}"; [[ "$v" == 0 || "$v" == 1 ]] || { echo "$x must be 0 or 1" >&2; exit 2; }; done
 TAG="n27_ilp4warp_dualmask_closuretab"
 [[ "$RANDOM_CG" == 1 ]] && TAG="${TAG}_cg"
+[[ "$WARP_SCAN" == 1 ]] && TAG="${TAG}_warpscan"
 ISO="${ISO:-$ONEESAN_BUILD_DIR/${TAG}_gen}"
 BIN="${BIN:-$ONEESAN_BUILD_DIR/oneesan_cuda_gridfp_b300_hbm32_${TAG}}"
 mkdir -p "$ISO" "$ISO/tmp"
@@ -48,21 +50,28 @@ if [[ "$REBUILD" == 1 || ! -x "$BIN" ]]; then
   bash "$ONEESAN_ROOT/scripts/bench/b300-block-pull-dualmask-proof.sh"
   bash "$ONEESAN_ROOT/scripts/bench/b300-block-closure-warp-batch-proof.sh"
   bash "$ONEESAN_ROOT/scripts/bench/b300-closure-contrib-table-proof.sh"
+  [[ "$WARP_SCAN" == 0 ]] || bash "$ONEESAN_ROOT/scripts/bench/b300-block-closure-warpscan-proof.sh"
 
   python3 "$ONEESAN_ROOT/scripts/build/gen-b300-block-closure-warp-dualmask.py" "$BUILD_SRC" "$DUAL_SRC"
   python3 "$ONEESAN_ROOT/scripts/build/gen-b300-closure-contrib-table.py" "$DUAL_SRC" "$TABLE_SRC"
   if [[ "$RANDOM_CG" == 1 ]]; then
-    CG_SRC="$ISO/final_random_cg.cu"
+    CG_SRC="$ISO/random_cg.cu"
     python3 "$ONEESAN_ROOT/scripts/build/gen-b300-rankstate-ilp4-random-cg.py" "$TABLE_SRC" "$CG_SRC"
     FINAL_SRC="$CG_SRC"
+  fi
+  if [[ "$WARP_SCAN" == 1 ]]; then
+    WARP_SCAN_SRC="$ISO/final_warpscan.cu"
+    python3 "$ONEESAN_ROOT/scripts/build/gen-b300-block-closure-warpscan.py" "$FINAL_SRC" "$WARP_SCAN_SRC"
+    FINAL_SRC="$WARP_SCAN_SRC"
   fi
   grep -Fq 'b300_closure_warp_endpoint_masks(d)' "$FINAL_SRC"
   grep -Fq 'D_BLOCK_CLOSURE_CONTRIB32' "$FINAL_SRC"
   grep -Fq 'D_BLOCK_CLOSURE_CROSS32' "$FINAL_SRC"
   grep -Fq 'b300_block_closure_warp_kernel' "$FINAL_SRC"
   [[ "$RANDOM_CG" == 0 ]] || grep -Fq 'ld.global.cg.u32' "$FINAL_SRC"
+  [[ "$WARP_SCAN" == 0 ]] || { grep -Fq 'const int ql=p-2-int(lane)' "$FINAL_SRC"; ! grep -Fq '__shared__ Code ranks[MAX_WARPS][MAX_TERMS]' "$FINAL_SRC"; }
 
-  echo "=== compile B300 saturation binary random_cg=$RANDOM_CG ===" >&2
+  echo "=== compile B300 saturation binary random_cg=$RANDOM_CG warpscan=$WARP_SCAN ===" >&2
   TMPDIR="$ISO/tmp" nvcc -O3 -std=c++17 -lineinfo -arch="$ARCH" -Xptxas=-v \
     -DTARGET_W=28 -DLOW_LUT_K=13 -DHIGH_LUT_K=13 \
     -DB300_FAST_SHARD_ADDRESS8=1 -DB300_BLOCK_CLOSURE_QUAD=0 \
@@ -71,8 +80,11 @@ if [[ "$REBUILD" == 1 || ! -x "$BIN" ]]; then
 fi
 
 nvidia-smi --query-gpu=index,name,memory.total,memory.free --format=csv,noheader || true
-echo "B300 x8 saturation n=$N rows=$ROWS threads=$THREADS target=${TARGET_MIB}MiB plan=${PLAN_MIB}MiB window=$MAX_WINDOW random_cg=$RANDOM_CG" >&2
-echo "features=rankstate_ilp4,closure_warp,dualmask,closure_contrib_shift_cross_tables,concurrent_io$([[ "$RANDOM_CG" == 1 ]] && printf ',random_cg')" >&2
+echo "B300 x8 saturation n=$N rows=$ROWS threads=$THREADS target=${TARGET_MIB}MiB plan=${PLAN_MIB}MiB window=$MAX_WINDOW random_cg=$RANDOM_CG warpscan=$WARP_SCAN" >&2
+features='rankstate_ilp4,closure_warp,dualmask,closure_contrib_shift_cross_tables,concurrent_io'
+[[ "$RANDOM_CG" == 0 ]] || features="${features},random_cg"
+[[ "$WARP_SCAN" == 0 ]] || features="${features},closure_warpscan"
+echo "features=$features" >&2
 echo "BIN=$BIN" >&2
 export B300_ROW_LIMIT="$ROWS" GRIDFP_THREADS="$THREADS" GRIDFP_PLAN_TARGET_MIB="$PLAN_MIB"
 exec "$BIN" "$N" "$MOD" "$TARGET_MIB" "$MAX_WINDOW" 8
