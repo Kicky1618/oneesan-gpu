@@ -7,12 +7,21 @@
 #ifndef P10DC_ORBITCTA_FLAT_DYNAMIC_BATCH
 #define P10DC_ORBITCTA_FLAT_DYNAMIC_BATCH 1
 #endif
+#ifndef P10DC_ORBITCTA_FLAT_DYNAMIC_PIPE2_PRODUCER_WARP
+#define P10DC_ORBITCTA_FLAT_DYNAMIC_PIPE2_PRODUCER_WARP 0
+#endif
 static_assert(P10DC_ORBITCTA_FLAT_DYNAMIC_BATCH == 1 ||
               P10DC_ORBITCTA_FLAT_DYNAMIC_BATCH == 2 ||
               P10DC_ORBITCTA_FLAT_DYNAMIC_BATCH == 4 ||
               P10DC_ORBITCTA_FLAT_DYNAMIC_BATCH == 8 ||
               P10DC_ORBITCTA_FLAT_DYNAMIC_BATCH == 16,
               "dynamic pipe2 batch must be 1,2,4,8,16");
+static_assert(P10DC_ORBITCTA_FLAT_DYNAMIC_PIPE2_PRODUCER_WARP == 0 ||
+              P10DC_ORBITCTA_FLAT_DYNAMIC_PIPE2_PRODUCER_WARP == 1,
+              "dynamic pipe2 producer warp must be 0/1");
+#if P10DC_ORBITCTA_FLAT_DYNAMIC_PIPE2_PRODUCER_WARP
+#include "ramstream32_bucket_orbit_closure_pattern10_depthcode_orbitcta_flat_dynamic_pipe2_producer_warp.cuh"
+#endif
 
 // The ordinary dynamic scheduler serializes
 //   lane0 prepare -> CTA barrier -> columns -> CTA barrier
@@ -78,6 +87,26 @@ __device__ __forceinline__ uint32_t p10dc_orbitcta_flat_dynamic_pipe2_next_k(
     return lease_base_lane0;
 }
 
+__device__ __forceinline__ void p10dc_orbitcta_flat_dynamic_pipe2_forward_columns(
+    P10DC_ORBITCTA_CTX& c
+) {
+#if P10DC_ORBITCTA_FLAT_DYNAMIC_PIPE2_PRODUCER_WARP
+    p10dc_orbitcta_flat_forward_columns_pipe2_producer_warp(c);
+#else
+    p10dc_orbitcta_flat_forward_columns(c);
+#endif
+}
+
+__device__ __forceinline__ void p10dc_orbitcta_flat_dynamic_pipe2_reverse_columns(
+    P10DC_ORBITCTA_CTX& c, bool edge
+) {
+#if P10DC_ORBITCTA_FLAT_DYNAMIC_PIPE2_PRODUCER_WARP
+    p10dc_orbitcta_flat_reverse_columns_pipe2_producer_warp(c, edge);
+#else
+    p10dc_orbitcta_flat_reverse_columns(c, edge);
+#endif
+}
+
 __global__ void bucket_high_orbit_closure_pattern10_depthcode_orbitcta_flat_dynamic_pipe2_kernel(int p) {
     const uint32_t nblocks = D_BKF_MAIN_NBLOCKS;
     if (!nblocks) return;
@@ -133,11 +162,12 @@ __global__ void bucket_high_orbit_closure_pattern10_depthcode_orbitcta_flat_dyna
             }
         }
 
-        // No barrier here: resident warps may consume current while lane 0
-        // resolves next. current and next are disjoint contexts. The barrier
-        // below publishes next.has_item/next.valid before the contexts swap.
+        // No barrier here: resident worker warps may consume current while lane
+        // 0 resolves next. In producer-warp mode all of warp 0 is excluded from
+        // the column partition, eliminating the delayed-warp tail at the cost of
+        // redistributing the same columns over blockDim.x-32 workers.
         if (current.valid == 1)
-            p10dc_orbitcta_flat_forward_columns(current);
+            p10dc_orbitcta_flat_dynamic_pipe2_forward_columns(current);
         __syncthreads();
         cur ^= 1u;
     }
@@ -202,7 +232,7 @@ __global__ void bucket_reverse_high_pattern10_depthcode_orbitcta_flat_dynamic_pi
         }
 
         if (current.valid == 1)
-            p10dc_orbitcta_flat_reverse_columns(current, edge);
+            p10dc_orbitcta_flat_dynamic_pipe2_reverse_columns(current, edge);
         __syncthreads();
         cur ^= 1u;
     }
