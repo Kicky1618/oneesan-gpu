@@ -5,7 +5,10 @@
 #ifndef P10DC_RANKFORMULA_PRECTX_FORWARD
 #define P10DC_RANKFORMULA_PRECTX_FORWARD 0
 #endif
-#if P10DC_RANKFORMULA_PRECTX_FORWARD
+#ifndef P10DC_RANKFORMULA_PRECTX_REVERSE
+#define P10DC_RANKFORMULA_PRECTX_REVERSE 0
+#endif
+#if P10DC_RANKFORMULA_PRECTX_FORWARD || P10DC_RANKFORMULA_PRECTX_REVERSE
 #include "ramstream32_bucket_precomputed_forward_high_ctx.cuh"
 #endif
 
@@ -15,8 +18,6 @@
 #endif
 #define P10DC_WARPSTRIPED_CTX P10DCDirectHighResolvedCtx
 #if P10DC_RANKFORMULA_PRECTX_FORWARD
-// Keep the cheap destination-row address calculation local to the launch and
-// fetch only the expensive closure-source resolution from the precomputed table.
 #define P10DC_WARPSTRIPED_PREPARE_FORWARD(c,payload,loc,p,ss,js,ds,sr,jr,dr) do { \
     (void)(payload); (void)(loc); (void)(p); \
     p10dc_direct_resolve_high_io((c),(ss),(js),(ds),(sr),(jr),(dr)); \
@@ -26,8 +27,16 @@
 #define P10DC_WARPSTRIPED_PREPARE_FORWARD(c,payload,loc,p,ss,js,ds,sr,jr,dr) \
     p10dc_prepare_forward_high_delta_direct_affine((c),(payload),(loc),(p),(ss),(js),(ds),(sr),(jr),(dr))
 #endif
+#if P10DC_RANKFORMULA_PRECTX_REVERSE
+#define P10DC_WARPSTRIPED_PREPARE_REVERSE(c,payload,loc,plan_db,p,edge,ss,js,ds,sr,jr,dr) do { \
+    (void)(payload); (void)(loc); (void)(plan_db); (void)(p); (void)(edge); \
+    p10dc_direct_resolve_high_io((c),(ss),(js),(ds),(sr),(jr),(dr)); \
+    p10dc_apply_reverse_prectx((c), qi, kind); \
+} while(0)
+#else
 #define P10DC_WARPSTRIPED_PREPARE_REVERSE(c,payload,loc,plan_db,p,edge,ss,js,ds,sr,jr,dr) \
     p10dc_prepare_reverse_high_delta_direct_affine((c),(payload),(loc),(plan_db),(p),(edge),(ss),(js),(ds),(sr),(jr),(dr))
+#endif
 #define p10dc_resolved_high_plan_sum p10dc_direct_resolved_high_plan_sum_cross5_rankformula_nometa4_abstract
 #if P10DC_RANKFORMULA_PAIR_MLP
 static_assert(P10DC_WARPSTRIPED_COL_ILP == 2 || P10DC_WARPSTRIPED_COL_ILP == 4,
