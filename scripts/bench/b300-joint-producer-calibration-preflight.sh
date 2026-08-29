@@ -17,18 +17,26 @@ done
 
 for s in \
   'N27_PRODUCER_WEIGHT_RACE=' \
+  'PWW_REPEATS=' \
+  'WEIGHT_REPEATS="$PWW_REPEATS"' \
   'b300x8-exact-auto-hbm-profiled-producer-weight-race.sh' \
   'WEIGHT_RACE_ONLY=1' \
   'N27_PRODUCER_ADAPTIVE_RACE=' \
+  'PAC_REPEATS=' \
+  'ADAPTIVE_REPEATS="$PAC_REPEATS"' \
   'b300x8-exact-auto-hbm-profiled-producer-adaptive-race.sh' \
   'ADAPTIVE_RACE_ONLY=1' \
   'ORBIT_N27_PRODUCER_ADAPTIVE_COLS' \
-  'export PRODUCER_ADAPTIVE_COLS'; do
+  'export PRODUCER_ADAPTIVE_COLS' \
+  'export REBUILD_BUCKETS=1'; do
   grep -Fq "$s" "$joint" || { echo "joint calibration marker missing: $s" >&2; exit 3; }
 done
 
 for s in \
   'PRODUCER_WEIGHTS=' \
+  'WEIGHT_REPEATS=' \
+  'statistics.median' \
+  'ORBIT_N27_PRODUCER_WEIGHT_REPEATS=' \
   'ORBITCTA_FLAT_DYNAMIC_PIPE2_PRODUCER_WORKER_WEIGHT' \
   'CANDIDATES=orbit_tuned' \
   'FATAL producer-weight residue mismatch'; do
@@ -37,6 +45,9 @@ done
 
 for s in \
   'PRODUCER_ADAPTIVE_THRESHOLDS=' \
+  'ADAPTIVE_REPEATS=' \
+  'statistics.median' \
+  'ORBIT_N27_PRODUCER_ADAPTIVE_REPEATS=' \
   'ORBITCTA_FLAT_DYNAMIC_PIPE2_PRODUCER_ADAPTIVE_COLS' \
   'CANDIDATES=orbit_tuned' \
   'FATAL producer-adaptive residue mismatch' \
@@ -60,4 +71,4 @@ grep -Fq 'b300x8-exact-auto-hbm-profiled.sh' "$external" || { echo 'external rac
 grep -Fq 'PRODUCER_ADAPTIVE_COLS=' "$build" || { echo 'producer build wrapper lost adaptive knob' >&2; exit 4; }
 grep -Fq 'P10DC_ORBITCTA_FLAT_DYNAMIC_PIPE2_PRODUCER_ADAPTIVE_COLS' "$build" || { echo 'producer build wrapper lost adaptive nvcc macro' >&2; exit 4; }
 
-echo 'b300_joint_producer_calibration_preflight=OK weight=OK adaptive=OK env_propagation=OK gpu_work=0 actions_triggered=0'
+echo 'b300_joint_producer_calibration_preflight=OK weight=OK adaptive=OK median=OK rebuild_guard=OK env_propagation=OK gpu_work=0 actions_triggered=0'
