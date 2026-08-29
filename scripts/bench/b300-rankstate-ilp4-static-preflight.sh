@@ -11,6 +11,7 @@ shells=(
   scripts/bench/b300x8-block-closure-cg-ab.sh
   scripts/bench/b300-orbitcta-flat-prectx-warpcoop-ab.sh
   scripts/bench/b300-pipe2-producer-warp-coverage-proof.sh
+  scripts/bench/b300-compact-prectx-meta-proof.sh
   scripts/bench/b300-orbitcta-flat-dynamic-pipe2-producer-quad-ab.sh
   scripts/bench/b300-orbitcta-flat-dynamic-pipe2-producer-prectx-warpcoop-ab.sh
   scripts/bench/b300-orbitcta-flat-dynamic-pipe2-producer-flatbid-ab.sh
@@ -24,6 +25,7 @@ py=(
 )
 for f in "${shells[@]}"; do bash -n "$ONEESAN_ROOT/$f"; echo "shell_syntax_ok=$f"; done
 for f in "${py[@]}"; do python3 -m py_compile "$ONEESAN_ROOT/$f"; echo "python_syntax_ok=$f"; done
+bash "$ONEESAN_ROOT/scripts/bench/b300-compact-prectx-meta-proof.sh"
 
 main2="$ONEESAN_ROOT/scripts/build/gen-b300-rank-state-ilp2.py"
 block2="$ONEESAN_ROOT/scripts/build/gen-b300-block-rank-state-ilp2.py"
@@ -69,7 +71,7 @@ for s in 'P10DC_RANKFORMULA_PRECTX_WARPCOOP' 'p10dc_apply_forward_compact_prectx
 done
 if grep -Fq 'c.cross_depth = q;' "$chunk"; then echo 'stale warpcoop q handoff through cross_depth remains' >&2; exit 3; fi
 if grep -Fq '__syncwarp();' "$chunk"; then echo 'stale explicit warpcoop sync remains in chunk scheduler' >&2; exit 3; fi
-for s in 'BKCZ_MAX_LOCAL + 1 <= 32' 'offsetof(P10DCHighClosureCompactPreCtx, local_n) % alignof(uint32_t) == 0' 'meta = __ldg(tail)' 'meta = __shfl_sync(active, meta, 0)' '__ldg(&z->local_ref[lane])' '__ldg(&z->cross_ref)' 'p10dc_high_row_ref_resolve_unchecked'; do
+for s in 'BKCZ_MAX_LOCAL + 1 <= 32' 'offsetof(P10DCHighClosureCompactPreCtx, local_n) % alignof(uint32_t) == 0' 'p10dc_compact_prectx_warpcoop_load_meta' 'meta = __ldg(tail)' 'return __shfl_sync(active, meta, 0)' 'p10dc_apply_compact_prectx_warpcoop_ptr_meta' '__ldg(&z->local_ref[lane])' '__ldg(&z->cross_ref)' 'p10dc_high_row_ref_resolve_unchecked'; do
   grep -Fq "$s" "$coop" || { echo "missing coalesced warpcoop helper marker: $s" >&2; exit 3; }
 done
 
@@ -79,9 +81,12 @@ done
 for s in 'P10DC_ORBITCTA_FLAT_DYNAMIC_PIPE2_PRODUCER_PRECTX_WARPCOOP' 'producer prectx warpcoop requires producer warp' 'first_k_lane0' 'next_k_lane0' 'prepare_forward_producer_prectx_warpcoop' 'prepare_reverse_producer_prectx_warpcoop'; do
   grep -Fq "$s" "$producer_pipe2" || { echo "missing producer prectx pipe2 wiring: $s" >&2; exit 3; }
 done
-for s in 'compact forward+reverse prectx' 'P10DC_RANKFORMULA_PRECTX_FLAT_BID_FUSED == 0' '__shfl_sync(active, k_lane0, 0)' 'p10dc_direct_resolve_high_io' 'p10dc_apply_forward_compact_prectx_warpcoop' 'p10dc_apply_reverse_compact_prectx_warpcoop' 'p10dc_forward_compact_prectx_flat_bid' 'p10dc_reverse_compact_prectx_flat_bid' 'p10dc_orbitcta_flat_bid'; do
+for s in 'compact forward+reverse prectx' 'P10DC_RANKFORMULA_PRECTX_FLAT_BID_FUSED == 0' '__shfl_sync(active, k_lane0, 0)' 'p10dc_direct_resolve_high_io' 'p10dc_forward_compact_prectx_warpcoop_ptr' 'p10dc_reverse_compact_prectx_warpcoop_ptr' 'p10dc_compact_prectx_warpcoop_load_meta(z)' 'const uint32_t bid = desc_meta >> 24' 'p10dc_apply_compact_prectx_warpcoop_ptr_meta' 'p10dc_apply_compact_prectx_warpcoop_ptr(c, z)' 'p10dc_orbitcta_flat_bid'; do
   grep -Fq "$s" "$producer_prectx" || { echo "missing producer prectx helper marker: $s" >&2; exit 3; }
 done
+[[ "$(grep -Fc 'p10dc_compact_prectx_warpcoop_load_meta(z)' "$producer_prectx")" == 2 ]] || {
+  echo 'producer meta-first must load one descriptor tail per forward/reverse helper' >&2; exit 3;
+}
 for s in 'QUAD_MLP="${QUAD_MLP:-0}"' 'producer-warp native QUAD_MLP=1 requires ORBITCTA_COL_ILP=4' 'QUAD_MLP="$QUAD_MLP"' 'PRODUCER_PRECTX_WARPCOOP="${PRODUCER_PRECTX_WARPCOOP:-0}"' 'PRODUCER_PRECTX_WARPCOOP=1 requires PRECTX_FORWARD=1 PRECTX_REVERSE=1 PRECTX_COMPACT=1' 'PRODUCER_PRECTX_WARPCOOP=1 currently requires PRECTX_FLAT_BID_FUSED=0' 'P10DC_ORBITCTA_FLAT_DYNAMIC_PIPE2_PRODUCER_PRECTX_WARPCOOP'; do
   grep -Fq "$s" "$producer_build" || { echo "missing producer build wiring: $s" >&2; exit 3; }
 done
@@ -104,4 +109,5 @@ echo 'warpcoop_compact_bytes=40 warpcoop_ticket_shuffles=2 warpcoop_meta_broadca
 echo 'pipe2_producer_native_quad=1 ilp4_full_group_quad=1 partial_group_pair_single_fallback=1 producer_warp=32'
 echo 'pipe2_producer_prectx_warpcoop=1 producer_prectx_lanes=9 next_context_overlap=worker_columns extra_cta_barriers=0'
 echo 'pipe2_producer_cached_flat_bid=1 bid_storage=compact_pad_u8 bytes_added=0 fused_load=0 binary_search_fallback=1'
+echo 'pipe2_producer_meta_first=1 cached_path_tail_loads=1 cached_path_tail_reloads=0 bid_shift=24'
 echo 'gpu_work=0 actions_triggered=0'
