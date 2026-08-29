@@ -64,8 +64,13 @@ def env(path):
  return d
 w=env(wenv)
 prod=w['ORBITCTA_FLAT_DYNAMIC_PIPE2_PRODUCER_WARP']
+weight=w.get('ORBITCTA_FLAT_DYNAMIC_PIPE2_PRODUCER_WORKER_WEIGHT','0')
+if prod not in ('0','1'): raise SystemExit('bad producer winner '+prod)
+if weight not in ('0','1','2','3','4'): raise SystemExit('bad producer weight '+weight)
+if prod=='0' and weight!='0': raise SystemExit('non-producer winner must have weight=0')
 repl={
  'ORBITCTA_FLAT_DYNAMIC_PIPE2_PRODUCER_WARP':prod,
+ 'ORBITCTA_FLAT_DYNAMIC_PIPE2_PRODUCER_WORKER_WEIGHT':weight,
  'ORBITCTA_FLAT_DYNAMIC_PIPE2_PRODUCER_PRECTX_WARPCOOP':'0',
 }
 lines=open(pin).read().splitlines(); out=[]; seen=set()
@@ -76,8 +81,8 @@ for line in lines:
    out.append(k+'='+repl[k]); seen.add(k); continue
  if line.startswith('ORBIT_PROFILE='):
   val=line.split('=',1)[1]
-  val=re.sub(r'_dpw$','',val)
-  out.append('ORBIT_PROFILE='+val+('_dpw' if prod=='1' else ''))
+  val=re.sub(r'_dpw(?:[0-4])?$','',val)
+  out.append('ORBIT_PROFILE='+val+(f'_dpw{weight}' if prod=='1' else ''))
   continue
  out.append(line)
 for k,v in repl.items():
@@ -85,7 +90,7 @@ for k,v in repl.items():
 for k in ('DYNAMIC_PRODUCER_WALL_S','DYNAMIC_PRODUCER_HIGH_S'):
  if k in w: out.append('ORBIT_'+k+'='+w[k])
 open(pout,'w').write('\n'.join(out)+'\n')
-print('DYNAMIC_PRODUCER_REFINE',f'producer={prod}',f'profile_file={pout}')
+print('DYNAMIC_PRODUCER_REFINE',f'producer={prod}',f'worker_weight={weight}',f'profile_file={pout}')
 PY
 cat "$PROFILE_OUT"
 echo "dynamic producer refine OK input=$PROFILE_IN output=$PROFILE_OUT winner=$WINNER_ENV" >&2
