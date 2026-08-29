@@ -16,7 +16,7 @@ SELECT_ONLY="${SELECT_ONLY:-1}"
 REBUILD_BUCKETS="${REBUILD_BUCKETS:-1}"
 STAGED_PREFIX="${STAGED_PREFIX:-$ONEESAN_ROOT/work/b300_nextgen_hybrid8_staged}"
 WINNER_ENV="${WINNER_ENV:-${STAGED_PREFIX}_winner.env}"
-MANIFEST="${MANIFEST:-${STAGED_PREFIX}_promotion-inputs.sha256}"
+MANIFEST="${MANIFEST:-${WINNER_ENV%.env}_promotion-inputs.sha256}"
 RACE_PREFIX="${RACE_PREFIX:-$ONEESAN_ROOT/work/b300_nextgen_hybrid8_staged_fullprime_n27}"
 for x in RUN_STAGED SELECT_ONLY REBUILD_BUCKETS; do
   v="${!x}"; [[ "$v" == 0 || "$v" == 1 ]] || { echo "$x must be 0/1" >&2; exit 2; }
