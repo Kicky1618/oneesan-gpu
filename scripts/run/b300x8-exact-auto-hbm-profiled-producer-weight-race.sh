@@ -47,26 +47,38 @@ for w in "${weight_list[@]}"; do
   seen[$w]=1
 done
 
+# Weight is calibrated at adaptive threshold=0. This keeps the first stage a
+# one-factor experiment even if the input profile or caller already carries a
+# producer-adaptive setting. The next calibration stage is responsible for
+# reintroducing and selecting the threshold for the winning base weight.
 make_profile() {
   local weight="$1" out="$2"
   python3 - "$PROFILE_IN" "$out" "$weight" <<'PY'
 import sys
 src,out,w=sys.argv[1:]
-key='ORBITCTA_FLAT_DYNAMIC_PIPE2_PRODUCER_WORKER_WEIGHT'
+weight_key='ORBITCTA_FLAT_DYNAMIC_PIPE2_PRODUCER_WORKER_WEIGHT'
+adaptive_key='ORBITCTA_FLAT_DYNAMIC_PIPE2_PRODUCER_ADAPTIVE_COLS'
 metadata={
     'ORBIT_N27_PRODUCER_WORKER_WEIGHT',
     'ORBIT_N27_PRODUCER_WEIGHT_WALL_S',
     'ORBIT_N27_PRODUCER_WEIGHT_REPEATS',
+    'ORBIT_N27_PRODUCER_ADAPTIVE_COLS',
+    'ORBIT_N27_PRODUCER_ADAPTIVE_WALL_S',
+    'ORBIT_N27_PRODUCER_ADAPTIVE_BASE_WEIGHT',
+    'ORBIT_N27_PRODUCER_ADAPTIVE_REPEATS',
 }
-lines=open(src).read().splitlines(); dst=[]; found=False
+lines=open(src).read().splitlines(); dst=[]; seen_weight=False; seen_adaptive=False
 for line in lines:
-    if line.startswith(key+'='):
-        dst.append(key+'='+w); found=True
+    if line.startswith(weight_key+'='):
+        dst.append(weight_key+'='+w); seen_weight=True
+    elif line.startswith(adaptive_key+'='):
+        dst.append(adaptive_key+'=0'); seen_adaptive=True
     elif any(line.startswith(k+'=') for k in metadata):
         continue
     else:
         dst.append(line)
-if not found: dst.append(key+'='+w)
+if not seen_weight: dst.append(weight_key+'='+w)
+if not seen_adaptive: dst.append(adaptive_key+'=0')
 open(out,'w').write('\n'.join(dst)+'\n')
 PY
 }
@@ -78,9 +90,9 @@ for w in "${weight_list[@]}"; do
   for ((rep=1; rep<=WEIGHT_REPEATS; ++rep)); do
     wp="${PREFIX}_w${w}_r${rep}"
     rebuild="$WEIGHT_REBUILD"; (( rep > 1 )) && rebuild=0
-    echo "=== n27 producer-weight smoke weight=$w repeat=$rep/$WEIGHT_REPEATS ===" >&2
+    echo "=== n27 producer-weight smoke weight=$w adaptive_cols=0 repeat=$rep/$WEIGHT_REPEATS ===" >&2
     set +e
-    PROFILE_FILE="$pf" CANDIDATES=orbit_tuned SELECT_ONLY=1 REBUILD="$rebuild" PREFIX="$wp" \
+    PRODUCER_ADAPTIVE_COLS=0 PROFILE_FILE="$pf" CANDIDATES=orbit_tuned SELECT_ONLY=1 REBUILD="$rebuild" PREFIX="$wp" \
       "$BASE_RUN" 27 >"$LOGDIR/w${w}_r${rep}.out" 2>"$LOGDIR/w${w}_r${rep}.err"
     rc=$?
     set -e
@@ -131,10 +143,10 @@ ORBIT_N27_PRODUCER_WEIGHT_WALL_S=$best_wall
 ORBIT_N27_PRODUCER_WEIGHT_REPEATS=$WEIGHT_REPEATS
 EOF
 
-echo "N27 PRODUCER WEIGHT SELECTED weight=$best_weight median_wall_s=$best_wall repeats=$WEIGHT_REPEATS residue=$best_residue profile=$PROFILE_OUT" >&2
+echo "N27 PRODUCER WEIGHT SELECTED weight=$best_weight adaptive_cols=0 median_wall_s=$best_wall repeats=$WEIGHT_REPEATS residue=$best_residue profile=$PROFILE_OUT" >&2
 cat "$SUMMARY" >&2
 if [[ "$WEIGHT_RACE_ONLY" == 1 ]]; then
   echo "WEIGHT_RACE_ONLY=1: selected weight=$best_weight; final selector not run" >&2
   exit 0
 fi
-exec env PROFILE_FILE="$PROFILE_OUT" "$BASE_RUN" 27 "$@"
+exec env PRODUCER_ADAPTIVE_COLS=0 PROFILE_FILE="$PROFILE_OUT" "$BASE_RUN" 27 "$@"
