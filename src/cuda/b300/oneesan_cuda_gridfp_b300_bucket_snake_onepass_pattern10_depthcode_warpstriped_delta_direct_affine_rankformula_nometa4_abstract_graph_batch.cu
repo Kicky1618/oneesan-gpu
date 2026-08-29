@@ -6,6 +6,9 @@
 #if P10DC_RANKFORMULA_NOMETA_DIRECTMAP
 #if P10DC_RANKFORMULA_DIRECTGATHER64
 #include "../gridfp/ramstream32_bucket_low_rankformula_directgather64.cuh"
+#if P10DC_RANKFORMULA_DIRECTGATHER_SPARSE64
+#include "../gridfp/ramstream32_bucket_low_rankformula_directgather_sparse64.cuh"
+#endif
 #elif P10DC_RANKFORMULA_DIRECTGATHER_SORTED
 #include "../gridfp/ramstream32_bucket_low_rankformula_nometa_directmap_sorted.cuh"
 #elif P10DC_RANKFORMULA_DIRECTGATHER_DEPTHMAJOR
@@ -19,7 +22,11 @@
 #define build_reverse_bucket_atomic build_reverse_bucket_atomic_release_inputs
 #if P10DC_RANKFORMULA_NOMETA_DIRECTMAP
 #if P10DC_RANKFORMULA_DIRECTGATHER64
+#if P10DC_RANKFORMULA_DIRECTGATHER_SPARSE64
+using P10DCSelectedFusedDeviceTables = BucketFusedDirectHighRowsRankFormulaNometa4DirectGatherSparse64Tables;
+#else
 using P10DCSelectedFusedDeviceTables = BucketFusedDirectHighRowsRankFormulaNometa4DirectGather64Tables;
+#endif
 #elif P10DC_RANKFORMULA_DIRECTGATHER_SORTED
 using P10DCSelectedFusedDeviceTables = BucketFusedDirectHighRowsRankFormulaNometa4DirectMapSortedTables;
 #elif P10DC_RANKFORMULA_DIRECTGATHER_DEPTHMAJOR
