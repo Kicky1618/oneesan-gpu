@@ -9,6 +9,7 @@ ADV_PROFILE="${ADV_PROFILE:-$ONEESAN_ROOT/work/b300_hbm_profile_advanced21.env}"
 DYNAMIC_PROFILE="${DYNAMIC_PROFILE:-$ONEESAN_ROOT/work/b300_hbm_profile_dynamic21.env}"
 DYNAMIC_BID_PROFILE="${DYNAMIC_BID_PROFILE:-$ONEESAN_ROOT/work/b300_hbm_profile_dynamic_bid21.env}"
 DYNAMIC_FUSE_PROFILE="${DYNAMIC_FUSE_PROFILE:-$ONEESAN_ROOT/work/b300_hbm_profile_dynamic_fuse21.env}"
+DYNAMIC_ADAPTIVE_PROFILE="${DYNAMIC_ADAPTIVE_PROFILE:-$ONEESAN_ROOT/work/b300_hbm_profile_dynamic_adaptive21.env}"
 WARPCOOP_PROFILE="${WARPCOOP_PROFILE:-$ONEESAN_ROOT/work/b300_hbm_profile_warpcoop21.env}"
 WARPCOOP_AUTO_PROFILE="${WARPCOOP_AUTO_PROFILE:-$ONEESAN_ROOT/work/b300_hbm_profile_warpcoop_auto21.env}"
 DESC_PROFILE="${DESC_PROFILE:-$ONEESAN_ROOT/work/b300_hbm_profile_desc21.env}"
@@ -22,6 +23,7 @@ ADV_PREFIX="${ADV_PREFIX:-$ONEESAN_ROOT/work/b300_hbm_profile_orbit_advanced21}"
 DYNAMIC_PREFIX="${DYNAMIC_PREFIX:-$ONEESAN_ROOT/work/b300_hbm_profile_orbit_dynamic21}"
 DYNAMIC_BID_PREFIX="${DYNAMIC_BID_PREFIX:-$ONEESAN_ROOT/work/b300_hbm_profile_orbit_dynamic_bid21}"
 DYNAMIC_FUSE_PREFIX="${DYNAMIC_FUSE_PREFIX:-$ONEESAN_ROOT/work/b300_hbm_profile_orbit_dynamic_fuse21}"
+DYNAMIC_ADAPTIVE_PREFIX="${DYNAMIC_ADAPTIVE_PREFIX:-$ONEESAN_ROOT/work/b300_hbm_profile_orbit_dynamic_adaptive21}"
 WARPCOOP_PREFIX="${WARPCOOP_PREFIX:-$ONEESAN_ROOT/work/b300_hbm_profile_orbit_warpcoop21}"
 WARPCOOP_AUTO_PREFIX="${WARPCOOP_AUTO_PREFIX:-$ONEESAN_ROOT/work/b300_hbm_profile_orbit_warpcoop_auto21}"
 QUAD_DESC_PREFIX="${QUAD_DESC_PREFIX:-$ONEESAN_ROOT/work/b300_hbm_profile_orbit_quad_desc21}"
@@ -35,13 +37,14 @@ RUN_ORBIT_ADVANCED="${RUN_ORBIT_ADVANCED:-${RUN_ORBIT_QUAD:-1}}"
 RUN_ORBIT_DYNAMIC="${RUN_ORBIT_DYNAMIC:-1}"
 RUN_ORBIT_DYNAMIC_BID="${RUN_ORBIT_DYNAMIC_BID:-1}"
 RUN_ORBIT_DYNAMIC_FUSE="${RUN_ORBIT_DYNAMIC_FUSE:-1}"
+RUN_ORBIT_DYNAMIC_ADAPTIVE="${RUN_ORBIT_DYNAMIC_ADAPTIVE:-1}"
 RUN_ORBIT_WARPCOOP="${RUN_ORBIT_WARPCOOP:-1}"
 RUN_ORBIT_WARPCOOP_AUTO="${RUN_ORBIT_WARPCOOP_AUTO:-1}"
 RUN_ORBIT_QUAD_DESC="${RUN_ORBIT_QUAD_DESC:-1}"
 RUN_ORBIT_QUAD_LOCAL0="${RUN_ORBIT_QUAD_LOCAL0:-1}"
 RUN_ORBIT_QUAD_GROUP="${RUN_ORBIT_QUAD_GROUP:-1}"
 RUN_ORBIT_QUAD_PREFETCH="${RUN_ORBIT_QUAD_PREFETCH:-1}"
-for x in RUN_PRECTX RUN_ORBIT_SCHEDULER RUN_ORBIT_ADVANCED RUN_ORBIT_DYNAMIC RUN_ORBIT_DYNAMIC_BID RUN_ORBIT_DYNAMIC_FUSE RUN_ORBIT_WARPCOOP RUN_ORBIT_WARPCOOP_AUTO RUN_ORBIT_QUAD_DESC RUN_ORBIT_QUAD_LOCAL0 RUN_ORBIT_QUAD_GROUP RUN_ORBIT_QUAD_PREFETCH; do
+for x in RUN_PRECTX RUN_ORBIT_SCHEDULER RUN_ORBIT_ADVANCED RUN_ORBIT_DYNAMIC RUN_ORBIT_DYNAMIC_BID RUN_ORBIT_DYNAMIC_FUSE RUN_ORBIT_DYNAMIC_ADAPTIVE RUN_ORBIT_WARPCOOP RUN_ORBIT_WARPCOOP_AUTO RUN_ORBIT_QUAD_DESC RUN_ORBIT_QUAD_LOCAL0 RUN_ORBIT_QUAD_GROUP RUN_ORBIT_QUAD_PREFETCH; do
   v="${!x}"; [[ "$v" == 0 || "$v" == 1 ]] || { echo "$x must be 0 or 1" >&2; exit 2; }
 done
 
@@ -123,21 +126,39 @@ else
   cp "$DYNAMIC_BID_PROFILE" "$DYNAMIC_FUSE_PROFILE"
 fi
 
-ORBITCTA_FLAT_DYNAMIC=0
+ORBITCTA_FLAT_DYNAMIC=0 ORBITCTA_FLAT_DYNAMIC_BATCH=1
 # shellcheck disable=SC1090
 source "$DYNAMIC_FUSE_PROFILE"
+DYNAMIC_SELECTED="${ORBITCTA_FLAT_DYNAMIC:-0}"
+DYNAMIC_BATCH_SELECTED="${ORBITCTA_FLAT_DYNAMIC_BATCH:-1}"
+
+# A fixed large lease batch can underfill the persistent pool on small HIGH
+# positions. When batch>1, tune how many lease waves must remain available;
+# waves=0 is the exact fixed-batch baseline.
+if [[ "$RUN_ORBIT_DYNAMIC_ADAPTIVE" == 1 && "$DYNAMIC_SELECTED" == 1 && "$DYNAMIC_BATCH_SELECTED" != 1 ]]; then
+  echo "=== HBM tune21 adaptive dynamic lease refinement ===" >&2
+  PROFILE_IN="$DYNAMIC_FUSE_PROFILE" PROFILE_OUT="$DYNAMIC_ADAPTIVE_PROFILE" PREFIX="$DYNAMIC_ADAPTIVE_PREFIX" \
+    bash "$ONEESAN_ROOT/scripts/bench/b300-hbm-profile-refine-orbit-dynamic-adaptive21.sh"
+else
+  [[ "$DYNAMIC_SELECTED" == 0 || "$DYNAMIC_BATCH_SELECTED" != 1 || "$RUN_ORBIT_DYNAMIC_ADAPTIVE" == 0 ]] || echo "=== skip adaptive dynamic lease: selected batch=1 ===" >&2
+  cp "$DYNAMIC_FUSE_PROFILE" "$DYNAMIC_ADAPTIVE_PROFILE"
+fi
+
+ORBITCTA_FLAT_DYNAMIC=0
+# shellcheck disable=SC1090
+source "$DYNAMIC_ADAPTIVE_PROFILE"
 DYNAMIC_SELECTED="${ORBITCTA_FLAT_DYNAMIC:-0}"
 
 # Warp-cooperative compact prectx is a chunked-QOL branch. It cannot compose
 # with the dynamic queue, so skip this entire family when dynamic won.
 if [[ "$RUN_ORBIT_WARPCOOP" == 1 && "$RUN_ORBIT_ADVANCED" == 1 && "$DYNAMIC_SELECTED" == 0 ]]; then
   echo "=== HBM tune21 warp-cooperative compact prectx refinement ===" >&2
-  PROFILE_IN="$DYNAMIC_FUSE_PROFILE" PROFILE_OUT="$WARPCOOP_PROFILE" PREFIX="$WARPCOOP_PREFIX" \
+  PROFILE_IN="$DYNAMIC_ADAPTIVE_PROFILE" PROFILE_OUT="$WARPCOOP_PROFILE" PREFIX="$WARPCOOP_PREFIX" \
     QUAD_WINNER_ENV="${ADV_PREFIX}_quad_winner.env" \
     bash "$ONEESAN_ROOT/scripts/bench/b300-hbm-profile-refine-orbit-warpcoop21.sh"
 else
   [[ "$DYNAMIC_SELECTED" == 0 ]] || echo "=== skip warpcoop refine: dynamic queue selected ===" >&2
-  cp "$DYNAMIC_FUSE_PROFILE" "$WARPCOOP_PROFILE"
+  cp "$DYNAMIC_ADAPTIVE_PROFILE" "$WARPCOOP_PROFILE"
 fi
 
 # A changed register footprint can change the occupancy-derived persistent pool.
@@ -220,4 +241,4 @@ fi
 
 echo "=== final HBM profile ===" >&2
 cat "$FINAL_PROFILE"
-echo "b300 HBM profile auto21 OK base_profile=$BASE_PROFILE prectx_profile=$PRECTX_PROFILE sched_profile=$SCHED_PROFILE advanced_profile=$ADV_PROFILE dynamic_profile=$DYNAMIC_PROFILE dynamic_bid_profile=$DYNAMIC_BID_PROFILE dynamic_fuse_profile=$DYNAMIC_FUSE_PROFILE dynamic_selected=$DYNAMIC_SELECTED warpcoop_profile=$WARPCOOP_PROFILE warpcoop_auto_profile=$WARPCOOP_AUTO_PROFILE desc_profile=$DESC_PROFILE local0_profile=$LOCAL0_PROFILE group_profile=$GROUP_PROFILE final_profile=$FINAL_PROFILE" >&2
+echo "b300 HBM profile auto21 OK base_profile=$BASE_PROFILE prectx_profile=$PRECTX_PROFILE sched_profile=$SCHED_PROFILE advanced_profile=$ADV_PROFILE dynamic_profile=$DYNAMIC_PROFILE dynamic_bid_profile=$DYNAMIC_BID_PROFILE dynamic_fuse_profile=$DYNAMIC_FUSE_PROFILE dynamic_adaptive_profile=$DYNAMIC_ADAPTIVE_PROFILE dynamic_selected=$DYNAMIC_SELECTED warpcoop_profile=$WARPCOOP_PROFILE warpcoop_auto_profile=$WARPCOOP_AUTO_PROFILE desc_profile=$DESC_PROFILE local0_profile=$LOCAL0_PROFILE group_profile=$GROUP_PROFILE final_profile=$FINAL_PROFILE" >&2
