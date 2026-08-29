@@ -26,7 +26,7 @@ sample(){ local pid="$1" out="$2"; : >"$out"; while kill -0 "$pid" 2>/dev/null; 
 
 printf 'mode\tpre_fwd\tpre_rev\trepeat\tresidue\twall_s\tforward_high_s\treverse_high_s\thigh_s\tprectx_entries_per_gpu\tprectx_mib_per_gpu\tavg_gpu_util_pct\tavg_memctrl_util_pct\tmax_memctrl_util_pct\n' >"$RESULT"
 printf 'backend\tkernel\tregisters\tstack_bytes\tspill_store_bytes\tspill_load_bytes\tsmem_bytes\tcmem0_bytes\n' >"$RESOURCE"
-for spec in 'runtime 0 0' 'forward 1 0' 'both 1 1'; do
+for spec in 'runtime 0 0' 'forward 1 0' 'reverse 0 1' 'both 1 1'; do
   read -r mode pf pr <<<"$spec"; bin="$ONEESAN_BUILD_DIR/b300_high_prectx_${mode}_dg64${DIRECTGATHER64}_sp64${DIRECTGATHER_SPARSE64}_ab_n${N}"
   N="$N" ARCH="$ARCH" OUT="$bin" COL_ILP="$COL_ILP" PM_ACCUM="$PM_ACCUM" DEPTHMAJOR=1 \
     PAIR_MLP="$PAIR_MLP" MLP_WINDOW4="$WINDOW4" SORTED="$SORTED" CPASYNC_PAIR="$CPASYNC_PAIR" \
@@ -69,18 +69,22 @@ cat "$RESULT"
 python3 - "$RESULT" <<'PY'
 import csv,statistics,sys
 r=list(csv.DictReader(open(sys.argv[1]),delimiter='\t')); q={}
-for m in ('runtime','forward','both'):
+for m in ('runtime','forward','reverse','both'):
  g=[x for x in r if x['mode']==m]
  q[m]={k:statistics.median(float(x[k]) for x in g) for k in ('wall_s','forward_high_s','reverse_high_s','high_s','prectx_mib_per_gpu','avg_memctrl_util_pct')}
  print(m,q[m])
 base=q['runtime']
-for m in ('forward','both'):
+for m in ('forward','reverse','both'):
  print(f"{m}_forward_speedup={base['forward_high_s']/q[m]['forward_high_s']:.6f}x")
  print(f"{m}_reverse_speedup={base['reverse_high_s']/q[m]['reverse_high_s']:.6f}x")
  print(f"{m}_high_speedup={base['high_s']/q[m]['high_s']:.6f}x")
  print(f"{m}_wall_speedup={base['wall_s']/q[m]['wall_s']:.6f}x")
  print(f"{m}_prectx_mib_per_gpu={q[m]['prectx_mib_per_gpu']:.3f}")
-print('selection_metric=wall_s_and_high_s correctness_gate=residue metadata_cost_reported=1')
+print(f"forward_only_forward_gain={base['forward_high_s']/q['forward']['forward_high_s']:.6f}x")
+print(f"reverse_only_reverse_gain={base['reverse_high_s']/q['reverse']['reverse_high_s']:.6f}x")
+print(f"both_vs_forward_reverse_gain={q['forward']['reverse_high_s']/q['both']['reverse_high_s']:.6f}x")
+print(f"both_vs_reverse_forward_gain={q['reverse']['forward_high_s']/q['both']['forward_high_s']:.6f}x")
+print('selection_metric=wall_s_and_high_s correctness_gate=residue metadata_cost_reported=1 reverse_isolated=1')
 PY
 
 echo "directgather64=$DIRECTGATHER64 sparse64=$DIRECTGATHER_SPARSE64 col_ilp=$COL_ILP pair_mlp=$PAIR_MLP result=$RESULT ptxas=$RESOURCE" >&2
