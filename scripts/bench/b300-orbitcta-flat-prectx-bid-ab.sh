@@ -37,8 +37,8 @@ fi
 
 # Isolate the bid-cache bundle. The candidate intentionally includes both
 # zero-search bid lookup and the specialized no-depthcode-decode prectx hot
-# path. Context-load fusion is held at zero and benchmarked separately.
-COMMON=(N="$N" ARCH="$ARCH" ORBITCTA_FLAT=1 ORBITCTA_FLAT_CHUNK=1 DIRECTGATHER64=1 DIRECTGATHER_SPARSE64="$SPARSE64" DIRECTGATHER_SORT_RANKS=0 ORBITCTA_COL_ILP="$COL_ILP" PAIR_MLP="$PAIR_MLP" CPASYNC_PAIR="$CPASYNC_PAIR" QUAD_MLP=0 QUAD_OVERLAP_LOCAL=0 QUAD_LOCAL_DIRECT_MAX=0 RANKFORMULA_MLP_WINDOW4="$WINDOW4" PM_ACCUM="$PM_ACCUM" PRECTX_FORWARD=1 PRECTX_REVERSE=1 PRECTX_COMPACT=1 PRECTX_FLAT_BID_FUSED=0 PTXAS_VERBOSE="$PTXAS_VERBOSE")
+# path. Dynamic scheduling and context-load fusion are benchmarked separately.
+COMMON=(N="$N" ARCH="$ARCH" ORBITCTA_FLAT=1 ORBITCTA_FLAT_CHUNK=1 ORBITCTA_FLAT_DYNAMIC=0 DIRECTGATHER64=1 DIRECTGATHER_SPARSE64="$SPARSE64" DIRECTGATHER_SORT_RANKS=0 ORBITCTA_COL_ILP="$COL_ILP" PAIR_MLP="$PAIR_MLP" CPASYNC_PAIR="$CPASYNC_PAIR" QUAD_MLP=0 QUAD_OVERLAP_LOCAL=0 QUAD_LOCAL_DIRECT_MAX=0 QUAD_SPARSE_DESC_MLP=0 QUAD_OVERLAP_BYPASS_LOCAL0=0 QUAD_CPASYNC_PREFETCH_BYTES=0 QUAD_CPASYNC_GROUP_COLS=1 RANKFORMULA_MLP_WINDOW4="$WINDOW4" PM_ACCUM="$PM_ACCUM" PRECTX_FORWARD=1 PRECTX_REVERSE=1 PRECTX_COMPACT=1 PRECTX_FLAT_BID_FUSED=0 PRECTX_WARPCOOP=0 PTXAS_VERBOSE="$PTXAS_VERBOSE")
 BASE_BIN="$ONEESAN_BUILD_DIR/b300_flat_prectx_bid0_n${N}"; CAND_BIN="$ONEESAN_BUILD_DIR/b300_flat_prectx_bid1_n${N}"
 env "${COMMON[@]}" PRECTX_FLAT_BID=0 OUT="$BASE_BIN" bash "$ONEESAN_ROOT/scripts/build/b300-directgather-orbitcta.sh" >"$LOGDIR/base.build.out" 2>"$LOGDIR/base.build.err"
 env "${COMMON[@]}" PRECTX_FLAT_BID=1 OUT="$CAND_BIN" bash "$ONEESAN_ROOT/scripts/build/b300-directgather-orbitcta.sh" >"$LOGDIR/cand.build.out" 2>"$LOGDIR/cand.build.err"
@@ -47,7 +47,7 @@ python3 "$PARSER" "$LOGDIR/base.build.err" --label base >>"$RESOURCE" || true
 python3 "$PARSER" "$LOGDIR/cand.build.err" --label cand >>"$RESOURCE" || true
 
 field(){ local k="$1" l="$2"; sed -nE "s/(^|.*[[:space:]])${k}=([^[:space:]]+).*/\\2/p" <<<"$l" | tail -n1; }
-printf 'mode\tprectx_flat_bid\trepeat\tresidue\twall_s\tforward_high_s\treverse_high_s\thigh_s\tforward_regs\treverse_regs\tforward_blocks_per_sm\treverse_blocks_per_sm\tforward_flat_blocks\treverse_flat_blocks\tflat_bid_mode\n' >"$RESULT"
+printf 'mode\tprectx_flat_bid\trepeat\tresidue\twall_s\tforward_high_s\treverse_high_s\thigh_s\tforward_regs\treverse_regs\tforward_blocks_per_sm\treverse_blocks_per_sm\tforward_flat_blocks\treverse_flat_blocks\tflat_bid_mode\tscheduler_mode\n' >"$RESULT"
 run_one(){
   local mode="$1" flag="$2" bin="$3" rep="$4" so="$LOGDIR/${mode}_r${rep}.out" se="$LOGDIR/${mode}_r${rep}.err"
   runenv=(BUCKET_THREADS="$THREADS" BUCKET_GRID_X="$LOW_GX" BUCKET_GRID_Y="$LOW_GY" BUCKET_LOW_GRID_X="$LOW_GX" BUCKET_LOW_GRID_Y="$LOW_GY")
@@ -62,9 +62,10 @@ import sys
 print(f'{float(sys.argv[1])+float(sys.argv[2]):.9f}')
 PY
 )"
-  mode_seen="$(field flat_bid_mode "$grid")"
+  mode_seen="$(field flat_bid_mode "$grid")"; sched_seen="$(field scheduler_mode "$grid")"
+  [[ "$sched_seen" == static_cyclic ]] || { echo "$mode scheduler_mode=$sched_seen expected=static_cyclic" >&2; exit 6; }
   if [[ "$flag" == 0 ]]; then [[ "$mode_seen" == binary_search ]] || { echo "base flat_bid_mode=$mode_seen" >&2; exit 6; }; else [[ "$mode_seen" == compact_prectx ]] || { echo "cand flat_bid_mode=$mode_seen" >&2; exit 6; }; fi
-  printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' "$mode" "$flag" "$rep" "$residue" "$(field wall_s "$line")" "$fh" "$rh" "$high" "$(field forward_regs "$occ")" "$(field reverse_regs "$occ")" "$(field forward_blocks_per_sm "$occ")" "$(field reverse_blocks_per_sm "$occ")" "$(field forward_flat_blocks "$grid")" "$(field reverse_flat_blocks "$grid")" "$mode_seen" >>"$RESULT"
+  printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' "$mode" "$flag" "$rep" "$residue" "$(field wall_s "$line")" "$fh" "$rh" "$high" "$(field forward_regs "$occ")" "$(field reverse_regs "$occ")" "$(field forward_blocks_per_sm "$occ")" "$(field reverse_blocks_per_sm "$occ")" "$(field forward_flat_blocks "$grid")" "$(field reverse_flat_blocks "$grid")" "$mode_seen" "$sched_seen" >>"$RESULT"
 }
 for ((r=1;r<=REPEATS;++r)); do run_one base 0 "$BASE_BIN" "$r"; run_one cand 1 "$CAND_BIN" "$r"; done
 
@@ -79,7 +80,7 @@ with open(summary,'w') as f:
  for k in ('wall_s','forward_high_s','reverse_high_s','high_s'): f.write(f'{k}\t{out["base"][k]}\t{out["cand"][k]}\t{out["base"][k]/out["cand"][k]}\n')
 winner_flag=1 if out['cand']['wall_s'] < out['base']['wall_s'] else 0
 with open(winner,'w') as f:
- f.write('ORBITCTA_FLAT=1\nORBITCTA_FLAT_CHUNK=1\nPRECTX_FORWARD=1\nPRECTX_REVERSE=1\nPRECTX_COMPACT=1\nPRECTX_FLAT_BID_FUSED=0\nQUAD_MLP=0\nQUAD_OVERLAP_LOCAL=0\nQUAD_LOCAL_DIRECT_MAX=0\n')
+ f.write('ORBITCTA_FLAT=1\nORBITCTA_FLAT_CHUNK=1\nORBITCTA_FLAT_DYNAMIC=0\nPRECTX_FORWARD=1\nPRECTX_REVERSE=1\nPRECTX_COMPACT=1\nPRECTX_FLAT_BID_FUSED=0\nPRECTX_WARPCOOP=0\nQUAD_MLP=0\nQUAD_OVERLAP_LOCAL=0\nQUAD_LOCAL_DIRECT_MAX=0\n')
  f.write(f'PRECTX_FLAT_BID={winner_flag}\n')
 print(f"PRECTX_FLAT_BID_BUNDLE wall_speedup={out['base']['wall_s']/out['cand']['wall_s']:.6f} high_speedup={out['base']['high_s']/out['cand']['high_s']:.6f} fh_speedup={out['base']['forward_high_s']/out['cand']['forward_high_s']:.6f} rh_speedup={out['base']['reverse_high_s']/out['cand']['reverse_high_s']:.6f} winner={winner_flag}")
 PY
