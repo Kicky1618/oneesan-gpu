@@ -30,7 +30,6 @@ case "$ORBITCTA_FLAT_DYNAMIC_ADAPTIVE_WAVES" in 0|1|2|4) ;; *) echo "ORBITCTA_FL
 if [[ "$ORBITCTA_FLAT_DYNAMIC" == 1 ]]; then
   [[ "$ORBITCTA_FLAT" == 1 ]] || { echo "ORBITCTA_FLAT_DYNAMIC requires ORBITCTA_FLAT=1" >&2; exit 2; }
   [[ "$ORBITCTA_FLAT_CHUNK" == 1 ]] || { echo "ORBITCTA_FLAT_DYNAMIC currently requires ORBITCTA_FLAT_CHUNK=1" >&2; exit 2; }
-  [[ "$QUAD_MLP" == 0 ]] || { echo "ORBITCTA_FLAT_DYNAMIC is isolated from QUAD_MLP" >&2; exit 2; }
   if (( ORBITCTA_FLAT_DYNAMIC_ADAPTIVE_WAVES != 0 )); then
     (( ORBITCTA_FLAT_DYNAMIC_BATCH > 1 )) || { echo "adaptive dynamic waves require ORBITCTA_FLAT_DYNAMIC_BATCH>1" >&2; exit 2; }
   fi
@@ -80,7 +79,11 @@ if [[ "$CPASYNC_PAIR" == 1 ]]; then
 fi
 if [[ "$QUAD_MLP" == 1 ]]; then
   [[ "$ORBITCTA_FLAT" == 1 ]] || { echo "QUAD_MLP currently targets flat orbit CTA" >&2; exit 2; }
-  (( ORBITCTA_FLAT_CHUNK > 1 )) || { echo "QUAD_MLP currently targets chunked flat scheduler (FLAT_CHUNK>1)" >&2; exit 2; }
+  if [[ "$ORBITCTA_FLAT_DYNAMIC" == 1 ]]; then
+    [[ "$ORBITCTA_FLAT_CHUNK" == 1 ]] || { echo "dynamic QUAD_MLP requires ORBITCTA_FLAT_CHUNK=1" >&2; exit 2; }
+  else
+    (( ORBITCTA_FLAT_CHUNK > 1 )) || { echo "static QUAD_MLP currently targets chunked flat scheduler (FLAT_CHUNK>1)" >&2; exit 2; }
+  fi
   [[ "$ORBITCTA_COL_ILP" == 4 ]] || { echo "QUAD_MLP requires ORBITCTA_COL_ILP=4" >&2; exit 2; }
   [[ "$PAIR_MLP" == 1 ]] || { echo "QUAD_MLP requires PAIR_MLP=1 for tail fallback" >&2; exit 2; }
   [[ "$WINDOW4" == 1 ]] || { echo "QUAD_MLP requires WINDOW4=1" >&2; exit 2; }
