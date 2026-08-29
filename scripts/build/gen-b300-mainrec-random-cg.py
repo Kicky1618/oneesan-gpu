@@ -2,8 +2,12 @@
 from __future__ import annotations
 import pathlib,re,sys
 
-if len(sys.argv)!=3:raise SystemExit('usage: gen-b300-mainrec-random-cg.py INPUT.cu OUTPUT.cu')
+if len(sys.argv) not in (3,4):
+    raise SystemExit('usage: gen-b300-mainrec-random-cg.py INPUT.cu OUTPUT.cu [L2_PREFETCH_BYTES=0|64|128|256]')
 src=pathlib.Path(sys.argv[1]);out=pathlib.Path(sys.argv[2]);s=src.read_text()
+try: l2_bytes=int(sys.argv[3],0) if len(sys.argv)==4 else 0
+except ValueError: raise SystemExit('L2_PREFETCH_BYTES must be 0,64,128,256')
+if l2_bytes not in (0,64,128,256): raise SystemExit('L2_PREFETCH_BYTES must be 0,64,128,256')
 for req in ('main_pull_kernel_ilp2','const Count pair0=','const Count block0=','high_rec_groups='):
     if req not in s:raise SystemExit(f'mainrec CG requires artifact: {req}')
 
@@ -24,16 +28,17 @@ for k in ids:
     body=body.replace(a,f'const Count pair{k}=hp{k}?b300_mainrec_random_load_cg(in+pj{k}):Count(0);',1)
     body=body.replace(b,f'const Count block{k}=hb{k}?b300_mainrec_random_load_cg(in_block+bj{k}):Count(0);',1)
 
-helper=r'''static_assert(sizeof(Count)==4,"mainrec random CG assumes 32-bit Count");
-__device__ __forceinline__ Count b300_mainrec_random_load_cg(const Count* p){
+qual='ld.global.cg.u32' if l2_bytes==0 else f'ld.global.cg.L2::{l2_bytes}B.u32'
+helper=f'''static_assert(sizeof(Count)==4,"mainrec random CG assumes 32-bit Count");
+__device__ __forceinline__ Count b300_mainrec_random_load_cg(const Count* p){{
 #if __CUDA_ARCH__
     uint32_t v;const unsigned long long a=reinterpret_cast<unsigned long long>(p);
-    asm volatile("ld.global.cg.u32 %0, [%1];" : "=r"(v) : "l"(a));
+    asm volatile("{qual} %0, [%1];" : "=r"(v) : "l"(a));
     return Count(v);
 #else
     return *p;
 #endif
-}
+}}
 
 '''
 s=s[:start]+helper+body+s[end:]
@@ -41,5 +46,6 @@ for k in ids:
     for req in (f'b300_mainrec_random_load_cg(in+pj{k})',f'b300_mainrec_random_load_cg(in_block+bj{k})'):
         if req not in s:raise SystemExit(f'missing CG lane artifact: {req}')
 if 'const Count self0=in[i0];' not in s:raise SystemExit('self stream unexpectedly rewritten')
+if qual not in s: raise SystemExit(f'missing load qualifier {qual}')
 out.parent.mkdir(parents=True,exist_ok=True);out.write_text(s)
-print(f'generated {out} from {src}: mainrec_random_cg=1 lanes={len(ids)} pair_cg_loads={len(ids)} block_cg_loads={len(ids)} self_load_policy=default semantic_load_width=32 extra_state_bytes=0 production_default=off')
+print(f'generated {out} from {src}: mainrec_random_cg=1 lanes={len(ids)} pair_cg_loads={len(ids)} block_cg_loads={len(ids)} self_load_policy=default semantic_load_width=32 l2_prefetch_bytes={l2_bytes} ptx_load={qual} extra_state_bytes=0 production_default=off')
