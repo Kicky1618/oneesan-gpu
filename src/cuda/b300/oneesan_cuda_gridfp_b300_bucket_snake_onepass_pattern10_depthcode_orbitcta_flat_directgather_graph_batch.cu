@@ -27,7 +27,11 @@ using P10DCFlatOrbitSelectedFusedDeviceTables = BucketFusedDirectHighRowsRankFor
 
 #if P10DC_RANKFORMULA_PRECTX_FORWARD || P10DC_RANKFORMULA_PRECTX_REVERSE
 #if P10DC_RANKFORMULA_PRECTX_COMPACT
+#if P10DC_RANKFORMULA_PRECTX_FLAT_BID
+#define BucketFusedDeviceTables BucketFusedCompactPrecomputedHighCtxFlatBidTables<P10DCFlatOrbitSelectedFusedDeviceTables>
+#else
 #define BucketFusedDeviceTables BucketFusedCompactPrecomputedHighCtxTables<P10DCFlatOrbitSelectedFusedDeviceTables>
+#endif
 #define P10DC_FLAT_ORBIT_PRECTX_BYTES sizeof(P10DCHighClosureCompactPreCtx)
 #else
 #define BucketFusedDeviceTables BucketFusedPrecomputedHighCtxTables<P10DCFlatOrbitSelectedFusedDeviceTables>
