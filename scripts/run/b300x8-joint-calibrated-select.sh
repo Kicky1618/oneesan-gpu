@@ -8,9 +8,10 @@ ARCH="${ARCH:-native}";PRIME="${SMOKE_PRIME:-4294967291}";TARGET_MIB="${FORCED_T
 PROFILE_FILE="${PROFILE_FILE:-$ONEESAN_ROOT/work/b300_hbm_profile_refined21.env}"
 PREFIX="${PREFIX:-$ONEESAN_ROOT/work/b300_joint_calibrated_select_n27}";CAL_PREFIX="${CAL_PREFIX:-${PREFIX}.calibration}";CAL_LOG="${CAL_LOG:-${PREFIX}.calibration.log}"
 RECALIBRATE="${RECALIBRATE:-1}";SELECT_ONLY="${SELECT_ONLY:-1}"
-N27_PRODUCER_WEIGHT_RACE="${N27_PRODUCER_WEIGHT_RACE:-1}";PWW_REBUILD="${PWW_REBUILD:-1}"
-N27_PRODUCER_ADAPTIVE_RACE="${N27_PRODUCER_ADAPTIVE_RACE:-1}";PAC_REBUILD="${PAC_REBUILD:-1}"
+N27_PRODUCER_WEIGHT_RACE="${N27_PRODUCER_WEIGHT_RACE:-1}";PWW_REBUILD="${PWW_REBUILD:-1}";PWW_REPEATS="${PWW_REPEATS:-1}"
+N27_PRODUCER_ADAPTIVE_RACE="${N27_PRODUCER_ADAPTIVE_RACE:-1}";PAC_REBUILD="${PAC_REBUILD:-1}";PAC_REPEATS="${PAC_REPEATS:-1}"
 for x in RECALIBRATE SELECT_ONLY N27_PRODUCER_WEIGHT_RACE PWW_REBUILD N27_PRODUCER_ADAPTIVE_RACE PAC_REBUILD;do v="${!x}";[[ "$v" == 0 || "$v" == 1 ]]||{ echo "$x must be 0 or 1" >&2;exit 2; };done
+for x in PWW_REPEATS PAC_REPEATS;do v="${!x}";[[ "$v" =~ ^[1-9][0-9]*$ ]]||{ echo "$x must be positive integer" >&2;exit 2; };done
 mkdir -p "$(dirname "$PREFIX")"
 getv(){ local k="$1" f="$2";sed -nE "s/^${k}=([^[:space:]]+).*/\\1/p" "$f"|tail -n1; }
 
@@ -55,9 +56,9 @@ fi
 if [[ "$N27_PRODUCER_WEIGHT_RACE" == 1 ]];then
   PWW_PROFILE_OUT="${PWW_PROFILE_OUT:-${PREFIX}.producer-weight.env}"
   PWW_PREFIX="${PWW_PREFIX:-${PREFIX}.producer-weight}"
-  echo '=== joint calibrated selector: n27 producer-weight race ===' >&2
+  echo "=== joint calibrated selector: n27 producer-weight race repeats=$PWW_REPEATS ===" >&2
   PROFILE_FILE="$PROFILE_FILE" PROFILE_OUT="$PWW_PROFILE_OUT" PREFIX="$PWW_PREFIX" \
-    WEIGHT_RACE_ONLY=1 WEIGHT_REBUILD="$PWW_REBUILD" ARCH="$ARCH" SMOKE_PRIME="$PRIME" MAX_WINDOW="$MAX_WINDOW" \
+    WEIGHT_RACE_ONLY=1 WEIGHT_REBUILD="$PWW_REBUILD" WEIGHT_REPEATS="$PWW_REPEATS" ARCH="$ARCH" SMOKE_PRIME="$PRIME" MAX_WINDOW="$MAX_WINDOW" \
     bash "$ONEESAN_ROOT/scripts/run/b300x8-exact-auto-hbm-profiled-producer-weight-race.sh" 27
   [[ -s "$PWW_PROFILE_OUT" ]]||{ echo "producer-weight profile missing: $PWW_PROFILE_OUT" >&2;exit 4; }
   PROFILE_FILE="$PWW_PROFILE_OUT"
@@ -70,9 +71,9 @@ fi
 if [[ "$N27_PRODUCER_ADAPTIVE_RACE" == 1 ]];then
   PAC_PROFILE_OUT="${PAC_PROFILE_OUT:-${PREFIX}.producer-adaptive.env}"
   PAC_PREFIX="${PAC_PREFIX:-${PREFIX}.producer-adaptive}"
-  echo '=== joint calibrated selector: n27 producer adaptive-threshold race ===' >&2
+  echo "=== joint calibrated selector: n27 producer adaptive-threshold race repeats=$PAC_REPEATS ===" >&2
   PROFILE_FILE="$PROFILE_FILE" PROFILE_OUT="$PAC_PROFILE_OUT" PREFIX="$PAC_PREFIX" \
-    ADAPTIVE_RACE_ONLY=1 ADAPTIVE_REBUILD="$PAC_REBUILD" ARCH="$ARCH" SMOKE_PRIME="$PRIME" MAX_WINDOW="$MAX_WINDOW" \
+    ADAPTIVE_RACE_ONLY=1 ADAPTIVE_REBUILD="$PAC_REBUILD" ADAPTIVE_REPEATS="$PAC_REPEATS" ARCH="$ARCH" SMOKE_PRIME="$PRIME" MAX_WINDOW="$MAX_WINDOW" \
     bash "$ONEESAN_ROOT/scripts/run/b300x8-exact-auto-hbm-profiled-producer-adaptive-race.sh" 27
   [[ -s "$PAC_PROFILE_OUT" ]]||{ echo "producer-adaptive profile missing: $PAC_PROFILE_OUT" >&2;exit 4; }
   PROFILE_FILE="$PAC_PROFILE_OUT"
@@ -83,7 +84,7 @@ PRODUCER_ADAPTIVE_COLS="${PRODUCER_ADAPTIVE_COLS:-0}"
 [[ "$PRODUCER_ADAPTIVE_COLS" =~ ^[0-9]+$ ]]||{ echo "bad selected producer adaptive cols=$PRODUCER_ADAPTIVE_COLS" >&2;exit 4; }
 export PRODUCER_ADAPTIVE_COLS
 
-echo "JOINT BUCKET PROFILE profile=$PROFILE_FILE producer_adaptive_cols=$PRODUCER_ADAPTIVE_COLS" >&2
+echo "JOINT BUCKET PROFILE profile=$PROFILE_FILE producer_adaptive_cols=$PRODUCER_ADAPTIVE_COLS pww_repeats=$PWW_REPEATS pac_repeats=$PAC_REPEATS" >&2
 export SELECT_ONLY FORCED_OVERRIDE_BIN="$BIN" FORCED_OVERRIDE_LABEL="$LABEL" FORCED_OVERRIDE_THREADS="$THREADS" PROFILE_FILE SMOKE_PRIME="$PRIME" FORCED_TARGET_MIB="$TARGET_MIB" MAX_WINDOW
 export PREFIX="${RACE_PREFIX:-${PREFIX}.race}"
 exec "$ONEESAN_ROOT/scripts/run/b300x8-race-external-forced-profiled.sh" 27 "$@"
