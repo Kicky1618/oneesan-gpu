@@ -3,22 +3,14 @@
 #ifndef P10DC_ORBITCTA_CTX
 #error "flat prectx-bid scheduler requires P10DC_ORBITCTA_CTX"
 #endif
-#ifndef P10DC_ORBITCTA_PREPARE_FORWARD
-#error "flat prectx-bid scheduler requires forward prepare hook"
-#endif
-#ifndef P10DC_ORBITCTA_PREPARE_REVERSE
-#error "flat prectx-bid scheduler requires reverse prepare hook"
-#endif
 #if !P10DC_RANKFORMULA_PRECTX_COMPACT || !P10DC_RANKFORMULA_PRECTX_FORWARD || !P10DC_RANKFORMULA_PRECTX_REVERSE
 #error "flat prectx-bid scheduler requires compact forward+reverse prectx"
 #endif
 
 // Exact flat scheduler with no q->bucket offset search. The existing compact
-// prectx padding byte carries the source main bid, so each orbit keeps the
-// original one-orbit cyclic load distribution while deleting the 6-step
-// binary search from thread-0 setup. The prectx already contains all closure
-// row information, so the runtime depthcode payload is intentionally not
-// decoded on this path either.
+// prectx padding byte carries the source main bid. One compact context is
+// loaded once per orbit, then reused both for bid selection and closure-row
+// restoration. Runtime depthcode decoding is unnecessary on this path.
 __global__ void bucket_high_orbit_closure_pattern10_depthcode_orbitcta_flat_prectx_bid_kernel(int p) {
     const uint32_t nblocks = D_BKF_MAIN_NBLOCKS;
     if (!nblocks) return;
@@ -45,7 +37,9 @@ __global__ void bucket_high_orbit_closure_pattern10_depthcode_orbitcta_flat_prec
             const uint32_t q = nn
                 ? D_BKF_HIGH_NN_OFF[base_off] + k
                 : c.n1 + k - c.n0;
-            const uint32_t bid = p10dc_forward_compact_prectx_flat_bid(q, nn);
+            const P10DCHighClosureCompactPreCtx z =
+                p10dc_load_forward_compact_prectx_flat(q, nn);
+            const uint32_t bid = uint32_t(z.pad);
             if (bid < nblocks) {
                 const BucketOrbitOp op = nn ? D_BKF_HIGH_NN[q] : D_BKF_HIGH_NRNL[q];
                 const uint32_t sl = bkf_orbit_src(op), jl = bkf_orbit_partner(op), dl = bkf_orbit_drop(op);
@@ -60,9 +54,10 @@ __global__ void bucket_high_orbit_closure_pattern10_depthcode_orbitcta_flat_prec
                     }
                     c.jb = bkf_high_main(js, jbid);
                     c.db = bkf_high_block(ds, uint32_t(c.xb.hs));
-                    P10DC_ORBITCTA_PREPARE_FORWARD(
-                        c, 0u, dl, p, ss, js, ds,
+                    p10dc_direct_resolve_high_io(
+                        c, ss, js, ds,
                         bkf_loc_rank(sl), bkf_loc_rank(jl), bkf_loc_rank(dl));
+                    p10dc_apply_loaded_compact_prectx(c, z);
                     c.kind = uint8_t(nn ? CPU_ORBIT_NN : CPU_ORBIT_NR);
                     c.valid = 1;
                 }
@@ -114,7 +109,9 @@ __global__ void bucket_reverse_high_pattern10_depthcode_orbitcta_flat_prectx_bid
                 q = D_RS54_HIGH_NL_OFF[base_off] + k - c.n0 - c.n1;
                 op = D_RS54_HIGH_NL[q];
             }
-            const uint32_t bid = p10dc_reverse_compact_prectx_flat_bid(q, kind);
+            const P10DCHighClosureCompactPreCtx z =
+                p10dc_load_reverse_compact_prectx_flat(q, kind);
+            const uint32_t bid = uint32_t(z.pad);
             if (bid < nblocks) {
                 const uint32_t sl = bkf_orbit_src(op), jl = bkf_orbit_partner(op), dl = bkf_orbit_drop(op);
                 const uint32_t ss = bkf_loc_owner(sl), js = bkf_loc_owner(jl), ds = bkf_loc_owner(dl);
@@ -122,9 +119,10 @@ __global__ void bucket_reverse_high_pattern10_depthcode_orbitcta_flat_prectx_bid
                 if (c.xb.valid && c.xb.rows && c.xb.cols) {
                     c.jb = bkf_high_main(js, bkcp10_reverse_high_jblock(bid, c.xb, p, kind));
                     c.db = bkf_high_block(ds, uint32_t(c.xb.hs));
-                    P10DC_ORBITCTA_PREPARE_REVERSE(
-                        c, 0u, edge ? sl : dl, edge ? c.xb : c.db, p, edge,
-                        ss, js, ds, bkf_loc_rank(sl), bkf_loc_rank(jl), bkf_loc_rank(dl));
+                    p10dc_direct_resolve_high_io(
+                        c, ss, js, ds,
+                        bkf_loc_rank(sl), bkf_loc_rank(jl), bkf_loc_rank(dl));
+                    p10dc_apply_loaded_compact_prectx(c, z);
                     c.kind = uint8_t(kind);
                     c.valid = 1;
                 }
