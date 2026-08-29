@@ -2,6 +2,8 @@
 set -euo pipefail
 source "$(dirname -- "${BASH_SOURCE[0]}")/../lib/common.sh"
 
+PATCH_ONLY="${PIPE2_PATCH_ONLY:-0}"
+[[ "$PATCH_ONLY" == 0 || "$PATCH_ONLY" == 1 ]] || { echo 'PIPE2_PATCH_ONLY must be 0/1' >&2; exit 2; }
 [[ "${ORBITCTA_FLAT:-1}" == 1 ]] || { echo 'pipe2 requires ORBITCTA_FLAT=1' >&2; exit 2; }
 [[ "${ORBITCTA_FLAT_DYNAMIC:-1}" == 1 ]] || { echo 'pipe2 requires ORBITCTA_FLAT_DYNAMIC=1' >&2; exit 2; }
 [[ "${ORBITCTA_FLAT_CHUNK:-1}" == 1 ]] || { echo 'pipe2 requires ORBITCTA_FLAT_CHUNK=1' >&2; exit 2; }
@@ -37,7 +39,6 @@ if line_end<0:
     raise SystemExit('pipe2 build summary line end missing')
 line=src[idx:line_end]
 if 'dynamic_pipe2=' not in line:
-    # Add inside the quoted summary when possible; otherwise append an argument.
     q=line.rfind('"')
     if q>0:
         line=line[:q]+' dynamic_pipe2=1'+line[q:]
@@ -47,5 +48,12 @@ if 'dynamic_pipe2=' not in line:
 Path(sys.argv[2]).write_text(src)
 PY
 chmod +x "$tmp"
+if [[ "$PATCH_ONLY" == 1 ]]; then
+  bash -n "$tmp"
+  grep -Fq -- '-DP10DC_ORBITCTA_FLAT_DYNAMIC_PIPE2=1' "$tmp" || { echo 'patched nvcc macro missing' >&2; exit 3; }
+  grep -Fq 'dynamic_pipe2=1' "$tmp" || { echo 'patched build marker missing' >&2; exit 3; }
+  echo 'b300_directgather_orbitcta_pipe2_patch=OK gpu_work=0'
+  exit 0
+fi
 exec env ORBITCTA_FLAT=1 ORBITCTA_FLAT_DYNAMIC=1 ORBITCTA_FLAT_CHUNK=1 \
   ORBITCTA_FLAT_DYNAMIC_FUSE_LEASE_PREP=0 bash "$tmp"
