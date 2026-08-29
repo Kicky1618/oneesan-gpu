@@ -22,6 +22,7 @@ case "$ORBITCTA_COL_ILP" in 1|2|4) ;; *) echo "ORBITCTA_COL_ILP must be 1, 2, or
 [[ "$DIRECTGATHER64" == 0 || "$FORCE7" == 0 ]] || { echo "DIRECTGATHER64 does not use FORCE7" >&2; exit 2; }
 [[ "$DIRECTGATHER_SPARSE64" == 0 || "$DIRECTGATHER64" == 1 ]] || { echo "DIRECTGATHER_SPARSE64 requires DIRECTGATHER64=1" >&2; exit 2; }
 [[ "$DIRECTGATHER_SORT_RANKS" == 0 || "$DIRECTGATHER64" == 1 ]] || { echo "DIRECTGATHER_SORT_RANKS requires DIRECTGATHER64=1" >&2; exit 2; }
+[[ "$DIRECTGATHER_SORT_RANKS" == 0 || "$DIRECTGATHER_SPARSE64" == 0 ]] || { echo "DIRECTGATHER_SORT_RANKS currently targets dense DIRECTGATHER64 only" >&2; exit 2; }
 if [[ "$PRECTX_COMPACT" == 1 ]]; then
   [[ "$PRECTX_FORWARD" == 1 || "$PRECTX_REVERSE" == 1 ]] || {
     echo "PRECTX_COMPACT requires PRECTX_FORWARD=1 and/or PRECTX_REVERSE=1" >&2; exit 2;
