@@ -28,13 +28,19 @@ using P10DCOrbitSelectedFusedDeviceTables = BucketFusedDirectHighRowsRankFormula
 using P10DCOrbitSelectedFusedDeviceTables = BucketFusedDirectHighRowsRankFormulaNometa4DirectMapDepthMajorTables;
 #endif
 #if P10DC_RANKFORMULA_PRECTX_FORWARD || P10DC_RANKFORMULA_PRECTX_REVERSE
+#if P10DC_RANKFORMULA_PRECTX_COMPACT
+#define BucketFusedDeviceTables BucketFusedCompactPrecomputedHighCtxTables<P10DCOrbitSelectedFusedDeviceTables>
+#define P10DC_ORBIT_PRECTX_BYTES sizeof(P10DCHighClosureCompactPreCtx)
+#else
 #define BucketFusedDeviceTables BucketFusedPrecomputedHighCtxTables<P10DCOrbitSelectedFusedDeviceTables>
+#define P10DC_ORBIT_PRECTX_BYTES sizeof(P10DCHighClosurePreCtx)
+#endif
 // build_reverse_split54(..., true) releases reverse.atomic.high_orbit before
 // the generic memory preflight executes.  The exact resident reverse stream is
 // the split54 payload retained by rattach, which is already in scope where this
 // macro expands.  Count that table rather than the now-empty legacy vector.
 #define BSN_GRAPH_BATCH_EXTRA_METADATA_BYTES(borbit,reverse) \
-    (sizeof(P10DCHighClosurePreCtx) * \
+    (P10DC_ORBIT_PRECTX_BYTES * \
      (size_t(P10DC_RANKFORMULA_PRECTX_FORWARD) * ((borbit).high_nn.size() + (borbit).high_nrnl.size()) + \
       size_t(P10DC_RANKFORMULA_PRECTX_REVERSE) * \
           (rattach.split.high.nn.size() + rattach.split.high.nr.size() + rattach.split.high.nl.size())))
