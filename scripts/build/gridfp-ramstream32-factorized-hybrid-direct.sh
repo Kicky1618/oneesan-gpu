@@ -25,3 +25,4 @@ TMPDIR="$ONEESAN_TMP_DIR" nvcc \
 
 echo "built $OUT"
 echo "  n=$N width=$W arch=$ARCH low_lut_k=$LOW_LUT_K high_lut_k=$HIGH_LUT_K"
+# ci-trigger: hybrid-direct-v4.2
