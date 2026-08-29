@@ -24,6 +24,15 @@ __device__ __forceinline__ const Count* p10dc_rankformula_local_pair_src(
     return row < uint32_t(c.local_n) ? c.local_base[row] + rank : c.ip_base;
 }
 
+__device__ __forceinline__ void p10dc_rankformula_cpasync_wait_one_pending() {
+#if __CUDA_ARCH__ >= 800
+    // With exactly two committed groups this guarantees the older (column A)
+    // group is complete while allowing the newer column-B group to remain in
+    // flight during the A reduction below.
+    asm volatile("cp.async.wait_group 1;");
+#endif
+}
+
 __device__ __forceinline__ void
 p10dc_direct_resolved_high_plan_sum_pair_local_cpasync(
     const P10DCDirectHighResolvedCtx& c, const BucketPhysicalBlock& db,
@@ -45,10 +54,10 @@ p10dc_direct_resolved_high_plan_sum_pair_local_cpasync(
     }
 
     // The cross pair path has already waited for its cp.async groups, so its
-    // fourteen shared slots can be recycled. Stage rows 0..6 for both columns:
-    // fourteen independent ordinary-source requests per lane. Keep row7 as two
-    // normal read-only loads issued before wait_all(), so they overlap the
-    // outstanding cp.async traffic without increasing dynamic shared memory.
+    // fourteen shared slots can be recycled. Commit column A and B separately.
+    // We then wait only for A, reduce it while B is still in flight, and wait for
+    // B immediately before reading its shared slots. This turns the previous
+    // wait-all bubble into useful integer reduction work.
 #define P10DC_LOCAL_CPASYNC_ROW(slot,row,rank) \
     p10dc_rankformula_cpasync_u32( \
         p10dc_rankformula_cpasync_slot(slot), \
@@ -74,17 +83,13 @@ p10dc_direct_resolved_high_plan_sum_pair_local_cpasync(
     p10dc_rankformula_cpasync_commit();
 #undef P10DC_LOCAL_CPASYNC_ROW
 
-    BkczCrossAccum a7 = 0, b7 = 0;
+    BkczCrossAccum a7 = 0;
     if constexpr (BKCZ_MAX_LOCAL > 7) {
-        if (c.local_n > 7) {
-            // Issue these before waiting so the two ordinary LDG requests can
-            // overlap the fourteen asynchronous row requests above.
+        if (c.local_n > 7)
             a7 = BkczCrossAccum(__ldg(c.local_base[7] + lr0));
-            b7 = BkczCrossAccum(__ldg(c.local_base[7] + lr1));
-        }
     }
-    p10dc_rankformula_cpasync_wait_all();
 
+    p10dc_rankformula_cpasync_wait_one_pending();
     const BkczCrossAccum a01 = p10dc_rankformula_accum_add(
         BkczCrossAccum(*p10dc_rankformula_cpasync_slot(0)),
         BkczCrossAccum(*p10dc_rankformula_cpasync_slot(1)));
@@ -100,6 +105,13 @@ p10dc_direct_resolved_high_plan_sum_pair_local_cpasync(
             p10dc_rankformula_accum_add(
                 BkczCrossAccum(*p10dc_rankformula_cpasync_slot(6)), a7),
             a45));
+
+    BkczCrossAccum b7 = 0;
+    if constexpr (BKCZ_MAX_LOCAL > 7) {
+        if (c.local_n > 7)
+            b7 = BkczCrossAccum(__ldg(c.local_base[7] + lr1));
+    }
+    p10dc_rankformula_cpasync_wait_all();
 
     const BkczCrossAccum b01 = p10dc_rankformula_accum_add(
         BkczCrossAccum(*p10dc_rankformula_cpasync_slot(7)),
