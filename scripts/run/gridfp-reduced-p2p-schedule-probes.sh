@@ -85,9 +85,6 @@ if [[ "$RUN_CUDA" == 1 ]]; then
   segment_major_cuda_bin="$(build_path gridfp_reduced_p2p_segment-major)"
   "$segment_major_cuda_bin" "$CUDA_W" "$K" "$CUDA_BATCHES" "$CUDA_BLOCKS" "$CUDA_NGPU"
 
-  # Builder count/fill need only one visible CUDA device; NGPU is a logical
-  # ownership model here. They compare device-generated metadata to the host
-  # exact plan before any multi-GPU P2P execution.
   MODE=segment-major-count ARCH="$ARCH" \
     "$(repo_path scripts/build/gridfp-reduced-p2p-schedule-probe.sh)"
   segment_major_count_bin="$(build_path gridfp_reduced_p2p_segment-major-count)"
@@ -97,6 +94,11 @@ if [[ "$RUN_CUDA" == 1 ]]; then
     "$(repo_path scripts/build/gridfp-reduced-p2p-schedule-probe.sh)"
   segment_major_fill_bin="$(build_path gridfp_reduced_p2p_segment-major-fill)"
   "$segment_major_fill_bin" "$CUDA_W" "$K" "$CUDA_BATCHES" "$CUDA_BLOCKS" "$CUDA_NGPU"
+
+  MODE=two-row-segment-major ARCH="$ARCH" \
+    "$(repo_path scripts/build/gridfp-reduced-p2p-schedule-probe.sh)"
+  two_row_segment_major_bin="$(build_path gridfp_reduced_p2p_two-row-segment-major)"
+  "$two_row_segment_major_bin" "$CUDA_W" "$CUDA_NGPU" "$CUDA_BATCHES" "$CUDA_BLOCKS"
 fi
 
 echo "ALL_OK local_p2p_schedule_regressions=1"
