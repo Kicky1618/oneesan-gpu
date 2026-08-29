@@ -28,15 +28,20 @@ grep -Fq '__constant__ Rank64 RP_CHOOSE[RP_MAX_W + 1][RP_MAX_W + 1];' "$PHYSICAL
 grep -Fq '__constant__ Rank64 RP_PRIMITIVE[RP_MAX_W + 1][RP_MAX_W + 2];' "$PHYSICAL"
 
 # Nonzero physical modes must not retain legacy u64 symbols in any memory
-# space. Candidate u32 constants and device-only proxy macros are the only
-# storage/read path.
+# space. Candidate u32 constants and proxy macros are the only storage/read
+# path. The proxy macros are deliberately visible in both nvcc passes so the
+# host pass never sees an undefined RP_CHOOSE/RP_PRIMITIVE token in device
+# function bodies; host upload statements are separately eliminated by mode0
+# preprocessor guards.
 if grep -Fq '__device__ Rank64 RP_CHOOSE[RP_MAX_W + 1][RP_MAX_W + 1];' "$PHYSICAL"; then
   echo "physical choose still contains a legacy global upload sink" >&2; exit 4
 fi
 if grep -Fq '__device__ Rank64 RP_PRIMITIVE[RP_MAX_W + 1][RP_MAX_W + 2];' "$PHYSICAL"; then
   echo "physical primitive still contains a legacy global upload sink" >&2; exit 5
 fi
-grep -Fq '#if defined(__CUDA_ARCH__)' "$PHYSICAL"
+if grep -Fq '#if defined(__CUDA_ARCH__)' "$PHYSICAL"; then
+  echo "physical codec proxy is still device-pass-only" >&2; exit 6
+fi
 grep -Fq '#define RP_CHOOSE CodecPhysicalChooseProxy{}' "$PHYSICAL"
 grep -Fq '#define RP_PRIMITIVE CodecPhysicalPrimitiveProxy{}' "$PHYSICAL"
 grep -Fq 'physical choose layout cannot be combined with an RP_CHOOSE preinclude remap' "$PHYSICAL"
@@ -75,8 +80,9 @@ print(f'physical_layout_motzkin_unmodified_bytes={motzkin}')
 print(f'physical_layout_legacy_three_table_bytes={legacy_three}')
 print('physical_layout_legacy_symbol_bytes_nonzero_mode=0')
 print('physical_layout_legacy_host_upload_nonzero_mode=0')
+print('physical_layout_proxy_nvcc_host_device_passes=1')
 print('physical_layout_device_reads_legacy_symbol=0')
 print('physical_layout_exact=1')
 PY
 
-echo "gridfp-codec-table-physical-replacement-proof OK default_legacy_constant=1 physical_legacy_symbol_removed=1 host_upload_removed=1 motzkin_unmodified=1 exact=1"
+echo "gridfp-codec-table-physical-replacement-proof OK default_legacy_constant=1 physical_legacy_symbol_removed=1 host_upload_removed=1 proxy_both_nvcc_passes=1 motzkin_unmodified=1 exact=1"
