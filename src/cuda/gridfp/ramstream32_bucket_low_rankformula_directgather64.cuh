@@ -9,6 +9,12 @@
 #if !P10DC_RANKFORMULA_DIRECTGATHER
 #error "directgather64 table requires DIRECTGATHER=1"
 #endif
+#ifndef P10DC_RANKFORMULA_DIRECTGATHER_SORT_RANKS
+#define P10DC_RANKFORMULA_DIRECTGATHER_SORT_RANKS 0
+#endif
+static_assert(P10DC_RANKFORMULA_DIRECTGATHER_SORT_RANKS == 0 ||
+              P10DC_RANKFORMULA_DIRECTGATHER_SORT_RANKS == 1,
+              "P10DC_RANKFORMULA_DIRECTGATHER_SORT_RANKS must be 0 or 1");
 
 __global__ void p10dc_rankformula_directgather64_count_rare_kernel(
     const uint4* in, uint32_t n, uint32_t* rare_count, uint32_t* error
@@ -31,14 +37,34 @@ __global__ void p10dc_rankformula_directgather64_compress_kernel(
         const uint4 d = in[i];
         const uint32_t count = d.w >> 16;
         if (count > 7u) { atomicOr(error, 1u); continue; }
-        const uint32_t r0 = d.x & 0xffffu, r1 = d.x >> 16;
-        const uint32_t r2 = d.y & 0xffffu, r3 = d.y >> 16;
-        const uint32_t r4 = d.z & 0xffffu, r5 = d.z >> 16;
-        const uint32_t r6 = d.w & 0xffffu;
-        if ((count > 0u && r0 >= 32768u) || (count > 1u && r1 >= 32768u) ||
-            (count > 2u && r2 >= 32768u) || (count > 3u && r3 >= 32768u) ||
-            (count > 4u && r4 >= 32768u) || (count > 5u && r5 >= 32768u) ||
-            (count > 6u && r6 >= 32768u)) {
+        uint32_t r[7] = {
+            d.x & 0xffffu, d.x >> 16,
+            d.y & 0xffffu, d.y >> 16,
+            d.z & 0xffffu, d.z >> 16,
+            d.w & 0xffffu
+        };
+#if P10DC_RANKFORMULA_DIRECTGATHER_SORT_RANKS
+        // Each destination sums these sources modulo p, so source order is
+        // algebraically irrelevant.  Canonical ascending order aligns the
+        // j-th gather of neighboring destination ranks much better than the
+        // original L-endpoint enumeration order and can reduce sector spread.
+#pragma unroll
+        for (uint32_t a = 1; a < 7u; ++a) {
+            if (a >= count) break;
+            const uint32_t x = r[a];
+            uint32_t b = a;
+#pragma unroll
+            while (b && r[b - 1u] > x) {
+                r[b] = r[b - 1u];
+                --b;
+            }
+            r[b] = x;
+        }
+#endif
+        if ((count > 0u && r[0] >= 32768u) || (count > 1u && r[1] >= 32768u) ||
+            (count > 2u && r[2] >= 32768u) || (count > 3u && r[3] >= 32768u) ||
+            (count > 4u && r[4] >= 32768u) || (count > 5u && r[5] >= 32768u) ||
+            (count > 6u && r[6] >= 32768u)) {
             atomicOr(error, 2u); continue;
         }
         uint32_t rare_ix = 0;
@@ -47,14 +73,14 @@ __global__ void p10dc_rankformula_directgather64_compress_kernel(
             if (rare_ix >= rare_capacity || rare_ix >= 65536u) {
                 atomicOr(error, 4u); continue;
             }
-            rare[rare_ix] = uint64_t(r3) |
-                (uint64_t(r4) << 15) |
-                (uint64_t(r5) << 30) |
-                (uint64_t(r6) << 45);
+            rare[rare_ix] = uint64_t(r[3]) |
+                (uint64_t(r[4]) << 15) |
+                (uint64_t(r[5]) << 30) |
+                (uint64_t(r[6]) << 45);
         }
-        primary[i] = uint64_t(r0) |
-            (uint64_t(r1) << 15) |
-            (uint64_t(r2) << 30) |
+        primary[i] = uint64_t(r[0]) |
+            (uint64_t(r[1]) << 15) |
+            (uint64_t(r[2]) << 30) |
             (uint64_t(count) << 45) |
             (uint64_t(rare_ix) << 48);
     }
@@ -219,6 +245,7 @@ struct BucketFusedDirectHighRowsRankFormulaNometa4DirectGather64Tables
                   << " rare_capacity_entries=" << low_rankformula_directgather64_rare_capacity
                   << " primary_descriptor_bytes=8"
                   << " source_rank_bits=15 rare_index_bits=16"
+                  << " source_ranks_sorted=" << P10DC_RANKFORMULA_DIRECTGATHER_SORT_RANKS
                   << " exact_rare_allocation=1"
                   << " parent_uint4_freed=1"
                   << " directmap_freed=1"
