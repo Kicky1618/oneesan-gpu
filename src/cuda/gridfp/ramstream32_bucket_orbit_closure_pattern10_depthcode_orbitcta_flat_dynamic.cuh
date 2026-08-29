@@ -191,7 +191,7 @@ __global__ void bucket_high_orbit_closure_pattern10_depthcode_orbitcta_flat_dyna
             lease_base = atomicAdd(&D_P10DC_ORBITCTA_FLAT_NEXT, BATCH);
         __syncthreads();
         if (lease_base >= c.total) break;
-#pragma unroll
+#pragma unroll 1
         for (uint32_t j = 0; j < BATCH; ++j) {
             if (threadIdx.x == 0) {
                 c.valid = 0;
@@ -233,7 +233,7 @@ __global__ void bucket_reverse_high_pattern10_depthcode_orbitcta_flat_dynamic_ke
             lease_base = atomicAdd(&D_P10DC_ORBITCTA_FLAT_NEXT, BATCH);
         __syncthreads();
         if (lease_base >= c.total) break;
-#pragma unroll
+#pragma unroll 1
         for (uint32_t j = 0; j < BATCH; ++j) {
             if (threadIdx.x == 0) {
                 c.valid = 0;
