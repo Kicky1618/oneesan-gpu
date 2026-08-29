@@ -12,4 +12,5 @@ grep -Fq 'configs=6 max_pairs=20 total_exact_queries=9600000' <<<"$out"
 grep -Fq 'set_associative=1 overflow_state=packed_high_bit' <<<"$out"
 grep -Fq 'extra_overflow_registers=0' <<<"$out"
 grep -Fq 'stale_bytes_clear_required=0 false_negative=0 exact=1' <<<"$out"
-echo 'gridfp-runtime-find-index-cache-proof OK exact=1 set_associative=1' >&2
+bash "$ONEESAN_ROOT/scripts/bench/gridfp-runtime-find-index-bucket-reuse-proof.sh"
+echo 'gridfp-runtime-find-index-cache-proof OK exact=1 set_associative=1 bucket_reuse_gate=1' >&2
