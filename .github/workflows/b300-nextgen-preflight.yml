@@ -10,6 +10,7 @@ on:
       - 'scripts/build/gen-b300-mainrec-random-cg.py'
       - 'scripts/build/gen-b300-mainrec-prefetch-l2.py'
       - 'scripts/bench/b300-nextgen-*.sh'
+      - 'scripts/bench/b300-grand-selector-contract-preflight.sh'
       - 'scripts/bench/b300-main-recurrence-ilp-partition-proof.py'
       - 'scripts/bench/b300-mainrec-hybrid-ilp8-partition-proof.py'
       - 'scripts/bench/b300-mainrec-hybrid-ilp8-transform-preflight.sh'
@@ -36,6 +37,7 @@ on:
       - 'scripts/build/gen-b300-mainrec-random-cg.py'
       - 'scripts/build/gen-b300-mainrec-prefetch-l2.py'
       - 'scripts/bench/b300-nextgen-*.sh'
+      - 'scripts/bench/b300-grand-selector-contract-preflight.sh'
       - 'scripts/bench/b300-main-recurrence-ilp-partition-proof.py'
       - 'scripts/bench/b300-mainrec-hybrid-ilp8-partition-proof.py'
       - 'scripts/bench/b300-mainrec-hybrid-ilp8-transform-preflight.sh'
@@ -72,3 +74,5 @@ jobs:
         run: bash scripts/bench/b300-joint-nextgen-hybrid8-preflight.sh
       - name: Validate grand next-self + hybrid8 selector
         run: bash scripts/bench/b300-nextgen-grand-selector-preflight.sh
+      - name: Execute grand selector contract without GPUs
+        run: bash scripts/bench/b300-grand-selector-contract-preflight.sh
