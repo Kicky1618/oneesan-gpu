@@ -18,16 +18,16 @@ p10dc_resolved_low_preimages_cross5_rankformula_nometa4_directgather64_pair_fixe
     P10DCDirectGather64Word p0 = 0, p1 = 0;
 
 #if P10DC_RANKFORMULA_DIRECTGATHER_SPARSE64
-    // Issue both sparse-index words before consuming either result. They are
-    // independent even when they land in different 32-entry groups.
+    // Each 32-rank sparse bitmap word is shared by neighboring lanes. The
+    // helper optionally turns the per-lane duplicate __ldg into one load per
+    // actual word followed by warp broadcast, while preserving the baseline
+    // implementation when the experiment is disabled.
     const size_t wi0 = gi0 >> 5;
     const size_t wi1 = gi1 >> 5;
     const uint32_t bit0 = uint32_t(gi0) & 31u;
     const uint32_t bit1 = uint32_t(gi1) & 31u;
-    const P10DCDirectGather64Word ix0 = __ldg(
-        D_P10DC_RANKFORMULA_DIRECTGATHER_SPARSE64_INDEX + wi0);
-    const P10DCDirectGather64Word ix1 = __ldg(
-        D_P10DC_RANKFORMULA_DIRECTGATHER_SPARSE64_INDEX + wi1);
+    const P10DCDirectGather64Word ix0 = p10dc_rankformula_sparse64_index_word(wi0);
+    const P10DCDirectGather64Word ix1 = p10dc_rankformula_sparse64_index_word(wi1);
     const uint32_t bits0 = uint32_t(ix0), bits1 = uint32_t(ix1);
     const uint32_t flag0 = 1u << bit0, flag1 = 1u << bit1;
     const bool live0 = (bits0 & flag0) != 0u;
@@ -90,9 +90,6 @@ p10dc_resolved_low_preimages_cross5_rankformula_nometa4_directgather64_pair_fixe
     }
 
 #if P10DC_RANKFORMULA_CPASYNC_PAIR
-    // Keep descriptor compression while moving all fourteen potentially remote
-    // Count requests out of the register dependency chain. Two async groups are
-    // committed so one lane can expose up to 14 source reads before reduction.
     p10dc_rankformula_cpasync_u32(p10dc_rankformula_cpasync_slot(0), source_row + a0, n0 > 0u);
     p10dc_rankformula_cpasync_u32(p10dc_rankformula_cpasync_slot(1), source_row + a1, n0 > 1u);
     p10dc_rankformula_cpasync_u32(p10dc_rankformula_cpasync_slot(2), source_row + a2, n0 > 2u);
@@ -140,8 +137,6 @@ p10dc_resolved_low_preimages_cross5_rankformula_nometa4_directgather64_pair_fixe
         p10dc_rankformula_accum_add(as03, as46),
         p10dc_rankformula_accum_add(bs03, bs46)};
 #else
-    // Register path: first source window issues A and B before either reduction,
-    // creating up to eight independent 32-bit source requests per lane.
     BkczCrossAccum av0 = 0, av1 = 0, av2 = 0, av3 = 0;
     BkczCrossAccum bv0 = 0, bv1 = 0, bv2 = 0, bv3 = 0;
     if (n0 > 0u) av0 = BkczCrossAccum(__ldg(source_row + a0));
