@@ -8,7 +8,8 @@ THREADS="${BUCKET_THREADS:-256}"; LOW_GX="${BUCKET_LOW_GRID_X:-16}"; LOW_GY="${B
 REPEATS="${REPEATS:-1}"; SAMPLE_INTERVAL="${SAMPLE_INTERVAL:-0.15}"
 BATCH="${ORBITCTA_FLAT_DYNAMIC_BATCH:-1}"; ADAPTIVE_WAVES="${ORBITCTA_FLAT_DYNAMIC_ADAPTIVE_WAVES:-0}"
 SPARSE64="${DIRECTGATHER_SPARSE64:-1}"; PM_ACCUM="${PM_ACCUM:-1}"; CPASYNC_PAIR="${CPASYNC_PAIR:-1}"
-PREFIX="${PREFIX:-$ONEESAN_ROOT/work/b300_pipe2_producer_prectx_warpcoop_ab_n${N}_t${THREADS}_b${BATCH}}"
+PRECTX_FLAT_BID="${PRECTX_FLAT_BID:-0}"; PRECTX_FLAT_BID_FUSED="${PRECTX_FLAT_BID_FUSED:-0}"
+PREFIX="${PREFIX:-$ONEESAN_ROOT/work/b300_pipe2_producer_prectx_warpcoop_ab_n${N}_t${THREADS}_b${BATCH}_bid${PRECTX_FLAT_BID}}"
 LOGDIR="${LOGDIR:-${PREFIX}_logs}"; RESULT="${RESULT:-${PREFIX}.tsv}"; RESOURCE="${RESOURCE:-${PREFIX}_ptxas.tsv}"
 PARSER="$ONEESAN_ROOT/scripts/bench/parse-ptxas-resources.py"
 mkdir -p "$LOGDIR" "$(dirname "$RESULT")"
@@ -20,8 +21,9 @@ mkdir -p "$LOGDIR" "$(dirname "$RESULT")"
 case "$BATCH" in 1|2|4|8|16) ;; *) echo 'dynamic batch must be 1,2,4,8,16' >&2; exit 2;; esac
 case "$ADAPTIVE_WAVES" in 0|1|2|4) ;; *) echo 'adaptive waves must be 0,1,2,4' >&2; exit 2;; esac
 (( ADAPTIVE_WAVES == 0 || BATCH > 1 )) || { echo 'adaptive waves require batch>1' >&2; exit 2; }
-for x in SPARSE64 PM_ACCUM CPASYNC_PAIR; do v="${!x}"; [[ "$v" == 0 || "$v" == 1 ]] || { echo "$x must be 0/1" >&2; exit 2; }; done
+for x in SPARSE64 PM_ACCUM CPASYNC_PAIR PRECTX_FLAT_BID PRECTX_FLAT_BID_FUSED; do v="${!x}"; [[ "$v" == 0 || "$v" == 1 ]] || { echo "$x must be 0/1" >&2; exit 2; }; done
 [[ "$CPASYNC_PAIR" == 1 ]] || { echo 'producer prectx A/B fixes CPASYNC_PAIR=1' >&2; exit 2; }
+[[ "$PRECTX_FLAT_BID_FUSED" == 0 ]] || { echo 'producer prectx warpcoop currently requires PRECTX_FLAT_BID_FUSED=0' >&2; exit 2; }
 command -v nvcc >/dev/null || { echo 'nvcc required' >&2; exit 2; }
 command -v nvidia-smi >/dev/null || { echo 'nvidia-smi required' >&2; exit 2; }
 (( $(nvidia-smi --query-gpu=index --format=csv,noheader | wc -l) >= NGPU )) || { echo "need $NGPU visible GPUs" >&2; exit 2; }
@@ -30,29 +32,36 @@ bash "$ONEESAN_ROOT/scripts/bench/b300-pipe2-producer-warp-coverage-proof.sh" >"
 grep -q 'b300_pipe2_producer_warp_coverage=OK' "$LOGDIR/coverage.out" || exit 5
 ARCH="$ARCH" PM_ACCUM="$PM_ACCUM" bash "$ONEESAN_ROOT/scripts/bench/compact-prectx-selftest.sh" \
   >"$LOGDIR/compact-prectx.out" 2>"$LOGDIR/compact-prectx.err"
+if [[ "$PRECTX_FLAT_BID" == 1 ]]; then
+  ARCH="$ARCH" PM_ACCUM="$PM_ACCUM" bash "$ONEESAN_ROOT/scripts/bench/compact-flat-bid-selftest.sh" \
+    >"$LOGDIR/compact-flat-bid.out" 2>"$LOGDIR/compact-flat-bid.err"
+  grep -q 'bucket-compact-flat-bid-selftest OK' "$LOGDIR/compact-flat-bid.out" || { echo 'compact flat-bid gate failed' >&2; exit 5; }
+fi
 PIPE2_PRODUCER_PATCH_ONLY=1 PRODUCER_PRECTX_WARPCOOP=1 QUAD_MLP=1 ORBITCTA_COL_ILP=4 \
-  PRECTX_FORWARD=1 PRECTX_REVERSE=1 PRECTX_COMPACT=1 PRECTX_FLAT_BID=0 \
+  PRECTX_FORWARD=1 PRECTX_REVERSE=1 PRECTX_COMPACT=1 PRECTX_FLAT_BID="$PRECTX_FLAT_BID" PRECTX_FLAT_BID_FUSED=0 \
   ORBITCTA_FLAT=1 ORBITCTA_FLAT_DYNAMIC=1 ORBITCTA_FLAT_DYNAMIC_PIPE2=1 ORBITCTA_FLAT_CHUNK=1 \
   ORBITCTA_FLAT_DYNAMIC_FUSE_LEASE_PREP=0 \
   bash "$ONEESAN_ROOT/scripts/build/b300-directgather-orbitcta-pipe2-producer-warp.sh" >"$LOGDIR/producer-prectx-patch.out"
 grep -q 'producer_prectx_warpcoop=1' "$LOGDIR/producer-prectx-patch.out" || { echo 'producer prectx patch marker missing' >&2; exit 5; }
+grep -q "prectx_flat_bid=$PRECTX_FLAT_BID prectx_flat_bid_fused=0" "$LOGDIR/producer-prectx-patch.out" || { echo 'producer prectx cached-bid patch marker mismatch' >&2; exit 5; }
 
 COMMON=(N="$N" ARCH="$ARCH" PM_ACCUM="$PM_ACCUM" DIRECTGATHER64=1 DIRECTGATHER_SPARSE64="$SPARSE64" DIRECTGATHER_SORT_RANKS=0
   RANKFORMULA_MLP_WINDOW4=1 PAIR_MLP=1 CPASYNC_PAIR="$CPASYNC_PAIR" ORBITCTA_FLAT=1 ORBITCTA_FLAT_CHUNK=1
   ORBITCTA_FLAT_DYNAMIC=1 ORBITCTA_FLAT_DYNAMIC_BATCH="$BATCH" ORBITCTA_FLAT_DYNAMIC_ADAPTIVE_WAVES="$ADAPTIVE_WAVES"
   ORBITCTA_FLAT_DYNAMIC_FUSE_LEASE_PREP=0 ORBITCTA_FLAT_DYNAMIC_PIPE2=1 ORBITCTA_COL_ILP=4
   QUAD_MLP=1 QUAD_OVERLAP_LOCAL=0 QUAD_LOCAL_DIRECT_MAX=0 QUAD_SPARSE_DESC_MLP=0 QUAD_OVERLAP_BYPASS_LOCAL0=0
-  PRECTX_FORWARD=1 PRECTX_REVERSE=1 PRECTX_COMPACT=1 PRECTX_FLAT_BID=0 PRECTX_FLAT_BID_FUSED=0 PRECTX_WARPCOOP=0 PTXAS_VERBOSE=1)
+  PRECTX_FORWARD=1 PRECTX_REVERSE=1 PRECTX_COMPACT=1 PRECTX_FLAT_BID="$PRECTX_FLAT_BID" PRECTX_FLAT_BID_FUSED=0 PRECTX_WARPCOOP=0 PTXAS_VERBOSE=1)
 
 printf 'backend\tkernel\tregisters\tstack_bytes\tspill_store_bytes\tspill_load_bytes\tsmem_bytes\tcmem0_bytes\n' >"$RESOURCE"
 build_one(){
-  local coop="$1" name="$2" bin="$ONEESAN_BUILD_DIR/b300_pipe2_producer_prectx_${name}_t${THREADS}_b${BATCH}_n${N}"
+  local coop="$1" name="$2" bin="$ONEESAN_BUILD_DIR/b300_pipe2_producer_prectx_${name}_t${THREADS}_b${BATCH}_bid${PRECTX_FLAT_BID}_n${N}"
   env "${COMMON[@]}" PRODUCER_PRECTX_WARPCOOP="$coop" OUT="$bin" \
     bash "$ONEESAN_ROOT/scripts/build/b300-directgather-orbitcta-pipe2-producer-warp.sh" \
     >"$LOGDIR/${name}.build.out" 2>"$LOGDIR/${name}.build.err"
   [[ -x "$bin" ]] || { echo "$name binary missing" >&2; exit 6; }
   grep -q 'pipe2_producer_warp=1' "$LOGDIR/${name}.build.err" || { echo "$name producer marker missing" >&2; exit 6; }
   grep -q "pipe2_producer_prectx_warpcoop=$coop" "$LOGDIR/${name}.build.err" || { echo "$name producer prectx marker mismatch" >&2; exit 6; }
+  grep -q "prectx_flat_bid=$PRECTX_FLAT_BID" "$LOGDIR/${name}.build.err" || { echo "$name flat-bid marker mismatch" >&2; exit 6; }
   grep -q 'quad_mlp=1' "$LOGDIR/${name}.build.err" || { echo "$name quad marker missing" >&2; exit 6; }
   python3 "$PARSER" "$LOGDIR/${name}.build.err" --label "$name" >>"$RESOURCE" || true
   printf '%s' "$bin"
@@ -108,4 +117,4 @@ print(f'producer_prectx_high_speedup={m("serial","high_s")/m("warpcoop","high_s"
 print(f'producer_prectx_memctrl_delta={m("warpcoop","avg_memctrl_pct")-m("serial","avg_memctrl_pct"):.6f}pp')
 PY
 
-echo "pipe2 producer-prectx warpcoop A/B OK result=$RESULT resources=$RESOURCE" >&2
+echo "pipe2 producer-prectx warpcoop A/B OK result=$RESULT resources=$RESOURCE cached_bid=$PRECTX_FLAT_BID" >&2
