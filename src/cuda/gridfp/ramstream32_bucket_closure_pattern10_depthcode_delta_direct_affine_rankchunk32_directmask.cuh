@@ -8,16 +8,28 @@
 static_assert(P10DC_RANKCHUNK32_DIRECTMASK == 0 || P10DC_RANKCHUNK32_DIRECTMASK == 1,
               "P10DC_RANKCHUNK32_DIRECTMASK must be 0 or 1");
 
+#ifndef P10DC_RANKCHUNK32_RANKPLANE
+#define P10DC_RANKCHUNK32_RANKPLANE 0
+#endif
+static_assert(P10DC_RANKCHUNK32_RANKPLANE == 0 || P10DC_RANKCHUNK32_RANKPLANE == 1,
+              "P10DC_RANKCHUNK32_RANKPLANE must be 0 or 1");
+static_assert(!P10DC_RANKCHUNK32_RANKPLANE || P10DC_RANKCHUNK32_DIRECTMASK,
+              "rankplane is only valid with directmask");
+
 #if P10DC_RANKCHUNK32_DIRECTMASK
 
-// The CROSS5 automaton and rank-stream projection depend only on the LOW code
-// and incoming cross depth. Precompute the final global rank-ordinal mask for
-// every compact LOW code/depth. A second compact table stores the absolute
-// rankstream offset for each LOW rank, eliminating rankchunk metadata decode,
-// block-base loads, and warp shuffles from the directmask hot path.
+// CROSS5 and rank projection depend only on LOW code + incoming depth. Store a
+// depth-major final ordinal mask. The optional ordinal-major rank plane stores
+// the uint16 source rank for each L ordinal directly, so the hot chain becomes
+//   mask8 -> rank16 plane -> source32
+// instead of
+//   mask8 -> offset32 -> rank16 -> source32.
 __constant__ uint8_t* D_P10DC_LOW_RANKDIRECTMASK;
 __constant__ uint32_t D_P10DC_LOW_RANKDIRECTMASK_STRIDE;
 __constant__ uint32_t* D_P10DC_LOW_RANKDIRECTOFF;
+#if P10DC_RANKCHUNK32_RANKPLANE
+__constant__ uint16_t* D_P10DC_LOW_RANKDIRECTPLANE;
+#endif
 
 static constexpr uint8_t p10dc_rankchunk32_directmask_host(
     uint32_t packed_chunks, uint32_t depth
@@ -57,28 +69,55 @@ __device__ __forceinline__ uint32_t p10dc_low_rankchunk32_directcompact(
     return D_P10DC_LOW_RANKCHUNK_HOFF[h] + rank;
 }
 
+__device__ __forceinline__ uint8_t p10dc_low_rankchunk32_directmask_load_compact(
+    uint32_t compact, uint32_t depth
+) {
+    const size_t ix = size_t(depth) * D_P10DC_LOW_RANKDIRECTMASK_STRIDE + compact;
+    return __ldg(D_P10DC_LOW_RANKDIRECTMASK + ix);
+}
+
 __device__ __forceinline__ uint8_t p10dc_low_rankchunk32_directmask_load(
     uint32_t h, uint32_t rank, uint32_t depth
 ) {
-    const uint32_t compact = p10dc_low_rankchunk32_directcompact(h, rank);
-    const size_t ix = size_t(depth) * D_P10DC_LOW_RANKDIRECTMASK_STRIDE + compact;
-    return __ldg(D_P10DC_LOW_RANKDIRECTMASK + ix);
+    return p10dc_low_rankchunk32_directmask_load_compact(
+        p10dc_low_rankchunk32_directcompact(h, rank), depth);
+}
+
+__device__ __forceinline__ const uint16_t* p10dc_low_rankchunk32_directoff_row_compact(
+    uint32_t compact
+) {
+    const uint32_t off = __ldg(D_P10DC_LOW_RANKDIRECTOFF + compact);
+    return D_P10DC_LOW_RANKSTREAM + off;
 }
 
 __device__ __forceinline__ const uint16_t* p10dc_low_rankchunk32_directoff_row(
     uint32_t h, uint32_t rank
 ) {
-    const uint32_t compact = p10dc_low_rankchunk32_directcompact(h, rank);
-    const uint32_t off = __ldg(D_P10DC_LOW_RANKDIRECTOFF + compact);
-    return D_P10DC_LOW_RANKSTREAM + off;
+    return p10dc_low_rankchunk32_directoff_row_compact(
+        p10dc_low_rankchunk32_directcompact(h, rank));
 }
+
+#if P10DC_RANKCHUNK32_RANKPLANE
+__device__ __forceinline__ uint16_t p10dc_low_rankchunk32_directrank_load_compact(
+    uint32_t compact, uint32_t ordinal
+) {
+    const size_t ix = size_t(ordinal) * D_P10DC_LOW_RANKDIRECTMASK_STRIDE + compact;
+    return __ldg(D_P10DC_LOW_RANKDIRECTPLANE + ix);
+}
+#endif
 
 struct BucketFusedDirectHighRowsRankChunk32DirectMaskTables
     : BucketFusedDirectHighRowsRankChunk32Tables {
     uint8_t* low_rankdirectmask = nullptr;
     uint32_t* low_rankdirectoff = nullptr;
+#if P10DC_RANKCHUNK32_RANKPLANE
+    uint16_t* low_rankdirectplane = nullptr;
+#endif
     size_t low_rankdirectmask_count = 0, low_rankdirectoff_count = 0;
     size_t low_rankdirectmask_capacity = 0, low_rankdirectoff_capacity = 0;
+#if P10DC_RANKCHUNK32_RANKPLANE
+    size_t low_rankdirectplane_count = 0, low_rankdirectplane_capacity = 0;
+#endif
 
     void bind_owner(
         uint32_t fixed, const BucketPhysicalLayoutHost& buckets,
@@ -97,6 +136,8 @@ struct BucketFusedDirectHighRowsRankChunk32DirectMaskTables
 
         const BucketFusedHost& f = *host_fused;
         constexpr size_t P = size_t(MAXW + 2);
+        constexpr size_t NRANK = size_t(P10DC_RANKCHUNK32_MAX_L_PER_LEGAL_CODE);
+        constexpr size_t RANK_STORAGE = NRANK ? NRANK : 1u;
         const size_t owner_base = size_t(fixed) * P;
         const uint32_t owner_end = fixed + 1u < BUCKET_NGPU
             ? f.low_code_off[size_t(fixed + 1u) * P]
@@ -104,6 +145,9 @@ struct BucketFusedDirectHighRowsRankChunk32DirectMaskTables
         const size_t stride = low_rankchunkmeta32_count;
         std::vector<uint8_t> mask(size_t(16) * stride, uint8_t(0));
         std::vector<uint32_t> off(stride, uint32_t(0));
+#if P10DC_RANKCHUNK32_RANKPLANE
+        std::vector<uint16_t> plane(RANK_STORAGE * stride, uint16_t(0));
+#endif
 
         size_t compact = 0;
         size_t actual_codes = 0;
@@ -133,8 +177,39 @@ struct BucketFusedDirectHighRowsRankChunk32DirectMaskTables
                     mask[size_t(depth) * stride + compact] = m;
                     mask_or = uint8_t(mask_or | m);
                 }
-                for (int pos = 0; pos < LOW_LUT_K; ++pos)
-                    if (((code >> (2 * pos)) & 3u) == uint32_t(::L)) ++stream_cursor;
+
+                uint32_t ordinal = 0;
+                uint32_t weight = bkcz_pow3_const(LOW_LUT_K - 1);
+                for (int pos = LOW_LUT_K - 1; pos >= 0; --pos) {
+                    if (((code >> (2 * pos)) & 3u) == uint32_t(::L)) {
+#if P10DC_RANKCHUNK32_RANKPLANE
+                        const uint32_t cand_key = key - weight;
+                        if (cand_key >= f.low_direct.size()) {
+                            std::cerr << "p10dc directrank key overflow owner=" << fixed
+                                      << " h=" << h << " pos=" << pos << '\n';
+                            std::exit(685);
+                        }
+                        const uint32_t x = f.low_direct[cand_key];
+                        if (x == BKF_DIRECT_INVALID || bkf_loc_owner(x & BKF_LOC_MASK) != fixed ||
+                            bkf_loc_rank(x & BKF_LOC_MASK) >= 0xffffu || ordinal >= NRANK) {
+                            std::cerr << "p10dc directrank invariant failure owner=" << fixed
+                                      << " h=" << h << " pos=" << pos
+                                      << " ordinal=" << ordinal << '\n';
+                            std::exit(686);
+                        }
+                        plane[size_t(ordinal) * stride + compact] =
+                            uint16_t(bkf_loc_rank(x & BKF_LOC_MASK));
+#endif
+                        ++ordinal;
+                        ++stream_cursor;
+                    }
+                    if (pos) weight /= 3u;
+                }
+                if (ordinal > NRANK) {
+                    std::cerr << "p10dc directrank ordinal overflow owner=" << fixed
+                              << " h=" << h << " count=" << ordinal << '\n';
+                    std::exit(687);
+                }
             }
         }
         if (compact != stride || actual_codes != low_prekey_count ||
@@ -149,6 +224,9 @@ struct BucketFusedDirectHighRowsRankChunk32DirectMaskTables
 
         low_rankdirectmask_count = mask.size();
         low_rankdirectoff_count = off.size();
+#if P10DC_RANKCHUNK32_RANKPLANE
+        low_rankdirectplane_count = plane.size();
+#endif
         if (low_rankdirectmask_count > low_rankdirectmask_capacity) {
             if (low_rankdirectmask) cudaFree(low_rankdirectmask);
             low_rankdirectmask = nullptr;
@@ -165,6 +243,17 @@ struct BucketFusedDirectHighRowsRankChunk32DirectMaskTables
                 ck(cudaMalloc(&low_rankdirectoff, low_rankdirectoff_capacity * sizeof(uint32_t)),
                    "p10dc rankchunk32 directoff alloc");
         }
+#if P10DC_RANKCHUNK32_RANKPLANE
+        if (low_rankdirectplane_count > low_rankdirectplane_capacity) {
+            if (low_rankdirectplane) cudaFree(low_rankdirectplane);
+            low_rankdirectplane = nullptr;
+            low_rankdirectplane_capacity = low_rankdirectplane_count;
+            if (low_rankdirectplane_capacity)
+                ck(cudaMalloc(&low_rankdirectplane,
+                              low_rankdirectplane_capacity * sizeof(uint16_t)),
+                   "p10dc rankchunk32 directplane alloc");
+        }
+#endif
         if (!mask.empty())
             ck(cudaMemcpy(low_rankdirectmask, mask.data(), mask.size() * sizeof(uint8_t),
                           cudaMemcpyHostToDevice),
@@ -173,6 +262,12 @@ struct BucketFusedDirectHighRowsRankChunk32DirectMaskTables
             ck(cudaMemcpy(low_rankdirectoff, off.data(), off.size() * sizeof(uint32_t),
                           cudaMemcpyHostToDevice),
                "p10dc rankchunk32 directoff H2D");
+#if P10DC_RANKCHUNK32_RANKPLANE
+        if (!plane.empty())
+            ck(cudaMemcpy(low_rankdirectplane, plane.data(), plane.size() * sizeof(uint16_t),
+                          cudaMemcpyHostToDevice),
+               "p10dc rankchunk32 directplane H2D");
+#endif
         const uint32_t stride32 = uint32_t(stride);
         ck(cudaMemcpyToSymbol(D_P10DC_LOW_RANKDIRECTMASK, &low_rankdirectmask,
                               sizeof(low_rankdirectmask)),
@@ -183,6 +278,11 @@ struct BucketFusedDirectHighRowsRankChunk32DirectMaskTables
         ck(cudaMemcpyToSymbol(D_P10DC_LOW_RANKDIRECTOFF, &low_rankdirectoff,
                               sizeof(low_rankdirectoff)),
            "p10dc rankchunk32 directoff ptr");
+#if P10DC_RANKCHUNK32_RANKPLANE
+        ck(cudaMemcpyToSymbol(D_P10DC_LOW_RANKDIRECTPLANE, &low_rankdirectplane,
+                              sizeof(low_rankdirectplane)),
+           "p10dc rankchunk32 directplane ptr");
+#endif
 
         std::cerr << "p10dc_low_rankchunk32_directmask fixed_owner=" << fixed
                   << " stride=" << stride
@@ -190,16 +290,29 @@ struct BucketFusedDirectHighRowsRankChunk32DirectMaskTables
                   << " offset_entries=" << low_rankdirectoff_count
                   << " mask_mib=" << double(low_rankdirectmask_count) / double(1 << 20)
                   << " offset_mib=" << double(low_rankdirectoff_count * sizeof(uint32_t)) / double(1 << 20)
-                  << " depth_major=1 coalesced_warp_byte_load=1 coalesced_offset32_load=1"
+#if P10DC_RANKCHUNK32_RANKPLANE
+                  << " rankplane_entries=" << low_rankdirectplane_count
+                  << " rankplane_mib=" << double(low_rankdirectplane_count * sizeof(uint16_t)) / double(1 << 20)
+#endif
+                  << " depth_major_mask=1 ordinal_major_rank=" << P10DC_RANKCHUNK32_RANKPLANE
                   << " cross5_runtime_lut=0 cross5_runtime_state=0"
                   << " rankchunk_meta_runtime=0 blockbase_runtime=0 blockbase_shuffle_runtime=0"
-                  << " zero_mask_skips_offset_and_rankstream=1 mask_or=0x"
-                  << std::hex << unsigned(mask_or) << std::dec << '\n';
+#if P10DC_RANKCHUNK32_RANKPLANE
+                  << " offset_runtime=0 dependency_chain=mask8_rank16_source32"
+#else
+                  << " dependency_chain=mask8_offset32_rank16_source32"
+#endif
+                  << " mask_or=0x" << std::hex << unsigned(mask_or) << std::dec << '\n';
     }
 
     void release() {
         if (low_rankdirectmask) cudaFree(low_rankdirectmask);
         if (low_rankdirectoff) cudaFree(low_rankdirectoff);
+#if P10DC_RANKCHUNK32_RANKPLANE
+        if (low_rankdirectplane) cudaFree(low_rankdirectplane);
+        low_rankdirectplane = nullptr;
+        low_rankdirectplane_count = low_rankdirectplane_capacity = 0;
+#endif
         low_rankdirectmask = nullptr;
         low_rankdirectoff = nullptr;
         low_rankdirectmask_count = low_rankdirectoff_count = 0;
@@ -213,15 +326,23 @@ p10dc_resolved_low_preimages_rankchunk32_directmask_fixed(
     uint32_t h, uint32_t rank, uint32_t depth, const Count* source_row
 ) {
     if (!depth) return BkczCrossAccum(0);
-    uint8_t pending = p10dc_low_rankchunk32_directmask_load(h, rank, depth);
+    const uint32_t compact = p10dc_low_rankchunk32_directcompact(h, rank);
+    const uint8_t pending = p10dc_low_rankchunk32_directmask_load_compact(compact, depth);
     if (!pending) return BkczCrossAccum(0);
 
-    const uint16_t* rank_row = p10dc_low_rankchunk32_directoff_row(h, rank);
+#if !P10DC_RANKCHUNK32_RANKPLANE
+    const uint16_t* rank_row = p10dc_low_rankchunk32_directoff_row_compact(compact);
+#endif
     BkczCrossAccum sum = 0;
 #pragma unroll
     for (uint32_t ordinal = 0; ordinal < P10DC_RANKCHUNK32_MAX_L_PER_LEGAL_CODE; ++ordinal) {
         if (pending & uint8_t(1u << ordinal)) {
+#if P10DC_RANKCHUNK32_RANKPLANE
+            const uint16_t source_rank =
+                p10dc_low_rankchunk32_directrank_load_compact(compact, ordinal);
+#else
             const uint16_t source_rank = rank_row[ordinal];
+#endif
             sum = bkcz_cross_add(sum, source_row[uint32_t(source_rank)]);
         }
     }
