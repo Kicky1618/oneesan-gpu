@@ -8,9 +8,10 @@ ARCH="${ARCH:-native}";PRIME="${SMOKE_PRIME:-4294967291}";TARGET_MIB="${FORCED_T
 PROFILE_FILE="${PROFILE_FILE:-$ONEESAN_ROOT/work/b300_hbm_profile_refined21.env}"
 PREFIX="${PREFIX:-$ONEESAN_ROOT/work/b300_joint_calibrated_select_n27}";CAL_PREFIX="${CAL_PREFIX:-${PREFIX}.calibration}";CAL_LOG="${CAL_LOG:-${PREFIX}.calibration.log}"
 RECALIBRATE="${RECALIBRATE:-1}";SELECT_ONLY="${SELECT_ONLY:-1}";REBUILD_BUCKETS="${REBUILD_BUCKETS:-1}"
+PREPARE_ONLY="${PREPARE_ONLY:-0}";PREPARE_ENV="${PREPARE_ENV:-${PREFIX}.prepared.env}"
 N27_PRODUCER_WEIGHT_RACE="${N27_PRODUCER_WEIGHT_RACE:-1}";PWW_REBUILD="${PWW_REBUILD:-1}";PWW_REPEATS="${PWW_REPEATS:-1}"
 N27_PRODUCER_ADAPTIVE_RACE="${N27_PRODUCER_ADAPTIVE_RACE:-1}";PAC_REBUILD="${PAC_REBUILD:-1}";PAC_REPEATS="${PAC_REPEATS:-1}"
-for x in RECALIBRATE SELECT_ONLY REBUILD_BUCKETS N27_PRODUCER_WEIGHT_RACE PWW_REBUILD N27_PRODUCER_ADAPTIVE_RACE PAC_REBUILD;do v="${!x}";[[ "$v" == 0 || "$v" == 1 ]]||{ echo "$x must be 0 or 1" >&2;exit 2; };done
+for x in RECALIBRATE SELECT_ONLY REBUILD_BUCKETS PREPARE_ONLY N27_PRODUCER_WEIGHT_RACE PWW_REBUILD N27_PRODUCER_ADAPTIVE_RACE PAC_REBUILD;do v="${!x}";[[ "$v" == 0 || "$v" == 1 ]]||{ echo "$x must be 0 or 1" >&2;exit 2; };done
 for x in PWW_REPEATS PAC_REPEATS;do v="${!x}";[[ "$v" =~ ^[1-9][0-9]*$ ]]||{ echo "$x must be positive integer" >&2;exit 2; };done
 mkdir -p "$(dirname "$PREFIX")"
 getv(){ local k="$1" f="$2";sed -nE "s/^${k}=([^[:space:]]+).*/\\1/p" "$f"|tail -n1; }
@@ -34,10 +35,6 @@ N=27 ARCH="$ARCH" OUT="$BIN" HIGH_DROP_CHUNK="$HIGH" DUALMASK="$DUAL" CLOSURE_BA
 [[ -x "$BIN" ]]||{ echo 'joint calibrated binary missing' >&2;exit 4; };grep -Fq "mlp_calibrated_forced=1 high_drop_chunk=$HIGH dualmask=$DUAL closure_batch=$BATCH" "$BUILD_OUT"
 echo "JOINT CALIBRATED FORCED label=$LABEL binary=$BIN select_only=$SELECT_ONLY" >&2
 
-# Partial-row calibration can rank transformed and untransformed forced paths
-# differently from a complete n=27 prime. Build the globally fastest partial
-# untransformed baseline too, unless it is exactly the selected configuration,
-# and let the downstream complete-prime race arbitrate both vs both bucket paths.
 unset FORCED_BASE_BIN FORCED_BASE_LABEL FORCED_BASE_THREADS
 if [[ "$DUAL" != 0 || "$BATCH" != 0 || "$HIGH" != "$BASE_HIGH" || "$THREADS" != "$BASE_THREADS" ]];then
   BASE_LABEL="forced_joint_base_hd${BASE_HIGH}_dual0_cb0_t${BASE_THREADS}"
@@ -51,8 +48,6 @@ if [[ "$DUAL" != 0 || "$BATCH" != 0 || "$HIGH" != "$BASE_HIGH" || "$THREADS" != 
   echo "JOINT BASELINE FORCED label=$BASE_LABEL binary=$BASE_BIN" >&2
 fi
 
-# n=21 gives a cheap first estimate of producer share. Recalibrate on a complete
-# n=27 prime before comparing the bucket family against the forced family.
 if [[ "$N27_PRODUCER_WEIGHT_RACE" == 1 ]];then
   PWW_PROFILE_OUT="${PWW_PROFILE_OUT:-${PREFIX}.producer-weight.env}"
   PWW_PREFIX="${PWW_PREFIX:-${PREFIX}.producer-weight}"
@@ -64,8 +59,6 @@ if [[ "$N27_PRODUCER_WEIGHT_RACE" == 1 ]];then
   PROFILE_FILE="$PWW_PROFILE_OUT"
 fi
 
-# Once the n=27 base weight is known, calibrate the column threshold that makes
-# small orbits use weight=1 while large orbits keep that base weight.
 if [[ "$N27_PRODUCER_ADAPTIVE_RACE" == 1 ]];then
   PAC_PROFILE_OUT="${PAC_PROFILE_OUT:-${PREFIX}.producer-adaptive.env}"
   PAC_PREFIX="${PAC_PREFIX:-${PREFIX}.producer-adaptive}"
@@ -81,9 +74,27 @@ PRODUCER_ADAPTIVE_COLS="$(getv ORBIT_N27_PRODUCER_ADAPTIVE_COLS "$PROFILE_FILE")
 PRODUCER_ADAPTIVE_COLS="${PRODUCER_ADAPTIVE_COLS:-0}"
 [[ "$PRODUCER_ADAPTIVE_COLS" =~ ^[0-9]+$ ]]||{ echo "bad selected producer adaptive cols=$PRODUCER_ADAPTIVE_COLS" >&2;exit 4; }
 
-# The build-only selector used by the single-pass final race fingerprints both
-# pww and pac, so REBUILD_BUCKETS=0 is safe when the matching binary already
-# exists. No full-prime bucket preselection is performed here.
+if [[ "$PREPARE_ONLY" == 1 ]];then
+  mkdir -p "$(dirname "$PREPARE_ENV")"
+  {
+    printf 'B300_JOINT_PREPARED=1\n'
+    printf 'PROFILE_FILE=%q\n' "$PROFILE_FILE"
+    printf 'FORCED_OVERRIDE_BIN=%q\n' "$BIN"
+    printf 'FORCED_OVERRIDE_LABEL=%q\n' "$LABEL"
+    printf 'FORCED_OVERRIDE_THREADS=%q\n' "$THREADS"
+    printf 'FORCED_BASE_BIN=%q\n' "${FORCED_BASE_BIN:-}"
+    printf 'FORCED_BASE_LABEL=%q\n' "${FORCED_BASE_LABEL:-}"
+    printf 'FORCED_BASE_THREADS=%q\n' "${FORCED_BASE_THREADS:-256}"
+    printf 'PRODUCER_ADAPTIVE_COLS=%q\n' "$PRODUCER_ADAPTIVE_COLS"
+    printf 'SMOKE_PRIME=%q\n' "$PRIME"
+    printf 'FORCED_TARGET_MIB=%q\n' "$TARGET_MIB"
+    printf 'MAX_WINDOW=%q\n' "$MAX_WINDOW"
+  } >"$PREPARE_ENV"
+  cat "$PREPARE_ENV"
+  echo "JOINT PREPARED env=$PREPARE_ENV profile=$PROFILE_FILE primary=$LABEL base=${FORCED_BASE_LABEL:-none}" >&2
+  exit 0
+fi
+
 echo "JOINT BUCKET PROFILE profile=$PROFILE_FILE producer_adaptive_cols=$PRODUCER_ADAPTIVE_COLS pww_repeats=$PWW_REPEATS pac_repeats=$PAC_REPEATS rebuild_buckets=$REBUILD_BUCKETS final_race=single_pass" >&2
 export SELECT_ONLY REBUILD_BUCKETS FORCED_OVERRIDE_BIN="$BIN" FORCED_OVERRIDE_LABEL="$LABEL" FORCED_OVERRIDE_THREADS="$THREADS" PROFILE_FILE ARCH SMOKE_PRIME="$PRIME" FORCED_TARGET_MIB="$TARGET_MIB" MAX_WINDOW
 export PREFIX="${RACE_PREFIX:-${PREFIX}.race}"
