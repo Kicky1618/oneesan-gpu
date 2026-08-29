@@ -58,7 +58,11 @@ if [[ "$LOW_DROP_CHUNK" == 1 ]]; then bash "$ONEESAN_ROOT/scripts/bench/b300-low
 if [[ "$LOW_BLOCK_CACHE" == 1 ]]; then bash "$ONEESAN_ROOT/scripts/bench/b300-low-block-cache-proof.sh"; fi
 if [[ "$HIGH_DROP_CHUNK" == 1 ]]; then bash "$ONEESAN_ROOT/scripts/bench/b300-high-drop-chunk-proof.sh"; fi
 if [[ "$LOW_MAIN_RECURRENCE" == 1 || "$MAIN_RECURRENCE" == 1 ]]; then bash "$ONEESAN_ROOT/scripts/bench/b300-low-main-recurrence-proof.sh"; fi
-if [[ "$HIGH_MAIN_RECURRENCE" == 1 || "$MAIN_RECURRENCE" == 1 ]]; then bash "$ONEESAN_ROOT/scripts/bench/b300-high-main-recurrence-proof.sh"; fi
+if [[ "$HIGH_MAIN_RECURRENCE" == 1 || "$MAIN_RECURRENCE" == 1 ]]; then
+  bash "$ONEESAN_ROOT/scripts/bench/b300-rank-delta-recurrence-proof.sh"
+  bash "$ONEESAN_ROOT/scripts/bench/b300-high-main-recurrence-proof.sh"
+fi
+if [[ "$MAIN_RECURRENCE" == 1 ]]; then bash "$ONEESAN_ROOT/scripts/bench/b300-main-recurrence-production-generate-proof.sh"; fi
 if [[ "$MAIN_PULL_ILP" == 2 ]]; then bash "$ONEESAN_ROOT/scripts/bench/b300-ilp2-partition-proof.sh"; fi
 if [[ "$MAIN_PULL_ILP" == 3 ]]; then bash "$ONEESAN_ROOT/scripts/bench/b300-main-pull-ilp3-partition-proof.sh"; fi
 if [[ "$MAIN_PULL_ILP" == 4 ]]; then bash "$ONEESAN_ROOT/scripts/bench/b300-ilp4-partition-proof.sh"; fi
@@ -93,5 +97,5 @@ echo "  batch_row_limit_env=B300_ROW_LIMIT default_rows=$W calibration_default=0
 if [[ "$MAIN_PULL_ILP" != 1 ]]; then echo "  main_pull_destinations_per_thread=$MAIN_PULL_ILP memory_request_phases=mate,self,pair,block register_pressure_requires_ab=1"; fi
 if [[ "$HIGH_DROP_CHUNK" == 1 ]]; then echo "  high_drop_chunk_table_bytes_per_gpu=184320 max_table_loads=3 max_scalar_tail=3 proof_gate=1"; fi
 if [[ "$LOW_MAIN_RECURRENCE" == 1 ]]; then echo "  low_main_state_bits=60 extra_state_bytes=0 mate_hbm_store_per_state_step=8 low_drop_table_loads_per_state_step=0 low_height_popcounts_per_state_step=0 proof_gate=1"; fi
-if [[ "$HIGH_MAIN_RECURRENCE" == 1 ]]; then echo "  high_main_state_bits=64 extra_state_bytes=0 high_p_lo=14 high_symbol_range=13..27 high_trit_positions=15 high_min_fixed=7 high_fixed_lt7_fallback=raw_mate_rank mate_hbm_store_per_state_step=8 high_drop_walk_or_table_loads_per_state_step=0 high_height_walk_per_state_step=0 proof_gate=1"; fi
-if [[ "$MAIN_RECURRENCE" == 1 ]]; then echo "  unified_main_state_extra_bytes=0 low_delta_bits=31 high_delta_bits=35 high_p_lo=14 high_symbol_range=13..27 high_trit_positions=15 high_min_fixed=7 high_fixed_lt7_fallback=raw_mate_rank trit_bits=25 height_bits=4 mate_hbm_store_per_state_step=8 main_drop_walk_or_table_loads_per_state_step=0 main_height_walk_or_popcount_per_state_step=0 proof_gate=2"; fi
+if [[ "$HIGH_MAIN_RECURRENCE" == 1 ]]; then echo "  high_main_state_bits=64 extra_state_bytes=0 high_p_lo=14 high_symbol_range=13..27 high_trit_positions=15 high_min_fixed=7 high_fixed_lt7_fallback=raw_mate_rank mate_hbm_store_per_state_step=8 high_drop_walk_or_table_loads_per_state_step=0 high_height_walk_per_state_step=0 proof_gate=rank_delta+high_bound"; fi
+if [[ "$MAIN_RECURRENCE" == 1 ]]; then echo "  unified_main_state_extra_bytes=0 low_delta_bits=31 high_delta_bits=35 high_p_lo=14 high_symbol_range=13..27 high_trit_positions=15 high_min_fixed=7 high_fixed_lt7_fallback=raw_mate_rank trit_bits=25 height_bits=4 mate_hbm_store_per_state_step=8 main_drop_walk_or_table_loads_per_state_step=0 main_height_walk_or_popcount_per_state_step=0 proof_gate=low+rank_delta+high_bound+composition"; fi
