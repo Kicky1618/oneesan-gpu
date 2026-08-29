@@ -35,7 +35,29 @@ if [[ ! -s "$STAGE_F_ENV" ]]; then
   exit 0
 fi
 
-echo '=== Stage G grand: distance staged prepare ===' >&2
+# New Stage F searches width and distance jointly against the plain hybrid
+# control and already sends its selected geometry through the complete-prime
+# grand race. Re-running the legacy fixed-width distance stage would duplicate
+# B300 work without introducing a candidate that was not already considered.
+# Keep this runner compatible with old width-only Stage-F artifacts: only skip
+# when both geometry provenance fields are present.
+# shellcheck disable=SC1090
+source "$STAGE_F_ENV"
+if [[ -n "${B300_HYBRID8_NEXTSELF_FINAL_DISTANCE+x}" && -n "${B300_HYBRID8_NEXTSELF_SEARCH_DISTANCES+x}" ]]; then
+  cp "$BASE_SELECTED_ENV" "$SELECTED_ENV"
+  {
+    printf 'B300_GRAND_STAGEG_APPLICABLE=0\n'
+    printf 'B300_GRAND_STAGEG_REASON=stage_f_geometry_complete\n'
+    printf 'B300_GRAND_STAGEG_GEOMETRY_VALIDATED=%q\n' "${B300_HYBRID8_NEXTSELF_STAGED_VALIDATED:-0}"
+    printf 'B300_GRAND_STAGEG_GEOMETRY_WIDTH=%q\n' "${B300_HYBRID8_NEXTSELF_FINAL_WIDTH:-0}"
+    printf 'B300_GRAND_STAGEG_GEOMETRY_DISTANCE=%q\n' "${B300_HYBRID8_NEXTSELF_FINAL_DISTANCE:-0}"
+    printf 'B300_GRAND_STAGEG_GEOMETRY_SEARCH_DISTANCES=%q\n' "${B300_HYBRID8_NEXTSELF_SEARCH_DISTANCES:-}"
+  } >>"$SELECTED_ENV"
+  echo "grand Stage-G: joint geometry already searched in Stage F; existing grand winner retained: $BASE_BACKEND" >&2
+  exit 0
+fi
+
+echo '=== Stage G grand: legacy fixed-width distance staged prepare ===' >&2
 set +e
 PROFILE_FILE="$PROFILE_FILE" ARCH="$ARCH" TARGET_MIB="$FORCED_TARGET_MIB" MAX_WINDOW="$MAX_WINDOW" MOD="$SMOKE_PRIME" \
   RUN_STAGED=1 RUN_STAGE_F=0 PREPARE_ONLY=1 MIN_SPEEDUP="$STAGEG_MIN_SPEEDUP" DISTANCE_LIST="$DISTANCE_LIST" \
