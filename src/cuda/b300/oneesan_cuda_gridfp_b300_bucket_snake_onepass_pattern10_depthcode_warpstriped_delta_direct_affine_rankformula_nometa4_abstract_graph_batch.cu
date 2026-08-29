@@ -3,10 +3,17 @@
 #endif
 #include "../gridfp/ramstream32_bucket_orbit_closure_pattern10_depthcode_warpstriped_delta_direct_affine_rankformula_nometa4_abstract_graph.cuh"
 #include "../gridfp/ramstream32_reverse_build_release.hpp"
+#if P10DC_RANKFORMULA_NOMETA_DIRECTMAP
+#include "../gridfp/ramstream32_bucket_low_rankformula_nometa_directmap.cuh"
+#endif
 
 #define BSN_REVERSE_FUSED_TABLES_TYPE ReverseBucketZeroTables
 #define build_reverse_bucket_atomic build_reverse_bucket_atomic_release_inputs
+#if P10DC_RANKFORMULA_NOMETA_DIRECTMAP
+#define BucketFusedDeviceTables BucketFusedDirectHighRowsRankFormulaNometa4DirectMapTables
+#else
 #define BucketFusedDeviceTables BucketFusedDirectHighRowsRankFormulaNometa4Tables
+#endif
 #define BucketForwardOrbitClosureAttachHost BucketForwardPattern10DepthCodeHost
 #define BucketReverseOrbitClosureAttachHost BucketReversePattern10DepthCodeHost
 #define BucketForwardOrbitClosureAttachDeviceTables BucketForwardPattern10DepthCodeDeviceTables
