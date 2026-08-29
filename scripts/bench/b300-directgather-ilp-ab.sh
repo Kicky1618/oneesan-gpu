@@ -25,12 +25,12 @@ CASES=(
   "prefetch 1 1 0 0 0"
   "ilp2 2 0 0 0 0"
   "ilp2_prefetch 2 1 0 0 0"
-  "ilp2_pair 2 0 1 0 0"
-  "ilp2_pair_prefetch 2 1 1 0 0"
-  "ilp4_pair 4 0 1 0 0"
-  "ilp4_pair_prefetch 4 1 1 0 0"
-  "ilp2_pair_r128 2 0 1 0 128"
   "ilp2_window4 2 0 0 1 0"
+  "ilp2_pair 2 0 1 1 0"
+  "ilp2_pair_prefetch 2 1 1 1 0"
+  "ilp4_pair 4 0 1 1 0"
+  "ilp4_pair_prefetch 4 1 1 1 0"
+  "ilp2_pair_r128 2 0 1 1 128"
 )
 
 printf 'mode\tilp\tprefetch\tpair\twindow4\tmaxrreg\trepeat\tresidue\twall_s\tforward_high_s\tforward_low_s\treverse_low_s\treverse_high_s\ttranspose_s\n' >"$RESULT"
