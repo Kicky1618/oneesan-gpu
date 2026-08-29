@@ -19,7 +19,6 @@ TAG="hd${HIGH_DROP_CHUNK}_ilp${RECURRENCE_ILP}_cg${RANDOM_CG}_cgl2${RANDOM_CG_L2
 ISO="${NEXTGEN_BUILD_DIR:-$ONEESAN_BUILD_DIR/nextgen/$TAG}"; mkdir -p "$ISO" "$ISO/tmp" "$(dirname "$OUT")"
 BASE_BIN="$ISO/base.bin"; BASE_OUT="$ISO/base.build.out"; BASE_ERR="$ISO/base.build.err"; FINAL_ERR="${BUILD_ERR:-${OUT}.build.err}"
 
-# Canonical production recurrence source plus all established proofs/gates.
 N=27 ARCH="$ARCH" OUT="$BASE_BIN" HIGH_DROP_CHUNK="$HIGH_DROP_CHUNK" DUALMASK=0 BUILD_ERR="$BASE_ERR" CALIBRATED_BUILD_DIR="$ISO/basechain" PTXAS_VERBOSE="$PTXAS_VERBOSE" \
   bash "$ONEESAN_ROOT/scripts/build/b300-forced-calibrated.sh" >"$BASE_OUT" 2>"$ISO/base.driver.err"
 [[ -x "$BASE_BIN" ]] || { echo 'canonical recurrence base binary missing' >&2; exit 3; }
@@ -48,9 +47,8 @@ if [[ "$CLOSURE_BATCH" != 0 ]]; then grep -Fq 'B300_BLOCK_CLOSURE_BATCH' "$CURRE
 if [[ "$RECURRENCE_ILP" == 2 && "$RANDOM_CG" == 0 && "$RANDOM_CG_L2_FETCH_BYTES" == 0 && "$PREFETCH_L2" == 0 && "$DUALMASK" == 0 && "$CLOSURE_BATCH" == 0 && "$MAXRREGCOUNT" == 0 ]]; then
   cp "$BASE_BIN" "$OUT"; chmod +x "$OUT"
   echo "built $OUT"
-  # Keep the historical random_cg -> prefetch_l2 adjacency for downstream
-  # greps; the new fetch-size field is additive after those established keys.
   echo "  nextgen_forced=1 high_drop_chunk=$HIGH_DROP_CHUNK recurrence_ilp=2 random_cg=0 prefetch_l2=0 random_cg_l2_fetch_bytes=0 dualmask=0 closure_batch=0 maxrregcount=0"
+  echo "  cg_l2_detail random_cg=0 random_cg_l2_fetch_bytes=0 prefetch_l2=0"
   echo "  source_after_all=$CURRENT"
   echo "  production_chain_proof_gates=1 experimental_post_transforms=0"
   echo "  ptxas_log=$FINAL_ERR"
@@ -63,8 +61,8 @@ DEFS=(-DTARGET_W=28 -DLOW_LUT_K=14 -DHIGH_LUT_K=13); [[ "$CLOSURE_BATCH" == 0 ]]
 TMPDIR="$ISO/tmp" nvcc -O3 -std=c++17 -lineinfo -arch="$ARCH" "${PTXAS_FLAGS[@]}" "${REG_FLAGS[@]}" "${DEFS[@]}" "$CURRENT" -o "$OUT" >"$ISO/final.compile.out" 2>>"$FINAL_ERR"
 [[ -x "$OUT" ]] || { echo 'nextgen forced binary missing' >&2; exit 5; }
 echo "built $OUT"
-# Keep established summary key adjacency for every existing selector.
 echo "  nextgen_forced=1 high_drop_chunk=$HIGH_DROP_CHUNK recurrence_ilp=$RECURRENCE_ILP random_cg=$RANDOM_CG prefetch_l2=$PREFETCH_L2 random_cg_l2_fetch_bytes=$RANDOM_CG_L2_FETCH_BYTES dualmask=$DUALMASK closure_batch=$CLOSURE_BATCH maxrregcount=$MAXRREGCOUNT"
+echo "  cg_l2_detail random_cg=$RANDOM_CG random_cg_l2_fetch_bytes=$RANDOM_CG_L2_FETCH_BYTES prefetch_l2=$PREFETCH_L2"
 echo "  source_after_all=$CURRENT"
 echo "  production_chain_proof_gates=1 experimental_post_transforms=1 extra_state_bytes=0"
 echo "  transform_order=production_recurrence,recurrence_ilp,random_cg_l2_fetch,prefetch_l2,dualmask,closure_batch,register_cap"
