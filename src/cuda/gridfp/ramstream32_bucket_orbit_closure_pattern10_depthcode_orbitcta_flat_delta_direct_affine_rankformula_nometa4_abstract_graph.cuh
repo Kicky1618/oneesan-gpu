@@ -12,11 +12,20 @@
 #ifndef P10DC_ORBITCTA_FLAT_DYNAMIC_BATCH
 #define P10DC_ORBITCTA_FLAT_DYNAMIC_BATCH 1
 #endif
+#ifndef P10DC_ORBITCTA_FLAT_DYNAMIC_PIPE2
+#define P10DC_ORBITCTA_FLAT_DYNAMIC_PIPE2 0
+#endif
 
 #if P10DC_ORBITCTA_FLAT_DYNAMIC
+#if P10DC_ORBITCTA_FLAT_DYNAMIC_PIPE2
+#define P10DC_ORBITCTA_FLAT_FORWARD_KERNEL bucket_high_orbit_closure_pattern10_depthcode_orbitcta_flat_dynamic_pipe2_kernel
+#define P10DC_ORBITCTA_FLAT_REVERSE_KERNEL bucket_reverse_high_pattern10_depthcode_orbitcta_flat_dynamic_pipe2_kernel
+#define P10DC_ORBITCTA_FLAT_SCHEDULER_MODE "dynamic_atomic_queue_pipe2"
+#else
 #define P10DC_ORBITCTA_FLAT_FORWARD_KERNEL bucket_high_orbit_closure_pattern10_depthcode_orbitcta_flat_dynamic_kernel
 #define P10DC_ORBITCTA_FLAT_REVERSE_KERNEL bucket_reverse_high_pattern10_depthcode_orbitcta_flat_dynamic_kernel
 #define P10DC_ORBITCTA_FLAT_SCHEDULER_MODE "dynamic_atomic_queue"
+#endif
 #elif P10DC_RANKFORMULA_PRECTX_FLAT_BID
 #define P10DC_ORBITCTA_FLAT_FORWARD_KERNEL bucket_high_orbit_closure_pattern10_depthcode_orbitcta_flat_prectx_bid_kernel
 #define P10DC_ORBITCTA_FLAT_REVERSE_KERNEL bucket_reverse_high_pattern10_depthcode_orbitcta_flat_prectx_bid_kernel
@@ -38,6 +47,19 @@
 #else
 #define P10DC_ORBITCTA_FLAT_BID_MODE "binary_search"
 #endif
+
+static inline size_t p10dc_orbitcta_flat_high_smem_bytes(int threads) {
+    size_t n = p10dc_orbitcta_high_smem_bytes(threads);
+#if P10DC_ORBITCTA_FLAT_DYNAMIC_PIPE2
+    // dynamic pipe2 places the second resolved context after the complete
+    // existing region. With cp.async enabled that region includes all pair/quad
+    // Count staging, so context #1 cannot alias in-flight source values.
+    const size_t a = alignof(P10DCDirectHighResolvedCtx);
+    n = (n + a - 1u) & ~(a - 1u);
+    n += sizeof(P10DCDirectHighResolvedCtx);
+#endif
+    return n;
+}
 
 static inline int p10dc_orbitcta_flat_blocks_env(int fallback) {
     const char* s = std::getenv("BUCKET_ORBITCTA_FLAT_BLOCKS");
@@ -68,7 +90,7 @@ struct P10DCOrbitCtaFlatOccupancy {
 };
 
 static P10DCOrbitCtaFlatOccupancy p10dc_orbitcta_flat_report_high_occupancy(int threads) {
-    const size_t smem = p10dc_orbitcta_high_smem_bytes(threads);
+    const size_t smem = p10dc_orbitcta_flat_high_smem_bytes(threads);
     int device = 0;
     ck(cudaGetDevice(&device), "flat orbitcta occupancy get device");
     cudaDeviceProp prop{};
@@ -95,6 +117,7 @@ static P10DCOrbitCtaFlatOccupancy p10dc_orbitcta_flat_report_high_occupancy(int 
               << " flat_chunk=" << P10DC_ORBITCTA_FLAT_CHUNK
               << " flat_dynamic=" << P10DC_ORBITCTA_FLAT_DYNAMIC
               << " flat_dynamic_batch=" << P10DC_ORBITCTA_FLAT_DYNAMIC_BATCH
+              << " flat_dynamic_pipe2=" << P10DC_ORBITCTA_FLAT_DYNAMIC_PIPE2
               << " scheduler_mode=" << P10DC_ORBITCTA_FLAT_SCHEDULER_MODE
               << " flat_bid_mode=" << P10DC_ORBITCTA_FLAT_BID_MODE
               << " flat_bid_fused=" << P10DC_RANKFORMULA_PRECTX_FLAT_BID_FUSED
@@ -129,7 +152,7 @@ static void bucket_enqueue_high_orbit_closure_pattern10_depthcode_orbitcta_flat_
     p10dc_warpstriped_delta_direct_affine_rankformula_nometa4_abstract_require_threads(threads);
     const dim3 block(unsigned(threads));
     const dim3 grid(unsigned(blocks));
-    const size_t smem = p10dc_orbitcta_high_smem_bytes(threads);
+    const size_t smem = p10dc_orbitcta_flat_high_smem_bytes(threads);
     for (int p = TARGET_W - 1; p >= LOW_LUT_K + 1; --p) {
         p10dc_orbitcta_flat_enqueue_reset(stream);
         P10DC_ORBITCTA_FLAT_FORWARD_KERNEL<<<grid, block, smem, stream>>>(p);
@@ -143,7 +166,7 @@ static void bucket_enqueue_reverse_high_pattern10_depthcode_orbitcta_flat_rankfo
     p10dc_warpstriped_delta_direct_affine_rankformula_nometa4_abstract_require_threads(threads);
     const dim3 block(unsigned(threads));
     const dim3 grid(unsigned(blocks));
-    const size_t smem = p10dc_orbitcta_high_smem_bytes(threads);
+    const size_t smem = p10dc_orbitcta_flat_high_smem_bytes(threads);
     for (int p = LOW_LUT_K + 1; p < TARGET_W; ++p) {
         p10dc_orbitcta_flat_enqueue_reset(stream);
         P10DC_ORBITCTA_FLAT_REVERSE_KERNEL<<<grid, block, smem, stream>>>(p);
@@ -216,6 +239,9 @@ struct BucketPattern10DepthCodeFlatOrbitCtaDirectAffineRankFormulaNometa4Abstrac
                   << " flat_chunk=" << P10DC_ORBITCTA_FLAT_CHUNK
                   << " flat_dynamic=" << P10DC_ORBITCTA_FLAT_DYNAMIC
                   << " flat_dynamic_batch=" << P10DC_ORBITCTA_FLAT_DYNAMIC_BATCH
+                  << " flat_dynamic_pipe2=" << P10DC_ORBITCTA_FLAT_DYNAMIC_PIPE2
+                  << " dynamic_context_buffers=" << (P10DC_ORBITCTA_FLAT_DYNAMIC_PIPE2 ? 2 : 1)
+                  << " steady_state_orbit_barriers=" << (P10DC_ORBITCTA_FLAT_DYNAMIC_PIPE2 ? 1 : 2)
                   << " flat_bid_mode=" << P10DC_ORBITCTA_FLAT_BID_MODE
                   << " flat_bid_fused=" << P10DC_RANKFORMULA_PRECTX_FLAT_BID_FUSED
                   << " bid_binary_search_per_chunk="
@@ -225,7 +251,7 @@ struct BucketPattern10DepthCodeFlatOrbitCtaDirectAffineRankFormulaNometa4Abstrac
                   << (P10DC_ORBITCTA_FLAT_DYNAMIC ? P10DC_ORBITCTA_FLAT_DYNAMIC_BATCH : 0)
                   << " high_grid_y=1 high_grid_z=1"
                   << " context_smem_bytes=" << sizeof(P10DCDirectHighResolvedCtx)
-                  << " launch_smem_bytes=" << p10dc_orbitcta_high_smem_bytes(threads)
+                  << " launch_smem_bytes=" << p10dc_orbitcta_flat_high_smem_bytes(threads)
                   << '\n';
 
         ck(cudaStreamCreateWithFlags(&stream, cudaStreamNonBlocking),
