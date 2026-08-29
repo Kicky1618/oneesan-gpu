@@ -13,6 +13,7 @@ int main() {
                   << " coopgroup=" << P10DC_RANKFORMULA_NOMETA_COOPGROUP
                   << " coop_unroll=" << P10DC_RANKFORMULA_NOMETA_COOP_UNROLL
                   << " group56=" << P10DC_RANKFORMULA_NOMETA_GROUP56
+                  << " group61=" << P10DC_RANKFORMULA_NOMETA_GROUP61
                   << " select8=" << P10DC_RANKFORMULA_ABSTRACT_SELECT8
                   << " depth4=" << P10DC_RANKFORMULA_ABSTRACT_DEPTH4
                   << " srcpack10=" << P10DC_RANKFORMULA_ABSTRACT_SRCPACK10
