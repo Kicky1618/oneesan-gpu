@@ -94,16 +94,25 @@ __global__ void b300_block_pull_rankstate_ilp4_kernel(
         const bool ep0=(l0==R||l0==L),ep1=v1&&(l1==R||l1==L),ep2=v2&&(l2==R||l2==L),ep3=v3&&(l3==R||l3==L);
         const RankDelta nr0=rd0+b300_rank_delta_step(l0,p,h0),nr1=v1?rd1+b300_rank_delta_step(l1,p,h1):RankDelta(0),nr2=v2?rd2+b300_rank_delta_step(l2,p,h2):RankDelta(0),nr3=v3?rd3+b300_rank_delta_step(l3,p,h3):RankDelta(0);
         const Code j0=ep0?b300_sub_rank_delta(i0,rd0):Code(0),j1=ep1?b300_sub_rank_delta(i1,rd1):Code(0),j2=ep2?b300_sub_rank_delta(i2,rd2):Code(0),j3=ep3?b300_sub_rank_delta(i3,rd3):Code(0);
+
+        // Rank-state output is independent of endpoint/closure Count reads.
+        // Store it before the long-latency phase so old packed states/deltas do
+        // not stay live while four endpoints and variable closure gathers wait.
+        rank_state[i0]=b300_pack_rank_state(nr0,b300_rank_height_advance(h0,l0));
+        if(v1)rank_state[i1]=b300_pack_rank_state(nr1,b300_rank_height_advance(h1,l1));
+        if(v2)rank_state[i2]=b300_pack_rank_state(nr2,b300_rank_height_advance(h2,l2));
+        if(v3)rank_state[i3]=b300_pack_rank_state(nr3,b300_rank_height_advance(h3,l3));
+
         const Count endpoint0=ep0?in_main[j0]:Count(0),endpoint1=ep1?in_main[j1]:Count(0),endpoint2=ep2?in_main[j2]:Count(0),endpoint3=ep3?in_main[j3]:Count(0);
         Count a0=endpoint0,a1=endpoint1,a2=endpoint2,a3=endpoint3;
         if(!ep0&&l0==N)a0=b300_block_rankstate_ilp4_closure(in_main,i0,b0,p,h0,nr0);
         if(v1&&!ep1&&l1==N)a1=b300_block_rankstate_ilp4_closure(in_main,i1,b1,p,h1,nr1);
         if(v2&&!ep2&&l2==N)a2=b300_block_rankstate_ilp4_closure(in_main,i2,b2,p,h2,nr2);
         if(v3&&!ep3&&l3==N)a3=b300_block_rankstate_ilp4_closure(in_main,i3,b3,p,h3,nr3);
-        out_block[i0]=a0;rank_state[i0]=b300_pack_rank_state(nr0,b300_rank_height_advance(h0,l0));
-        if(v1){out_block[i1]=a1;rank_state[i1]=b300_pack_rank_state(nr1,b300_rank_height_advance(h1,l1));}
-        if(v2){out_block[i2]=a2;rank_state[i2]=b300_pack_rank_state(nr2,b300_rank_height_advance(h2,l2));}
-        if(v3){out_block[i3]=a3;rank_state[i3]=b300_pack_rank_state(nr3,b300_rank_height_advance(h3,l3));}
+        out_block[i0]=a0;
+        if(v1)out_block[i1]=a1;
+        if(v2)out_block[i2]=a2;
+        if(v3)out_block[i3]=a3;
     }
 }
 '''
@@ -112,7 +121,11 @@ old='''if(ds.size){if(useRankDelta)block_pull_kernel<true,true><<<bd,threads,0,c
 new='''if(ds.size){if(useRankDelta)b300_block_pull_rankstate_ilp4_kernel<<<bd,threads,0,c.sBlock>>>(cur,c.dBlockMate,ds.size,dnext,p,c.dBlockRankDelta);'''
 if s.count(old)!=1: raise SystemExit(f'block rank-state ILP4 launch anchor expected one match got {s.count(old)}')
 s=s.replace(old,new,1)
-for req in ('b300_block_pull_rankstate_ilp4_kernel','base+=4*grid','endpoint3=','b300_block_rankstate_ilp4_closure','B300_BLOCK_CLOSURE_QUAD','b300_closure_quad_emit','rank_state[i3]=b300_pack_rank_state'):
+for req in (
+    'b300_block_pull_rankstate_ilp4_kernel','base+=4*grid','endpoint3=',
+    'b300_block_rankstate_ilp4_closure','B300_BLOCK_CLOSURE_QUAD','b300_closure_quad_emit',
+    'Rank-state output is independent','rank_state[i3]=b300_pack_rank_state'
+):
     if req not in s: raise SystemExit(f'missing block rank-state ILP4 artifact: {req}')
 out.parent.mkdir(parents=True,exist_ok=True);out.write_text(s)
-print(f'generated {out} from {src}: b300_block_rank_state_ilp4=1 destinations_per_thread=4 endpoint_loads_issued_before_closure=1 closure_slow_path=noinline closure_register_isolation=1 closure_quad_compile_switch=B300_BLOCK_CLOSURE_QUAD packed_rank_state=1 register_pressure_requires_ab=1')
+print(f'generated {out} from {src}: b300_block_rank_state_ilp4=1 destinations_per_thread=4 endpoint_loads_issued_before_closure=1 closure_slow_path=noinline closure_register_isolation=1 closure_quad_compile_switch=B300_BLOCK_CLOSURE_QUAD packed_rank_state=1 rank_state_store_before_count_gather=1 register_live_range_reduced=1 register_pressure_requires_ab=1')
