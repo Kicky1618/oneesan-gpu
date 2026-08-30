@@ -1,0 +1,30 @@
+#!/usr/bin/env bash
+set -euo pipefail
+source "$(dirname -- "${BASH_SOURCE[0]}")/../lib/common.sh"
+GEN="$ONEESAN_ROOT/scripts/build/gen-b300-mainrec-pair-block-load-policy.py"
+BUILDER="$ONEESAN_ROOT/scripts/build/b300-forced-nextgen-hybrid8-pair-block-load-policy.sh"
+PROOF="$ONEESAN_ROOT/scripts/bench/b300-mainrec-pair-block-load-policy-preflight.sh"
+SWEEP="$ONEESAN_ROOT/scripts/bench/b300-nextgen-hybrid8-pair-block-load-policy-sweep.sh"
+STAGED="$ONEESAN_ROOT/scripts/bench/b300-nextgen-hybrid8-pair-block-load-policy-staged-calibrate.sh"
+python3 -m py_compile "$GEN"
+for f in "$BUILDER" "$PROOF" "$SWEEP" "$STAGED"; do [[ -f "$f" ]] || exit 2; bash -n "$f"; done
+bash "$PROOF" >/dev/null
+need(){ local f="$1" s="$2"; grep -Fq "$s" "$f" || { echo "Stage-N marker missing in $f: $s" >&2; exit 3; }; }
+for s in 'MATE_LOAD_POLICY="${MATE_LOAD_POLICY:-default}"' 'PAIR_LOAD_POLICY="${PAIR_LOAD_POLICY:-default}"' 'BLOCK_LOAD_POLICY="${BLOCK_LOAD_POLICY:-default}"' 'b300-forced-nextgen-hybrid8-self-mate-geometry.sh' 'b300-forced-nextgen-hybrid8-mate-load-policy.sh' 'gen-b300-mainrec-pair-block-load-policy.py' 'stage_n_scope=pair_block_count_reads_only' 'geometry_eviction_guard_preserved=1'; do need "$BUILDER" "$s"; done
+for s in 'UPSTREAM_KIND="${UPSTREAM_KIND:-auto}"' 'PAIR_POLICY_LIST="${PAIR_POLICY_LIST:-default cg cs}"' 'BLOCK_POLICY_LIST="${BLOCK_POLICY_LIST:-default cg cs}"' 'BASE_COUNT_POLICY=default' '[[ "$CG" == 1 ]] && BASE_COUNT_POLICY=cg' 'B300_STAGEN_UPSTREAM_KIND' 'B300_STAGEN_MATE_LOAD_POLICY' 'B300_STAGEN_PAIR_POLICY' 'B300_STAGEN_BLOCK_POLICY' 'FATAL Stage-N residue mismatch' 'clean=len(rv)>=2 and ss==0 and sl==0' 'b300_stagen_exact_match=1'; do need "$SWEEP" "$s"; done
+for s in 'SEARCH_ROWS="${SEARCH_ROWS:-1}"' 'VALIDATE_ROWS="${VALIDATE_ROWS:-4 8}"' 'RESOLVED_UPSTREAM=stagel' 'FATAL Stage-N/upstream residue mismatch' 'FATAL Stage-N/Stage-L residue mismatch' 'FATAL Stage-N/Stage-F residue mismatch' 'SELECTED_PAIR="$B300_STAGEN_PAIR_POLICY"' 'SELECTED_BLOCK="$B300_STAGEN_BLOCK_POLICY"' 'B300_STAGEN_STAGED_VALIDATED=' 'B300_STAGEN_FINAL_ENABLED=' 'B300_STAGEN_FINAL_STAGE_RESIDUE='; do need "$STAGED" "$s"; done
+python3 - "$SWEEP" "$STAGED" <<'PY'
+from pathlib import Path
+import sys
+sweep=Path(sys.argv[1]).read_text(); staged=Path(sys.argv[2]).read_text()
+if "printf 'control\\t%s\\t%s\\t%s\\t-\\n' \"$BASE_COUNT_POLICY\" \"$BASE_COUNT_POLICY\" \"$CONTROL_BIN\"" not in sweep:
+    raise SystemExit('Stage-N control must be the exact upstream binary')
+if '[[ "$pair" == "$BASE_COUNT_POLICY" && "$block" == "$BASE_COUNT_POLICY" ]] && continue' not in sweep:
+    raise SystemExit('Stage-N must not rebuild the inherited symmetric baseline')
+if 'run_stage "$rows" "$SELECTED_PAIR" "$SELECTED_BLOCK"' not in staged:
+    raise SystemExit('Stage-N validation must lock pair/block winner')
+if 'UPSTREAM_KIND="$RESOLVED_UPSTREAM"' not in staged:
+    raise SystemExit('Stage-N staged sweep must pin upstream identity')
+print('stagen_contract_structure=OK')
+PY
+echo 'b300_stagen_preflight=OK stage_n=pair_block_count_loads upstream=stagel_or_stagem pair_policies=default,cg,cs block_policies=default,cg,cs exact_upstream_control=1 inherited_baseline_skipped=1 residue_gate=1 ptxas_spill=1 row_scoped_validation=1 upstream_locked=1 gpu_work=0'
