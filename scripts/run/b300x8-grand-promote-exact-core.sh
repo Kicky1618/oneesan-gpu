@@ -8,6 +8,8 @@ if (( $# > 0 )); then shift; fi
 
 FIRSTPASS_PREFIX="${FIRSTPASS_PREFIX:-$ONEESAN_ROOT/work/b300_grand_firstpass_n27}"
 SELECTED_ENV="${SELECTED_ENV:-${FIRSTPASS_PREFIX}.selected.env}"
+readonly SELECTED_ENV_PATH="$SELECTED_ENV"
+readonly ONEESAN_ROOT_PATH="$ONEESAN_ROOT"
 ALLOW_HEAD_DRIFT="${ALLOW_HEAD_DRIFT:-0}"
 ALLOW_DIRTY_FIRSTPASS="${ALLOW_DIRTY_FIRSTPASS:-0}"
 ALLOW_WORKTREE_DIRTY="${ALLOW_WORKTREE_DIRTY:-0}"
@@ -15,10 +17,20 @@ DRY_RUN="${DRY_RUN:-0}"
 for x in ALLOW_HEAD_DRIFT ALLOW_DIRTY_FIRSTPASS ALLOW_WORKTREE_DIRTY DRY_RUN; do
   v="${!x}"; [[ "$v" == 0 || "$v" == 1 ]] || { echo "$x must be 0/1" >&2; exit 2; }
 done
+# Promotion-control decisions belong to the caller, not to sourced provenance
+# artifacts. Make them immutable before loading the selected contract.
+readonly SELECTED_ENV ALLOW_HEAD_DRIFT ALLOW_DIRTY_FIRSTPASS ALLOW_WORKTREE_DIRTY DRY_RUN
 
-[[ -s "$SELECTED_ENV" ]] || { echo "missing first-pass selection contract: $SELECTED_ENV" >&2; exit 2; }
+[[ -s "$SELECTED_ENV_PATH" ]] || { echo "missing first-pass selection contract: $SELECTED_ENV_PATH" >&2; exit 2; }
 # shellcheck disable=SC1090
-source "$SELECTED_ENV"
+source "$SELECTED_ENV_PATH"
+# Grand summaries and runtime profiles are sourced later. Freeze the selected
+# contract namespace now so neither downstream artifact can redirect the exact
+# binary, checkpoint, runtime geometry, or other selected provenance.
+mapfile -t selected_contract_keys < <(compgen -A variable B300_GRAND_SELECTED_)
+((${#selected_contract_keys[@]})) || { echo 'selected contract namespace is empty' >&2; exit 3; }
+readonly "${selected_contract_keys[@]}"
+
 required=(
   B300_GRAND_SELECTED_SCHEMA B300_GRAND_SELECTED_VALIDATED B300_GRAND_SELECTED_N
   B300_GRAND_SELECTED_HEAD_SHA B300_GRAND_SELECTED_HEAD_DIRTY
@@ -75,9 +87,9 @@ done
 
 command -v git >/dev/null || { echo 'git required' >&2; exit 2; }
 command -v sha256sum >/dev/null || { echo 'sha256sum required' >&2; exit 2; }
-CURRENT_HEAD="$(git -C "$ONEESAN_ROOT" rev-parse HEAD)"
+CURRENT_HEAD="$(git -C "$ONEESAN_ROOT_PATH" rev-parse HEAD)"
 CURRENT_DIRTY=0
-[[ -z "$(git -C "$ONEESAN_ROOT" status --porcelain=v1 --untracked-files=normal)" ]] || CURRENT_DIRTY=1
+[[ -z "$(git -C "$ONEESAN_ROOT_PATH" status --porcelain=v1 --untracked-files=normal)" ]] || CURRENT_DIRTY=1
 if [[ "$B300_GRAND_SELECTED_HEAD_DIRTY" != 0 && "$ALLOW_DIRTY_FIRSTPASS" != 1 ]]; then
   echo 'first-pass provenance was dirty; set ALLOW_DIRTY_FIRSTPASS=1 only after auditing local changes' >&2
   exit 3
@@ -176,7 +188,7 @@ PROMOTION_META="$B300_GRAND_SELECTED_WORK_DIR/promotion.meta"
 {
   printf 'schema=2\n'
   printf 'selection_schema=%s\n' "$SELECTION_SCHEMA"
-  printf 'selected_env=%s\n' "$SELECTED_ENV"
+  printf 'selected_env=%s\n' "$SELECTED_ENV_PATH"
   printf 'selected_backend=%s\n' "$B300_GRAND_SELECTED_BACKEND"
   printf 'selected_profile=%s\n' "$B300_GRAND_SELECTED_PROFILE"
   printf 'selected_binary=%s\n' "$B300_GRAND_SELECTED_BINARY"
@@ -198,7 +210,7 @@ PROMOTION_META="$B300_GRAND_SELECTED_WORK_DIR/promotion.meta"
   printf 'dry_run=%s\n' "$DRY_RUN"
 } >"$PROMOTION_META"
 
-cmd=(python3 "$ONEESAN_ROOT/scripts/solve/solve_b300_exact_batch.py" 27
+cmd=(python3 "$ONEESAN_ROOT_PATH/scripts/solve/solve_b300_exact_batch.py" 27
   --binary "$B300_GRAND_SELECTED_BINARY"
   --target-mib "$B300_GRAND_SELECTED_TARGET_MIB"
   --max-window "$B300_GRAND_SELECTED_MAX_WINDOW"

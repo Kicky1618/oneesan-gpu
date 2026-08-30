@@ -3,9 +3,11 @@ set -euo pipefail
 source "$(dirname -- "${BASH_SOURCE[0]}")/../lib/common.sh"
 
 PROMOTE="$ONEESAN_ROOT/scripts/run/b300x8-grand-promote-exact.sh"
+CORE="$ONEESAN_ROOT/scripts/run/b300x8-grand-promote-exact-core.sh"
 CHECKPOINT_TEST="$ONEESAN_ROOT/scripts/bench/b300-exact-checkpoint-compat-preflight.py"
-[[ -f "$PROMOTE" && -f "$CHECKPOINT_TEST" ]] || { echo 'promotion preflight dependency missing' >&2; exit 2; }
+[[ -f "$PROMOTE" && -f "$CORE" && -f "$CHECKPOINT_TEST" ]] || { echo 'promotion preflight dependency missing' >&2; exit 2; }
 bash -n "$PROMOTE"
+bash -n "$CORE"
 python3 -m py_compile "$CHECKPOINT_TEST" "$ONEESAN_ROOT/scripts/solve/solve_b300_exact_batch.py"
 python3 "$CHECKPOINT_TEST" | grep -Fq 'b300-exact-checkpoint-compat-preflight OK'
 
@@ -26,6 +28,13 @@ for s in \
   'solve_b300_exact_batch.py' \
   'B300 GRAND EXACT PROMOTION VALIDATED'; do
   grep -Fq "$s" "$PROMOTE" || { echo "promotion marker missing: $s" >&2; exit 3; }
+done
+for s in \
+  'readonly SELECTED_ENV ALLOW_HEAD_DRIFT ALLOW_DIRTY_FIRSTPASS ALLOW_WORKTREE_DIRTY DRY_RUN' \
+  'selected contract namespace is empty' \
+  'ONEESAN_ROOT_PATH' \
+  'B300 GRAND EXACT PROMOTION VALIDATED'; do
+  grep -Fq "$s" "$CORE" || { echo "promotion core marker missing: $s" >&2; exit 3; }
 done
 
 TMP="$(mktemp -d)"
@@ -105,12 +114,29 @@ B300_GRAND_SELECTED_FIRSTPASS_META=$(printf '%q' "$META")
 EOF
 }
 
-# Backward-compatible schema-1 contract remains accepted.
+# Backward-compatible schema-1 contract remains accepted by both the canonical
+# wrapper and the core it dispatches.
 write_common 1 "$ENV1"
 DRY_RUN=1 SELECTED_ENV="$ENV1" bash "$PROMOTE" 27 >"$TMP/schema1.out" 2>"$TMP/schema1.err"
 grep -Fq 'B300 GRAND EXACT PROMOTION VALIDATED schema=1 command=' "$TMP/schema1.err"
 grep -Fq -- '--binary' "$TMP/schema1.err"
 grep -Fq "$BIN" "$TMP/schema1.err"
+DRY_RUN=1 SELECTED_ENV="$ENV1" bash "$CORE" 27 >"$TMP/core-schema1.out" 2>"$TMP/core-schema1.err"
+grep -Fq 'B300 GRAND EXACT PROMOTION VALIDATED schema=1 command=' "$TMP/core-schema1.err"
+
+# The selected contract itself cannot elevate a caller-owned safety override.
+# With the historical core this injected ALLOW_HEAD_DRIFT=1 and accepted a
+# deliberately stale first-pass head under DRY_RUN.
+CONTROL_SHADOW="$TMP/selected-control-shadow.env"
+cp "$ENV1" "$CONTROL_SHADOW"
+sed -i 's/^B300_GRAND_SELECTED_HEAD_SHA=.*/B300_GRAND_SELECTED_HEAD_SHA=deadbeef/' "$CONTROL_SHADOW"
+printf 'ALLOW_HEAD_DRIFT=1\n' >>"$CONTROL_SHADOW"
+set +e
+DRY_RUN=1 SELECTED_ENV="$CONTROL_SHADOW" bash "$CORE" 27 >"$TMP/core-control-shadow.out" 2>"$TMP/core-control-shadow.err"
+rc=$?
+set -e
+((rc!=0)) || { echo 'selected contract elevated ALLOW_HEAD_DRIFT in exact core' >&2; exit 4; }
+grep -Fq 'readonly variable' "$TMP/core-control-shadow.err" || { cat "$TMP/core-control-shadow.err" >&2; exit 4; }
 
 # Current hardened schema-3 contract binds the selected candidate to the exact
 # grand summary and to the one-complete-prime Stage-I/J/K selection proof.
@@ -141,6 +167,26 @@ grep -Fq "$WORK" "$TMP/schema3.err"
 [[ -s "$WORK/promotion.meta" ]] || { echo 'promotion meta was not written' >&2; exit 4; }
 grep -Fq 'selection_schema=3' "$WORK/promotion.meta"
 grep -Fq "selected_grand_summary_sha256=$SUMMARY_SHA" "$WORK/promotion.meta"
+DRY_RUN=1 SELECTED_ENV="$ENV3" bash "$CORE" 27 >"$TMP/core-schema3.out" 2>"$TMP/core-schema3.err"
+grep -Fq 'B300 GRAND EXACT PROMOTION VALIDATED schema=3 command=' "$TMP/core-schema3.err"
+
+# A correctly hashed downstream summary cannot rewrite selected exact runtime
+# parameters. Historically TARGET_MIB could be silently changed after all
+# selected-contract validation and would reach the exact solver command.
+SUMMARY_SHADOW="$TMP/grand-summary-selected-shadow.env"
+cp "$SUMMARY" "$SUMMARY_SHADOW"
+printf 'B300_GRAND_SELECTED_TARGET_MIB=1\n' >>"$SUMMARY_SHADOW"
+SUMMARY_SHADOW_SHA="$(sha256sum "$SUMMARY_SHADOW" | awk '{print $1}')"
+ENV3_SHADOW="$TMP/selected-schema3-summary-shadow.env"
+cp "$ENV3" "$ENV3_SHADOW"
+sed -i "s#^B300_GRAND_SELECTED_GRAND_SUMMARY_ENV=.*#B300_GRAND_SELECTED_GRAND_SUMMARY_ENV=$(printf '%q' "$SUMMARY_SHADOW")#" "$ENV3_SHADOW"
+sed -i "s/^B300_GRAND_SELECTED_GRAND_SUMMARY_SHA256=.*/B300_GRAND_SELECTED_GRAND_SUMMARY_SHA256=$SUMMARY_SHADOW_SHA/" "$ENV3_SHADOW"
+set +e
+DRY_RUN=1 SELECTED_ENV="$ENV3_SHADOW" bash "$CORE" 27 >"$TMP/core-summary-shadow.out" 2>"$TMP/core-summary-shadow.err"
+rc=$?
+set -e
+((rc!=0)) || { echo 'grand summary rewrote selected TARGET_MIB in exact core' >&2; exit 4; }
+grep -Fq 'readonly variable' "$TMP/core-summary-shadow.err" || { cat "$TMP/core-summary-shadow.err" >&2; exit 4; }
 
 # Tampering with the complete-prime result must block promotion.
 printf 'tamper\n' >>"$RESULT"
@@ -161,4 +207,4 @@ set -e
 ((rc!=0)) || { echo 'tampered grand summary unexpectedly accepted' >&2; exit 4; }
 grep -Fq 'grand summary fingerprint mismatch' "$TMP/tamper-summary.err"
 
-echo 'b300-grand-exact-promotion-preflight OK selection_schema1=1 selection_schema3=1 checkpoint_schema3=1 grand_summary_fingerprint=1 single_complete_prime_proof=1 synthetic_dry_run=1 race_tamper_rejected=1 summary_tamper_rejected=1 gpu_work=0'
+echo 'b300-grand-exact-promotion-preflight OK selection_schema1=1 selection_schema3=1 checkpoint_schema3=1 grand_summary_fingerprint=1 single_complete_prime_proof=1 synthetic_dry_run=1 race_tamper_rejected=1 summary_tamper_rejected=1 core_control_override_locked=1 core_selected_namespace_locked=1 gpu_work=0'
