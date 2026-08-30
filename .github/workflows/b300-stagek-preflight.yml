@@ -15,6 +15,8 @@ on:
       - 'scripts/build/gen-b300-mainrec-hybrid8-mate-load-policy.py'
       - 'scripts/build/b300-forced-nextgen-hybrid8-mate-load-policy.sh'
       - 'scripts/run/b300x8-nextgen-hybrid8-mate-evict-stagek-staged-fullprime-race.sh'
+      - 'scripts/run/b300x8-nextgen-hybrid8-prefetch-guard-stagel-staged-fullprime-race.sh'
+      - 'scripts/run/b300x8-nextgen-hybrid8-mate-load-stagem-staged-fullprime-race.sh'
       - 'scripts/run/b300x8-joint-nextself-hybrid8-select.sh'
       - 'scripts/run/b300x8-grand-firstpass.sh'
       - 'scripts/run/b300x8-grand-stagek-firstpass.sh'
@@ -41,6 +43,8 @@ on:
       - 'scripts/build/gen-b300-mainrec-hybrid8-mate-load-policy.py'
       - 'scripts/build/b300-forced-nextgen-hybrid8-mate-load-policy.sh'
       - 'scripts/run/b300x8-nextgen-hybrid8-mate-evict-stagek-staged-fullprime-race.sh'
+      - 'scripts/run/b300x8-nextgen-hybrid8-prefetch-guard-stagel-staged-fullprime-race.sh'
+      - 'scripts/run/b300x8-nextgen-hybrid8-mate-load-stagem-staged-fullprime-race.sh'
       - 'scripts/run/b300x8-joint-nextself-hybrid8-select.sh'
       - 'scripts/run/b300x8-grand-firstpass.sh'
       - 'scripts/run/b300x8-grand-stagek-firstpass.sh'
@@ -75,7 +79,7 @@ jobs:
           python3 -m py_compile scripts/build/gen-b300-mainrec-hybrid8-mate-load-policy.py
           bash -n scripts/build/b300-forced-nextgen-hybrid8-mate-load-policy.sh
           bash scripts/bench/b300-mainrec-hybrid8-mate-load-policy-preflight.sh
-      - name: Validate Stage L to Stage M isolation
+      - name: Validate Stage L to Stage M isolation and promotion
         run: bash scripts/bench/b300-stagem-preflight.sh
       - name: Validate exact promotion and checkpoint compatibility
         run: bash scripts/bench/b300-grand-exact-promotion-preflight.sh
