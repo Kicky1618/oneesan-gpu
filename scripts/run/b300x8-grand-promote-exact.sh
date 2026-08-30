@@ -8,11 +8,12 @@ if (( $# > 0 )); then shift; fi
 
 FIRSTPASS_PREFIX="${FIRSTPASS_PREFIX:-$ONEESAN_ROOT/work/b300_grand_firstpass_n27}"
 SELECTED_ENV="${SELECTED_ENV:-${FIRSTPASS_PREFIX}.selected.env}"
-CORE_PROMOTER="${CORE_PROMOTER:-$ONEESAN_ROOT/scripts/run/b300x8-grand-promote-exact-core.sh}"
-[[ -s "$SELECTED_ENV" ]] || { echo "missing first-pass selection contract: $SELECTED_ENV" >&2; exit 2; }
-[[ -f "$CORE_PROMOTER" ]] || { echo "missing exact promotion core: $CORE_PROMOTER" >&2; exit 2; }
+readonly SELECTED_ENV_PATH="$SELECTED_ENV"
+readonly CORE_PROMOTER_PATH="${CORE_PROMOTER:-$ONEESAN_ROOT/scripts/run/b300x8-grand-promote-exact-core.sh}"
+[[ -s "$SELECTED_ENV_PATH" ]] || { echo "missing first-pass selection contract: $SELECTED_ENV_PATH" >&2; exit 2; }
+[[ -f "$CORE_PROMOTER_PATH" ]] || { echo "missing exact promotion core: $CORE_PROMOTER_PATH" >&2; exit 2; }
 # shellcheck disable=SC1090
-source "$SELECTED_ENV"
+source "$SELECTED_ENV_PATH"
 
 stagel_keys=(
   B300_GRAND_SELECTED_STAGEL_ENABLED B300_GRAND_SELECTED_STAGEL_MIN_SPEEDUP
@@ -132,4 +133,4 @@ fi
 # B300 GRAND EXACT PROMOTION VALIDATED
 
 echo "Stage-L/M exact provenance OK has_l=$HAS_L has_m=$HAS_M" >&2
-exec env SELECTED_ENV="$SELECTED_ENV" "$CORE_PROMOTER" 27 "$@"
+exec env SELECTED_ENV="$SELECTED_ENV_PATH" "$CORE_PROMOTER_PATH" 27 "$@"

@@ -35,6 +35,20 @@ EOF
 run_ok "$old"
 run_canon_ok "$old"
 
+# A selected artifact must not be able to redirect the canonical validator to
+# another selected file or another core promoter after it has been chosen by
+# the caller. These names are intentionally legal shell assignments because
+# the production selected contract is sourced for compatibility.
+control_override="$tmp/control-override.env"
+cat >"$control_override" <<'EOF'
+B300_GRAND_SELECTED_SCHEMA=3
+B300_GRAND_SELECTED_VALIDATED=1
+SELECTED_ENV=/definitely/not/the/original/selection.env
+CORE_PROMOTER=/bin/false
+EOF
+run_canon_ok "$control_override"
+[[ "$(tail -n1 "$canon_calls")" == "$control_override" ]] || { echo 'canonical selected path was shadowed by artifact' >&2; exit 3; }
+
 grand="$tmp/grand.env"
 cat >"$grand" <<'EOF'
 B300_GRAND_PREPARED=1
@@ -103,5 +117,5 @@ run_canon_bad "$bad_speed"
 grep -Fq 'accepted Stage-M speedup is below threshold' "$tmp/canon-bad.err" || { cat "$tmp/canon-bad.err" >&2; exit 3; }
 
 [[ "$(wc -l <"$calls")" == 2 ]] || { echo 'fake wrapper promoter should run only for old+valid contracts' >&2; exit 3; }
-[[ "$(wc -l <"$canon_calls")" == 2 ]] || { echo 'canonical core should run only for old+valid contracts' >&2; exit 3; }
-echo 'b300-grand-stagem-exact-promotion-preflight OK legacy_schema3=1 stage_l_semantics=1 stage_m_requires_l=1 summary_policy_binding=1 canonical_direct=1 summary_sha_binding=1 threshold_binding=1 rejection_before_promoter=1 gpu_work=0'
+[[ "$(wc -l <"$canon_calls")" == 3 ]] || { echo 'canonical core should run only for old+control-shadow+valid contracts' >&2; exit 3; }
+echo 'b300-grand-stagem-exact-promotion-preflight OK legacy_schema3=1 stage_l_semantics=1 stage_m_requires_l=1 summary_policy_binding=1 canonical_direct=1 summary_sha_binding=1 threshold_binding=1 control_path_pinned=1 rejection_before_promoter=1 gpu_work=0'
