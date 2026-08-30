@@ -20,6 +20,8 @@ RUN_HYBRID_NS_STAGE="${RUN_HYBRID_NS_STAGE:-1}"
 RUN_STAGEI="${RUN_STAGEI:-1}"
 RUN_STAGEJ="${RUN_STAGEJ:-${RUN_STAGEH:-1}}"
 RUN_STAGEK="${RUN_STAGEK:-1}"
+RUN_STAGEL="${RUN_STAGEL:-1}"
+RUN_STAGEM="${RUN_STAGEM:-1}"
 NEXTSELF_THREADS="${NEXTSELF_THREADS:-256}"
 NEXTSELF_SEARCH_ROWS="${NEXTSELF_SEARCH_ROWS:-1}"
 NEXTSELF_VALIDATE_ROWS="${NEXTSELF_VALIDATE_ROWS:-4 8}"
@@ -35,6 +37,10 @@ HYBRID_NS_VALIDATE_REPEATS="${HYBRID_NS_VALIDATE_REPEATS:-1}"
 STAGEI_MIN_SPEEDUP="${STAGEI_MIN_SPEEDUP:-1.002}"
 STAGEJ_MIN_SPEEDUP="${STAGEJ_MIN_SPEEDUP:-${STAGEH_MIN_SPEEDUP:-1.002}}"
 STAGEK_MIN_SPEEDUP="${STAGEK_MIN_SPEEDUP:-1.002}"
+STAGEL_MIN_SPEEDUP="${STAGEL_MIN_SPEEDUP:-1.002}"
+STAGEL_GUARD_LIST="${STAGEL_GUARD_LIST:-bb pb bp pp}"
+STAGEM_MIN_SPEEDUP="${STAGEM_MIN_SPEEDUP:-1.002}"
+STAGEM_POLICY_LIST="${STAGEM_POLICY_LIST:-default cg cs}"
 MATE_WIDTH_LIST="${MATE_WIDTH_LIST:-1 2 4 8}"
 MATE_DISTANCE_LIST="${MATE_DISTANCE_LIST:-1 2 4}"
 MATE_EVICT="${MATE_EVICT:-default}"
@@ -47,7 +53,7 @@ SELECTED_ENV="${SELECTED_ENV:-${PREFIX}.selected.env}"
 RACE_RESULT="${RACE_RESULT:-${RACE_PREFIX}.tsv}"
 GRAND_SUMMARY_ENV="${GRAND_SUMMARY_ENV:-${RACE_PREFIX}_grand.env}"
 
-for x in REBUILD_BUCKETS RUN_NEXTSELF_STAGE RUN_HYBRID_STAGE RUN_HYBRID_NS_STAGE RUN_STAGEI RUN_STAGEJ RUN_STAGEK; do
+for x in REBUILD_BUCKETS RUN_NEXTSELF_STAGE RUN_HYBRID_STAGE RUN_HYBRID_NS_STAGE RUN_STAGEI RUN_STAGEJ RUN_STAGEK RUN_STAGEL RUN_STAGEM; do
   v="${!x}"
   [[ "$v" == 0 || "$v" == 1 ]] || { echo "$x must be 0/1" >&2; exit 2; }
 done
@@ -76,16 +82,30 @@ normalize_evicts(){
   for e in $raw; do case "$e" in default|normal|last) ;; *) echo "bad eviction hint=$e" >&2; exit 2;; esac; seen=0; for old in "${out[@]}"; do [[ "$old" == "$e" ]] && seen=1; done; ((seen)) || out+=("$e"); done
   ((${#out[@]})) || { echo 'eviction list must not be empty' >&2; exit 2; }; printf '%s' "${out[*]}"
 }
+normalize_guards(){
+  local raw="$1" out=() g old seen
+  for g in $raw; do case "$g" in bb|pb|bp|pp) ;; *) echo "bad guard profile=$g" >&2; exit 2;; esac; seen=0; for old in "${out[@]}"; do [[ "$old" == "$g" ]] && seen=1; done; ((seen)) || out+=("$g"); done
+  ((${#out[@]})) || { echo 'guard list must not be empty' >&2; exit 2; }; printf '%s' "${out[*]}"
+}
+normalize_mate_load_policies(){
+  local raw="$1" out=() p old seen
+  for p in $raw; do case "$p" in default|cg|cs) ;; *) echo "bad mate-load policy=$p" >&2; exit 2;; esac; seen=0; for old in "${out[@]}"; do [[ "$old" == "$p" ]] && seen=1; done; ((seen)) || out+=("$p"); done
+  ((${#out[@]})) || { echo 'mate-load policy list must not be empty' >&2; exit 2; }; printf '%s' "${out[*]}"
+}
 HYBRID_NS_WIDTH_LIST="$(normalize_widths "$HYBRID_NS_WIDTH_LIST")"
 HYBRID_NS_DISTANCE_LIST="$(normalize_distances "$HYBRID_NS_DISTANCE_LIST")"
 MATE_WIDTH_LIST="$(normalize_widths "$MATE_WIDTH_LIST")"
 MATE_DISTANCE_LIST="$(normalize_distances "$MATE_DISTANCE_LIST")"
 MATE_EVICT_LIST="$(normalize_evicts "$MATE_EVICT_LIST")"
+STAGEL_GUARD_LIST="$(normalize_guards "$STAGEL_GUARD_LIST")"
+STAGEM_POLICY_LIST="$(normalize_mate_load_policies "$STAGEM_POLICY_LIST")"
 case "$MATE_EVICT" in default|normal|last) ;; *) echo 'MATE_EVICT must be default,normal,last' >&2; exit 2;; esac
 case " $MATE_EVICT_LIST " in *" $MATE_EVICT "*) ;; *) echo 'MATE_EVICT_LIST must include MATE_EVICT' >&2; exit 2;; esac
-python3 - "$NEXTSELF_MIN_SPEEDUP" "$HYBRID_MIN_SPEEDUP" "$HYBRID_NS_MIN_SPEEDUP" "$STAGEI_MIN_SPEEDUP" "$STAGEJ_MIN_SPEEDUP" "$STAGEK_MIN_SPEEDUP" <<'PY'
+case " $STAGEL_GUARD_LIST " in *' bb '*) ;; *) echo 'STAGEL_GUARD_LIST must include bb' >&2; exit 2;; esac
+case " $STAGEM_POLICY_LIST " in *' default '*) ;; *) echo 'STAGEM_POLICY_LIST must include default' >&2; exit 2;; esac
+python3 - "$NEXTSELF_MIN_SPEEDUP" "$HYBRID_MIN_SPEEDUP" "$HYBRID_NS_MIN_SPEEDUP" "$STAGEI_MIN_SPEEDUP" "$STAGEJ_MIN_SPEEDUP" "$STAGEK_MIN_SPEEDUP" "$STAGEL_MIN_SPEEDUP" "$STAGEM_MIN_SPEEDUP" <<'PY'
 import sys
-names=('NEXTSELF_MIN_SPEEDUP','HYBRID_MIN_SPEEDUP','HYBRID_NS_MIN_SPEEDUP','STAGEI_MIN_SPEEDUP','STAGEJ_MIN_SPEEDUP','STAGEK_MIN_SPEEDUP')
+names=('NEXTSELF_MIN_SPEEDUP','HYBRID_MIN_SPEEDUP','HYBRID_NS_MIN_SPEEDUP','STAGEI_MIN_SPEEDUP','STAGEJ_MIN_SPEEDUP','STAGEK_MIN_SPEEDUP','STAGEL_MIN_SPEEDUP','STAGEM_MIN_SPEEDUP')
 for name,v in zip(names,map(float,sys.argv[1:])):
     if v < 1.0: raise SystemExit(f'{name} must be >=1')
 PY
@@ -128,6 +148,8 @@ PROFILE_SHA="$(sha256sum "$PROFILE_FILE" | awk '{print $1}')"
   printf 'run_stagei=%s\n' "$RUN_STAGEI"
   printf 'run_stagej=%s\n' "$RUN_STAGEJ"
   printf 'run_stagek=%s\n' "$RUN_STAGEK"
+  printf 'run_stagel=%s\n' "$RUN_STAGEL"
+  printf 'run_stagem=%s\n' "$RUN_STAGEM"
   printf 'nextself_threads=%s\n' "$NEXTSELF_THREADS"
   printf 'nextself_search_rows=%s\n' "$NEXTSELF_SEARCH_ROWS"
   printf 'nextself_validate_rows=%s\n' "$NEXTSELF_VALIDATE_ROWS"
@@ -147,6 +169,10 @@ PROFILE_SHA="$(sha256sum "$PROFILE_FILE" | awk '{print $1}')"
   printf 'stagej_mate_evict=%s\n' "$MATE_EVICT"
   printf 'stagek_min_speedup=%s\n' "$STAGEK_MIN_SPEEDUP"
   printf 'stagek_mate_evict_list=%s\n' "$MATE_EVICT_LIST"
+  printf 'stagel_min_speedup=%s\n' "$STAGEL_MIN_SPEEDUP"
+  printf 'stagel_guard_list=%s\n' "$STAGEL_GUARD_LIST"
+  printf 'stagem_min_speedup=%s\n' "$STAGEM_MIN_SPEEDUP"
+  printf 'stagem_policy_list=%s\n' "$STAGEM_POLICY_LIST"
   printf 'stagei_namespace_contract_preflight=1\n'
   printf 'grand_selector_contract_preflight=1\n'
   printf 'complete_prime_races_expected=1\n'
@@ -171,21 +197,25 @@ bash "$ONEESAN_ROOT/scripts/bench/b300-stagei-namespace-contract-preflight.sh"
 bash "$ONEESAN_ROOT/scripts/bench/b300-nextgen-grand-selector-preflight.sh"
 bash "$ONEESAN_ROOT/scripts/bench/b300-grand-selector-contract-preflight.sh"
 bash "$ONEESAN_ROOT/scripts/bench/b300-grand-stagek-contract-preflight.sh"
+bash "$ONEESAN_ROOT/scripts/bench/b300-stagel-preflight.sh"
+bash "$ONEESAN_ROOT/scripts/bench/b300-stagem-preflight.sh"
 
-echo "=== B300 grand first-pass: n=27 head=${HEAD_SHA:0:12} GPUs=$GPU_COUNT SELECT_ONLY=1 self_geometry=[$HYBRID_NS_WIDTH_LIST]x[$HYBRID_NS_DISTANCE_LIST] mate_geometry=[$MATE_WIDTH_LIST]x[$MATE_DISTANCE_LIST] mate_evict=[$MATE_EVICT_LIST] ===" >&2
+echo "=== B300 grand first-pass: n=27 head=${HEAD_SHA:0:12} GPUs=$GPU_COUNT SELECT_ONLY=1 self_geometry=[$HYBRID_NS_WIDTH_LIST]x[$HYBRID_NS_DISTANCE_LIST] mate_geometry=[$MATE_WIDTH_LIST]x[$MATE_DISTANCE_LIST] mate_evict=[$MATE_EVICT_LIST] guards=[$STAGEL_GUARD_LIST] mate_load=[$STAGEM_POLICY_LIST] ===" >&2
 set +e
 PROFILE_FILE="$PROFILE_FILE" ARCH="$ARCH" MAX_WINDOW="$MAX_WINDOW" SMOKE_PRIME="$SMOKE_PRIME" \
   FORCED_TARGET_MIB="$FORCED_TARGET_MIB" BUCKET_TARGET_MIB="$BUCKET_TARGET_MIB" WORK_ROOT="$WORK_ROOT" RACE_PREFIX="$RACE_PREFIX" \
   SELECT_ONLY=1 REBUILD_BUCKETS="$REBUILD_BUCKETS" \
   RUN_NEXTSELF_STAGE="$RUN_NEXTSELF_STAGE" RUN_HYBRID_STAGE="$RUN_HYBRID_STAGE" RUN_HYBRID_NS_STAGE="$RUN_HYBRID_NS_STAGE" \
-  RUN_STAGEI="$RUN_STAGEI" RUN_STAGEJ="$RUN_STAGEJ" RUN_STAGEK="$RUN_STAGEK" \
+  RUN_STAGEI="$RUN_STAGEI" RUN_STAGEJ="$RUN_STAGEJ" RUN_STAGEK="$RUN_STAGEK" RUN_STAGEL="$RUN_STAGEL" RUN_STAGEM="$RUN_STAGEM" \
   NEXTSELF_THREADS="$NEXTSELF_THREADS" NEXTSELF_SEARCH_ROWS="$NEXTSELF_SEARCH_ROWS" NEXTSELF_VALIDATE_ROWS="$NEXTSELF_VALIDATE_ROWS" \
   NEXTSELF_SEARCH_REPEATS="$NEXTSELF_SEARCH_REPEATS" NEXTSELF_VALIDATE_REPEATS="$NEXTSELF_VALIDATE_REPEATS" NEXTSELF_MIN_SPEEDUP="$NEXTSELF_MIN_SPEEDUP" \
   HYBRID_MIN_SPEEDUP="$HYBRID_MIN_SPEEDUP" HYBRID_NS_MIN_SPEEDUP="$HYBRID_NS_MIN_SPEEDUP" \
   HYBRID_NS_WIDTH_LIST="$HYBRID_NS_WIDTH_LIST" HYBRID_NS_DISTANCE_LIST="$HYBRID_NS_DISTANCE_LIST" \
   HYBRID_NS_SEARCH_REPEATS="$HYBRID_NS_SEARCH_REPEATS" HYBRID_NS_VALIDATE_REPEATS="$HYBRID_NS_VALIDATE_REPEATS" \
   STAGEI_MIN_SPEEDUP="$STAGEI_MIN_SPEEDUP" STAGEJ_MIN_SPEEDUP="$STAGEJ_MIN_SPEEDUP" STAGEK_MIN_SPEEDUP="$STAGEK_MIN_SPEEDUP" \
+  STAGEL_MIN_SPEEDUP="$STAGEL_MIN_SPEEDUP" STAGEM_MIN_SPEEDUP="$STAGEM_MIN_SPEEDUP" \
   MATE_WIDTH_LIST="$MATE_WIDTH_LIST" MATE_DISTANCE_LIST="$MATE_DISTANCE_LIST" MATE_EVICT="$MATE_EVICT" MATE_EVICT_LIST="$MATE_EVICT_LIST" \
+  STAGEL_GUARD_LIST="$STAGEL_GUARD_LIST" STAGEM_POLICY_LIST="$STAGEM_POLICY_LIST" \
   PREFIX="$PREFIX" bash "$ONEESAN_ROOT/scripts/run/b300x8-joint-nextself-hybrid8-select.sh" 27 "$@" \
   2>&1 | tee "$LOG"
 rc=${PIPESTATUS[0]}
@@ -204,9 +234,10 @@ grep -Fq 'SELECT_ONLY=1: selected' "$LOG" || { echo "grand first-pass did not st
 # shellcheck disable=SC1090
 source "$GRAND_SUMMARY_ENV"
 [[ "${B300_GRAND_PREPARED:-0}" == 1 && "${B300_GRAND_STAGEJ_INTEGRATED:-0}" == 1 && \
-   "${B300_GRAND_STAGEK_INTEGRATED:-0}" == 1 && "${B300_GRAND_STAGEI_NAMESPACE_ISOLATED:-0}" == 1 && \
+   "${B300_GRAND_STAGEK_INTEGRATED:-0}" == 1 && "${B300_GRAND_STAGEL_INTEGRATED:-0}" == 1 && \
+   "${B300_GRAND_STAGEM_INTEGRATED:-0}" == 1 && "${B300_GRAND_STAGEI_NAMESPACE_ISOLATED:-0}" == 1 && \
    "${B300_GRAND_COMPLETE_PRIME_RACES:-0}" == 1 ]] || {
-  echo 'grand Stage-I/J/K single-race provenance markers missing' >&2; exit 4;
+  echo 'grand Stage-I/J/K/L/M single-race provenance markers missing' >&2; exit 4;
 }
 GRAND_SUMMARY_SHA="$(sha256sum "$GRAND_SUMMARY_ENV" | awk '{print $1}')"
 
@@ -306,6 +337,20 @@ PY
   printf 'B300_GRAND_SELECTED_STAGEK_MATE_EVICT=%q\n' "${B300_GRAND_STAGEK_MATE_EVICT:-$MATE_EVICT}"
   printf 'B300_GRAND_SELECTED_STAGEK_STAGED_SPEEDUP=%q\n' "${B300_GRAND_STAGEK_STAGED_SPEEDUP:-1.0}"
   printf 'B300_GRAND_SELECTED_STAGEK_SEARCH_EVICTS=%q\n' "$MATE_EVICT_LIST"
+  printf 'B300_GRAND_SELECTED_STAGEL_ENABLED=%q\n' "$RUN_STAGEL"
+  printf 'B300_GRAND_SELECTED_STAGEL_MIN_SPEEDUP=%q\n' "$STAGEL_MIN_SPEEDUP"
+  printf 'B300_GRAND_SELECTED_STAGEL_ACCEPTED=%q\n' "${B300_GRAND_STAGEL_OK:-0}"
+  printf 'B300_GRAND_SELECTED_STAGEL_PROFILE=%q\n' "${B300_GRAND_STAGEL_PROFILE:-bb}"
+  printf 'B300_GRAND_SELECTED_STAGEL_SELF_GUARD=%q\n' "${B300_GRAND_STAGEL_SELF_GUARD:-branch}"
+  printf 'B300_GRAND_SELECTED_STAGEL_MATE_GUARD=%q\n' "${B300_GRAND_STAGEL_MATE_GUARD:-branch}"
+  printf 'B300_GRAND_SELECTED_STAGEL_STAGED_SPEEDUP=%q\n' "${B300_GRAND_STAGEL_STAGED_SPEEDUP:-1.0}"
+  printf 'B300_GRAND_SELECTED_STAGEL_SEARCH_PROFILES=%q\n' "$STAGEL_GUARD_LIST"
+  printf 'B300_GRAND_SELECTED_STAGEM_ENABLED=%q\n' "$RUN_STAGEM"
+  printf 'B300_GRAND_SELECTED_STAGEM_MIN_SPEEDUP=%q\n' "$STAGEM_MIN_SPEEDUP"
+  printf 'B300_GRAND_SELECTED_STAGEM_ACCEPTED=%q\n' "${B300_GRAND_STAGEM_OK:-0}"
+  printf 'B300_GRAND_SELECTED_STAGEM_POLICY=%q\n' "${B300_GRAND_STAGEM_POLICY:-default}"
+  printf 'B300_GRAND_SELECTED_STAGEM_STAGED_SPEEDUP=%q\n' "${B300_GRAND_STAGEM_STAGED_SPEEDUP:-1.0}"
+  printf 'B300_GRAND_SELECTED_STAGEM_SEARCH_POLICIES=%q\n' "$STAGEM_POLICY_LIST"
   printf 'B300_GRAND_SELECTED_COMPLETE_PRIME_RACES=1\n'
   printf 'B300_GRAND_SELECTED_GRAND_SUMMARY_ENV=%q\n' "$GRAND_SUMMARY_ENV"
   printf 'B300_GRAND_SELECTED_GRAND_SUMMARY_SHA256=%q\n' "$GRAND_SUMMARY_SHA"
@@ -315,7 +360,6 @@ PY
   printf 'B300_GRAND_SELECTED_RACE_RESULT=%q\n' "$RACE_RESULT"
   printf 'B300_GRAND_SELECTED_RACE_RESULT_SHA256=%q\n' "$RACE_SHA"
   printf 'B300_GRAND_SELECTED_FIRSTPASS_META=%q\n' "$META"
-  # Compatibility aliases retained for old Stage-H exact-continuation readers.
   printf 'B300_GRAND_SELECTED_STAGEH_ENABLED=%q\n' "$RUN_STAGEJ"
   printf 'B300_GRAND_SELECTED_STAGEH_MIN_SPEEDUP=%q\n' "$STAGEJ_MIN_SPEEDUP"
 } >"$SELECTED_ENV"
@@ -355,6 +399,17 @@ PY
   printf 'stagek_base_mate_evict=%s\n' "${B300_GRAND_STAGEK_BASE_MATE_EVICT:-$MATE_EVICT}"
   printf 'stagek_mate_evict=%s\n' "${B300_GRAND_STAGEK_MATE_EVICT:-$MATE_EVICT}"
   printf 'stagek_staged_speedup=%s\n' "${B300_GRAND_STAGEK_STAGED_SPEEDUP:-1.0}"
+  printf 'stagel_enabled=%s\n' "$RUN_STAGEL"
+  printf 'stagel_min_speedup=%s\n' "$STAGEL_MIN_SPEEDUP"
+  printf 'stagel_accepted=%s\n' "${B300_GRAND_STAGEL_OK:-0}"
+  printf 'stagel_profile=%s\n' "${B300_GRAND_STAGEL_PROFILE:-bb}"
+  printf 'stagel_guards=%s/%s\n' "${B300_GRAND_STAGEL_SELF_GUARD:-branch}" "${B300_GRAND_STAGEL_MATE_GUARD:-branch}"
+  printf 'stagel_staged_speedup=%s\n' "${B300_GRAND_STAGEL_STAGED_SPEEDUP:-1.0}"
+  printf 'stagem_enabled=%s\n' "$RUN_STAGEM"
+  printf 'stagem_min_speedup=%s\n' "$STAGEM_MIN_SPEEDUP"
+  printf 'stagem_accepted=%s\n' "${B300_GRAND_STAGEM_OK:-0}"
+  printf 'stagem_policy=%s\n' "${B300_GRAND_STAGEM_POLICY:-default}"
+  printf 'stagem_staged_speedup=%s\n' "${B300_GRAND_STAGEM_STAGED_SPEEDUP:-1.0}"
   printf 'complete_prime_races=1\n'
   printf 'promotion_contract=3\n'
 } >>"$META"
