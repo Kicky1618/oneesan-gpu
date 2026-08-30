@@ -12,6 +12,15 @@ for s in \
   'POLICY_LIST="${POLICY_LIST:-default cg cs}"' \
   'b300-nextgen-hybrid8-staget-ilp2-mate-load-policy-staged-calibrate.sh' \
   'case "$B300_STAGET_POLICY" in cg|cs)' \
+  'source "$STAGER_PREPARE_ENV"' \
+  'Stage-T/Stage-R prepare mismatch' \
+  'sha256sum -c "$B300_STAGER_PREPARED_MANIFEST"' \
+  'case "$B300_STAGER_PREPARED_UPSTREAM_KIND" in' \
+  'B300_STAGEQ_PREPARED_MATE_CG_L2_BYTES' \
+  'B300_STAGEP_PREPARED_MATE_L2_BYTES' \
+  'B300_STAGEO_PREPARED_MATE_LOAD_POLICY' \
+  'B300_STAGEN_PREPARED_MATE_LOAD_POLICY' \
+  'Stage-T changed high mate provenance' \
   'case "$B300_STAGET_UPSTREAM_KIND" in' \
   'B300_STAGES_PREPARED_BIN' \
   'B300_STAGER_PREPARED_BIN' \
@@ -30,24 +39,38 @@ python3 - "$RUNNER" <<'PY'
 from pathlib import Path
 import sys
 s=Path(sys.argv[1]).read_text()
-# Exact immediate upstream must be selected before candidate/control binding.
+# Stage R must be bound first, then its high-state mate provenance, then the
+# immediate S/R control. No downstream artifact may be consulted before R.
+rbind=s.find('source "$STAGER_PREPARE_ENV"')
+high=s.find('case "$B300_STAGER_PREPARED_UPSTREAM_KIND" in')
 case=s.find('case "$B300_STAGET_UPSTREAM_KIND" in')
 ctrl=s.find('[[ "$B300_STAGET_CONTROL_BIN" == "$UP_BIN" ]]')
 prep=s.find('if [[ "$PREPARE_ONLY" == 1 ]]')
 ngpu=s.find("Stage-T complete-prime promotion requires NGPU=8")
 race=s.find('b300x8-race-external-forced-profiled-once.sh')
-if min(case,ctrl,prep,ngpu,race) < 0: raise SystemExit('Stage-T promotion ordering anchor missing')
-if not (case < ctrl < prep < ngpu < race):
-    raise SystemExit('Stage-T promotion ordering drift: upstream/control -> PREPARE_ONLY -> NGPU gate -> race required')
+if min(rbind,high,case,ctrl,prep,ngpu,race) < 0:
+    raise SystemExit('Stage-T promotion ordering anchor missing')
+if not (rbind < high < case < ctrl < prep < ngpu < race):
+    raise SystemExit('Stage-T promotion ordering drift: R -> high mate -> S/R control -> PREPARE_ONLY -> NGPU gate -> race required')
 if s.count('b300x8-race-external-forced-profiled-once.sh') != 1:
     raise SystemExit('Stage-T promotion must contain exactly one external complete-prime race call')
 if 'FORCED_OVERRIDE_BIN="$B300_STAGET_FINAL_BIN"' not in s:
     raise SystemExit('Stage-T candidate is not the forced override')
 if 'FORCED_BASE_BIN="$B300_STAGET_CONTROL_BIN"' not in s:
     raise SystemExit('Stage-T exact upstream is not the forced base')
-# Both possible immediate-upstream manifests must be verified before use.
 if s.count('sha256sum -c "$UP_MAN"') != 1:
     raise SystemExit('Stage-T immediate-upstream manifest verification count drift')
+if s.count('sha256sum -c "$B300_STAGER_PREPARED_MANIFEST"') != 1:
+    raise SystemExit('Stage-T Stage-R manifest verification count drift')
+# Q/P may carry an ILP8 mate L2 hint; O/N must retain zero.
+for marker in (
+    'EXPECTED_HIGH_MATE_L2="$B300_STAGEQ_PREPARED_MATE_CG_L2_BYTES"',
+    'EXPECTED_HIGH_MATE_L2="$B300_STAGEP_PREPARED_MATE_L2_BYTES"',
+    'EXPECTED_HIGH_MATE_L2=0',
+    '[[ "$B300_STAGET_HIGH_MATE_POLICY" == "$EXPECTED_HIGH_MATE_POLICY" && "$B300_STAGET_HIGH_MATE_L2_BYTES" == "$EXPECTED_HIGH_MATE_L2" ]]',
+):
+    if marker not in s:
+        raise SystemExit('Stage-T high mate provenance gate missing: '+marker)
 print('staget_promotion_contract_structure=OK')
 PY
-echo 'b300-staget-promotion-preflight OK stage=T exact_upstream=S_or_R default_control=1 candidate_policy=cg_or_cs manifest=1 prepare_before_fullprime=1 ngpu8_gate=1 complete_prime_races=1 gpu_work=0'
+echo 'b300-staget-promotion-preflight OK stage=T stage_r_bound_first=1 high_mate_provenance=Q,P,O,N exact_upstream=S_or_R default_control=1 candidate_policy=cg_or_cs manifest=1 prepare_before_fullprime=1 ngpu8_gate=1 complete_prime_races=1 gpu_work=0'
