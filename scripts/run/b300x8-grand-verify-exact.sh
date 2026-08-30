@@ -8,10 +8,12 @@ if (( $# > 0 )); then shift; fi
 
 FIRSTPASS_PREFIX="${FIRSTPASS_PREFIX:-$ONEESAN_ROOT/work/b300_grand_firstpass_n27}"
 SELECTED_ENV="${SELECTED_ENV:-${FIRSTPASS_PREFIX}.selected.env}"
-CERTIFICATE="${CERTIFICATE:-}"
-[[ -s "$SELECTED_ENV" ]] || { echo "missing first-pass selection contract: $SELECTED_ENV" >&2; exit 2; }
+readonly SELECTED_ENV_PATH="$SELECTED_ENV"
+readonly CERTIFICATE_REQUESTED="${CERTIFICATE:-}"
+readonly ONEESAN_ROOT_PATH="$ONEESAN_ROOT"
+[[ -s "$SELECTED_ENV_PATH" ]] || { echo "missing first-pass selection contract: $SELECTED_ENV_PATH" >&2; exit 2; }
 # shellcheck disable=SC1090
-source "$SELECTED_ENV"
+source "$SELECTED_ENV_PATH"
 
 for key in \
   B300_GRAND_SELECTED_SCHEMA B300_GRAND_SELECTED_VALIDATED B300_GRAND_SELECTED_N \
@@ -20,7 +22,10 @@ for key in \
   B300_GRAND_SELECTED_WORK_DIR B300_GRAND_SELECTED_CHECKPOINT; do
   [[ -n "${!key+x}" ]] || { echo "selection contract missing $key" >&2; exit 3; }
 done
-[[ "$B300_GRAND_SELECTED_SCHEMA" == 1 && "$B300_GRAND_SELECTED_VALIDATED" == 1 && "$B300_GRAND_SELECTED_N" == 27 ]] || {
+[[ "$B300_GRAND_SELECTED_SCHEMA" =~ ^[1-9][0-9]*$ ]] || { echo "bad selection schema=$B300_GRAND_SELECTED_SCHEMA" >&2; exit 3; }
+SELECTION_SCHEMA="$B300_GRAND_SELECTED_SCHEMA"
+(( SELECTION_SCHEMA >= 1 && SELECTION_SCHEMA <= 3 )) || { echo "unsupported grand selection schema=$SELECTION_SCHEMA" >&2; exit 3; }
+[[ "$B300_GRAND_SELECTED_VALIDATED" == 1 && "$B300_GRAND_SELECTED_N" == 27 ]] || {
   echo 'invalid grand selection contract' >&2; exit 3;
 }
 [[ -x "$B300_GRAND_SELECTED_BINARY" ]] || { echo "selected binary missing: $B300_GRAND_SELECTED_BINARY" >&2; exit 3; }
@@ -35,12 +40,14 @@ PROFILE_SHA="$(sha256sum "$B300_GRAND_SELECTED_PROFILE_FILE" | awk '{print $1}')
 [[ "$BIN_SHA" == "$B300_GRAND_SELECTED_BINARY_SHA256" ]] || { echo 'selected binary fingerprint mismatch' >&2; exit 4; }
 [[ "$PROFILE_SHA" == "$B300_GRAND_SELECTED_PROFILE_SHA256" ]] || { echo 'selected profile fingerprint mismatch' >&2; exit 4; }
 
-if [[ -z "$CERTIFICATE" ]]; then
+if [[ -n "$CERTIFICATE_REQUESTED" ]]; then
+  CERTIFICATE="$CERTIFICATE_REQUESTED"
+else
   CERTIFICATE="$B300_GRAND_SELECTED_WORK_DIR/exact.verify.json"
 fi
 VERIFY_LOG="$B300_GRAND_SELECTED_WORK_DIR/exact.verify.log"
 
-python3 "$ONEESAN_ROOT/scripts/solve/verify_b300_exact_result.py" 27 \
+python3 "$ONEESAN_ROOT_PATH/scripts/solve/verify_b300_exact_result.py" 27 \
   --checkpoint "$B300_GRAND_SELECTED_CHECKPOINT" \
   --exact "$EXACT" \
   --binary "$B300_GRAND_SELECTED_BINARY" \
@@ -69,4 +76,4 @@ PY
 
 CERT_SHA="$(sha256sum "$CERTIFICATE" | awk '{print $1}')"
 EXACT_SHA="$(sha256sum "$EXACT" | awk '{print $1}')"
-echo "B300 GRAND VERIFY COMPLETE exact=$EXACT exact_sha256=$EXACT_SHA certificate=$CERTIFICATE certificate_sha256=$CERT_SHA" >&2
+echo "B300 GRAND VERIFY COMPLETE schema=$SELECTION_SCHEMA exact=$EXACT exact_sha256=$EXACT_SHA certificate=$CERTIFICATE certificate_sha256=$CERT_SHA" >&2

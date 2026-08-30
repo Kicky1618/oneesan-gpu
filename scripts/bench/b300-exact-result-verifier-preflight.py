@@ -3,6 +3,8 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
+import shlex
 import subprocess
 import sys
 import tempfile
@@ -14,6 +16,7 @@ sys.path.insert(0, str(SOLVE_DIR))
 from solve_b300_exact import crt_pair, primes_for_bound, simple_path_upper_bound
 
 VERIFIER = SOLVE_DIR / "verify_b300_exact_result.py"
+WRAPPER = ROOT / "scripts" / "run" / "b300x8-grand-verify-exact.sh"
 
 
 def sha(path: Path) -> str:
@@ -33,6 +36,29 @@ def run(args: list[str], ok: bool, needle: str) -> subprocess.CompletedProcess[s
         raise AssertionError(f"verifier unexpectedly succeeded: {text}")
     if needle not in text:
         raise AssertionError(f"missing marker {needle!r}: {text}")
+    return p
+
+
+def run_wrapper(
+    selected: Path,
+    certificate: Path,
+    shim_dir: Path,
+    *,
+    ok: bool,
+    needle: str,
+) -> subprocess.CompletedProcess[str]:
+    env = os.environ.copy()
+    env["SELECTED_ENV"] = str(selected)
+    env["CERTIFICATE"] = str(certificate)
+    env["PATH"] = f"{shim_dir}:{env.get('PATH', '')}"
+    p = subprocess.run(["bash", str(WRAPPER), "27"], text=True, capture_output=True, env=env)
+    text = p.stdout + p.stderr
+    if ok and p.returncode != 0:
+        raise AssertionError(f"wrapper failed rc={p.returncode}: {text}")
+    if not ok and p.returncode == 0:
+        raise AssertionError(f"wrapper unexpectedly succeeded: {text}")
+    if needle not in text:
+        raise AssertionError(f"wrapper missing marker {needle!r}: {text}")
     return p
 
 
@@ -117,4 +143,97 @@ with tempfile.TemporaryDirectory() as td:
     binary.write_bytes(binary.read_bytes() + b"tamper")
     run(common, False, "binary SHA mismatch")
 
-print("b300-exact-result-verifier-preflight OK synthetic_complete_crt=1 certificate=1 exact_tamper_rejected=1 checkpoint_tamper_rejected=1 binary_tamper_rejected=1 gpu_work=0")
+    # Exercise the canonical shell wrapper separately. The real Python verifier
+    # above already proves CRT/certificate correctness; this shim only lets the
+    # wrapper reach its post-verification certificate binding without needing an
+    # n=27 exact fixture.
+    wrapper_work = t / "wrapper-work"
+    wrapper_work.mkdir()
+    wrapper_binary = t / "wrapper-solver.bin"
+    wrapper_binary.write_bytes(b"synthetic-wrapper-solver\x00")
+    wrapper_binary.chmod(0o755)
+    wrapper_profile = t / "wrapper-profile.env"
+    wrapper_profile.write_text("BUCKET_THREADS=256\n")
+    wrapper_checkpoint = t / "wrapper-checkpoint.json"
+    wrapper_checkpoint.write_text("{}\n")
+    wrapper_exact = wrapper_work / "exact.txt"
+    wrapper_exact.write_text("synthetic-n27-exact\n")
+    wrapper_bsha = sha(wrapper_binary)
+    wrapper_psha = sha(wrapper_profile)
+
+    shim_dir = t / "shim"
+    shim_dir.mkdir()
+    shim = shim_dir / "python3"
+    shim.write_text(f"""#!/usr/bin/env bash
+set -euo pipefail
+if [[ "${{1:-}}" == */scripts/solve/verify_b300_exact_result.py ]]; then
+  shift
+  [[ "${{1:-}}" == 27 ]] || exit 91
+  shift
+  checkpoint=''; exact=''; binary=''; psha=''; cert=''
+  while (($#)); do
+    case "$1" in
+      --checkpoint) checkpoint="$2"; shift 2 ;;
+      --exact) exact="$2"; shift 2 ;;
+      --binary) binary="$2"; shift 2 ;;
+      --profile-sha256) psha="$2"; shift 2 ;;
+      --certificate) cert="$2"; shift 2 ;;
+      *) shift ;;
+    esac
+  done
+  [[ -n "$checkpoint" && -n "$exact" && -n "$binary" && -n "$psha" && -n "$cert" ]] || exit 92
+  bsha="$(sha256sum "$binary" | awk '{{print $1}}')"
+  csha="$(sha256sum "$checkpoint" | awk '{{print $1}}')"
+  esha="$(sha256sum "$exact" | awk '{{print $1}}')"
+  cat >"$cert" <<EOF
+{{"schema":1,"verified":true,"n":27,"solver_binary_sha256":"$bsha","solver_profile_sha256":"$psha","checkpoint_sha256":"$csha","exact_txt_sha256":"$esha"}}
+EOF
+  echo 'B300_EXACT_VERIFY_OK synthetic_wrapper=1'
+  exit 0
+fi
+exec {shlex.quote(sys.executable)} "$@"
+""")
+    shim.chmod(0o755)
+
+    def selected_contract(schema: int, path: Path, *, shadow_controls: bool = False) -> None:
+        lines = [
+            f"B300_GRAND_SELECTED_SCHEMA={schema}",
+            "B300_GRAND_SELECTED_VALIDATED=1",
+            "B300_GRAND_SELECTED_N=27",
+            f"B300_GRAND_SELECTED_PROFILE_FILE={shlex.quote(str(wrapper_profile))}",
+            f"B300_GRAND_SELECTED_PROFILE_SHA256={wrapper_psha}",
+            f"B300_GRAND_SELECTED_BINARY={shlex.quote(str(wrapper_binary))}",
+            f"B300_GRAND_SELECTED_BINARY_SHA256={wrapper_bsha}",
+            f"B300_GRAND_SELECTED_WORK_DIR={shlex.quote(str(wrapper_work))}",
+            f"B300_GRAND_SELECTED_CHECKPOINT={shlex.quote(str(wrapper_checkpoint))}",
+        ]
+        if shadow_controls:
+            lines += [
+                "SELECTED_ENV=/tmp/oneesan-shadow-selected.env",
+                "CERTIFICATE=/tmp/oneesan-shadow-certificate.json",
+                "ONEESAN_ROOT=/tmp/oneesan-shadow-root",
+            ]
+        path.write_text("\n".join(lines) + "\n")
+
+    selected1 = t / "wrapper-schema1.env"
+    selected3 = t / "wrapper-schema3.env"
+    selected4 = t / "wrapper-schema4.env"
+    selected_contract(1, selected1)
+    selected_contract(3, selected3, shadow_controls=True)
+    selected_contract(4, selected4)
+
+    cert1 = t / "wrapper-schema1.verify.json"
+    cert3 = t / "wrapper-schema3.verify.json"
+    run_wrapper(selected1, cert1, shim_dir, ok=True, needle="B300 GRAND VERIFY COMPLETE schema=1")
+    run_wrapper(selected3, cert3, shim_dir, ok=True, needle="B300 GRAND VERIFY COMPLETE schema=3")
+    assert cert1.is_file() and cert3.is_file()
+    assert not Path("/tmp/oneesan-shadow-certificate.json").exists()
+    run_wrapper(selected4, t / "wrapper-schema4.verify.json", shim_dir, ok=False, needle="unsupported grand selection schema=4")
+
+print(
+    "b300-exact-result-verifier-preflight OK "
+    "synthetic_complete_crt=1 certificate=1 exact_tamper_rejected=1 "
+    "checkpoint_tamper_rejected=1 binary_tamper_rejected=1 "
+    "wrapper_schema1=1 wrapper_schema3=1 wrapper_schema4_rejected=1 "
+    "wrapper_control_paths_pinned=1 gpu_work=0"
+)
