@@ -15,10 +15,15 @@ on:
       - 'scripts/bench/b300-grand-stages-firstpass-preflight.sh'
       - 'scripts/bench/b300-grand-stages-exact-promotion-preflight.sh'
       - 'scripts/bench/b300-grand-stages-exact-controlpath-preflight.sh'
+      - 'scripts/bench/b300-grand-latest-entrypoint-preflight.sh'
+      - 'scripts/bench/b300-latest-environment-preflight-test.sh'
       - 'scripts/run/b300x8-nextgen-hybrid8-stages-ilp2-cg-l2-staged-fullprime-race.sh'
       - 'scripts/run/b300x8-joint-nextself-hybrid8-select-stages.sh'
       - 'scripts/run/b300x8-grand-firstpass-stages.sh'
       - 'scripts/run/b300x8-grand-promote-exact-stages.sh'
+      - 'scripts/run/b300x8-grand-firstpass-latest.sh'
+      - 'scripts/run/b300x8-grand-promote-exact-latest.sh'
+      - 'scripts/run/b300x8-grand-latest-preflight.sh'
       - '.github/workflows/b300-stages-preflight.yml'
   pull_request:
     paths:
@@ -34,10 +39,15 @@ on:
       - 'scripts/bench/b300-grand-stages-firstpass-preflight.sh'
       - 'scripts/bench/b300-grand-stages-exact-promotion-preflight.sh'
       - 'scripts/bench/b300-grand-stages-exact-controlpath-preflight.sh'
+      - 'scripts/bench/b300-grand-latest-entrypoint-preflight.sh'
+      - 'scripts/bench/b300-latest-environment-preflight-test.sh'
       - 'scripts/run/b300x8-nextgen-hybrid8-stages-ilp2-cg-l2-staged-fullprime-race.sh'
       - 'scripts/run/b300x8-joint-nextself-hybrid8-select-stages.sh'
       - 'scripts/run/b300x8-grand-firstpass-stages.sh'
       - 'scripts/run/b300x8-grand-promote-exact-stages.sh'
+      - 'scripts/run/b300x8-grand-firstpass-latest.sh'
+      - 'scripts/run/b300x8-grand-promote-exact-latest.sh'
+      - 'scripts/run/b300x8-grand-latest-preflight.sh'
       - '.github/workflows/b300-stages-preflight.yml'
   workflow_dispatch:
 
@@ -60,3 +70,7 @@ jobs:
         run: bash scripts/bench/b300-grand-stages-exact-promotion-preflight.sh
       - name: Validate Stage S exact control-path pinning
         run: bash scripts/bench/b300-grand-stages-exact-controlpath-preflight.sh
+      - name: Validate latest Stage S entrypoints
+        run: bash scripts/bench/b300-grand-latest-entrypoint-preflight.sh
+      - name: Validate latest Stage S environment preflight
+        run: bash scripts/bench/b300-latest-environment-preflight-test.sh
