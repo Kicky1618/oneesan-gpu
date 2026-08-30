@@ -27,7 +27,7 @@ exit 0
 EOF
   chmod +x "$root/bin/$name"
 }
-for name in joint-primary joint-base sat-nextself sat-control hybrid hybrid-base composed stagef-control; do make_bin "$name"; done
+for name in joint-primary joint-base sat-nextself sat-control hybrid hybrid-base composed stagef-control stageh-mate stageh-self; do make_bin "$name"; done
 
 cat >"$root/scripts/run/b300x8-joint-calibrated-select.sh" <<'EOF'
 #!/usr/bin/env bash
@@ -107,6 +107,29 @@ EOT
 EOF
 chmod +x "$root/scripts/run/b300x8-nextgen-hybrid8-nextself-staged-fullprime-race.sh"
 
+cat >"$root/scripts/run/b300x8-nextgen-hybrid8-nextmate-staged-fullprime-race.sh" <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+rc="${FAKE_STAGEH_RC:-0}"
+((rc==0)) || exit "$rc"
+: "${PREPARE_ENV:?}"
+cat >"$PREPARE_ENV" <<EOT
+B300_STAGEH_PREPARED=1
+B300_STAGEH_PREPARED_WIDTH=4
+B300_STAGEH_PREPARED_DISTANCE=2
+B300_STAGEH_PREPARED_BIN=$ONEESAN_ROOT/bin/stageh-mate
+B300_STAGEH_PREPARED_LABEL=stageh_mate_w4_d2
+B300_STAGEH_PREPARED_THREADS=512
+B300_STAGEH_PREPARED_CONTROL_BIN=$ONEESAN_ROOT/bin/stageh-self
+B300_STAGEH_PREPARED_CONTROL_LABEL=stageh_self_w4_d2
+B300_STAGEH_PREPARED_CONTROL_THREADS=512
+B300_STAGEH_PREPARED_SPEEDUP=1.01
+B300_STAGEH_PREPARED_HIGH_S=0.5
+B300_STAGEH_PREPARED_MANIFEST=$ONEESAN_ROOT/work/fake-stageh.sha256
+EOT
+EOF
+chmod +x "$root/scripts/run/b300x8-nextgen-hybrid8-nextmate-staged-fullprime-race.sh"
+
 cat >"$root/scripts/run/b300x8-race-external-forced-profiled-once.sh" <<'EOF'
 #!/usr/bin/env bash
 set -euo pipefail
@@ -142,14 +165,14 @@ printf 'PROFILE=contract\n' >"$profile"
 grand="$root/scripts/run/b300x8-joint-nextself-hybrid8-select.sh"
 
 run_case(){
-  local name="$1" next_rc="$2" hybrid_rc="$3" stagef_rc="$4" expected_mode="$5"
-  shift 5
+  local name="$1" next_rc="$2" hybrid_rc="$3" stagef_rc="$4" stageh_rc="$5" expected_mode="$6"
+  shift 6
   local prefix="$root/work/$name" capture="$root/work/$name.capture" out="$root/work/$name.out" err="$root/work/$name.err"
-  FAKE_NEXTSELF_RC="$next_rc" FAKE_HYBRID_RC="$hybrid_rc" FAKE_STAGEF_RC="$stagef_rc" FAKE_CAPTURE="$capture" \
-    PROFILE_FILE="$profile" PREFIX="$prefix" RUN_NEXTSELF_STAGE=1 RUN_HYBRID_STAGE=1 RUN_HYBRID_NS_STAGE=1 \
+  FAKE_NEXTSELF_RC="$next_rc" FAKE_HYBRID_RC="$hybrid_rc" FAKE_STAGEF_RC="$stagef_rc" FAKE_STAGEH_RC="$stageh_rc" FAKE_CAPTURE="$capture" \
+    PROFILE_FILE="$profile" PREFIX="$prefix" RUN_NEXTSELF_STAGE=1 RUN_HYBRID_STAGE=1 RUN_HYBRID_NS_STAGE=1 RUN_STAGEH=1 \
     HYBRID_NS_WIDTH_LIST='1 2 4 8' HYBRID_NS_DISTANCE_LIST='1 2 4' \
     bash "$grand" 27 >"$out" 2>"$err"
-  [[ -s "$capture" ]] || { echo "$name missing fake race capture" >&2; exit 4; }
+  [[ -s "$capture" ]] || { echo "$name missing fake race capture" >&2; cat "$err" >&2 || true; exit 4; }
   local summary="${prefix}.race_grand.env"
   [[ -s "$summary" ]] || { echo "$name missing grand summary" >&2; exit 4; }
   # shellcheck disable=SC1090
@@ -157,7 +180,12 @@ run_case(){
   [[ "$B300_GRAND_MODE" == "$expected_mode" ]] || { echo "$name mode=$B300_GRAND_MODE expected=$expected_mode" >&2; exit 4; }
   [[ "$B300_GRAND_HYBRID8_NEXTSELF_SEARCH_WIDTHS" == '1 2 4 8' ]] || { echo "$name width search provenance lost" >&2; exit 4; }
   [[ "$B300_GRAND_HYBRID8_NEXTSELF_SEARCH_DISTANCES" == '1 2 4' ]] || { echo "$name distance search provenance lost" >&2; exit 4; }
-  if [[ "$expected_mode" == hybrid8_nextself_composed_* ]]; then
+  if [[ "$expected_mode" == stageh_nextmate_* ]]; then
+    [[ "$B300_GRAND_STAGEH_OK" == 1 && "$B300_GRAND_STAGEH_WIDTH" == 4 && "$B300_GRAND_STAGEH_DISTANCE" == 2 ]] || { echo "$name Stage-H provenance lost" >&2; exit 4; }
+  else
+    [[ "$B300_GRAND_STAGEH_OK" == 0 ]] || { echo "$name unexpected Stage-H success" >&2; exit 4; }
+  fi
+  if [[ "$expected_mode" == stageh_nextmate_* || "$expected_mode" == hybrid8_nextself_composed_* ]]; then
     [[ "$B300_GRAND_HYBRID8_NEXTSELF_WIDTH" == 4 && "$B300_GRAND_HYBRID8_NEXTSELF_DISTANCE" == 2 ]] || { echo "$name prepared geometry lost" >&2; exit 4; }
   else
     [[ "$B300_GRAND_HYBRID8_NEXTSELF_WIDTH" == 0 && "$B300_GRAND_HYBRID8_NEXTSELF_DISTANCE" == 0 ]] || { echo "$name rejected geometry leaked" >&2; exit 4; }
@@ -172,10 +200,8 @@ for line in Path(capture).read_text().splitlines():
 keys=('P_BIN','B_BIN','E1_BIN','E2_BIN','E3_BIN')
 if len(expect)!=5: raise SystemExit('internal expected candidate count mismatch')
 for k,want in zip(keys,expect):
-    if want:
-        want=f'{root}/bin/{want}'
-    if got.get(k,'')!=want:
-        raise SystemExit(f'{name}: {k}={got.get(k)!r} expected={want!r}')
+    if want: want=f'{root}/bin/{want}'
+    if got.get(k,'')!=want: raise SystemExit(f'{name}: {k}={got.get(k)!r} expected={want!r}')
 if got.get('SELECT_ONLY')!='1': raise SystemExit(f'{name}: SELECT_ONLY not forced/preserved')
 if got.get('SMOKE_PRIME')!='4294967291': raise SystemExit(f'{name}: smoke prime contract lost')
 if got.get('TARGET_MIB')!='65536': raise SystemExit(f'{name}: target contract lost')
@@ -183,15 +209,21 @@ print(f'grand_contract_case={name} OK')
 PY
 }
 
-run_case composed_all 0 0 0 hybrid8_nextself_composed_grand \
+# Stage H accepted: mate/self directly occupy the selected geometry pair.
+run_case stageh_all 0 0 0 0 stageh_nextmate_grand \
+  stageh-mate stageh-self hybrid-base sat-nextself joint-primary
+# Stage H rejected: fall back to Stage-F geometry branch.
+run_case stageh_rejected 0 0 0 4 hybrid8_nextself_composed_grand \
   composed stagef-control hybrid-base sat-nextself joint-primary
-run_case stagef_rejected 0 0 4 nextself_hybrid8_joint \
+# Separate saturation next-self rejected, but Stage H remains a valid candidate.
+run_case nextself_rejected 4 0 0 0 stageh_nextmate_joint \
+  stageh-mate stageh-self hybrid-base joint-primary joint-base
+# Stage F rejected, therefore Stage H is not applicable.
+run_case stagef_rejected 0 0 4 0 nextself_hybrid8_joint \
   sat-nextself sat-control hybrid hybrid-base joint-primary
-run_case nextself_rejected 4 0 0 hybrid8_nextself_composed_joint \
-  composed stagef-control hybrid-base joint-primary joint-base
-run_case hybrid_rejected 0 4 0 nextself_joint \
+run_case hybrid_rejected 0 4 0 0 nextself_joint \
   sat-nextself sat-control joint-primary joint-base ''
-run_case transforms_rejected 4 4 0 joint_fallback \
+run_case transforms_rejected 4 4 0 0 joint_fallback \
   joint-primary joint-base '' '' ''
 
-echo 'b300_grand_selector_contract_preflight=OK cases=5 composed=OK geometry=w4d2 stagef_reject=OK nextself_reject=OK hybrid_reject=OK joint_fallback=OK candidate_env=OK select_only=OK gpu_work=0'
+echo 'b300_grand_selector_contract_preflight=OK cases=6 stageh=OK stageh_reject=OK geometry=w4d2 stagef_reject=OK nextself_reject=OK hybrid_reject=OK joint_fallback=OK candidate_env=OK select_only=OK gpu_work=0'
