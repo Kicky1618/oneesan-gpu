@@ -14,11 +14,8 @@ for f in "$FIRST" "$GRAND" "$STAGEK" "$STAGEK_PREFLIGHT" "$PROMOTE" "$VERIFY"; d
   case "$f" in *.sh) bash -n "$f" ;; esac
 done
 
-# Reuse the deeper Stage-J/K implementation proof first.
 bash "$STAGEK_PREFLIGHT"
 
-# The canonical first-pass must expose Stage K directly and promise exactly one
-# complete-prime selection race for the whole grand pipeline.
 for s in \
   'RUN_STAGEK="${RUN_STAGEK:-1}"' \
   'STAGEK_MIN_SPEEDUP="${STAGEK_MIN_SPEEDUP:-1.002}"' \
@@ -32,11 +29,12 @@ for s in \
   grep -Fq "$s" "$FIRST" || { echo "canonical first-pass Stage-K marker missing: $s" >&2; exit 3; }
 done
 
-# Stage I, J and K must all be staged before the selector's one external race.
+# Stage K may now be followed by Stage L guard staging, but both must remain
+# candidate preparation before the selector's single external full-prime race.
 for s in \
   'RUN_STAGEK="${RUN_STAGEK:-1}"' \
   'STAGEK_MIN_SPEEDUP="${STAGEK_MIN_SPEEDUP:-1.002}"' \
-  'Stage K: refine only mate-prefetch eviction priority after Stage J geometry is fixed.' \
+  'b300x8-nextgen-hybrid8-mate-evict-stagek-staged-fullprime-race.sh' \
   'PREPARE_ONLY=1' \
   'MODE=stagek_mateevict_grand' \
   'MODE=stagek_mateevict_joint' \
@@ -50,22 +48,20 @@ python3 - "$GRAND" <<'PY'
 from pathlib import Path
 import sys
 s=Path(sys.argv[1]).read_text()
-# All optimization stages prepare candidates; the selector itself owns the
-# only complete-prime race.
+race=s.find('b300x8-race-external-forced-profiled-once.sh')
+stagek=s.find('b300x8-nextgen-hybrid8-mate-evict-stagek-staged-fullprime-race.sh')
 if s.count('b300x8-race-external-forced-profiled-once.sh') != 1:
     raise SystemExit('grand selector must contain exactly one external complete-prime race')
+if stagek < 0 or race < 0 or stagek >= race:
+    raise SystemExit('Stage K must be prepared before complete-prime race')
 if 'Stage-K mate eviction rejected; retaining Stage J' not in s:
     raise SystemExit('Stage-K rejection must fall back to Stage J')
-if s.find('# Stage K:') > s.find('b300x8-race-external-forced-profiled-once.sh'):
-    raise SystemExit('Stage K must be prepared before complete-prime race')
 print('integrated_stagek_single_prime=OK')
 PY
 
-# The post-selection path remains the shared hardened CRT continuation and
-# independent verifier; Stage K must not invent a parallel exact pipeline.
 for s in 'B300_GRAND_SELECTED_VALIDATED' 'B300_GRAND_SELECTED_BINARY_SHA256' 'B300_GRAND_SELECTED_RACE_RESULT_SHA256'; do
   grep -Fq "$s" "$PROMOTE" || { echo "shared promotion marker missing: $s" >&2; exit 3; }
 done
 grep -Fq 'verify_b300_exact_result.py' "$VERIFY" || exit 3
 
-echo 'b300-grand-stagek-contract-preflight OK canonical_firstpass=1 stage_i_before_j_before_k=1 stagek_integrated=1 single_complete_prime=1 stagej_fallback=1 schema3_promotion=1 independent_verifier=1 gpu_work=0'
+echo 'b300-grand-stagek-contract-preflight OK canonical_firstpass=1 stage_i_before_j_before_k=1 stagek_integrated=1 later_stage_allowed=1 single_complete_prime=1 stagej_fallback=1 schema3_promotion=1 independent_verifier=1 gpu_work=0'
