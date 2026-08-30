@@ -22,6 +22,7 @@ using MateID = unsigned long long;
 static int b300_main_pull_ilp2_blocks(Code,int){return 1;}
 __global__ void main_pull_kernel_ilp2(const Count*,MateID*,Code,const Count*,Code,Count*,int){}
 void launch(){if(useMate)main_pull_kernel_ilp2<<<b300_main_pull_ilp2_blocks(ms.size,threads),threads,0,c.sMain>>>(cur,c.dMate,ms.size,dcur,ds.size,nxt,p);}
+
 static Code rank_full(MateID m,int width){return Code(m)+Code(width);}
 CU
 HYB="$TMP/hybrid.cu"; python3 "$HYBRID" "$BASE" "$HYB" 1048576 >/dev/null
