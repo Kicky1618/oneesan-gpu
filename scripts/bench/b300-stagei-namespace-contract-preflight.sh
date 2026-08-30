@@ -56,6 +56,7 @@ B300_STAGEI_PREPARED_THREADS=512
 B300_STAGEI_PREPARED_CONTROL_BIN=$ONEESAN_ROOT/bin/mate-control
 B300_STAGEI_PREPARED_CONTROL_LABEL=self_w4d2
 B300_STAGEI_PREPARED_CONTROL_THREADS=256
+B300_STAGEI_PREPARED_STAGED_SPEEDUP=1.023000000
 B300_STAGEI_PREPARED_MANIFEST=$manifest
 EOT
 EOF
@@ -79,12 +80,12 @@ source "$mg"
 [[ "$B300_MATEGEO_SELF_WIDTH" == 4 && "$B300_MATEGEO_SELF_DISTANCE" == 2 ]] || exit 4
 [[ "$B300_MATEGEO_MATE_WIDTH" == 1 && "$B300_MATEGEO_MATE_DISTANCE" == 4 ]] || exit 4
 [[ "$B300_MATEGEO_SELF_EVICT" == last && "$B300_MATEGEO_MATE_EVICT" == normal ]] || exit 4
+[[ "$B300_MATEGEO_STAGED_SPEEDUP" == 1.023000000 ]] || { echo 'mate geometry speedup lost at namespace boundary' >&2; exit 4; }
 [[ "$B300_MATEGEO_BIN" == "$root/bin/mate" && "$B300_MATEGEO_CONTROL_BIN" == "$root/bin/mate-control" ]] || exit 4
 # The first contract remains stable after sourcing the second namespaced env.
 [[ "$B300_EVICT_HINT" == "$E_HINT" && "$B300_EVICT_BIN" == "$E_BIN" ]] || { echo 'namespaced self-eviction values were contaminated' >&2; exit 4; }
-# Raw ambiguous names may exist in the shell, but downstream contracts must not depend on them.
-[[ "$B300_EVICT_HINT" != "$B300_MATEGEO_MATE_EVICT" ]] || true
 
 grep -Fq 'B300_EVICT_PREPARED=1' "$ev"
 grep -Fq 'B300_MATEGEO_PREPARED=1' "$mg"
-echo 'b300_stagei_namespace_contract_preflight=OK self_evict_namespace=1 mate_geometry_namespace=1 sequential_source_stable=1 raw_stagei_collision_isolated=1 gpu_work=0'
+grep -Fq 'B300_MATEGEO_STAGED_SPEEDUP=' "$mg"
+echo 'b300_stagei_namespace_contract_preflight=OK self_evict_namespace=1 mate_geometry_namespace=1 staged_speedup=1 sequential_source_stable=1 raw_stagei_collision_isolated=1 gpu_work=0'
