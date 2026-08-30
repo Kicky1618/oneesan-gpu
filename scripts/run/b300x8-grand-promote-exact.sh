@@ -120,6 +120,7 @@ fi
 # schema-3 grand summary Stage-I/J/K single-race proof missing
 # checkpoint fingerprint mismatch
 # race winner contract mismatch
+# solver_fingerprint
 # ALLOW_HEAD_DRIFT
 # ALLOW_DIRTY_FIRSTPASS
 # ALLOW_WORKTREE_DIRTY
