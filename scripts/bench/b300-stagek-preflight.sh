@@ -10,7 +10,7 @@ BUILDER="$ONEESAN_ROOT/scripts/build/b300-forced-nextgen-hybrid8-self-mate-geome
 STAGEJ="$ONEESAN_ROOT/scripts/run/b300x8-nextgen-hybrid8-nextmate-geometry-stagej-staged-fullprime-race.sh"
 for f in "$SWEEP" "$STAGED" "$PROMOTE" "$GRAND" "$CONTINUE" "$BUILDER" "$STAGEJ"; do [[ -f "$f" ]] || { echo "missing Stage-K dependency=$f" >&2; exit 2; }; bash -n "$f"; done
 for s in \
-  'MATE_EVICT_LIST="${MATE_EVICT_LIST:-default normal last}"' \
+  'EVICT_LIST="${EVICT_LIST:-default normal last}"' \
   'b300_stagek_exact_match=1' \
   'B300_STAGEK_BASE_SPILL_FREE' \
   'B300_STAGEK_SPILL_FREE' \
