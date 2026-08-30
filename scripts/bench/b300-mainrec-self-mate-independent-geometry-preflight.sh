@@ -7,8 +7,9 @@ SELF="$ONEESAN_ROOT/scripts/build/gen-b300-mainrec-hybrid8-next-self-prefetch.py
 MATE="$ONEESAN_ROOT/scripts/build/gen-b300-mainrec-hybrid8-next-mate-prefetch.py"
 BUILDER="$ONEESAN_ROOT/scripts/build/b300-forced-nextgen-hybrid8-self-mate-geometry.sh"
 SWEEP="$ONEESAN_ROOT/scripts/bench/b300-nextgen-hybrid8-nextmate-geometry-sweep.sh"
+STAGED="$ONEESAN_ROOT/scripts/bench/b300-nextgen-hybrid8-nextmate-geometry-staged-calibrate.sh"
 for f in "$HYBRID" "$SELF" "$MATE"; do python3 -m py_compile "$f"; done
-for f in "$BUILDER" "$SWEEP"; do bash -n "$f"; done
+for f in "$BUILDER" "$SWEEP" "$STAGED"; do bash -n "$f"; done
 
 for s in \
   'SELF_WIDTH=' 'SELF_DISTANCE=' 'MATE_WIDTH=' 'MATE_DISTANCE=' \
@@ -28,6 +29,23 @@ for s in \
   'B300_STAGEI_MATE_DISTANCE' \
   'b300_stagei_exact_match=1'; do
   grep -Fq "$s" "$SWEEP" || { echo "Stage-I geometry sweep marker missing: $s" >&2; exit 3; }
+done
+for s in \
+  'SEARCH_ROWS="${SEARCH_ROWS:-1}"' \
+  'VALIDATE_ROWS="${VALIDATE_ROWS:-4 8}"' \
+  'MATE_WIDTH_LIST="${MATE_WIDTH_LIST:-1 2 4 8}"' \
+  'MATE_DISTANCE_LIST="${MATE_DISTANCE_LIST:-1 2 4}"' \
+  'FATAL Stage-I/core residue mismatch' \
+  'FATAL Stage-I/Stage-E-final residue mismatch' \
+  'FATAL Stage-I/Stage-F-final residue mismatch' \
+  'FATAL Stage-I geometry changed during validation' \
+  'B300_STAGEI_STAGED_VALIDATED' \
+  'B300_STAGEI_FINAL_MATE_WIDTH' \
+  'B300_STAGEI_FINAL_MATE_DISTANCE' \
+  'B300_STAGEI_FINAL_STAGE_RESIDUE' \
+  'B300_STAGEI_SEARCH_MATE_WIDTHS' \
+  'B300_STAGEI_SEARCH_MATE_DISTANCES'; do
+  grep -Fq "$s" "$STAGED" || { echo "Stage-I staged marker missing: $s" >&2; exit 3; }
 done
 
 TMP="$(mktemp -d)"; trap 'rm -rf "$TMP"' EXIT
@@ -79,4 +97,4 @@ for md in 1 2 4; do
 done
 [[ "$count" == 12 ]]
 
-echo 'b300-mainrec-self-mate-independent-geometry-preflight OK self_geometry=w4d2 mate_geometries=12 self_advance_locked=16grid mate_advance_independent=1 exact_prefetch_counts=1 builder_decoupled=1 sweep_exact_gate=1 spill_gate=1 gpu_work=0'
+echo 'b300-mainrec-self-mate-independent-geometry-preflight OK self_geometry=w4d2 mate_geometries=12 self_advance_locked=16grid mate_advance_independent=1 exact_prefetch_counts=1 builder_decoupled=1 sweep_exact_gate=1 spill_gate=1 staged_rows=1,4,8 staged_geometry_lock=1 gpu_work=0'
