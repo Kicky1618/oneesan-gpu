@@ -92,7 +92,7 @@ bad_l="$tmp/bad-l.env"; cp "$new" "$bad_l"; sed -i 's/B300_GRAND_SELECTED_STAGEL
 run_bad "$bad_l"
 grep -Fq 'accepted Stage L cannot retain bb control profile' "$tmp/bad.err" || { cat "$tmp/bad.err" >&2; exit 3; }
 run_canon_bad "$bad_l"
-grep -Fq 'accepted Stage L cannot retain bb control profile' "$tmp/canon-bad.err" || { cat "$tmp/canon-bad.err" >&2; exit 3; }
+grep -Fq 'Stage-L profile/guard mapping mismatch' "$tmp/canon-bad.err" || { cat "$tmp/canon-bad.err" >&2; exit 3; }
 
 # Canonical promotion additionally binds the hashed summary and threshold claim.
 bad_hash="$tmp/bad-hash.env"; cp "$new" "$bad_hash"; sed -i 's/^B300_GRAND_SELECTED_GRAND_SUMMARY_SHA256=.*/B300_GRAND_SELECTED_GRAND_SUMMARY_SHA256=deadbeef/' "$bad_hash"
