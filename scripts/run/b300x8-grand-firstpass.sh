@@ -114,8 +114,11 @@ command -v nvidia-smi >/dev/null || { echo 'nvidia-smi required' >&2; exit 2; }
 command -v nvcc >/dev/null || { echo 'nvcc required' >&2; exit 2; }
 command -v git >/dev/null || { echo 'git required' >&2; exit 2; }
 command -v sha256sum >/dev/null || { echo 'sha256sum required' >&2; exit 2; }
-GPU_COUNT="$(nvidia-smi --query-gpu=index --format=csv,noheader | wc -l)"
-(( GPU_COUNT >= 8 )) || { echo "need 8 visible GPUs; got $GPU_COUNT" >&2; exit 2; }
+HARDWARE_GUARD="$ONEESAN_ROOT/scripts/run/b300x8-require-b300-inventory.sh"
+[[ -f "$HARDWARE_GUARD" ]] || { echo "missing B300 hardware guard=$HARDWARE_GUARD" >&2; exit 2; }
+GPU_INVENTORY="$(bash "$HARDWARE_GUARD")"
+GPU_COUNT="$(printf '%s\n' "$GPU_INVENTORY" | awk 'NF{n++} END{print n+0}')"
+GPU_LIST="$(nvidia-smi -L)"
 
 mkdir -p "$(dirname "$LOG")" "$(dirname "$META")" "$(dirname "$SELECTED_ENV")" "$WORK_ROOT"
 HEAD_SHA="$(git -C "$ONEESAN_ROOT" rev-parse HEAD)"
@@ -131,6 +134,7 @@ PROFILE_SHA="$(sha256sum "$PROFILE_FILE" | awk '{print $1}')"
   printf 'profile_file=%s\n' "$PROFILE_FILE"
   printf 'profile_sha256=%s\n' "$PROFILE_SHA"
   printf 'gpu_count=%s\n' "$GPU_COUNT"
+  printf 'gpu_guard=b300x8_exact_model\n'
   printf 'arch=%s\n' "$ARCH"
   printf 'max_window=%s\n' "$MAX_WINDOW"
   printf 'smoke_prime=%s\n' "$SMOKE_PRIME"
@@ -179,8 +183,11 @@ PROFILE_SHA="$(sha256sum "$PROFILE_FILE" | awk '{print $1}')"
   printf 'nvcc_version_begin=1\n'
   nvcc --version | sed 's/^/nvcc: /'
   printf 'nvcc_version_end=1\n'
+  printf 'gpu_list_begin=1\n'
+  printf '%s\n' "$GPU_LIST" | sed 's/^/gpu-list: /'
+  printf 'gpu_list_end=1\n'
   printf 'gpu_inventory_begin=1\n'
-  nvidia-smi --query-gpu=index,name,uuid,memory.total,driver_version --format=csv,noheader | sed 's/^/gpu: /'
+  printf '%s\n' "$GPU_INVENTORY" | sed 's/^/gpu: /'
   printf 'gpu_inventory_end=1\n'
 } >"$META"
 
