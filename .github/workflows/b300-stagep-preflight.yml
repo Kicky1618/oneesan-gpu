@@ -6,28 +6,42 @@ on:
       - 'scripts/build/gen-b300-mainrec-hybrid8-mate-cg-l2-policy.py'
       - 'scripts/build/b300-forced-nextgen-hybrid8-stagep-mate-cg-l2-policy.sh'
       - 'scripts/build/gen-b300-grand-selector-stagep.py'
+      - 'scripts/build/gen-b300-grand-firstpass-stagep.py'
       - 'scripts/bench/b300-mainrec-hybrid8-mate-cg-l2-policy-preflight.sh'
       - 'scripts/bench/b300-nextgen-hybrid8-stagep-mate-cg-l2-sweep.sh'
       - 'scripts/bench/b300-nextgen-hybrid8-stagep-mate-cg-l2-staged-calibrate.sh'
       - 'scripts/bench/b300-stagep-preflight.sh'
       - 'scripts/bench/b300-grand-stagep-contract-preflight.sh'
+      - 'scripts/bench/b300-grand-stagep-firstpass-preflight.sh'
+      - 'scripts/bench/b300-grand-stagep-exact-promotion-preflight.sh'
       - 'scripts/run/b300x8-nextgen-hybrid8-stagep-mate-cg-l2-staged-fullprime-race.sh'
       - 'scripts/run/b300x8-joint-nextself-hybrid8-select-stageo.sh'
       - 'scripts/run/b300x8-joint-nextself-hybrid8-select-stagep.sh'
+      - 'scripts/run/b300x8-grand-firstpass-stageo.sh'
+      - 'scripts/run/b300x8-grand-firstpass-stagep.sh'
+      - 'scripts/run/b300x8-grand-promote-exact-stageo.sh'
+      - 'scripts/run/b300x8-grand-promote-exact-stagep.sh'
       - '.github/workflows/b300-stagep-preflight.yml'
   pull_request:
     paths:
       - 'scripts/build/gen-b300-mainrec-hybrid8-mate-cg-l2-policy.py'
       - 'scripts/build/b300-forced-nextgen-hybrid8-stagep-mate-cg-l2-policy.sh'
       - 'scripts/build/gen-b300-grand-selector-stagep.py'
+      - 'scripts/build/gen-b300-grand-firstpass-stagep.py'
       - 'scripts/bench/b300-mainrec-hybrid8-mate-cg-l2-policy-preflight.sh'
       - 'scripts/bench/b300-nextgen-hybrid8-stagep-mate-cg-l2-sweep.sh'
       - 'scripts/bench/b300-nextgen-hybrid8-stagep-mate-cg-l2-staged-calibrate.sh'
       - 'scripts/bench/b300-stagep-preflight.sh'
       - 'scripts/bench/b300-grand-stagep-contract-preflight.sh'
+      - 'scripts/bench/b300-grand-stagep-firstpass-preflight.sh'
+      - 'scripts/bench/b300-grand-stagep-exact-promotion-preflight.sh'
       - 'scripts/run/b300x8-nextgen-hybrid8-stagep-mate-cg-l2-staged-fullprime-race.sh'
       - 'scripts/run/b300x8-joint-nextself-hybrid8-select-stageo.sh'
       - 'scripts/run/b300x8-joint-nextself-hybrid8-select-stagep.sh'
+      - 'scripts/run/b300x8-grand-firstpass-stageo.sh'
+      - 'scripts/run/b300x8-grand-firstpass-stagep.sh'
+      - 'scripts/run/b300x8-grand-promote-exact-stageo.sh'
+      - 'scripts/run/b300x8-grand-promote-exact-stagep.sh'
       - '.github/workflows/b300-stagep-preflight.yml'
   workflow_dispatch:
 
@@ -46,3 +60,7 @@ jobs:
         run: bash scripts/bench/b300-stagep-preflight.sh
       - name: Validate Stage P grand selector overlay
         run: bash scripts/bench/b300-grand-stagep-contract-preflight.sh
+      - name: Validate Stage P grand firstpass overlay
+        run: bash scripts/bench/b300-grand-stagep-firstpass-preflight.sh
+      - name: Validate Stage P exact provenance
+        run: bash scripts/bench/b300-grand-stagep-exact-promotion-preflight.sh
