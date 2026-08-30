@@ -64,6 +64,7 @@ EOF
     [[ "$with_o" == 1 ]] && echo '// b300_mainrec_stageo_pair_block_cg_l2=1 pair_policy=cg block_policy=cg pair_l2_bytes=64 block_l2_bytes=256 base_l2_bytes=128'
     [[ "$with_p" == 1 ]] && echo '// b300_mainrec_stagep_mate_cg_l2=1 l2_bytes=64 scope=ilp8_mate_reads_only'
   } >"$out"
+  return 0
 }
 
 make_src "$tmp/op.cu" 1 1
