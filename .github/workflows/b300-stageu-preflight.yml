@@ -1,0 +1,26 @@
+name: B300 Stage U preflight
+
+on:
+  push:
+    paths:
+      - 'scripts/build/gen-b300-mainrec-ilp2-mate-cg-l2-policy.py'
+      - 'scripts/bench/b300-mainrec-ilp2-mate-cg-l2-stageu-preflight.sh'
+      - '.github/workflows/b300-stageu-preflight.yml'
+  pull_request:
+    paths:
+      - 'scripts/build/gen-b300-mainrec-ilp2-mate-cg-l2-policy.py'
+      - 'scripts/bench/b300-mainrec-ilp2-mate-cg-l2-stageu-preflight.sh'
+      - '.github/workflows/b300-stageu-preflight.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  preflight:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - name: Validate Stage U ILP2 mate CG L2 split
+        run: bash scripts/bench/b300-mainrec-ilp2-mate-cg-l2-stageu-preflight.sh
