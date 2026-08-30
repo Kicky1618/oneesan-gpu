@@ -16,6 +16,8 @@ on:
       - 'scripts/bench/b300-nextgen-*.sh'
       - 'scripts/bench/b300-local-sm86-hybrid8-smoke.sh'
       - 'scripts/bench/b300-local-sm86-hybrid8-nextself-width-smoke.sh'
+      - 'scripts/bench/b300-local-sm86-hybrid8-sweep.sh'
+      - 'scripts/bench/b300-hybrid8-ngpu-preflight.sh'
       - 'scripts/bench/b300-low-window-drop-cache-proof.sh'
       - 'scripts/bench/b300-main-recurrence-production-generate-proof.sh'
       - 'scripts/bench/b300-mainrec-hybrid8-next-mate-preflight.sh'
@@ -70,6 +72,8 @@ on:
       - 'scripts/bench/b300-nextgen-*.sh'
       - 'scripts/bench/b300-local-sm86-hybrid8-smoke.sh'
       - 'scripts/bench/b300-local-sm86-hybrid8-nextself-width-smoke.sh'
+      - 'scripts/bench/b300-local-sm86-hybrid8-sweep.sh'
+      - 'scripts/bench/b300-hybrid8-ngpu-preflight.sh'
       - 'scripts/bench/b300-low-window-drop-cache-proof.sh'
       - 'scripts/bench/b300-main-recurrence-production-generate-proof.sh'
       - 'scripts/bench/b300-mainrec-hybrid8-next-mate-preflight.sh'
@@ -124,6 +128,10 @@ jobs:
         run: bash -n scripts/bench/b300-local-sm86-hybrid8-smoke.sh
       - name: Syntax-check local sm86 hybrid next-self width smoke
         run: bash -n scripts/bench/b300-local-sm86-hybrid8-nextself-width-smoke.sh
+      - name: Syntax-check local sm86 canonical hybrid sweep
+        run: bash -n scripts/bench/b300-local-sm86-hybrid8-sweep.sh
+      - name: Validate portable hybrid8 GPU count
+        run: bash scripts/bench/b300-hybrid8-ngpu-preflight.sh
       - name: Validate low-window drop-cache rank decomposition
         run: bash scripts/bench/b300-low-window-drop-cache-proof.sh
       - name: Validate production recurrence transform composition
