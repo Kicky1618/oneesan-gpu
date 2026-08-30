@@ -1,0 +1,28 @@
+name: B300 Stage O preflight
+
+on:
+  push:
+    paths:
+      - 'scripts/build/gen-b300-mainrec-pair-block-load-policy.py'
+      - 'scripts/build/gen-b300-mainrec-pair-block-cg-l2-policy.py'
+      - 'scripts/bench/b300-mainrec-pair-block-cg-l2-policy-preflight.sh'
+      - '.github/workflows/b300-stageo-preflight.yml'
+  pull_request:
+    paths:
+      - 'scripts/build/gen-b300-mainrec-pair-block-load-policy.py'
+      - 'scripts/build/gen-b300-mainrec-pair-block-cg-l2-policy.py'
+      - 'scripts/bench/b300-mainrec-pair-block-cg-l2-policy-preflight.sh'
+      - '.github/workflows/b300-stageo-preflight.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  preflight:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - name: Validate Stage O pair block CG L2 transform
+        run: bash scripts/bench/b300-mainrec-pair-block-cg-l2-policy-preflight.sh
