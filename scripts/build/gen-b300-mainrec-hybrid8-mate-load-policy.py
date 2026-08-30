@@ -27,12 +27,15 @@ for req in (
     if req not in s:
         raise SystemExit(f'hybrid8 mate-load policy requires artifact: {req}')
 
-# The helper must be declared before main_pull_kernel_ilp8_hybrid because the
-# generated kernel calls it directly. The hybrid block-count helper is the
-# stable insertion point immediately before that kernel.
+# The helper must be declared before the ILP8 kernel definition because the
+# generated kernel calls it directly. The block-count helper is the stable
+# insertion point immediately before that definition.
 kernel_marker = 'static inline int b300_main_recurrence_ilp8_hybrid_blocks(Code n,int threads)'
+kernel_definition = '__global__ void main_pull_kernel_ilp8_hybrid('
 if s.count(kernel_marker) != 1:
     raise SystemExit(f'hybrid8 kernel preamble expected one match got {s.count(kernel_marker)}')
+if s.count(kernel_definition) != 1:
+    raise SystemExit(f'hybrid8 kernel definition expected one match got {s.count(kernel_definition)}')
 helper = f'b300_mainrec_hybrid8_mate_load_policy_{policy}'
 intrinsic = '__ldcg' if policy == 'cg' else '__ldcs'
 helper_src = f'''__device__ __forceinline__ MateID {helper}(const MateID* p){{
@@ -59,8 +62,10 @@ for k in range(8):
 for req in ('main_pull_kernel_ilp2', 'mates[i7]=b300_high_state_advance', 'const Count self7='):
     if req not in s:
         raise SystemExit(f'mate-load policy damaged required artifact: {req}')
-if s.find(helper_src.rstrip()) > s.find('main_pull_kernel_ilp8_hybrid'):
-    raise SystemExit('mate-load helper must precede ILP8 kernel')
+helper_pos = s.find(f'__device__ __forceinline__ MateID {helper}(')
+kernel_pos = s.find(kernel_definition)
+if helper_pos < 0 or kernel_pos < 0 or helper_pos >= kernel_pos:
+    raise SystemExit('mate-load helper must precede ILP8 kernel definition')
 
 out.parent.mkdir(parents=True, exist_ok=True)
 out.write_text(s)
