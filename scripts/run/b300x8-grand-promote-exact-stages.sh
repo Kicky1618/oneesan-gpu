@@ -8,8 +8,10 @@ SELECTED_ENV="${SELECTED_ENV:-${FIRSTPASS_PREFIX}.selected.env}"
 BASE_PROMOTER="${BASE_PROMOTER:-$ONEESAN_ROOT/scripts/run/b300x8-grand-promote-exact-stager.sh}"
 [[ -s "$SELECTED_ENV" && -f "$BASE_PROMOTER" ]] || exit 2
 command -v sha256sum >/dev/null || exit 2
-# Pin control paths before sourcing any selected artifact.
+# Pin control paths before sourcing any selected artifact. readonly prevents either
+# the selected env or the grand summary from redirecting exact continuation.
 PINNED_SELECTED_ENV="$SELECTED_ENV"; PINNED_BASE_PROMOTER="$BASE_PROMOTER"
+readonly PINNED_SELECTED_ENV PINNED_BASE_PROMOTER
 # shellcheck disable=SC1090
 source "$PINNED_SELECTED_ENV"
 SELECTED_ENV="$PINNED_SELECTED_ENV"; BASE_PROMOTER="$PINNED_BASE_PROMOTER"
@@ -51,6 +53,8 @@ PY
   SUMMARY_ENV="$B300_GRAND_SELECTED_GRAND_SUMMARY_ENV"
   # shellcheck disable=SC1090
   source "$SUMMARY_ENV"
+  # Restore ordinary aliases after summary sourcing; readonly pins remain authoritative.
+  SELECTED_ENV="$PINNED_SELECTED_ENV"; BASE_PROMOTER="$PINNED_BASE_PROMOTER"
   [[ "${B300_GRAND_STAGES_INTEGRATED:-0}" == 1 && "${B300_GRAND_COMPLETE_PRIME_RACES:-0}" == 1 ]] || { echo 'grand summary missing Stage-S single-race integration' >&2; exit 3; }
   [[ "${B300_GRAND_STAGES_OK:-0}" == "$B300_GRAND_SELECTED_STAGES_ACCEPTED" ]] || { echo 'Stage-S accepted flag differs from grand summary' >&2; exit 3; }
   [[ "${B300_GRAND_STAGES_STAGER_UPSTREAM_KIND:-}" == "$B300_GRAND_SELECTED_STAGES_STAGER_UPSTREAM_KIND" ]] || { echo 'Stage-S upstream differs from grand summary' >&2; exit 3; }
@@ -63,4 +67,5 @@ PY
   fi
 fi
 echo "Stage-S exact provenance OK has_s=$HAS_S" >&2
-exec env SELECTED_ENV="$PINNED_SELECTED_ENV" "$PINNED_BASE_PROMOTER" 27 "$@"
+# Do not leak an outer BASE_PROMOTER override into Stage R; invoke the pinned target directly.
+exec env -u BASE_PROMOTER SELECTED_ENV="$PINNED_SELECTED_ENV" "$PINNED_BASE_PROMOTER" 27 "$@"
