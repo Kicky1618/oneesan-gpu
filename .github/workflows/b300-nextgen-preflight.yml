@@ -22,7 +22,10 @@ on:
       - 'scripts/bench/b300-main-recurrence-production-generate-proof.sh'
       - 'scripts/bench/b300-mainrec-hybrid8-next-mate-preflight.sh'
       - 'scripts/bench/b300-mainrec-self-mate-independent-geometry-preflight.sh'
+      - 'scripts/bench/b300-mainrec-predicated-prefetch-source-preflight.sh'
       - 'scripts/bench/b300-stagei-namespace-contract-preflight.sh'
+      - 'scripts/bench/b300-stagel-preflight.sh'
+      - 'scripts/bench/b300-stagem-preflight.sh'
       - 'scripts/bench/b300-grand-selector-contract-preflight.sh'
       - 'scripts/bench/b300-grand-stageg-contract-preflight.sh'
       - 'scripts/bench/b300-grand-stageh-contract-preflight.sh'
@@ -47,6 +50,8 @@ on:
       - 'scripts/run/b300x8-nextgen-hybrid8-selfevict-prepare.sh'
       - 'scripts/run/b300x8-nextgen-hybrid8-mategeo-prepare.sh'
       - 'scripts/run/b300x8-nextgen-hybrid8-mate-evict-stagek-staged-fullprime-race.sh'
+      - 'scripts/run/b300x8-nextgen-hybrid8-prefetch-guard-stagel-staged-fullprime-race.sh'
+      - 'scripts/run/b300x8-nextgen-hybrid8-mate-load-stagem-staged-fullprime-race.sh'
       - 'scripts/run/b300x8-joint-nextgen-hybrid8-select.sh'
       - 'scripts/run/b300x8-joint-nextself-hybrid8-select.sh'
       - 'scripts/run/b300x8-joint-calibrated-select.sh'
@@ -85,7 +90,10 @@ on:
       - 'scripts/bench/b300-main-recurrence-production-generate-proof.sh'
       - 'scripts/bench/b300-mainrec-hybrid8-next-mate-preflight.sh'
       - 'scripts/bench/b300-mainrec-self-mate-independent-geometry-preflight.sh'
+      - 'scripts/bench/b300-mainrec-predicated-prefetch-source-preflight.sh'
       - 'scripts/bench/b300-stagei-namespace-contract-preflight.sh'
+      - 'scripts/bench/b300-stagel-preflight.sh'
+      - 'scripts/bench/b300-stagem-preflight.sh'
       - 'scripts/bench/b300-grand-selector-contract-preflight.sh'
       - 'scripts/bench/b300-grand-stageg-contract-preflight.sh'
       - 'scripts/bench/b300-grand-stageh-contract-preflight.sh'
@@ -110,6 +118,8 @@ on:
       - 'scripts/run/b300x8-nextgen-hybrid8-selfevict-prepare.sh'
       - 'scripts/run/b300x8-nextgen-hybrid8-mategeo-prepare.sh'
       - 'scripts/run/b300x8-nextgen-hybrid8-mate-evict-stagek-staged-fullprime-race.sh'
+      - 'scripts/run/b300x8-nextgen-hybrid8-prefetch-guard-stagel-staged-fullprime-race.sh'
+      - 'scripts/run/b300x8-nextgen-hybrid8-mate-load-stagem-staged-fullprime-race.sh'
       - 'scripts/run/b300x8-joint-nextgen-hybrid8-select.sh'
       - 'scripts/run/b300x8-joint-nextself-hybrid8-select.sh'
       - 'scripts/run/b300x8-joint-calibrated-select.sh'
@@ -174,6 +184,10 @@ jobs:
         run: bash scripts/bench/b300-grand-stagej-v2-contract-preflight.sh
       - name: Validate Stage K mate eviction refinement contract
         run: bash scripts/bench/b300-grand-stagek-contract-preflight.sh
+      - name: Validate Stage L joint prefetch guard contract
+        run: bash scripts/bench/b300-stagel-preflight.sh
+      - name: Validate Stage M mate-load isolation
+        run: bash scripts/bench/b300-stagem-preflight.sh
       - name: Validate grand exact promotion and checkpoint compatibility
         run: bash scripts/bench/b300-grand-exact-promotion-preflight.sh
       - name: Validate independent exact CRT verifier
