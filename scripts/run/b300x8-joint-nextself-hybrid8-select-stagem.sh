@@ -12,14 +12,28 @@ command -v python3 >/dev/null || exit 2
 
 BASE_SHA="$(sha256sum "$BASE_SELECTOR" | awk '{print $1}')"
 GEN_SHA="$(sha256sum "$GENERATOR" | awk '{print $1}')"
-KEY="${BASE_SHA:0:12}-${GEN_SHA:0:12}"
-OUT_DIR="${STAGEM_SELECTOR_BUILD_DIR:-$ONEESAN_BUILD_DIR/generated-grand-selectors}"
-OUT="${STAGEM_SELECTOR_OUT:-$OUT_DIR/b300x8-joint-nextself-hybrid8-select-stagem-${KEY}.sh}"
-mkdir -p "$OUT_DIR"
-python3 "$GENERATOR" "$BASE_SELECTOR" "$OUT" >"${OUT}.transform.out"
-chmod +x "$OUT"
-bash -n "$OUT"
-OUT_SHA="$(sha256sum "$OUT" | awk '{print $1}')"
+
+# Newer canonical selectors already contain Stage M. In that case the overlay
+# must be an identity operation; applying the generator twice would corrupt the
+# stage chain and makes concurrent main updates unnecessarily fragile.
+NATIVE=0
+if grep -Fq 'RUN_STAGEM=' "$BASE_SELECTOR" && \
+   grep -Fq 'B300_GRAND_STAGEM_INTEGRATED=1' "$BASE_SELECTOR" && \
+   grep -Fq 'MODE=stagem_mateload_grand' "$BASE_SELECTOR" && \
+   grep -Fq 'b300x8-nextgen-hybrid8-mate-load-stagem-staged-fullprime-race.sh' "$BASE_SELECTOR"; then
+  NATIVE=1
+  OUT="$BASE_SELECTOR"
+  OUT_SHA="$BASE_SHA"
+else
+  KEY="${BASE_SHA:0:12}-${GEN_SHA:0:12}"
+  OUT_DIR="${STAGEM_SELECTOR_BUILD_DIR:-$ONEESAN_BUILD_DIR/generated-grand-selectors}"
+  OUT="${STAGEM_SELECTOR_OUT:-$OUT_DIR/b300x8-joint-nextself-hybrid8-select-stagem-${KEY}.sh}"
+  mkdir -p "$OUT_DIR"
+  python3 "$GENERATOR" "$BASE_SELECTOR" "$OUT" >"${OUT}.transform.out"
+  chmod +x "$OUT"
+  bash -n "$OUT"
+  OUT_SHA="$(sha256sum "$OUT" | awk '{print $1}')"
+fi
 
 export ONEESAN_ROOT ONEESAN_BUILD_DIR
 export B300_STAGEM_SELECTOR_BASE="$BASE_SELECTOR"
@@ -28,10 +42,12 @@ export B300_STAGEM_SELECTOR_GENERATOR="$GENERATOR"
 export B300_STAGEM_SELECTOR_GENERATOR_SHA256="$GEN_SHA"
 export B300_STAGEM_SELECTOR_GENERATED="$OUT"
 export B300_STAGEM_SELECTOR_GENERATED_SHA256="$OUT_SHA"
+export B300_STAGEM_SELECTOR_NATIVE="$NATIVE"
 
-echo "Stage-M integrated selector base_sha=${BASE_SHA:0:12} generator_sha=${GEN_SHA:0:12} generated_sha=${OUT_SHA:0:12} path=$OUT" >&2
+echo "Stage-M selector native=$NATIVE base_sha=${BASE_SHA:0:12} generator_sha=${GEN_SHA:0:12} selected_sha=${OUT_SHA:0:12} path=$OUT" >&2
 if [[ "$PATCH_ONLY" == 1 ]]; then
   printf 'B300_STAGEM_SELECTOR_PATCHED=1\n'
+  printf 'B300_STAGEM_SELECTOR_NATIVE=%q\n' "$NATIVE"
   printf 'B300_STAGEM_SELECTOR_BASE=%q\n' "$BASE_SELECTOR"
   printf 'B300_STAGEM_SELECTOR_BASE_SHA256=%q\n' "$BASE_SHA"
   printf 'B300_STAGEM_SELECTOR_GENERATOR=%q\n' "$GENERATOR"
