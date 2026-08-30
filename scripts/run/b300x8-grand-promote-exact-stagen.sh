@@ -9,6 +9,7 @@ SELECTED_ENV="${SELECTED_ENV:-${FIRSTPASS_PREFIX}.selected.env}"
 BASE_PROMOTER="${BASE_PROMOTER:-$ONEESAN_ROOT/scripts/run/b300x8-grand-promote-exact-stagem.sh}"
 [[ -s "$SELECTED_ENV" ]] || { echo "missing selected env=$SELECTED_ENV" >&2; exit 2; }
 [[ -f "$BASE_PROMOTER" ]] || { echo "missing Stage-L/M exact promoter=$BASE_PROMOTER" >&2; exit 2; }
+command -v sha256sum >/dev/null || exit 2
 # shellcheck disable=SC1090
 source "$SELECTED_ENV"
 
@@ -53,6 +54,7 @@ PY
 
   if [[ "$B300_GRAND_SELECTED_STAGEN_ACCEPTED" == 1 ]]; then
     [[ -n "$B300_GRAND_SELECTED_STAGEN_UPSTREAM_KIND" ]] || { echo 'accepted Stage N has no upstream kind' >&2; exit 3; }
+    [[ "${B300_GRAND_SELECTED_STAGEL_ACCEPTED:-0}" == 1 ]] || { echo 'Stage N accepted without Stage-L acceptance' >&2; exit 3; }
     [[ "$B300_GRAND_SELECTED_STAGEN_PAIR_POLICY" != "$B300_GRAND_SELECTED_STAGEN_BASE_COUNT_POLICY" || \
        "$B300_GRAND_SELECTED_STAGEN_BLOCK_POLICY" != "$B300_GRAND_SELECTED_STAGEN_BASE_COUNT_POLICY" ]] || {
       echo 'accepted Stage N retained inherited pair/block baseline' >&2; exit 3;
@@ -67,7 +69,7 @@ PY
         [[ "${B300_GRAND_SELECTED_STAGEM_ACCEPTED:-0}" == 1 ]] || { echo 'Stage N uses Stage M without Stage-M acceptance' >&2; exit 3; }
         ;;
       stagel)
-        [[ "${B300_GRAND_SELECTED_STAGEL_ACCEPTED:-0}" == 1 ]] || { echo 'Stage N uses Stage L without Stage-L acceptance' >&2; exit 3; }
+        [[ "${B300_GRAND_SELECTED_STAGEM_ACCEPTED:-0}" != 1 ]] || { echo 'Stage N used Stage L despite accepted Stage M' >&2; exit 3; }
         ;;
     esac
   fi
@@ -82,6 +84,10 @@ PY
   [[ "${B300_GRAND_STAGEN_PAIR_POLICY:-default}" == "$B300_GRAND_SELECTED_STAGEN_PAIR_POLICY" ]] || { echo 'Stage-N pair policy differs from grand summary' >&2; exit 3; }
   [[ "${B300_GRAND_STAGEN_BLOCK_POLICY:-default}" == "$B300_GRAND_SELECTED_STAGEN_BLOCK_POLICY" ]] || { echo 'Stage-N block policy differs from grand summary' >&2; exit 3; }
   [[ "${B300_GRAND_STAGEN_BASE_COUNT_POLICY:-default}" == "$B300_GRAND_SELECTED_STAGEN_BASE_COUNT_POLICY" ]] || { echo 'Stage-N baseline policy differs from grand summary' >&2; exit 3; }
+  if [[ "$B300_GRAND_SELECTED_STAGEN_ACCEPTED" == 1 ]]; then
+    [[ -s "${B300_GRAND_STAGEN_MANIFEST:-}" ]] || { echo 'accepted Stage-N manifest missing from grand summary' >&2; exit 3; }
+    sha256sum -c "$B300_GRAND_STAGEN_MANIFEST" >/dev/null || { echo 'Stage-N promotion manifest failed before exact continuation' >&2; exit 3; }
+  fi
 fi
 
 echo "Stage-N exact provenance OK has_n=$HAS_N" >&2
