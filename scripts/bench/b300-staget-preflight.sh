@@ -4,7 +4,9 @@ source "$(dirname -- "${BASH_SOURCE[0]}")/../lib/common.sh"
 GEN="$ONEESAN_ROOT/scripts/build/gen-b300-mainrec-ilp2-mate-load-policy.py"
 BUILDER="$ONEESAN_ROOT/scripts/build/b300-forced-nextgen-hybrid8-staget-ilp2-mate-load-policy.sh"
 PROOF="$ONEESAN_ROOT/scripts/bench/b300-mainrec-ilp2-mate-load-policy-staget-preflight.sh"
-python3 -m py_compile "$GEN"; for f in "$BUILDER" "$PROOF"; do [[ -f "$f" ]] || exit 2; bash -n "$f"; done; bash "$PROOF"
+SWEEP="$ONEESAN_ROOT/scripts/bench/b300-nextgen-hybrid8-staget-ilp2-mate-load-policy-sweep.sh"
+STAGED="$ONEESAN_ROOT/scripts/bench/b300-nextgen-hybrid8-staget-ilp2-mate-load-policy-staged-calibrate.sh"
+python3 -m py_compile "$GEN"; for f in "$BUILDER" "$PROOF" "$SWEEP" "$STAGED"; do [[ -f "$f" ]] || exit 2; bash -n "$f"; done; bash "$PROOF"
 need(){ grep -Fq "$2" "$1" || { echo "Stage-T marker missing in $1: $2" >&2; exit 3; }; }
 for s in \
   'Stage T requires Stage-R ILP2 pair/block policy marker' \
@@ -24,16 +26,48 @@ for s in \
   'gen-b300-mainrec-ilp2-mate-load-policy.py' \
   'high_policy=$MATE_LOAD_POLICY high_l2_bytes=$EXPECTED_HIGH_L2' \
   'stage_t_scope=ilp2_mate_reads_only ilp8_exact_upstream=1 count_policies_preserved=1 count_l2_preserved=1'; do need "$BUILDER" "$s"; done
-python3 - "$GEN" "$BUILDER" <<'PY'
+for s in \
+  'UPSTREAM_KIND="${UPSTREAM_KIND:-auto}"' \
+  'POLICY_LIST="${POLICY_LIST:-default cg cs}"' \
+  'POLICY_LIST must include default baseline' \
+  'RESOLVED=stager' \
+  'RESOLVED=stages' \
+  'CONTROL_BIN="$B300_STAGER_PREPARED_BIN"' \
+  'CONTROL_BIN="$B300_STAGES_PREPARED_BIN"' \
+  'printf '\''control\tdefault\t%s\t-\n'\'' "$CONTROL_BIN"' \
+  '[[ "$p" == default ]] && continue' \
+  'ILP2_MATE_LOAD_POLICY="$p"' \
+  'clean=len(rv)>=2 and ss==0 and sl==0' \
+  'FATAL Stage-T/upstream residue mismatch' \
+  'b300_staget_exact_match=1'; do need "$SWEEP" "$s"; done
+for s in \
+  'SEARCH_ROWS="${SEARCH_ROWS:-1}"' \
+  'VALIDATE_ROWS="${VALIDATE_ROWS:-4 8}"' \
+  'MIN_SPEEDUP="${MIN_SPEEDUP:-1.002}"' \
+  'validation_policies="default $SELECTED"' \
+  'for rows in $VALIDATE_ROWS "$UP_ROWS"' \
+  'B300_STAGET_POLICY" != "$SELECTED"' \
+  'Stage-T low Count provenance drift' \
+  'Stage-T high-state provenance drift' \
+  'Stage-T exact control provenance drift' \
+  'FATAL Stage-T/upstream residue mismatch' \
+  'B300_STAGET_STAGED_VALIDATED=' \
+  'B300_STAGET_FINAL_ENABLED=' \
+  'B300_STAGET_FINAL_SPILL_FREE=1'; do need "$STAGED" "$s"; done
+python3 - "$GEN" "$BUILDER" "$SWEEP" "$STAGED" <<'PY'
 from pathlib import Path
 import sys
-g,b=(Path(p).read_text() for p in sys.argv[1:])
+g,b,w,t=(Path(p).read_text() for p in sys.argv[1:])
 if "if s[new8_start:new8_end]!=ilp8_before" not in g: raise SystemExit('Stage-T ILP8 byte lock missing')
 if "found[k]" not in g or "needle=f'mates[i{k}]'" not in g: raise SystemExit('Stage-T lane-local rewrite proof missing')
-r=b.find('b300-forced-nextgen-hybrid8-stager-ilp2-load-policy.sh'); s=b.find('b300-forced-nextgen-hybrid8-stages-ilp2-cg-l2-policy.sh'); t=b.find('gen-b300-mainrec-ilp2-mate-load-policy.py')
-if min(r,s,t)<0 or r>=t or s>=t: raise SystemExit('Stage T must compose strictly after R/S reconstruction')
+r=b.find('b300-forced-nextgen-hybrid8-stager-ilp2-load-policy.sh'); s=b.find('b300-forced-nextgen-hybrid8-stages-ilp2-cg-l2-policy.sh'); tt=b.find('gen-b300-mainrec-ilp2-mate-load-policy.py')
+if min(r,s,tt)<0 or r>=tt or s>=tt: raise SystemExit('Stage T must compose strictly after R/S reconstruction')
 if b.count('gen-b300-mainrec-ilp2-mate-load-policy.py') != 1: raise SystemExit('Stage-T transform count drift')
 if '[[ "$UPSTREAM_KIND" == stages ]]' not in b: raise SystemExit('Stage-T optional Stage-S branch missing')
-print('staget_composition_contract_structure=OK')
+if "printf 'control\\tdefault\\t%s\\t-\\n' \"$CONTROL_BIN\"" not in w: raise SystemExit('Stage-T exact prepared control missing')
+if '[[ "$p" == default ]] && continue' not in w: raise SystemExit('Stage-T rebuilds default baseline')
+for x in ('validation_policies="default $SELECTED"','for rows in $VALIDATE_ROWS "$UP_ROWS"','B300_STAGET_POLICY" != "$SELECTED"'):
+    if x not in t: raise SystemExit('Stage-T staged selected-policy lock missing '+x)
+print('staget_sweep_staged_contract_structure=OK')
 PY
-echo 'b300_staget_preflight=OK stage_t=ilp2_mate_load_split upstream_priority=S,R low_mate_policies=cg,cs high_mate_policy=M high_mate_l2=P stage_s_optional=1 stage_r_required=1 ilp8_byte_locked=1 count_policy_locked=1 count_l2_locked=1 gpu_work=0'
+echo 'b300_staget_preflight=OK stage_t=ilp2_mate_load_split upstream_priority=S,R low_mate_policies=default,cg,cs exact_prepared_control=1 default_not_rebuilt=1 high_mate_policy=M high_mate_l2=P stage_s_optional=1 stage_r_required=1 ilp8_byte_locked=1 count_policy_locked=1 count_l2_locked=1 spill_gate=1 residue_gate=1 staged_rows=1,4,8 selected_policy_lock=1 gpu_work=0'
