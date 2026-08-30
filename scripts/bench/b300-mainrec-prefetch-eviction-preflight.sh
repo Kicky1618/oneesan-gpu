@@ -40,10 +40,10 @@ for ev in default normal last; do
   M="$TMP/mate_${ev}.cu"; ML="$TMP/mate_${ev}.log"
   python3 "$MATE" "$SD" "$M" 4 2 "$ev" >"$ML"
   grep -Fq "evict_priority=$ev" "$ML"
+  grep -Fq 'b300_mainrec_hybrid8_prefetch_next_mate_l2' "$M"
   grep -Fq 'prefetch.global.L2 [%0];' "$M"
   if [[ "$ev" == default ]]; then
-    ! grep -Fq 'b300_mainrec_hybrid8_prefetch_next_mate_l2' "$M" || true
-    ! grep -Fq 'prefetch.global.L2::evict_' "$ML"
+    ! grep -Fq 'prefetch.global.L2::evict_' "$M"
   else
     grep -Fq "prefetch.global.L2::evict_${ev} [%0];" "$M"
     grep -Fq 'eviction_hint_sm80_only=1' "$ML"
@@ -57,4 +57,4 @@ for gen in "$SELF" "$MATE"; do
   ((rc!=0)) || { echo "invalid eviction accepted by $gen" >&2; exit 3; }
   grep -Fq 'EVICT must be one of default,normal,last' "$TMP/bad.err"
 done
-echo 'b300_mainrec_prefetch_eviction_preflight=OK self=default,normal,last mate=default,normal,last sm80_qualifier=OK pre_sm80_fallback=bare invalid_rejected=OK gpu_work=0 actions_triggered=0'
+echo 'b300_mainrec_prefetch_eviction_preflight=OK self=default,normal,last mate=default,normal,last sm80_qualifier=OK pre_sm80_fallback=bare default_no_qualifier=OK invalid_rejected=OK gpu_work=0 actions_triggered=0'
