@@ -14,6 +14,9 @@ for s in \
   'B300_GRAND_SELECTED_BINARY_SHA256' \
   'B300_GRAND_SELECTED_PROFILE_SHA256' \
   'B300_GRAND_SELECTED_RACE_RESULT_SHA256' \
+  'unsupported grand selection schema' \
+  'grand summary fingerprint mismatch' \
+  'schema-3 grand summary Stage-I/J/K single-race proof missing' \
   'checkpoint fingerprint mismatch' \
   'race winner contract mismatch' \
   'ALLOW_HEAD_DRIFT' \
@@ -32,7 +35,9 @@ PROFILE="$TMP/profile.env"
 RESULT="$TMP/race.tsv"
 WORK="$TMP/work"
 META="$TMP/firstpass.meta"
-ENVF="$TMP/selected.env"
+ENV1="$TMP/selected-schema1.env"
+ENV3="$TMP/selected-schema3.env"
+SUMMARY="$TMP/grand-summary.env"
 mkdir -p "$WORK"
 cat >"$BIN" <<'SH'
 #!/usr/bin/env bash
@@ -51,7 +56,7 @@ ORBITCTA_FLAT_BLOCKS_PER_SM=0
 ENV
 printf 'backend\tprofile\tbinary\tstatus\tresidue\twall_s\tmc_avg_pct\tmc_max_pct\tmc_samples\n' >"$RESULT"
 printf 'synthetic_forced\tt256\t%s\tok\t7\t1.250000\t90\t95\t4\n' "$BIN" >>"$RESULT"
-printf 'schema=2\nexit_code=0\npromotion_contract=1\n' >"$META"
+printf 'schema=4\nexit_code=0\npromotion_contract=3\n' >"$META"
 
 BIN_SHA="$(sha256sum "$BIN" | awk '{print $1}')"
 PROFILE_SHA="$(sha256sum "$PROFILE" | awk '{print $1}')"
@@ -70,8 +75,11 @@ cat >"$WORK/checkpoint.json" <<EOF
   }
 }
 EOF
-cat >"$ENVF" <<EOF
-B300_GRAND_SELECTED_SCHEMA=1
+
+write_common(){
+  local schema="$1" out="$2"
+  cat >"$out" <<EOF
+B300_GRAND_SELECTED_SCHEMA=$schema
 B300_GRAND_SELECTED_VALIDATED=1
 B300_GRAND_SELECTED_N=27
 B300_GRAND_SELECTED_HEAD_SHA=$(printf '%q' "$HEAD_SHA")
@@ -95,26 +103,62 @@ B300_GRAND_SELECTED_RACE_RESULT=$(printf '%q' "$RESULT")
 B300_GRAND_SELECTED_RACE_RESULT_SHA256=$RESULT_SHA
 B300_GRAND_SELECTED_FIRSTPASS_META=$(printf '%q' "$META")
 EOF
+}
 
-OUT="$TMP/promote.out"
-ERR="$TMP/promote.err"
-DRY_RUN=1 SELECTED_ENV="$ENVF" bash "$PROMOTE" 27 >"$OUT" 2>"$ERR"
-grep -Fq 'B300 GRAND EXACT PROMOTION VALIDATED command=' "$ERR"
-grep -Fq -- '--binary' "$ERR"
-grep -Fq "$BIN" "$ERR"
-grep -Fq -- '--work-dir' "$ERR"
-grep -Fq "$WORK" "$ERR"
+# Backward-compatible schema-1 contract remains accepted.
+write_common 1 "$ENV1"
+DRY_RUN=1 SELECTED_ENV="$ENV1" bash "$PROMOTE" 27 >"$TMP/schema1.out" 2>"$TMP/schema1.err"
+grep -Fq 'B300 GRAND EXACT PROMOTION VALIDATED schema=1 command=' "$TMP/schema1.err"
+grep -Fq -- '--binary' "$TMP/schema1.err"
+grep -Fq "$BIN" "$TMP/schema1.err"
+
+# Current hardened schema-3 contract binds the selected candidate to the exact
+# grand summary and to the one-complete-prime Stage-I/J/K selection proof.
+cat >"$SUMMARY" <<'EOF'
+B300_GRAND_PREPARED=1
+B300_GRAND_STAGEI_NAMESPACE_ISOLATED=1
+B300_GRAND_STAGEJ_INTEGRATED=1
+B300_GRAND_STAGEK_INTEGRATED=1
+B300_GRAND_COMPLETE_PRIME_RACES=1
+B300_GRAND_STAGEI_OK=1
+B300_GRAND_STAGEJ_OK=1
+B300_GRAND_STAGEK_OK=1
+EOF
+SUMMARY_SHA="$(sha256sum "$SUMMARY" | awk '{print $1}')"
+write_common 3 "$ENV3"
+cat >>"$ENV3" <<EOF
+B300_GRAND_SELECTED_GRAND_SUMMARY_ENV=$(printf '%q' "$SUMMARY")
+B300_GRAND_SELECTED_GRAND_SUMMARY_SHA256=$SUMMARY_SHA
+B300_GRAND_SELECTED_COMPLETE_PRIME_RACES=1
+B300_GRAND_SELECTED_STAGEI_ACCEPTED=1
+B300_GRAND_SELECTED_STAGEJ_ACCEPTED=1
+B300_GRAND_SELECTED_STAGEK_ACCEPTED=1
+EOF
+DRY_RUN=1 SELECTED_ENV="$ENV3" bash "$PROMOTE" 27 >"$TMP/schema3.out" 2>"$TMP/schema3.err"
+grep -Fq 'B300 GRAND EXACT PROMOTION VALIDATED schema=3 command=' "$TMP/schema3.err"
+grep -Fq -- '--work-dir' "$TMP/schema3.err"
+grep -Fq "$WORK" "$TMP/schema3.err"
 [[ -s "$WORK/promotion.meta" ]] || { echo 'promotion meta was not written' >&2; exit 4; }
-grep -Fq 'selected_binary_sha256=' "$WORK/promotion.meta"
+grep -Fq 'selection_schema=3' "$WORK/promotion.meta"
+grep -Fq "selected_grand_summary_sha256=$SUMMARY_SHA" "$WORK/promotion.meta"
 
-# Tampering with any immutable first-pass artifact must block promotion before
-# the exact solver can be launched.
+# Tampering with the complete-prime result must block promotion.
 printf 'tamper\n' >>"$RESULT"
 set +e
-DRY_RUN=1 SELECTED_ENV="$ENVF" bash "$PROMOTE" 27 >"$TMP/tamper.out" 2>"$TMP/tamper.err"
+DRY_RUN=1 SELECTED_ENV="$ENV3" bash "$PROMOTE" 27 >"$TMP/tamper-race.out" 2>"$TMP/tamper-race.err"
 rc=$?
 set -e
 ((rc!=0)) || { echo 'tampered race TSV unexpectedly accepted' >&2; exit 4; }
-grep -Fq 'single-pass TSV fingerprint mismatch' "$TMP/tamper.err"
+grep -Fq 'single-pass TSV fingerprint mismatch' "$TMP/tamper-race.err"
+# Restore the race file and its contract for the independent summary tamper test.
+sed -i '$d' "$RESULT"
+[[ "$(sha256sum "$RESULT" | awk '{print $1}')" == "$RESULT_SHA" ]] || exit 4
+printf 'B300_GRAND_STAGEK_OK=0\n' >>"$SUMMARY"
+set +e
+DRY_RUN=1 SELECTED_ENV="$ENV3" bash "$PROMOTE" 27 >"$TMP/tamper-summary.out" 2>"$TMP/tamper-summary.err"
+rc=$?
+set -e
+((rc!=0)) || { echo 'tampered grand summary unexpectedly accepted' >&2; exit 4; }
+grep -Fq 'grand summary fingerprint mismatch' "$TMP/tamper-summary.err"
 
-echo 'b300-grand-exact-promotion-preflight OK bash_syntax=1 checkpoint_schema2_schema3=1 synthetic_dry_run=1 selected_binary=1 runtime_reconstruction=forced tamper_rejected=1 gpu_work=0'
+echo 'b300-grand-exact-promotion-preflight OK selection_schema1=1 selection_schema3=1 checkpoint_schema3=1 grand_summary_fingerprint=1 single_complete_prime_proof=1 synthetic_dry_run=1 race_tamper_rejected=1 summary_tamper_rejected=1 gpu_work=0'
