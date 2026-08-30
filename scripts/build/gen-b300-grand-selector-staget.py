@@ -25,7 +25,7 @@ STAGET_WINNER_ENV="${STAGET_WINNER_ENV:-${STAGET_PREFIX}_winner.env}"
 STAGET_PREPARE_ENV="${STAGET_PREPARE_ENV:-${PREFIX}.staget-ilp2-mate.prepared.env}"
 STAGET_RACE_PREFIX="${STAGET_RACE_PREFIX:-${PREFIX}.staget-ilp2-mate.promote}"''','Stage-T paths')
 after_line('RUN_STAGES=', 'RUN_STAGET="${RUN_STAGET:-1}"','RUN_STAGET')
-after_line('STAGES_BLOCK_L2_LIST=', '''STAGET_MIN_SPEEDUP="${STAGET_MIN_SPEEDUP:-1.002}"
+after_line('STAGES_BLOCK_L2_LIST="${STAGES_BLOCK_L2_LIST:-0 64 128 256}"', '''STAGET_MIN_SPEEDUP="${STAGET_MIN_SPEEDUP:-1.002}"
 STAGET_POLICY_LIST="${STAGET_POLICY_LIST:-default cg cs}"
 [[ "$RUN_STAGET" == 0 || "$RUN_STAGET" == 1 ]] || { echo 'RUN_STAGET must be 0/1' >&2; exit 2; }
 python3 - "$STAGET_MIN_SPEEDUP" <<'PY'
