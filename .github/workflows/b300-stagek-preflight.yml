@@ -6,6 +6,7 @@ on:
       - 'scripts/bench/b300-stagek-preflight.sh'
       - 'scripts/bench/b300-grand-stagek-contract-preflight.sh'
       - 'scripts/bench/b300-grand-stagem-contract-preflight.sh'
+      - 'scripts/bench/b300-grand-stagem-exact-promotion-preflight.sh'
       - 'scripts/bench/b300-nextgen-hybrid8-mate-evict-sweep.sh'
       - 'scripts/bench/b300-nextgen-hybrid8-mate-evict-staged-calibrate.sh'
       - 'scripts/bench/b300-nextgen-hybrid8-prefetch-guard-staged-calibrate.sh'
@@ -24,6 +25,7 @@ on:
       - 'scripts/run/b300x8-joint-nextself-hybrid8-select-stagem.sh'
       - 'scripts/run/b300x8-grand-firstpass.sh'
       - 'scripts/run/b300x8-grand-firstpass-stagem.sh'
+      - 'scripts/run/b300x8-grand-promote-exact-stagem.sh'
       - 'scripts/run/b300x8-grand-stagek-firstpass.sh'
       - 'scripts/run/b300x8-grand-stagek-continue.sh'
       - 'scripts/run/b300x8-nextgen-hybrid8-nextmate-geometry-stagej-staged-fullprime-race.sh'
@@ -39,6 +41,7 @@ on:
       - 'scripts/bench/b300-stagek-preflight.sh'
       - 'scripts/bench/b300-grand-stagek-contract-preflight.sh'
       - 'scripts/bench/b300-grand-stagem-contract-preflight.sh'
+      - 'scripts/bench/b300-grand-stagem-exact-promotion-preflight.sh'
       - 'scripts/bench/b300-nextgen-hybrid8-mate-evict-sweep.sh'
       - 'scripts/bench/b300-nextgen-hybrid8-mate-evict-staged-calibrate.sh'
       - 'scripts/bench/b300-nextgen-hybrid8-prefetch-guard-staged-calibrate.sh'
@@ -57,6 +60,7 @@ on:
       - 'scripts/run/b300x8-joint-nextself-hybrid8-select-stagem.sh'
       - 'scripts/run/b300x8-grand-firstpass.sh'
       - 'scripts/run/b300x8-grand-firstpass-stagem.sh'
+      - 'scripts/run/b300x8-grand-promote-exact-stagem.sh'
       - 'scripts/run/b300x8-grand-stagek-firstpass.sh'
       - 'scripts/run/b300x8-grand-stagek-continue.sh'
       - 'scripts/run/b300x8-nextgen-hybrid8-nextmate-geometry-stagej-staged-fullprime-race.sh'
@@ -93,6 +97,8 @@ jobs:
         run: bash scripts/bench/b300-stagem-preflight.sh
       - name: Validate generated Stage M grand first-pass
         run: bash scripts/bench/b300-grand-stagem-contract-preflight.sh
+      - name: Validate Stage L M exact provenance
+        run: bash scripts/bench/b300-grand-stagem-exact-promotion-preflight.sh
       - name: Validate exact promotion and checkpoint compatibility
         run: bash scripts/bench/b300-grand-exact-promotion-preflight.sh
       - name: Validate independent exact CRT verifier
