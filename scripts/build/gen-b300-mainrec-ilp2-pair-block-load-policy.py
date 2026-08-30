@@ -25,7 +25,7 @@ if not mn:
 high_pair, high_block, high_base_l2 = mn.group(1), mn.group(2), int(mn.group(3))
 mo = re.search(r'// b300_mainrec_stageo_pair_block_cg_l2=1 pair_policy=(default|cg|cs) block_policy=(default|cg|cs) pair_l2_bytes=(0|64|128|256) block_l2_bytes=(0|64|128|256) base_l2_bytes=(0|64|128|256)', s)
 if mo:
-    if (mo.group(1), mo.group(2), int(mo.group(6))) != (high_pair, high_block, high_base_l2):
+    if (mo.group(1), mo.group(2), int(mo.group(5))) != (high_pair, high_block, high_base_l2):
         raise SystemExit('Stage-O marker is inconsistent with Stage-N policy')
     high_pair_l2, high_block_l2 = int(mo.group(3)), int(mo.group(4))
 else:
