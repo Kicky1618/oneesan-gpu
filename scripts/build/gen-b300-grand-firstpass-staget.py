@@ -21,7 +21,7 @@ def rep(old:str,new:str,label:str,count:int=1)->None:
     s=s.replace(old,new,count)
 
 after_line('RUN_STAGES=', 'RUN_STAGET="${RUN_STAGET:-1}"','RUN_STAGET')
-after_line('STAGES_BLOCK_L2_LIST=', '''STAGET_MIN_SPEEDUP="${STAGET_MIN_SPEEDUP:-1.002}"
+after_line('STAGES_BLOCK_L2_LIST="${STAGES_BLOCK_L2_LIST:-0 64 128 256}"', '''STAGET_MIN_SPEEDUP="${STAGET_MIN_SPEEDUP:-1.002}"
 STAGET_POLICY_LIST="${STAGET_POLICY_LIST:-default cg cs}"
 python3 - "$STAGET_MIN_SPEEDUP" <<'PY'
 import sys
