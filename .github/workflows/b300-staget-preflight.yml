@@ -16,9 +16,11 @@ on:
       - 'scripts/bench/b300-staget-promotion-preflight.sh'
       - 'scripts/bench/b300-grand-staget-contract-preflight.sh'
       - 'scripts/bench/b300-grand-staget-firstpass-preflight.sh'
+      - 'scripts/bench/b300-grand-staget-exact-promotion-preflight.sh'
       - 'scripts/run/b300x8-nextgen-hybrid8-staget-ilp2-mate-load-policy-staged-fullprime-race.sh'
       - 'scripts/run/b300x8-joint-nextself-hybrid8-select-staget.sh'
       - 'scripts/run/b300x8-grand-firstpass-staget.sh'
+      - 'scripts/run/b300x8-grand-promote-exact-staget.sh'
       - '.github/workflows/b300-staget-preflight.yml'
   pull_request:
     paths:
@@ -35,9 +37,11 @@ on:
       - 'scripts/bench/b300-staget-promotion-preflight.sh'
       - 'scripts/bench/b300-grand-staget-contract-preflight.sh'
       - 'scripts/bench/b300-grand-staget-firstpass-preflight.sh'
+      - 'scripts/bench/b300-grand-staget-exact-promotion-preflight.sh'
       - 'scripts/run/b300x8-nextgen-hybrid8-staget-ilp2-mate-load-policy-staged-fullprime-race.sh'
       - 'scripts/run/b300x8-joint-nextself-hybrid8-select-staget.sh'
       - 'scripts/run/b300x8-grand-firstpass-staget.sh'
+      - 'scripts/run/b300x8-grand-promote-exact-staget.sh'
       - '.github/workflows/b300-staget-preflight.yml'
   workflow_dispatch:
 
@@ -58,3 +62,5 @@ jobs:
         run: bash scripts/bench/b300-grand-staget-contract-preflight.sh
       - name: Validate Stage T grand firstpass contract
         run: bash scripts/bench/b300-grand-staget-firstpass-preflight.sh
+      - name: Validate Stage T exact provenance
+        run: bash scripts/bench/b300-grand-staget-exact-promotion-preflight.sh
