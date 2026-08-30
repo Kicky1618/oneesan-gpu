@@ -33,6 +33,7 @@ required_files=(
   scripts/bench/b300-grand-stages-contract-preflight.sh
   scripts/bench/b300-grand-stages-firstpass-preflight.sh
   scripts/bench/b300-grand-stages-exact-promotion-preflight.sh
+  scripts/bench/b300-grand-stages-exact-controlpath-preflight.sh
 )
 for rel in "${required_files[@]}"; do [[ -s "$ONEESAN_ROOT/$rel" ]] || { echo "missing latest-chain artifact=$rel" >&2; exit 3; }; done
 
