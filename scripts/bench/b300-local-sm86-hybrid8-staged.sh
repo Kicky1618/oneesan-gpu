@@ -13,6 +13,10 @@ SEARCH_THRESHOLDS="${SEARCH_THRESHOLDS:-0 262144 1048576 4194304}"
 # auto validates the threshold selected by the search stage. An explicit
 # integer remains available for targeted experiments.
 VALIDATE_THRESHOLD="${VALIDATE_THRESHOLD:-auto}"
+# If search selects hybrid, require it to remain the winner at every validation
+# depth. Baseline search winners are correctness-only and are not promoted.
+REQUIRE_HYBRID_SURVIVAL="${REQUIRE_HYBRID_SURVIVAL:-1}"
+MIN_VALIDATE_SPEEDUP="${MIN_VALIDATE_SPEEDUP:-1.0}"
 # A separate deep threshold=0 run exercises the ILP8 kernel regardless of the
 # selected policy. Set to 0 to disable or to another row count to relocate it.
 FORCE_ILP8_ROWS="${FORCE_ILP8_ROWS:-8}"
@@ -25,7 +29,12 @@ mkdir -p "$(dirname "$PREFIX")"
 
 [[ "$NGPU" =~ ^[1-8]$ ]] || { echo 'NGPU must be 1..8' >&2; exit 2; }
 [[ "$VALIDATE_THRESHOLD" == auto || "$VALIDATE_THRESHOLD" =~ ^[0-9]+$ ]] || { echo 'VALIDATE_THRESHOLD must be auto or non-negative integer' >&2; exit 2; }
+[[ "$REQUIRE_HYBRID_SURVIVAL" == 0 || "$REQUIRE_HYBRID_SURVIVAL" == 1 ]] || { echo 'REQUIRE_HYBRID_SURVIVAL must be 0/1' >&2; exit 2; }
 [[ "$FORCE_ILP8_ROWS" =~ ^[0-9]+$ ]] && ((FORCE_ILP8_ROWS<=28)) || { echo 'FORCE_ILP8_ROWS must be 0..28' >&2; exit 2; }
+python3 - "$MIN_VALIDATE_SPEEDUP" <<'PY'
+import sys
+if float(sys.argv[1]) < 1.0: raise SystemExit('MIN_VALIDATE_SPEEDUP must be >=1')
+PY
 for rows in "$SEARCH_ROWS" $VALIDATE_ROWS; do
   [[ "$rows" =~ ^[1-9][0-9]*$ ]] && ((rows<=28)) || { echo "bad rows=$rows" >&2; exit 2; }
 done
@@ -59,11 +68,35 @@ else
 fi
 [[ "$SELECTED_THRESHOLD" =~ ^[0-9]+$ ]] || { echo "invalid selected threshold=$SELECTED_THRESHOLD" >&2; exit 3; }
 
+validate_selected_policy(){
+  local envf="$1" rows="$2"
+  [[ "$SEARCH_MODE" == hybrid && "$REQUIRE_HYBRID_SURVIVAL" == 1 ]] || return 0
+  (
+    # shellcheck disable=SC1090
+    source "$envf"
+    [[ "$B300_HYBRID8_WINNER_MODE" == hybrid ]] || {
+      echo "selected hybrid policy lost at rows=$rows winner_mode=$B300_HYBRID8_WINNER_MODE" >&2
+      exit 4
+    }
+    [[ "$B300_HYBRID8_WINNER_THRESHOLD" == "$SELECTED_THRESHOLD" ]] || {
+      echo "selected hybrid threshold drift rows=$rows expected=$SELECTED_THRESHOLD got=$B300_HYBRID8_WINNER_THRESHOLD" >&2
+      exit 4
+    }
+    python3 - "$B300_HYBRID8_WINNER_SPEEDUP_VS_BASELINE" "$MIN_VALIDATE_SPEEDUP" "$rows" <<'PY'
+import sys
+speed,min_speed,rows=float(sys.argv[1]),float(sys.argv[2]),sys.argv[3]
+if speed < min_speed:
+    raise SystemExit(f'selected hybrid speedup below validation gate rows={rows} speedup={speed} minimum={min_speed}')
+PY
+  )
+}
+
 last_env="$SEARCH_ENV"
 stage=0
 for rows in $VALIDATE_ROWS; do
   ((stage+=1))
   last_env="$(run_stage "$rows" "$SELECTED_THRESHOLD" "validate${stage}" | tail -n1)"
+  validate_selected_policy "$last_env" "$rows"
 done
 
 FORCED_ENV=""
@@ -78,4 +111,6 @@ fi
 # forced-ILP8 correctness run.
 # shellcheck disable=SC1090
 source "$last_env"
-echo "b300_local_sm86_hybrid8_staged=OK search_rows=$SEARCH_ROWS validate_rows=[$VALIDATE_ROWS] search_profile=$SEARCH_PROFILE search_mode=$SEARCH_MODE search_threshold=$SEARCH_THRESHOLD search_speedup=${SEARCH_SPEED}x search_residue=$SEARCH_RES selected_validate_threshold=$SELECTED_THRESHOLD forced_ilp8_rows=$FORCE_ILP8_ROWS final_profile=$B300_HYBRID8_WINNER_PROFILE final_mode=$B300_HYBRID8_WINNER_MODE final_residue=$B300_HYBRID8_RESIDUE ngpu=$NGPU arch=$ARCH"
+PROMOTION_CANDIDATE=0
+[[ "$SEARCH_MODE" == hybrid && "$B300_HYBRID8_WINNER_MODE" == hybrid ]] && PROMOTION_CANDIDATE=1
+echo "b300_local_sm86_hybrid8_staged=OK search_rows=$SEARCH_ROWS validate_rows=[$VALIDATE_ROWS] search_profile=$SEARCH_PROFILE search_mode=$SEARCH_MODE search_threshold=$SEARCH_THRESHOLD search_speedup=${SEARCH_SPEED}x search_residue=$SEARCH_RES selected_validate_threshold=$SELECTED_THRESHOLD require_hybrid_survival=$REQUIRE_HYBRID_SURVIVAL min_validate_speedup=$MIN_VALIDATE_SPEEDUP forced_ilp8_rows=$FORCE_ILP8_ROWS promotion_candidate=$PROMOTION_CANDIDATE final_profile=$B300_HYBRID8_WINNER_PROFILE final_mode=$B300_HYBRID8_WINNER_MODE final_residue=$B300_HYBRID8_RESIDUE ngpu=$NGPU arch=$ARCH"
