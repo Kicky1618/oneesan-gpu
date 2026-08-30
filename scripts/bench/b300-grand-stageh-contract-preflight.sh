@@ -42,15 +42,22 @@ for s in \
   grep -Fq "$s" "$GRAND" || { echo "integrated Stage-J/Stage-H alias marker missing: $s" >&2; exit 3; }
 done
 
+# Stage J deliberately keeps the historical raw implementation in a child
+# process. The winner env is translated from B300_STAGEI_* to B300_STAGEJ_*,
+# while the public prepare/promotion contract is explicit in this wrapper.
 for s in \
-  'B300_STAGEJ_STAGED_VALIDATED' \
-  'B300_STAGEJ_FINAL_ENABLED' \
-  'B300_STAGEJ_PREPARED' \
-  'B300_STAGEJ_PREPARED_SELF_WIDTH' \
-  'B300_STAGEJ_PREPARED_MATE_WIDTH' \
-  'B300_STAGEJ_PREPARED_BIN' \
-  'B300_STAGEJ_PREPARED_CONTROL_BIN'; do
-  grep -Fq "$s" "$STAGEJ" || { echo "Stage-J staged marker missing: $s" >&2; exit 3; }
+  "s/B300_STAGEI_/B300_STAGEJ_/g" \
+  'B300_STAGEJ_PROMOTION_VALIDATED=1' \
+  'B300_STAGEJ_PREPARED=1' \
+  'B300_STAGEJ_PREPARED_MOD=' \
+  'B300_STAGEJ_PREPARED_SELF_WIDTH=' \
+  'B300_STAGEJ_PREPARED_MATE_WIDTH=' \
+  'B300_STAGEJ_PREPARED_BIN=' \
+  'B300_STAGEJ_PREPARED_CONTROL_BIN=' \
+  'B300_STAGEJ_PREPARED_MANIFEST=' \
+  'ONEESAN_BUILD_DIR="$STAGEJ_BUILD_DIR"' \
+  'sha256sum -c "$MANIFEST"'; do
+  grep -Fq "$s" "$STAGEJ" || { echo "Stage-J translated/public contract marker missing: $s" >&2; exit 3; }
 done
 
 # Stage-H first-pass is now a compatibility normalizer. It must consume the
@@ -87,4 +94,4 @@ for s in 'verify_b300_exact_result.py' 'B300 GRAND VERIFY COMPLETE'; do
   grep -Fq "$s" "$VERIFY" || { echo "exact verifier wrapper marker missing: $s" >&2; exit 3; }
 done
 
-echo 'b300-grand-stageh-contract-preflight OK legacy_staged=1 integrated_stagej=1 stageh_aliases=1 no_duplicate_fullprime=1 normalized_selection=1 checkpoint_schema3=1 race_fingerprint=1 work_root=1 hardened_promotion=1 independent_verifier=1 gpu_work=0'
+echo 'b300-grand-stageh-contract-preflight OK legacy_staged=1 integrated_stagej=1 translated_winner=1 stageh_aliases=1 no_duplicate_fullprime=1 normalized_selection=1 checkpoint_schema3=1 race_fingerprint=1 work_root=1 hardened_promotion=1 independent_verifier=1 gpu_work=0'
