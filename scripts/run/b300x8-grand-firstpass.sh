@@ -17,6 +17,7 @@ REBUILD_BUCKETS="${REBUILD_BUCKETS:-1}"
 RUN_NEXTSELF_STAGE="${RUN_NEXTSELF_STAGE:-1}"
 RUN_HYBRID_STAGE="${RUN_HYBRID_STAGE:-1}"
 RUN_HYBRID_NS_STAGE="${RUN_HYBRID_NS_STAGE:-1}"
+RUN_STAGEH="${RUN_STAGEH:-1}"
 NEXTSELF_THREADS="${NEXTSELF_THREADS:-256}"
 NEXTSELF_SEARCH_ROWS="${NEXTSELF_SEARCH_ROWS:-1}"
 NEXTSELF_VALIDATE_ROWS="${NEXTSELF_VALIDATE_ROWS:-4 8}"
@@ -29,6 +30,7 @@ HYBRID_NS_WIDTH_LIST="${HYBRID_NS_WIDTH_LIST:-1 2 4 8}"
 HYBRID_NS_DISTANCE_LIST="${HYBRID_NS_DISTANCE_LIST:-1 2 4}"
 HYBRID_NS_SEARCH_REPEATS="${HYBRID_NS_SEARCH_REPEATS:-1}"
 HYBRID_NS_VALIDATE_REPEATS="${HYBRID_NS_VALIDATE_REPEATS:-1}"
+STAGEH_MIN_SPEEDUP="${STAGEH_MIN_SPEEDUP:-1.002}"
 PREFIX="${PREFIX:-$ONEESAN_ROOT/work/b300_grand_firstpass_n27}"
 RACE_PREFIX="${RACE_PREFIX:-${PREFIX}.race}"
 LOG="${LOG:-${PREFIX}.log}"
@@ -36,7 +38,7 @@ META="${META:-${PREFIX}.meta}"
 SELECTED_ENV="${SELECTED_ENV:-${PREFIX}.selected.env}"
 RACE_RESULT="${RACE_RESULT:-${RACE_PREFIX}.tsv}"
 
-for x in REBUILD_BUCKETS RUN_NEXTSELF_STAGE RUN_HYBRID_STAGE RUN_HYBRID_NS_STAGE; do
+for x in REBUILD_BUCKETS RUN_NEXTSELF_STAGE RUN_HYBRID_STAGE RUN_HYBRID_NS_STAGE RUN_STAGEH; do
   v="${!x}"
   [[ "$v" == 0 || "$v" == 1 ]] || { echo "$x must be 0/1" >&2; exit 2; }
 done
@@ -58,9 +60,9 @@ distances=()
 for d in $HYBRID_NS_DISTANCE_LIST; do case "$d" in 1|2|4) ;; *) echo "bad HYBRID_NS_DISTANCE_LIST entry=$d" >&2; exit 2;; esac; seen=0; for old in "${distances[@]}"; do [[ "$old" == "$d" ]] && seen=1; done; ((seen)) || distances+=("$d"); done
 ((${#distances[@]})) || { echo 'HYBRID_NS_DISTANCE_LIST must not be empty' >&2; exit 2; }
 HYBRID_NS_DISTANCE_LIST="${distances[*]}"
-python3 - "$NEXTSELF_MIN_SPEEDUP" "$HYBRID_MIN_SPEEDUP" "$HYBRID_NS_MIN_SPEEDUP" <<'PY'
+python3 - "$NEXTSELF_MIN_SPEEDUP" "$HYBRID_MIN_SPEEDUP" "$HYBRID_NS_MIN_SPEEDUP" "$STAGEH_MIN_SPEEDUP" <<'PY'
 import sys
-for name,v in zip(('NEXTSELF_MIN_SPEEDUP','HYBRID_MIN_SPEEDUP','HYBRID_NS_MIN_SPEEDUP'),map(float,sys.argv[1:])):
+for name,v in zip(('NEXTSELF_MIN_SPEEDUP','HYBRID_MIN_SPEEDUP','HYBRID_NS_MIN_SPEEDUP','STAGEH_MIN_SPEEDUP'),map(float,sys.argv[1:])):
     if v < 1.0: raise SystemExit(f'{name} must be >=1')
 PY
 [[ -f "$PROFILE_FILE" ]] || { echo "missing PROFILE_FILE=$PROFILE_FILE" >&2; exit 2; }
@@ -98,6 +100,7 @@ PROFILE_SHA="$(sha256sum "$PROFILE_FILE" | awk '{print $1}')"
   printf 'run_nextself_stage=%s\n' "$RUN_NEXTSELF_STAGE"
   printf 'run_hybrid_stage=%s\n' "$RUN_HYBRID_STAGE"
   printf 'run_hybrid_ns_stage=%s\n' "$RUN_HYBRID_NS_STAGE"
+  printf 'run_stageh=%s\n' "$RUN_STAGEH"
   printf 'nextself_threads=%s\n' "$NEXTSELF_THREADS"
   printf 'nextself_search_rows=%s\n' "$NEXTSELF_SEARCH_ROWS"
   printf 'nextself_validate_rows=%s\n' "$NEXTSELF_VALIDATE_ROWS"
@@ -110,6 +113,7 @@ PROFILE_SHA="$(sha256sum "$PROFILE_FILE" | awk '{print $1}')"
   printf 'hybrid_ns_distance_list=%s\n' "$HYBRID_NS_DISTANCE_LIST"
   printf 'hybrid_ns_search_repeats=%s\n' "$HYBRID_NS_SEARCH_REPEATS"
   printf 'hybrid_ns_validate_repeats=%s\n' "$HYBRID_NS_VALIDATE_REPEATS"
+  printf 'stageh_min_speedup=%s\n' "$STAGEH_MIN_SPEEDUP"
   printf 'hybrid8_nextself_transform_preflight=1\n'
   printf 'grand_selector_contract_preflight=1\n'
   printf 'nvcc_version_begin=1\n'
@@ -131,18 +135,18 @@ bash "$ONEESAN_ROOT/scripts/bench/b300-joint-nextgen-hybrid8-preflight.sh"
 bash "$ONEESAN_ROOT/scripts/bench/b300-nextgen-grand-selector-preflight.sh"
 bash "$ONEESAN_ROOT/scripts/bench/b300-grand-selector-contract-preflight.sh"
 
-echo "=== B300 grand first-pass: n=27 head=${HEAD_SHA:0:12} GPUs=$GPU_COUNT SELECT_ONLY=1 geometry_widths=[$HYBRID_NS_WIDTH_LIST] geometry_distances=[$HYBRID_NS_DISTANCE_LIST] ===" >&2
+echo "=== B300 grand first-pass: n=27 head=${HEAD_SHA:0:12} GPUs=$GPU_COUNT SELECT_ONLY=1 geometry_widths=[$HYBRID_NS_WIDTH_LIST] geometry_distances=[$HYBRID_NS_DISTANCE_LIST] stageh=$RUN_STAGEH ===" >&2
 set +e
 PROFILE_FILE="$PROFILE_FILE" ARCH="$ARCH" MAX_WINDOW="$MAX_WINDOW" SMOKE_PRIME="$SMOKE_PRIME" \
   FORCED_TARGET_MIB="$FORCED_TARGET_MIB" BUCKET_TARGET_MIB="$BUCKET_TARGET_MIB" WORK_ROOT="$WORK_ROOT" RACE_PREFIX="$RACE_PREFIX" \
   SELECT_ONLY=1 REBUILD_BUCKETS="$REBUILD_BUCKETS" \
-  RUN_NEXTSELF_STAGE="$RUN_NEXTSELF_STAGE" RUN_HYBRID_STAGE="$RUN_HYBRID_STAGE" RUN_HYBRID_NS_STAGE="$RUN_HYBRID_NS_STAGE" \
+  RUN_NEXTSELF_STAGE="$RUN_NEXTSELF_STAGE" RUN_HYBRID_STAGE="$RUN_HYBRID_STAGE" RUN_HYBRID_NS_STAGE="$RUN_HYBRID_NS_STAGE" RUN_STAGEH="$RUN_STAGEH" \
   NEXTSELF_THREADS="$NEXTSELF_THREADS" NEXTSELF_SEARCH_ROWS="$NEXTSELF_SEARCH_ROWS" \
   NEXTSELF_VALIDATE_ROWS="$NEXTSELF_VALIDATE_ROWS" NEXTSELF_SEARCH_REPEATS="$NEXTSELF_SEARCH_REPEATS" \
   NEXTSELF_VALIDATE_REPEATS="$NEXTSELF_VALIDATE_REPEATS" NEXTSELF_MIN_SPEEDUP="$NEXTSELF_MIN_SPEEDUP" \
   HYBRID_MIN_SPEEDUP="$HYBRID_MIN_SPEEDUP" HYBRID_NS_MIN_SPEEDUP="$HYBRID_NS_MIN_SPEEDUP" \
   HYBRID_NS_WIDTH_LIST="$HYBRID_NS_WIDTH_LIST" HYBRID_NS_DISTANCE_LIST="$HYBRID_NS_DISTANCE_LIST" \
-  HYBRID_NS_SEARCH_REPEATS="$HYBRID_NS_SEARCH_REPEATS" HYBRID_NS_VALIDATE_REPEATS="$HYBRID_NS_VALIDATE_REPEATS" \
+  HYBRID_NS_SEARCH_REPEATS="$HYBRID_NS_SEARCH_REPEATS" HYBRID_NS_VALIDATE_REPEATS="$HYBRID_NS_VALIDATE_REPEATS" STAGEH_MIN_SPEEDUP="$STAGEH_MIN_SPEEDUP" \
   PREFIX="$PREFIX" bash "$ONEESAN_ROOT/scripts/run/b300x8-joint-nextself-hybrid8-select.sh" 27 "$@" \
   2>&1 | tee "$LOG"
 rc=${PIPESTATUS[0]}
@@ -239,6 +243,8 @@ PY
   printf 'B300_GRAND_SELECTED_MAX_WINDOW=%q\n' "$MAX_WINDOW"
   printf 'B300_GRAND_SELECTED_GEOMETRY_WIDTH_LIST=%q\n' "$HYBRID_NS_WIDTH_LIST"
   printf 'B300_GRAND_SELECTED_GEOMETRY_DISTANCE_LIST=%q\n' "$HYBRID_NS_DISTANCE_LIST"
+  printf 'B300_GRAND_SELECTED_STAGEH_ENABLED=%q\n' "$RUN_STAGEH"
+  printf 'B300_GRAND_SELECTED_STAGEH_MIN_SPEEDUP=%q\n' "$STAGEH_MIN_SPEEDUP"
   printf 'B300_GRAND_SELECTED_WORK_DIR=%q\n' "$BEST_WORK"
   printf 'B300_GRAND_SELECTED_CHECKPOINT=%q\n' "$CHECKPOINT"
   printf 'B300_GRAND_SELECTED_RACE_PREFIX=%q\n' "$RACE_PREFIX"
@@ -262,6 +268,8 @@ PY
   printf 'race_result_sha256=%s\n' "$RACE_SHA"
   printf 'geometry_width_list=%s\n' "$HYBRID_NS_WIDTH_LIST"
   printf 'geometry_distance_list=%s\n' "$HYBRID_NS_DISTANCE_LIST"
+  printf 'stageh_enabled=%s\n' "$RUN_STAGEH"
+  printf 'stageh_min_speedup=%s\n' "$STAGEH_MIN_SPEEDUP"
   printf 'promotion_contract=1\n'
 } >>"$META"
 
