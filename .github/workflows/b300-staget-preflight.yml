@@ -4,12 +4,16 @@ on:
   push:
     paths:
       - 'scripts/build/gen-b300-mainrec-ilp2-mate-load-policy.py'
+      - 'scripts/build/b300-forced-nextgen-hybrid8-staget-ilp2-mate-load-policy.sh'
       - 'scripts/bench/b300-mainrec-ilp2-mate-load-policy-staget-preflight.sh'
+      - 'scripts/bench/b300-staget-preflight.sh'
       - '.github/workflows/b300-staget-preflight.yml'
   pull_request:
     paths:
       - 'scripts/build/gen-b300-mainrec-ilp2-mate-load-policy.py'
+      - 'scripts/build/b300-forced-nextgen-hybrid8-staget-ilp2-mate-load-policy.sh'
       - 'scripts/bench/b300-mainrec-ilp2-mate-load-policy-staget-preflight.sh'
+      - 'scripts/bench/b300-staget-preflight.sh'
       - '.github/workflows/b300-staget-preflight.yml'
   workflow_dispatch:
 
@@ -22,5 +26,5 @@ jobs:
     timeout-minutes: 5
     steps:
       - uses: actions/checkout@v4
-      - name: Validate Stage T ILP2 mate load split
-        run: bash scripts/bench/b300-mainrec-ilp2-mate-load-policy-staget-preflight.sh
+      - name: Validate Stage T ILP2 mate load split and composition
+        run: bash scripts/bench/b300-staget-preflight.sh
