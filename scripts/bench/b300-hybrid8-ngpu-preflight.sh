@@ -4,7 +4,8 @@ source "$(dirname -- "${BASH_SOURCE[0]}")/../lib/common.sh"
 
 SWEEP="$ONEESAN_ROOT/scripts/bench/b300-nextgen-hybrid-ilp8-sweep.sh"
 LOCAL="$ONEESAN_ROOT/scripts/bench/b300-local-sm86-hybrid8-sweep.sh"
-for f in "$SWEEP" "$LOCAL"; do
+STAGED="$ONEESAN_ROOT/scripts/bench/b300-local-sm86-hybrid8-staged.sh"
+for f in "$SWEEP" "$LOCAL" "$STAGED"; do
   [[ -f "$f" ]] || { echo "missing $f" >&2; exit 2; }
   bash -n "$f"
 done
@@ -30,4 +31,15 @@ for s in \
   grep -Fq "$s" "$LOCAL" || { echo "local sweep marker missing: $s" >&2; exit 3; }
 done
 
-echo 'b300_hybrid8_ngpu_preflight=OK default_b300_gpus=8 local_sm86_gpus=1 residue_gate=canonical spill_gate=canonical gpu_work=0 actions_triggered=0'
+for s in \
+  'SEARCH_ROWS="${SEARCH_ROWS:-1}"' \
+  'VALIDATE_ROWS="${VALIDATE_ROWS:-4 8}"' \
+  'SEARCH_THRESHOLDS="${SEARCH_THRESHOLDS:-0 262144 1048576 4194304}"' \
+  'VALIDATE_THRESHOLD="${VALIDATE_THRESHOLD:-0}"' \
+  'b300_nextgen_hybrid8_exact_intermediate_match=1' \
+  'b300_nextgen_hybrid8_ngpu=$NGPU' \
+  'b300_local_sm86_hybrid8_staged=OK'; do
+  grep -Fq "$s" "$STAGED" || { echo "local staged marker missing: $s" >&2; exit 3; }
+done
+
+echo 'b300_hybrid8_ngpu_preflight=OK default_b300_gpus=8 local_sm86_gpus=1 residue_gate=canonical spill_gate=canonical staged_rows=1,4,8 gpu_work=0 actions_triggered=0'
