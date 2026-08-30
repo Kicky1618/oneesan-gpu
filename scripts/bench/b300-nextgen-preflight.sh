@@ -16,6 +16,7 @@ shells=(
   scripts/bench/b300-nextgen-hybrid-ilp8-sweep.sh
   scripts/bench/b300-nextgen-hybrid8-staged-calibrate.sh
   scripts/bench/b300-nextgen-hybrid8-nextself-width-sweep.sh
+  scripts/bench/b300-nextgen-hybrid8-nextself-geometry-sweep.sh
   scripts/bench/b300-nextgen-hybrid8-nextself-staged-calibrate.sh
   scripts/bench/b300-mainrec-hybrid-ilp8-transform-preflight.sh
   scripts/run/b300x8-nextgen-hybrid8-staged-fullprime-race.sh
@@ -59,6 +60,7 @@ hybrid8="$ONEESAN_ROOT/scripts/bench/b300-nextgen-hybrid-ilp8-sweep.sh"
 hybrid8_staged="$ONEESAN_ROOT/scripts/bench/b300-nextgen-hybrid8-staged-calibrate.sh"
 hybrid8_race="$ONEESAN_ROOT/scripts/run/b300x8-nextgen-hybrid8-staged-fullprime-race.sh"
 hybrid8_ns_width="$ONEESAN_ROOT/scripts/bench/b300-nextgen-hybrid8-nextself-width-sweep.sh"
+hybrid8_ns_geometry="$ONEESAN_ROOT/scripts/bench/b300-nextgen-hybrid8-nextself-geometry-sweep.sh"
 hybrid8_ns_staged="$ONEESAN_ROOT/scripts/bench/b300-nextgen-hybrid8-nextself-staged-calibrate.sh"
 hybrid8_ns_race="$ONEESAN_ROOT/scripts/run/b300x8-nextgen-hybrid8-nextself-staged-fullprime-race.sh"
 for s in \
@@ -85,7 +87,9 @@ done
 for s in \
   'b300_mainrec_hybrid8_next_self_prefetch=1' \
   'WIDTH must be one of 1,2,4,8' \
+  'DISTANCE must be one of 1,2,4' \
   'prefetch_width=' \
+  'prefetch_distance_iterations=' \
   'main_pull_kernel_ilp8_hybrid' \
   'b300_mainrec_hybrid8_prefetch_next_self_l2'; do
   grep -Fq "$s" "$hybrid_nextself" || { echo "hybrid next-self transform marker missing: $s" >&2; exit 3; }
@@ -132,6 +136,7 @@ for s in \
   'b300x8-race-external-forced-profiled-once.sh'; do
   grep -Fq "$s" "$hybrid8_race" || { echo "hybrid8 full-prime marker missing: $s" >&2; exit 3; }
 done
+# Keep the one-dimensional width sweep as a diagnostic and regression tool.
 for s in \
   'WIDTH_LIST="${WIDTH_LIST:-1 2 4 8}"' \
   'RECURRENCE_HYBRID_ILP8_NEXTSELF_WIDTH="$width"' \
@@ -144,20 +149,39 @@ for s in \
 done
 for s in \
   'WIDTH_LIST="${WIDTH_LIST:-1 2 4 8}"' \
-  'b300-nextgen-hybrid8-nextself-width-sweep.sh' \
+  'DISTANCE_LIST="${DISTANCE_LIST:-1 2 4}"' \
+  'Every geometry candidate is derived' \
+  'B300_HYBRID8_NEXTSELF_WIDTH' \
+  'B300_HYBRID8_NEXTSELF_DISTANCE' \
+  'B300_HYBRID8_NEXTSELF_BEST_WIDTH' \
+  'B300_HYBRID8_NEXTSELF_BEST_DISTANCE' \
+  'geometry control lacks known spill-free ILP2/ILP8 ptxas' \
+  'b300_nextgen_hybrid8_nextself_geometry_sweep=1'; do
+  grep -Fq "$s" "$hybrid8_ns_geometry" || { echo "hybrid8 next-self geometry marker missing: $s" >&2; exit 3; }
+done
+for s in \
+  'WIDTH_LIST="${WIDTH_LIST:-1 2 4 8}"' \
+  'DISTANCE_LIST="${DISTANCE_LIST:-1 2 4}"' \
+  'b300-nextgen-hybrid8-nextself-geometry-sweep.sh' \
   'SELECTED_WIDTH=0' \
-  'FATAL Stage-F width changed during validation' \
+  'SELECTED_DISTANCE=0' \
+  'FATAL Stage-F geometry changed during validation' \
   'B300_HYBRID8_NEXTSELF_FINAL_WIDTH' \
+  'B300_HYBRID8_NEXTSELF_FINAL_DISTANCE' \
   'B300_HYBRID8_NEXTSELF_SEARCH_WIDTHS' \
-  'width_locked=1'; do
-  grep -Fq "$s" "$hybrid8_ns_staged" || { echo "hybrid8 next-self staged-width marker missing: $s" >&2; exit 3; }
+  'B300_HYBRID8_NEXTSELF_SEARCH_DISTANCES' \
+  'geometry_locked=1'; do
+  grep -Fq "$s" "$hybrid8_ns_staged" || { echo "hybrid8 next-self staged-geometry marker missing: $s" >&2; exit 3; }
 done
 for s in \
   'B300_HYBRID8_NEXTSELF_FINAL_WIDTH' \
+  'B300_HYBRID8_NEXTSELF_FINAL_DISTANCE' \
   'B300_HYBRID8_NEXTSELF_PROMOTION_WIDTH' \
+  'B300_HYBRID8_NEXTSELF_PROMOTION_DISTANCE' \
   'B300_HYBRID8_NEXTSELF_PREPARED_WIDTH' \
-  'nextgen_hybrid8_nextself_w${B300_HYBRID8_NEXTSELF_FINAL_WIDTH}_t${B300_HYBRID8_NEXTSELF_THRESHOLD}'; do
-  grep -Fq "$s" "$hybrid8_ns_race" || { echo "hybrid8 next-self width promotion marker missing: $s" >&2; exit 3; }
+  'B300_HYBRID8_NEXTSELF_PREPARED_DISTANCE' \
+  'nextgen_hybrid8_nextself_w${B300_HYBRID8_NEXTSELF_FINAL_WIDTH}_d${B300_HYBRID8_NEXTSELF_FINAL_DISTANCE}_t${B300_HYBRID8_NEXTSELF_THRESHOLD}'; do
+  grep -Fq "$s" "$hybrid8_ns_race" || { echo "hybrid8 next-self geometry promotion marker missing: $s" >&2; exit 3; }
 done
 for s in \
   'SELECT_ONLY="${SELECT_ONLY:-1}"' \
@@ -203,4 +227,4 @@ for s in \
   grep -Fq "$s" "$staged" || { echo "Stage-D calibration marker missing: $s" >&2; exit 3; }
 done
 
-echo 'b300_nextgen_preflight=OK bash_syntax=OK python_ast=OK ilp_partition=OK hybrid_partition=OK hybrid_transform=OK transform_order=OK hybrid_ilp8_builder=OK hybrid_cache_policy=OK hybrid8_nextself=OK hybrid8_nextself_width=OK hybrid_ilp8_sweep=OK hybrid8_staged=OK row_scoped_residue=OK hybrid8_fullprime_gate=OK fingerprint_gate=OK uncapped_baseline=OK spill_gate=OK cgl2_stage_d=OK forced_set_single_pass=OK selection_default=only gpu_work=0 actions_triggered=0'
+echo 'b300_nextgen_preflight=OK bash_syntax=OK python_ast=OK ilp_partition=OK hybrid_partition=OK hybrid_transform=OK transform_order=OK hybrid_ilp8_builder=OK hybrid_cache_policy=OK hybrid8_nextself=OK hybrid8_nextself_width=OK hybrid8_nextself_geometry=OK hybrid_ilp8_sweep=OK hybrid8_staged=OK row_scoped_residue=OK hybrid8_fullprime_gate=OK fingerprint_gate=OK uncapped_baseline=OK spill_gate=OK cgl2_stage_d=OK forced_set_single_pass=OK selection_default=only gpu_work=0 actions_triggered=0'
