@@ -23,6 +23,7 @@ on:
       - 'scripts/bench/b300-grand-selector-contract-preflight.sh'
       - 'scripts/bench/b300-grand-stageg-contract-preflight.sh'
       - 'scripts/bench/b300-grand-stageh-contract-preflight.sh'
+      - 'scripts/bench/b300-grand-stagei-contract-preflight.sh'
       - 'scripts/bench/b300-grand-exact-promotion-preflight.sh'
       - 'scripts/bench/b300-exact-checkpoint-compat-preflight.py'
       - 'scripts/bench/b300-exact-result-verifier-preflight.py'
@@ -49,6 +50,7 @@ on:
       - 'scripts/run/b300x8-grand-stageg-firstpass.sh'
       - 'scripts/run/b300x8-grand-stageg-continue.sh'
       - 'scripts/run/b300x8-grand-stageh-firstpass.sh'
+      - 'scripts/run/b300x8-grand-stagei-firstpass.sh'
       - 'scripts/run/b300x8-grand-promote-exact.sh'
       - 'scripts/run/b300x8-grand-verify-exact.sh'
       - 'src/cpp/probes/b300_low_window_drop_cache_proof.cpp'
@@ -75,6 +77,7 @@ on:
       - 'scripts/bench/b300-grand-selector-contract-preflight.sh'
       - 'scripts/bench/b300-grand-stageg-contract-preflight.sh'
       - 'scripts/bench/b300-grand-stageh-contract-preflight.sh'
+      - 'scripts/bench/b300-grand-stagei-contract-preflight.sh'
       - 'scripts/bench/b300-grand-exact-promotion-preflight.sh'
       - 'scripts/bench/b300-exact-checkpoint-compat-preflight.py'
       - 'scripts/bench/b300-exact-result-verifier-preflight.py'
@@ -101,6 +104,7 @@ on:
       - 'scripts/run/b300x8-grand-stageg-firstpass.sh'
       - 'scripts/run/b300x8-grand-stageg-continue.sh'
       - 'scripts/run/b300x8-grand-stageh-firstpass.sh'
+      - 'scripts/run/b300x8-grand-stagei-firstpass.sh'
       - 'scripts/run/b300x8-grand-promote-exact.sh'
       - 'scripts/run/b300x8-grand-verify-exact.sh'
       - 'src/cpp/probes/b300_low_window_drop_cache_proof.cpp'
@@ -142,6 +146,8 @@ jobs:
         run: bash scripts/bench/b300-grand-stageg-contract-preflight.sh
       - name: Validate normalized Stage H next-mate contract
         run: bash scripts/bench/b300-grand-stageh-contract-preflight.sh
+      - name: Validate grand Stage I independent mate geometry contract
+        run: bash scripts/bench/b300-grand-stagei-contract-preflight.sh
       - name: Validate grand exact promotion and checkpoint compatibility
         run: bash scripts/bench/b300-grand-exact-promotion-preflight.sh
       - name: Validate independent exact CRT verifier
