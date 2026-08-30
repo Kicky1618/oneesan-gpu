@@ -5,13 +5,23 @@ on:
     paths:
       - 'scripts/build/gen-b300-mainrec-pair-block-load-policy.py'
       - 'scripts/build/gen-b300-mainrec-pair-block-cg-l2-policy.py'
+      - 'scripts/build/b300-forced-nextgen-hybrid8-stageo-cg-l2-policy.sh'
       - 'scripts/bench/b300-mainrec-pair-block-cg-l2-policy-preflight.sh'
+      - 'scripts/bench/b300-nextgen-hybrid8-stageo-cg-l2-sweep.sh'
+      - 'scripts/bench/b300-nextgen-hybrid8-stageo-cg-l2-staged-calibrate.sh'
+      - 'scripts/bench/b300-stageo-preflight.sh'
+      - 'scripts/run/b300x8-nextgen-hybrid8-stageo-cg-l2-staged-fullprime-race.sh'
       - '.github/workflows/b300-stageo-preflight.yml'
   pull_request:
     paths:
       - 'scripts/build/gen-b300-mainrec-pair-block-load-policy.py'
       - 'scripts/build/gen-b300-mainrec-pair-block-cg-l2-policy.py'
+      - 'scripts/build/b300-forced-nextgen-hybrid8-stageo-cg-l2-policy.sh'
       - 'scripts/bench/b300-mainrec-pair-block-cg-l2-policy-preflight.sh'
+      - 'scripts/bench/b300-nextgen-hybrid8-stageo-cg-l2-sweep.sh'
+      - 'scripts/bench/b300-nextgen-hybrid8-stageo-cg-l2-staged-calibrate.sh'
+      - 'scripts/bench/b300-stageo-preflight.sh'
+      - 'scripts/run/b300x8-nextgen-hybrid8-stageo-cg-l2-staged-fullprime-race.sh'
       - '.github/workflows/b300-stageo-preflight.yml'
   workflow_dispatch:
 
@@ -26,3 +36,5 @@ jobs:
       - uses: actions/checkout@v4
       - name: Validate Stage O pair block CG L2 transform
         run: bash scripts/bench/b300-mainrec-pair-block-cg-l2-policy-preflight.sh
+      - name: Validate staged Stage O promotion contract
+        run: bash scripts/bench/b300-stageo-preflight.sh
