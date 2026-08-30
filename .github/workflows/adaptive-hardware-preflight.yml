@@ -1,0 +1,44 @@
+name: Adaptive hardware preflight
+
+on:
+  push:
+    branches: [auto-hw-planner]
+    paths:
+      - "scripts/run/auto-plan.py"
+      - "scripts/run/auto.sh"
+      - "scripts/run/adaptive.sh"
+      - "scripts/build/gen-b300-adaptive-storage.py"
+      - "scripts/build/gen-b300-*.py"
+      - "scripts/build/normalize-b300-*.py"
+      - "scripts/build/lower-b300-*.py"
+      - "scripts/bench/auto-plan-selftest.py"
+      - "scripts/bench/b300-adaptive-storage-preflight.py"
+      - "src/cuda/b300/oneesan_cuda_gridfp_b300_hbm32_fullmate_dropN.cu"
+      - ".github/workflows/adaptive-hardware-preflight.yml"
+  pull_request:
+    paths:
+      - "scripts/run/auto-plan.py"
+      - "scripts/run/auto.sh"
+      - "scripts/run/adaptive.sh"
+      - "scripts/build/gen-b300-adaptive-storage.py"
+      - "scripts/bench/auto-plan-selftest.py"
+      - "scripts/bench/b300-adaptive-storage-preflight.py"
+      - "src/cuda/b300/oneesan_cuda_gridfp_b300_hbm32_fullmate_dropN.cu"
+      - ".github/workflows/adaptive-hardware-preflight.yml"
+
+jobs:
+  preflight:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Syntax
+        run: |
+          python -m py_compile scripts/run/auto-plan.py scripts/build/gen-b300-adaptive-storage.py scripts/bench/auto-plan-selftest.py scripts/bench/b300-adaptive-storage-preflight.py
+          bash -n scripts/run/auto.sh scripts/run/adaptive.sh
+      - name: Synthetic planner tests
+        run: python scripts/bench/auto-plan-selftest.py
+      - name: Full generator-chain preflight
+        run: python scripts/bench/b300-adaptive-storage-preflight.py
