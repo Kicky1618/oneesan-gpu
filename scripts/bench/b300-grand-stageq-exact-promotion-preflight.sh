@@ -97,7 +97,7 @@ unchanged="$tmp/unchanged.env"; make_selected "$unchanged" 1 1 1 stagep 128 64 1
 run_bad "$unchanged" unchanged 'accepted Stage Q retained exact upstream Count L2 tuple'
 mismatch_up="$tmp/mismatch-up.env"; cp "$p_valid" "$mismatch_up"; sed -i 's/B300_GRAND_SELECTED_STAGEQ_UPSTREAM_PAIR_L2_BYTES=128/B300_GRAND_SELECTED_STAGEQ_UPSTREAM_PAIR_L2_BYTES=64/' "$mismatch_up"
 run_bad "$mismatch_up" mismatch-up 'Stage-Q upstream Count L2 differs from grand summary'
-mismatch_sel="$tmp/mismatch-sel.env"; cp "$p_valid" "$mismatch_sel"; sed -i 's/B300_GRAND_SELECTED_STAGEQ_PAIR_L2_BYTES=256/B300_GRAND_SELECTED_STAGEQ_PAIR_L2_BYTES=128/' "$mismatch_sel"
+mismatch_sel="$tmp/mismatch-sel.env"; cp "$p_valid" "$mismatch_sel"; sed -i 's/B300_GRAND_SELECTED_STAGEQ_PAIR_L2_BYTES=256/B300_GRAND_SELECTED_STAGEQ_PAIR_L2_BYTES=0/' "$mismatch_sel"
 run_bad "$mismatch_sel" mismatch-sel 'Stage-Q selected Count L2 differs from grand summary'
 
 echo corrupt >>"$payload"
