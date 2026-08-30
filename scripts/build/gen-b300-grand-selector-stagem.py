@@ -108,15 +108,10 @@ elif ((STAGEM_OK)); then
 elif ((STAGEL_OK && NEXTSELF_OK)); then'''
 rep('if ((STAGEL_OK && NEXTSELF_OK)); then', branches, 'Stage-M branch pair')
 
-rep(
-    'stagej_mategeo_grand|stagek_mateevict_grand|stagel_guard_grand)',
-    'stagej_mategeo_grand|stagek_mateevict_grand|stagel_guard_grand|stagem_mateload_grand)',
-    'drop joint base mode',
-)
-# The string above appears twice, once in each case; replacement must cover both.
-# Restore the second occurrence explicitly if it remains.
-if 'stagej_mategeo_grand|stagek_mateevict_grand|stagel_guard_grand)' in s:
-    s = s.replace('stagej_mategeo_grand|stagek_mateevict_grand|stagel_guard_grand)', 'stagej_mategeo_grand|stagek_mateevict_grand|stagel_guard_grand|stagem_mateload_grand)', 1)
+suffix = 'stagej_mategeo_grand|stagek_mateevict_grand|stagel_guard_grand)'
+if s.count(suffix) != 2:
+    raise SystemExit(f'drop-mode suffix: expected two anchors, got {s.count(suffix)}')
+s = s.replace(suffix, 'stagej_mategeo_grand|stagek_mateevict_grand|stagel_guard_grand|stagem_mateload_grand)', 2)
 
 anchor = "  printf 'B300_GRAND_STAGEL_OK=%q\\n' \"$STAGEL_OK\"; printf 'B300_GRAND_STAGEL_MIN_SPEEDUP=%q\\n' \"$STAGEL_MIN_SPEEDUP\"; printf 'B300_GRAND_STAGEL_UPSTREAM_KIND=%q\\n' \"$STAGEL_UPSTREAM_KIND\"; printf 'B300_GRAND_STAGEL_PROFILE=%q\\n' \"${B300_STAGEL_PREPARED_PROFILE:-bb}\"; printf 'B300_GRAND_STAGEL_SELF_GUARD=%q\\n' \"${B300_STAGEL_PREPARED_SELF_GUARD:-branch}\"; printf 'B300_GRAND_STAGEL_MATE_GUARD=%q\\n' \"${B300_STAGEL_PREPARED_MATE_GUARD:-branch}\"; printf 'B300_GRAND_STAGEL_STAGED_SPEEDUP=%q\\n' \"${B300_STAGEL_PREPARED_STAGED_SPEEDUP:-1.0}\"; printf 'B300_GRAND_STAGEL_MANIFEST=%q\\n' \"${B300_STAGEL_PREPARED_MANIFEST:-}\"; printf 'B300_GRAND_STAGEL_SEARCH_PROFILES=%q\\n' \"$STAGEL_GUARD_LIST\"\n"
 rep(anchor, anchor + "  printf 'B300_GRAND_STAGEM_OK=%q\\n' \"$STAGEM_OK\"; printf 'B300_GRAND_STAGEM_MIN_SPEEDUP=%q\\n' \"$STAGEM_MIN_SPEEDUP\"; printf 'B300_GRAND_STAGEM_POLICY=%q\\n' \"${B300_STAGEM_PREPARED_POLICY:-default}\"; printf 'B300_GRAND_STAGEM_STAGED_SPEEDUP=%q\\n' \"${B300_STAGEM_PREPARED_STAGED_SPEEDUP:-1.0}\"; printf 'B300_GRAND_STAGEM_MANIFEST=%q\\n' \"${B300_STAGEM_PREPARED_MANIFEST:-}\"; printf 'B300_GRAND_STAGEM_SEARCH_POLICIES=%q\\n' \"$STAGEM_POLICY_LIST\"\n", 'Stage-M summary')
