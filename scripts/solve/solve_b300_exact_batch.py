@@ -68,11 +68,22 @@ def load_checkpoint(path: Path, n: int, fingerprint: dict) -> dict[int, dict]:
                 f"checkpoint {path} has no compatible solver fingerprint; "
                 "move/remove it or use a separate --work-dir"
             )
-    residues = {int(k): v for k, v in data.get("residues", {}).items()}
+    residues_raw = data.get("residues", {})
+    if not isinstance(residues_raw, dict):
+        raise SystemExit(f"checkpoint {path} residues must be an object")
+    residues = {int(k): v for k, v in residues_raw.items()}
     for p, rec in residues.items():
-        r = int(rec["residue"])
+        if not isinstance(rec, dict) or "residue" not in rec:
+            raise SystemExit(f"checkpoint {path} has malformed residue record for modulus {p}")
+        try:
+            r = int(rec["residue"])
+            wall = float(rec.get("wall_s", 0.0))
+        except (TypeError, ValueError) as exc:
+            raise SystemExit(f"checkpoint {path} has malformed residue record for modulus {p}") from exc
         if p <= 1 or not (0 <= r < p):
             raise SystemExit(f"checkpoint {path} has invalid residue {r} mod {p}")
+        if not math.isfinite(wall) or wall < 0:
+            raise SystemExit(f"checkpoint {path} has invalid wall_s={wall} for modulus {p}")
     return residues
 
 
