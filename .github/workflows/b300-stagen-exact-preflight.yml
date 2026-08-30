@@ -1,0 +1,46 @@
+name: B300 Stage N exact preflight
+
+on:
+  push:
+    paths:
+      - 'scripts/run/b300x8-grand-promote-exact-stagen.sh'
+      - 'scripts/run/b300x8-grand-promote-exact-stagem.sh'
+      - 'scripts/run/b300x8-grand-promote-exact.sh'
+      - 'scripts/bench/b300-grand-stagen-exact-promotion-preflight.sh'
+      - 'scripts/bench/b300-grand-stagem-exact-promotion-preflight.sh'
+      - 'scripts/bench/b300-grand-exact-promotion-preflight.sh'
+      - 'scripts/run/b300x8-grand-verify-exact.sh'
+      - 'scripts/bench/b300-exact-result-verifier-preflight.py'
+      - '.github/workflows/b300-stagen-exact-preflight.yml'
+  pull_request:
+    paths:
+      - 'scripts/run/b300x8-grand-promote-exact-stagen.sh'
+      - 'scripts/run/b300x8-grand-promote-exact-stagem.sh'
+      - 'scripts/run/b300x8-grand-promote-exact.sh'
+      - 'scripts/bench/b300-grand-stagen-exact-promotion-preflight.sh'
+      - 'scripts/bench/b300-grand-stagem-exact-promotion-preflight.sh'
+      - 'scripts/bench/b300-grand-exact-promotion-preflight.sh'
+      - 'scripts/run/b300x8-grand-verify-exact.sh'
+      - 'scripts/bench/b300-exact-result-verifier-preflight.py'
+      - '.github/workflows/b300-stagen-exact-preflight.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  preflight:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - name: Validate Stage N exact provenance
+        run: bash scripts/bench/b300-grand-stagen-exact-promotion-preflight.sh
+      - name: Validate Stage L M exact provenance
+        run: bash scripts/bench/b300-grand-stagem-exact-promotion-preflight.sh
+      - name: Validate base exact promotion and checkpoint compatibility
+        run: bash scripts/bench/b300-grand-exact-promotion-preflight.sh
+      - name: Validate independent exact CRT verifier
+        run: |
+          bash -n scripts/run/b300x8-grand-verify-exact.sh
+          python3 scripts/bench/b300-exact-result-verifier-preflight.py
