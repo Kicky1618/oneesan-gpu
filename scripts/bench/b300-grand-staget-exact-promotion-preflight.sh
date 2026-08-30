@@ -10,7 +10,7 @@ set -euo pipefail
 echo BASE_CALLED
 SH
 chmod +x "$tmp/base.sh"
-echo payload >"$tmp/payload"; (cd "$tmp" && sha256sum payload >manifest)
+echo payload >"$tmp/payload"; sha256sum "$tmp/payload" >"$tmp/manifest"
 manifest="$tmp/manifest"
 make_summary(){ local f="$1" up="$2" lp="$3" lb="$4" lpl2="$5" lbl2="$6" hp="$7" hb="$8" hpl2="$9"; shift 9; local hbl2="$1" hm="$2" hml2="$3" pol="$4" man="$5"; cat >"$f" <<EOF
 B300_GRAND_STAGET_INTEGRATED=1
