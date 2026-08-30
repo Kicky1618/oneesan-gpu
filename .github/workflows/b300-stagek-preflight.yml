@@ -4,9 +4,12 @@ on:
   push:
     paths:
       - 'scripts/bench/b300-stagek-preflight.sh'
+      - 'scripts/bench/b300-grand-stagek-contract-preflight.sh'
       - 'scripts/bench/b300-nextgen-hybrid8-mate-evict-sweep.sh'
       - 'scripts/bench/b300-nextgen-hybrid8-mate-evict-staged-calibrate.sh'
       - 'scripts/run/b300x8-nextgen-hybrid8-mate-evict-stagek-staged-fullprime-race.sh'
+      - 'scripts/run/b300x8-joint-nextself-hybrid8-select.sh'
+      - 'scripts/run/b300x8-grand-firstpass.sh'
       - 'scripts/run/b300x8-grand-stagek-firstpass.sh'
       - 'scripts/run/b300x8-grand-stagek-continue.sh'
       - 'scripts/run/b300x8-nextgen-hybrid8-nextmate-geometry-stagej-staged-fullprime-race.sh'
@@ -20,9 +23,12 @@ on:
   pull_request:
     paths:
       - 'scripts/bench/b300-stagek-preflight.sh'
+      - 'scripts/bench/b300-grand-stagek-contract-preflight.sh'
       - 'scripts/bench/b300-nextgen-hybrid8-mate-evict-sweep.sh'
       - 'scripts/bench/b300-nextgen-hybrid8-mate-evict-staged-calibrate.sh'
       - 'scripts/run/b300x8-nextgen-hybrid8-mate-evict-stagek-staged-fullprime-race.sh'
+      - 'scripts/run/b300x8-joint-nextself-hybrid8-select.sh'
+      - 'scripts/run/b300x8-grand-firstpass.sh'
       - 'scripts/run/b300x8-grand-stagek-firstpass.sh'
       - 'scripts/run/b300x8-grand-stagek-continue.sh'
       - 'scripts/run/b300x8-nextgen-hybrid8-nextmate-geometry-stagej-staged-fullprime-race.sh'
@@ -48,6 +54,8 @@ jobs:
         run: bash scripts/bench/b300-grand-stagej-v2-contract-preflight.sh
       - name: Validate Stage K mate eviction refinement
         run: bash scripts/bench/b300-stagek-preflight.sh
+      - name: Validate canonical integrated Stage K first-pass
+        run: bash scripts/bench/b300-grand-stagek-contract-preflight.sh
       - name: Validate exact promotion and checkpoint compatibility
         run: bash scripts/bench/b300-grand-exact-promotion-preflight.sh
       - name: Validate independent exact CRT verifier
