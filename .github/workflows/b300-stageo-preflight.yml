@@ -6,22 +6,30 @@ on:
       - 'scripts/build/gen-b300-mainrec-pair-block-load-policy.py'
       - 'scripts/build/gen-b300-mainrec-pair-block-cg-l2-policy.py'
       - 'scripts/build/b300-forced-nextgen-hybrid8-stageo-cg-l2-policy.sh'
+      - 'scripts/build/gen-b300-grand-selector-stageo.py'
       - 'scripts/bench/b300-mainrec-pair-block-cg-l2-policy-preflight.sh'
       - 'scripts/bench/b300-nextgen-hybrid8-stageo-cg-l2-sweep.sh'
       - 'scripts/bench/b300-nextgen-hybrid8-stageo-cg-l2-staged-calibrate.sh'
       - 'scripts/bench/b300-stageo-preflight.sh'
+      - 'scripts/bench/b300-grand-stageo-contract-preflight.sh'
       - 'scripts/run/b300x8-nextgen-hybrid8-stageo-cg-l2-staged-fullprime-race.sh'
+      - 'scripts/run/b300x8-joint-nextself-hybrid8-select-stagen.sh'
+      - 'scripts/run/b300x8-joint-nextself-hybrid8-select-stageo.sh'
       - '.github/workflows/b300-stageo-preflight.yml'
   pull_request:
     paths:
       - 'scripts/build/gen-b300-mainrec-pair-block-load-policy.py'
       - 'scripts/build/gen-b300-mainrec-pair-block-cg-l2-policy.py'
       - 'scripts/build/b300-forced-nextgen-hybrid8-stageo-cg-l2-policy.sh'
+      - 'scripts/build/gen-b300-grand-selector-stageo.py'
       - 'scripts/bench/b300-mainrec-pair-block-cg-l2-policy-preflight.sh'
       - 'scripts/bench/b300-nextgen-hybrid8-stageo-cg-l2-sweep.sh'
       - 'scripts/bench/b300-nextgen-hybrid8-stageo-cg-l2-staged-calibrate.sh'
       - 'scripts/bench/b300-stageo-preflight.sh'
+      - 'scripts/bench/b300-grand-stageo-contract-preflight.sh'
       - 'scripts/run/b300x8-nextgen-hybrid8-stageo-cg-l2-staged-fullprime-race.sh'
+      - 'scripts/run/b300x8-joint-nextself-hybrid8-select-stagen.sh'
+      - 'scripts/run/b300x8-joint-nextself-hybrid8-select-stageo.sh'
       - '.github/workflows/b300-stageo-preflight.yml'
   workflow_dispatch:
 
@@ -38,3 +46,5 @@ jobs:
         run: bash scripts/bench/b300-mainrec-pair-block-cg-l2-policy-preflight.sh
       - name: Validate staged Stage O promotion contract
         run: bash scripts/bench/b300-stageo-preflight.sh
+      - name: Validate Stage O grand selector overlay
+        run: bash scripts/bench/b300-grand-stageo-contract-preflight.sh
