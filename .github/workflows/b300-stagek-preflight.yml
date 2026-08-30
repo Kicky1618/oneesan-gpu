@@ -1,0 +1,56 @@
+name: B300 Stage K preflight
+
+on:
+  push:
+    paths:
+      - 'scripts/bench/b300-stagek-preflight.sh'
+      - 'scripts/bench/b300-nextgen-hybrid8-mate-evict-sweep.sh'
+      - 'scripts/bench/b300-nextgen-hybrid8-mate-evict-staged-calibrate.sh'
+      - 'scripts/run/b300x8-nextgen-hybrid8-mate-evict-stagek-staged-fullprime-race.sh'
+      - 'scripts/run/b300x8-grand-stagek-firstpass.sh'
+      - 'scripts/run/b300x8-grand-stagek-continue.sh'
+      - 'scripts/run/b300x8-nextgen-hybrid8-nextmate-geometry-stagej-staged-fullprime-race.sh'
+      - 'scripts/run/b300x8-grand-stagej-firstpass-v2.sh'
+      - 'scripts/bench/b300-grand-stagej-v2-contract-preflight.sh'
+      - 'scripts/run/b300x8-grand-promote-exact.sh'
+      - 'scripts/run/b300x8-grand-verify-exact.sh'
+      - 'scripts/bench/b300-grand-exact-promotion-preflight.sh'
+      - 'scripts/bench/b300-exact-result-verifier-preflight.py'
+      - '.github/workflows/b300-stagek-preflight.yml'
+  pull_request:
+    paths:
+      - 'scripts/bench/b300-stagek-preflight.sh'
+      - 'scripts/bench/b300-nextgen-hybrid8-mate-evict-sweep.sh'
+      - 'scripts/bench/b300-nextgen-hybrid8-mate-evict-staged-calibrate.sh'
+      - 'scripts/run/b300x8-nextgen-hybrid8-mate-evict-stagek-staged-fullprime-race.sh'
+      - 'scripts/run/b300x8-grand-stagek-firstpass.sh'
+      - 'scripts/run/b300x8-grand-stagek-continue.sh'
+      - 'scripts/run/b300x8-nextgen-hybrid8-nextmate-geometry-stagej-staged-fullprime-race.sh'
+      - 'scripts/run/b300x8-grand-stagej-firstpass-v2.sh'
+      - 'scripts/bench/b300-grand-stagej-v2-contract-preflight.sh'
+      - 'scripts/run/b300x8-grand-promote-exact.sh'
+      - 'scripts/run/b300x8-grand-verify-exact.sh'
+      - 'scripts/bench/b300-grand-exact-promotion-preflight.sh'
+      - 'scripts/bench/b300-exact-result-verifier-preflight.py'
+      - '.github/workflows/b300-stagek-preflight.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  preflight:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - name: Validate isolated Stage J contract
+        run: bash scripts/bench/b300-grand-stagej-v2-contract-preflight.sh
+      - name: Validate Stage K mate eviction refinement
+        run: bash scripts/bench/b300-stagek-preflight.sh
+      - name: Validate exact promotion and checkpoint compatibility
+        run: bash scripts/bench/b300-grand-exact-promotion-preflight.sh
+      - name: Validate independent exact CRT verifier
+        run: |
+          bash -n scripts/run/b300x8-grand-verify-exact.sh
+          python3 scripts/bench/b300-exact-result-verifier-preflight.py
