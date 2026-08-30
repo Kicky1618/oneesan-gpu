@@ -118,6 +118,9 @@ fi
 # B300_GRAND_SELECTED_RACE_RESULT_SHA256
 # unsupported grand selection schema
 # schema-3 grand summary Stage-I/J/K single-race proof missing
+# selected binary fingerprint mismatch
+# selected profile fingerprint mismatch
+# single-pass TSV fingerprint mismatch
 # checkpoint fingerprint mismatch
 # race winner contract mismatch
 # solver_fingerprint
