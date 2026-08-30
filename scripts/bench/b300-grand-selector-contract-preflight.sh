@@ -98,8 +98,6 @@ B300_HYBRID8_NEXTSELF_PREPARED_MANIFEST=$ONEESAN_ROOT/work/fake-stagef.sha256
 EOT
 EOF
 
-# Current official Stage I: self-prefetch eviction hint, exported through the
-# collision-free B300_EVICT_* namespace.
 cat >"$root/scripts/run/b300x8-nextgen-hybrid8-selfevict-prepare.sh" <<'EOF'
 #!/usr/bin/env bash
 set -euo pipefail
@@ -120,8 +118,6 @@ B300_EVICT_MANIFEST=$ONEESAN_ROOT/work/fake-stagei.sha256
 EOT
 EOF
 
-# Current Stage J: independent mate-prefetch geometry on top of the selected
-# Stage-F self geometry and optional Stage-I self eviction hint.
 cat >"$root/scripts/run/b300x8-nextgen-hybrid8-nextmate-geometry-stagej-staged-fullprime-race.sh" <<'EOF'
 #!/usr/bin/env bash
 set -euo pipefail
@@ -138,10 +134,10 @@ B300_STAGEJ_PREPARED_MATE_DISTANCE=1
 B300_STAGEJ_PREPARED_SELF_EVICT=$sev
 B300_STAGEJ_PREPARED_MATE_EVICT=$mev
 B300_STAGEJ_PREPARED_BIN=$ONEESAN_ROOT/bin/stagej-mategeo
-B300_STAGEJ_PREPARED_LABEL=stagej_mate_w2_d1_sev$sev_mev$mev
+B300_STAGEJ_PREPARED_LABEL=stagej_mate_w2_d1_sev${sev}_mev${mev}
 B300_STAGEJ_PREPARED_THREADS=512
 B300_STAGEJ_PREPARED_CONTROL_BIN=$ONEESAN_ROOT/bin/stagej-control
-B300_STAGEJ_PREPARED_CONTROL_LABEL=stagej_control_sev$sev
+B300_STAGEJ_PREPARED_CONTROL_LABEL=stagej_control_sev${sev}
 B300_STAGEJ_PREPARED_CONTROL_THREADS=512
 B300_STAGEJ_PREPARED_STAGED_SPEEDUP=1.01
 B300_STAGEJ_PREPARED_MANIFEST=$ONEESAN_ROOT/work/fake-stagej.sha256
