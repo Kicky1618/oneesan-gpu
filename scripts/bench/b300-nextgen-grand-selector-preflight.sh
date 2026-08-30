@@ -7,8 +7,9 @@ FIRSTPASS="$ONEESAN_ROOT/scripts/run/b300x8-grand-firstpass.sh"
 CONTRACT="$ONEESAN_ROOT/scripts/bench/b300-grand-selector-contract-preflight.sh"
 RACE="$ONEESAN_ROOT/scripts/run/b300x8-race-external-forced-profiled-once.sh"
 JOINT="$ONEESAN_ROOT/scripts/run/b300x8-joint-calibrated-select.sh"
+STAGEK="$ONEESAN_ROOT/scripts/run/b300x8-nextgen-hybrid8-mate-evict-stagek-staged-fullprime-race.sh"
 
-for f in "$GRAND" "$FIRSTPASS" "$CONTRACT" "$RACE" "$JOINT"; do
+for f in "$GRAND" "$FIRSTPASS" "$CONTRACT" "$RACE" "$JOINT" "$STAGEK"; do
   [[ -f "$f" ]] || { echo "missing grand-selector dependency=$f" >&2; exit 2; }
   bash -n "$f"
 done
@@ -18,41 +19,52 @@ need(){
   grep -Fq "$marker" "$file" || { echo "$label marker missing: $marker" >&2; exit 3; }
 }
 
-# Core prepare/reject contract. Exit 4 is a candidate rejection, not a fatal
-# selector error; all other nonzero exits must propagate.
+# Exit 4 is a candidate rejection. Any other nonzero status is fatal.
 for s in \
   'PREPARE_ONLY=1 PREPARE_ENV="$JOINT_PREPARE_ENV"' \
   'NEXTSELF_RC == 4' \
   'HYBRID_RC == 4' \
   'HYBRID_NS_RC == 4' \
   'EVICT_RC == 4' \
-  'STAGEJ_RC == 4'; do
+  'STAGEJ_RC == 4' \
+  'STAGEK_RC == 4'; do
   need "$GRAND" "$s" grand-selector
  done
 
-# Stage I is now the self-prefetch eviction-hint stage. Stage J independently
-# searches mate-prefetch geometry while preserving Stage-F self geometry.
+# Stage I tunes self eviction, Stage J tunes independent mate geometry, and
+# Stage K holds both geometries fixed while refining only mate eviction.
 for s in \
   'RUN_STAGEI="${RUN_STAGEI:-1}"' \
   'RUN_STAGEJ="${RUN_STAGEJ:-${RUN_STAGEH:-1}}"' \
+  'RUN_STAGEK="${RUN_STAGEK:-1}"' \
   'STAGEI_MIN_SPEEDUP="${STAGEI_MIN_SPEEDUP:-1.002}"' \
   'STAGEJ_MIN_SPEEDUP="${STAGEJ_MIN_SPEEDUP:-${STAGEH_MIN_SPEEDUP:-1.002}}"' \
+  'STAGEK_MIN_SPEEDUP="${STAGEK_MIN_SPEEDUP:-1.002}"' \
+  'MATE_EVICT_LIST="${MATE_EVICT_LIST:-default normal last}"' \
   'b300x8-nextgen-hybrid8-selfevict-prepare.sh' \
   'b300x8-nextgen-hybrid8-nextmate-geometry-stagej-staged-fullprime-race.sh' \
+  'b300x8-nextgen-hybrid8-mate-evict-stagek-staged-fullprime-race.sh' \
   'Stage-I self-eviction geometry drift' \
   'Stage-J self geometry drift' \
   'Stage-J self eviction drift' \
+  'Stage-K self geometry drift' \
+  'Stage-K mate geometry drift' \
+  'Stage-K self eviction drift' \
+  'Stage-K baseline mate eviction drift' \
   'B300_GRAND_STAGEI_NAMESPACE_ISOLATED=1' \
-  'B300_GRAND_STAGEJ_INTEGRATED=1'; do
-  need "$GRAND" "$s" stage-i-j
+  'B300_GRAND_STAGEJ_INTEGRATED=1' \
+  'B300_GRAND_STAGEK_INTEGRATED=1'; do
+  need "$GRAND" "$s" stage-i-j-k
  done
 
-# Keep the old Stage-H summary keys as compatibility aliases, but require them
-# to be derived from the stronger Stage-J result rather than a separate stage.
 for s in \
   'B300_GRAND_STAGEJ_OK' \
   'B300_GRAND_STAGEJ_MATE_WIDTH' \
   'B300_GRAND_STAGEJ_MATE_DISTANCE' \
+  'B300_GRAND_STAGEK_OK' \
+  'B300_GRAND_STAGEK_BASE_MATE_EVICT' \
+  'B300_GRAND_STAGEK_MATE_EVICT' \
+  'B300_GRAND_STAGEK_SEARCH_EVICTS' \
   'B300_GRAND_STAGEH_OK' \
   'B300_GRAND_STAGEH_WIDTH' \
   'B300_GRAND_STAGEH_DISTANCE' \
@@ -62,6 +74,8 @@ for s in \
  done
 
 for s in \
+  'MODE=stagek_mateevict_grand' \
+  'MODE=stagek_mateevict_joint' \
   'MODE=stagej_mategeo_grand' \
   'MODE=stagej_mategeo_joint' \
   'MODE=stagei_selfevict_grand' \
@@ -72,6 +86,17 @@ for s in \
   'MODE=joint_fallback' \
   'FORCED_EXTRA3_BIN="$E3_BIN"'; do
   need "$GRAND" "$s" candidate-mode
+ done
+
+for s in \
+  'B300_STAGEK_PREPARED=1' \
+  'B300_STAGEK_PREPARED_SELF_WIDTH' \
+  'B300_STAGEK_PREPARED_MATE_WIDTH' \
+  'B300_STAGEK_PREPARED_BASE_MATE_EVICT' \
+  'B300_STAGEK_PREPARED_MATE_EVICT' \
+  'Stage-J promotion manifest mismatch before Stage K' \
+  'sha256sum -c "$MANIFEST"'; do
+  need "$STAGEK" "$s" stage-k-runner
  done
 
 need "$CONTRACT" 'b300_grand_selector_contract_preflight=OK' grand-functional-contract
@@ -92,9 +117,9 @@ if grep -Eq 'SELECT_ONLY=0|SELECT_ONLY="?0"?' "$FIRSTPASS"; then
   exit 3
 fi
 
-# Verify the seven-candidate budget structurally. Five forced-like slots are
-# available; warp/orbit are added by the external race. The strongest composed
-# branches must not waste slots on controls already subsumed by their primary.
+# Five forced-like slots + profiled warp/orbit = seven candidates. Stronger
+# stages replace the first two slots; they must not add a second complete-prime
+# race or waste slots on controls already subsumed by the primary.
 python3 - "$GRAND" <<'PY'
 from pathlib import Path
 import re,sys
@@ -117,7 +142,16 @@ def mapping(b,label,required,forbidden=()):
         if bad in b:
             raise SystemExit(f'{label}: forbidden candidate {bad} occupies budget')
 
-j=block(r'if \(\( STAGEJ_OK && NEXTSELF_OK \)\); then(.*?)elif \(\( STAGEJ_OK \)\); then','stagej+nextself')
+k=block(r'if \(\( STAGEK_OK && NEXTSELF_OK \)\); then(.*?)elif \(\( STAGEK_OK \)\); then','stagek+nextself')
+mapping(k,'stagek+nextself',{
+    'P_BIN':'B300_STAGEK_PREPARED_BIN',
+    'B_BIN':'B300_STAGEK_PREPARED_CONTROL_BIN',
+    'E1_BIN':'B300_HYBRID8_PREPARED_BASE_BIN',
+    'E2_BIN':'B300_NEXTSELF_PREPARED_BIN',
+    'E3_BIN':'JOINT_PRIMARY_BIN',
+},('B300_NEXTSELF_PREPARED_CONTROL_BIN','JOINT_BASE_BIN','B300_STAGEJ_PREPARED_BIN'))
+
+j=block(r'elif \(\( STAGEJ_OK && NEXTSELF_OK \)\); then(.*?)elif \(\( STAGEJ_OK \)\); then','stagej+nextself')
 mapping(j,'stagej+nextself',{
     'P_BIN':'B300_STAGEJ_PREPARED_BIN',
     'B_BIN':'B300_STAGEJ_PREPARED_CONTROL_BIN',
@@ -148,7 +182,7 @@ sep=block(r'elif \(\( NEXTSELF_OK && HYBRID_OK \)\); then(.*?)elif \(\( NEXTSELF
 if 'JOINT_BASE_BIN' in sep:
     raise SystemExit('separate transform branch unexpectedly includes joint base')
 
-print('grand_candidate_budget=OK forced_slots=5 profiled_slots=2 total=7 stagej_mapping=OK stagei_mapping=OK stagef_mapping=OK')
+print('grand_candidate_budget=OK forced_slots=5 profiled_slots=2 total=7 stagek_mapping=OK stagej_mapping=OK stagei_mapping=OK stagef_mapping=OK')
 PY
 
-echo 'b300_nextgen_grand_selector_preflight=OK bash_syntax=OK firstpass_guard=OK rejection_contract=OK stagei_selfevict=OK stagej_mate_geometry=OK compatibility_aliases=OK candidate_budget=7 gpu_work=0 actions_triggered=0'
+echo 'b300_nextgen_grand_selector_preflight=OK bash_syntax=OK firstpass_guard=OK rejection_contract=OK stagei_selfevict=OK stagej_mate_geometry=OK stagek_mate_eviction=OK compatibility_aliases=OK candidate_budget=7 gpu_work=0 actions_triggered=0'
