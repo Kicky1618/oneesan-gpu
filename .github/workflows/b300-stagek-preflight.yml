@@ -7,6 +7,7 @@ on:
       - 'scripts/bench/b300-grand-stagek-contract-preflight.sh'
       - 'scripts/bench/b300-grand-stagem-contract-preflight.sh'
       - 'scripts/bench/b300-grand-stagem-exact-promotion-preflight.sh'
+      - 'scripts/bench/b300-mainrec-pair-block-load-policy-preflight.sh'
       - 'scripts/bench/b300-nextgen-hybrid8-mate-evict-sweep.sh'
       - 'scripts/bench/b300-nextgen-hybrid8-mate-evict-staged-calibrate.sh'
       - 'scripts/bench/b300-nextgen-hybrid8-prefetch-guard-staged-calibrate.sh'
@@ -15,6 +16,7 @@ on:
       - 'scripts/bench/b300-stagem-preflight.sh'
       - 'scripts/bench/b300-mainrec-hybrid8-mate-load-policy-preflight.sh'
       - 'scripts/build/gen-b300-mainrec-hybrid8-mate-load-policy.py'
+      - 'scripts/build/gen-b300-mainrec-pair-block-load-policy.py'
       - 'scripts/build/gen-b300-grand-selector-stagem.py'
       - 'scripts/build/gen-b300-grand-firstpass-stagem.py'
       - 'scripts/build/b300-forced-nextgen-hybrid8-mate-load-policy.sh'
@@ -42,6 +44,7 @@ on:
       - 'scripts/bench/b300-grand-stagek-contract-preflight.sh'
       - 'scripts/bench/b300-grand-stagem-contract-preflight.sh'
       - 'scripts/bench/b300-grand-stagem-exact-promotion-preflight.sh'
+      - 'scripts/bench/b300-mainrec-pair-block-load-policy-preflight.sh'
       - 'scripts/bench/b300-nextgen-hybrid8-mate-evict-sweep.sh'
       - 'scripts/bench/b300-nextgen-hybrid8-mate-evict-staged-calibrate.sh'
       - 'scripts/bench/b300-nextgen-hybrid8-prefetch-guard-staged-calibrate.sh'
@@ -50,6 +53,7 @@ on:
       - 'scripts/bench/b300-stagem-preflight.sh'
       - 'scripts/bench/b300-mainrec-hybrid8-mate-load-policy-preflight.sh'
       - 'scripts/build/gen-b300-mainrec-hybrid8-mate-load-policy.py'
+      - 'scripts/build/gen-b300-mainrec-pair-block-load-policy.py'
       - 'scripts/build/gen-b300-grand-selector-stagem.py'
       - 'scripts/build/gen-b300-grand-firstpass-stagem.py'
       - 'scripts/build/b300-forced-nextgen-hybrid8-mate-load-policy.sh'
@@ -99,6 +103,8 @@ jobs:
         run: bash scripts/bench/b300-grand-stagem-contract-preflight.sh
       - name: Validate Stage L M exact provenance
         run: bash scripts/bench/b300-grand-stagem-exact-promotion-preflight.sh
+      - name: Validate Stage N pair block load policies
+        run: bash scripts/bench/b300-mainrec-pair-block-load-policy-preflight.sh
       - name: Validate exact promotion and checkpoint compatibility
         run: bash scripts/bench/b300-grand-exact-promotion-preflight.sh
       - name: Validate independent exact CRT verifier
