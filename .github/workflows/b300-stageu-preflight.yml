@@ -4,12 +4,16 @@ on:
   push:
     paths:
       - 'scripts/build/gen-b300-mainrec-ilp2-mate-cg-l2-policy.py'
+      - 'scripts/build/b300-forced-nextgen-hybrid8-stageu-ilp2-mate-cg-l2-policy.sh'
       - 'scripts/bench/b300-mainrec-ilp2-mate-cg-l2-stageu-preflight.sh'
+      - 'scripts/bench/b300-stageu-preflight.sh'
       - '.github/workflows/b300-stageu-preflight.yml'
   pull_request:
     paths:
       - 'scripts/build/gen-b300-mainrec-ilp2-mate-cg-l2-policy.py'
+      - 'scripts/build/b300-forced-nextgen-hybrid8-stageu-ilp2-mate-cg-l2-policy.sh'
       - 'scripts/bench/b300-mainrec-ilp2-mate-cg-l2-stageu-preflight.sh'
+      - 'scripts/bench/b300-stageu-preflight.sh'
       - '.github/workflows/b300-stageu-preflight.yml'
   workflow_dispatch:
 
@@ -22,5 +26,7 @@ jobs:
     timeout-minutes: 5
     steps:
       - uses: actions/checkout@v4
-      - name: Validate Stage U ILP2 mate CG L2 split
+      - name: Validate Stage U ILP2 mate CG L2 transform
         run: bash scripts/bench/b300-mainrec-ilp2-mate-cg-l2-stageu-preflight.sh
+      - name: Validate Stage U direct R/S composition
+        run: bash scripts/bench/b300-stageu-preflight.sh
