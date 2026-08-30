@@ -5,14 +5,166 @@ import argparse
 import hashlib
 import json
 import math
-import sys
 from pathlib import Path
 
-HERE = Path(__file__).resolve().parent
-if str(HERE) not in sys.path:
-    sys.path.insert(0, str(HERE))
+PRIMES = [
+    4294967291, 4294967279, 4294967231, 4294967197,
+    4294967189, 4294967161, 4294967143, 4294967111,
+    4294967087, 4294967029, 4294966997, 4294966981,
+    4294966943, 4294966927, 4294966909, 4294966877,
+    4294966829, 4294966813, 4294966769, 4294966667,
+    4294966661, 4294966657, 4294966651, 4294966639,
+    4294966619, 4294966591, 4294966583, 4294966553,
+    4294966477, 4294966447, 4294966441, 4294966427,
+    4294966373, 4294966367, 4294966337, 4294966297,
+    4294966243, 4294966237, 4294966231, 4294966217,
+    4294966187, 4294966177, 4294966163, 4294966153,
+    4294966129, 4294966121, 4294966099, 4294966087,
+]
 
-from solve_b300_exact import crt_pair, primes_for_bound, simple_path_upper_bound
+VERIFIER_MATH_VERSION = "independent-v1"
+
+
+def _is_prime_32(n: int) -> bool:
+    if n < 2:
+        return False
+    small = (2, 3, 5, 7, 11, 13, 17, 19, 23, 29, 31, 37)
+    if n in small:
+        return True
+    if any(n % p == 0 for p in small):
+        return False
+
+    d = n - 1
+    s = 0
+    while d % 2 == 0:
+        s += 1
+        d //= 2
+    for a in (2, 3, 5, 7, 11):
+        if a >= n:
+            continue
+        x = pow(a, d, n)
+        if x in (1, n - 1):
+            continue
+        for _ in range(s - 1):
+            x = x * x % n
+            if x == n - 1:
+                break
+        else:
+            return False
+    return True
+
+
+def _validate_prime_table() -> None:
+    if len(PRIMES) != len(set(PRIMES)):
+        raise SystemExit("independent verifier prime table contains duplicates")
+    if any(a <= b for a, b in zip(PRIMES, PRIMES[1:])):
+        raise SystemExit("independent verifier prime table is not strictly descending")
+    for p in PRIMES:
+        if p >= 1 << 32 or not _is_prime_32(p):
+            raise SystemExit(f"independent verifier prime table contains non-prime p={p}")
+
+
+def _strip_compatible(x: int, y: int, height: int) -> bool:
+    if height <= 1:
+        return True
+    row_mask = (1 << (height - 1)) - 1
+    x_changes = (x ^ (x >> 1)) & row_mask
+    y_changes = (y ^ (y >> 1)) & row_mask
+    top_diff = (x ^ y) & row_mask
+    return (x_changes & y_changes & top_diff) == 0
+
+
+def checkerboard_strip_count(height: int, width: int) -> int:
+    if height < 1 or width < 1:
+        raise ValueError("strip dimensions must be positive")
+    states = 1 << height
+    transitions = [
+        [y for y in range(states) if _strip_compatible(x, y, height)]
+        for x in range(states)
+    ]
+    dp = [1] * states
+    for _ in range(width - 1):
+        nxt = [0] * states
+        for x, ys in enumerate(transitions):
+            count = dp[x]
+            if count == 0:
+                continue
+            for y in ys:
+                nxt[y] += count
+        dp = nxt
+    return sum(dp)
+
+
+def simple_path_upper_bound(n: int, max_strip_height: int = 9) -> tuple[int, list[int]]:
+    if n < 1:
+        return 1, []
+    if max_strip_height < 1:
+        raise ValueError("max_strip_height must be positive")
+
+    hmax = min(n, max_strip_height)
+    strip_counts = [0] + [
+        checkerboard_strip_count(height, n)
+        for height in range(1, hmax + 1)
+    ]
+
+    best: list[int | None] = [None] * (n + 1)
+    partition: list[list[int] | None] = [None] * (n + 1)
+    best[0] = 1
+    partition[0] = []
+    for rows in range(1, n + 1):
+        for height in range(1, min(hmax, rows) + 1):
+            previous = best[rows - height]
+            previous_parts = partition[rows - height]
+            if previous is None or previous_parts is None:
+                continue
+            candidate = previous * strip_counts[height]
+            if best[rows] is None or candidate < best[rows]:
+                best[rows] = candidate
+                partition[rows] = [*previous_parts, height]
+
+    if best[n] is None or partition[n] is None:
+        raise RuntimeError("failed to construct independent strip bound")
+    return best[n], partition[n]
+
+
+def primes_for_bound(bound: int) -> list[int]:
+    if bound < 0:
+        raise ValueError("bound must be non-negative")
+    _validate_prime_table()
+
+    product = 1
+    prefix: list[int] = []
+    for p in PRIMES:
+        prefix.append(p)
+        product *= p
+        if product > bound:
+            return prefix
+    raise SystemExit(
+        f"independent CRT prime capacity insufficient: product has {product.bit_length()} bits, "
+        f"bound has {bound.bit_length()} bits"
+    )
+
+
+def _mod_inverse(a: int, modulus: int) -> int:
+    old_r, r = modulus, a % modulus
+    old_t, t = 0, 1
+    while r:
+        q = old_r // r
+        old_r, r = r, old_r - q * r
+        old_t, t = t, old_t - q * t
+    if old_r != 1:
+        raise ValueError(f"no inverse for {a} modulo {modulus}")
+    return old_t % modulus
+
+
+def crt_pair(x: int, m: int, residue: int, prime: int) -> tuple[int, int]:
+    if m <= 0 or prime <= 1:
+        raise ValueError("CRT moduli must be positive")
+    if not 0 <= residue < prime:
+        raise ValueError(f"residue {residue} outside [0,{prime})")
+    delta = (residue - x) % prime
+    step = delta * _mod_inverse(m, prime) % prime
+    return x + m * step, m * prime
 
 
 def sha256(path: Path) -> str:
@@ -156,6 +308,7 @@ def main() -> int:
     certificate = {
         "schema": 1,
         "verified": True,
+        "verifier_math": VERIFIER_MATH_VERSION,
         "n": args.n,
         "exact": x,
         "rigorous_bound": path_bound,
@@ -179,7 +332,11 @@ def main() -> int:
     tmp.write_text(json.dumps(certificate, indent=2, sort_keys=True) + "\n")
     tmp.replace(cert_path)
 
-    print(f"B300_EXACT_VERIFY_OK n={args.n} exact={x} primes_used={used} modulus_bits={modulus.bit_length()} bound_bits={path_bound.bit_length()}")
+    print(
+        f"B300_EXACT_VERIFY_OK n={args.n} exact={x} primes_used={used} "
+        f"modulus_bits={modulus.bit_length()} bound_bits={path_bound.bit_length()} "
+        f"verifier_math={VERIFIER_MATH_VERSION}"
+    )
     print(f"checkpoint_sha256={checkpoint_sha}")
     print(f"exact_txt_sha256={certificate['exact_txt_sha256']}")
     print(f"solver_binary_sha256={bsha}")

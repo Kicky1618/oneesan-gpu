@@ -13,7 +13,18 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[2]
 SOLVE_DIR = ROOT / "scripts" / "solve"
 sys.path.insert(0, str(SOLVE_DIR))
-from solve_b300_exact import crt_pair, primes_for_bound, simple_path_upper_bound
+from solve_b300_exact import (
+    PRIMES as PROD_PRIMES,
+    crt_pair as prod_crt_pair,
+    primes_for_bound as prod_primes_for_bound,
+    simple_path_upper_bound as prod_simple_path_upper_bound,
+)
+from verify_b300_exact_result import (
+    VERIFIER_MATH_VERSION,
+    crt_pair as verify_crt_pair,
+    primes_for_bound as verify_primes_for_bound,
+    simple_path_upper_bound as verify_simple_path_upper_bound,
+)
 
 VERIFIER = SOLVE_DIR / "verify_b300_exact_result.py"
 WRAPPER = ROOT / "scripts" / "run" / "b300x8-grand-verify-exact.sh"
@@ -62,6 +73,30 @@ def run_wrapper(
     return p
 
 
+# The verifier must not import the production exact solver's CRT/bound code.
+verifier_source = VERIFIER.read_text()
+assert "solve_b300_exact" not in verifier_source
+assert VERIFIER_MATH_VERSION == "independent-v1"
+
+# Cross-check the independently implemented bound and prime-prefix logic against
+# the production implementation on small complete instances. This compares
+# results without sharing code inside the verifier itself.
+for n_check in range(1, 10):
+    prod_bound, prod_parts = prod_simple_path_upper_bound(n_check)
+    verify_bound, verify_parts = verify_simple_path_upper_bound(n_check)
+    assert (verify_bound, verify_parts) == (prod_bound, prod_parts), n_check
+    assert verify_primes_for_bound(verify_bound) == prod_primes_for_bound(prod_bound), n_check
+
+# Cross-check CRT accumulation using different modular-inverse implementations:
+# production uses Python's modular inverse; verifier uses extended Euclid.
+prod_x = verify_x = 0
+prod_modulus = verify_modulus = 1
+for i, prime in enumerate(PROD_PRIMES[:8], 1):
+    residue = (0x9E3779B1 * i + 0x12345) % prime
+    prod_x, prod_modulus = prod_crt_pair(prod_x, prod_modulus, residue, prime)
+    verify_x, verify_modulus = verify_crt_pair(verify_x, verify_modulus, residue, prime)
+    assert (verify_x, verify_modulus) == (prod_x, prod_modulus)
+
 with tempfile.TemporaryDirectory() as td:
     t = Path(td)
     binary = t / "solver.bin"
@@ -69,14 +104,16 @@ with tempfile.TemporaryDirectory() as td:
     bsha = sha(binary)
     psha = "a" * 64
 
+    # Build the fixture with production math, then require the independent
+    # verifier to reconstruct and accept it.
     n = 1
-    bound, _ = simple_path_upper_bound(n)
-    prefix = primes_for_bound(bound)
+    bound, _ = prod_simple_path_upper_bound(n)
+    prefix = prod_primes_for_bound(bound)
     assert len(prefix) == 1
     prime = prefix[0]
     residue = 1
     assert residue <= bound < prime
-    x, modulus = crt_pair(0, 1, residue, prime)
+    x, modulus = prod_crt_pair(0, 1, residue, prime)
     assert x == residue and modulus > bound
 
     checkpoint = t / "checkpoint.json"
@@ -118,6 +155,7 @@ with tempfile.TemporaryDirectory() as td:
     run(common, True, "B300_EXACT_VERIFY_OK")
     d = json.loads(cert.read_text())
     assert d["verified"] is True and d["exact"] == x and d["primes_used"] == 1
+    assert d["verifier_math"] == VERIFIER_MATH_VERSION
     assert d["checkpoint_sha256"] == csha
     assert d["exact_txt_sha256"] == sha(exact)
     assert d["solver_binary_sha256"] == bsha
@@ -232,6 +270,7 @@ exec {shlex.quote(sys.executable)} "$@"
 
 print(
     "b300-exact-result-verifier-preflight OK "
+    "independent_math=1 no_solver_math_import=1 cross_impl_bound=1 cross_impl_crt=1 "
     "synthetic_complete_crt=1 certificate=1 exact_tamper_rejected=1 "
     "checkpoint_tamper_rejected=1 binary_tamper_rejected=1 "
     "wrapper_schema1=1 wrapper_schema3=1 wrapper_schema4_rejected=1 "
