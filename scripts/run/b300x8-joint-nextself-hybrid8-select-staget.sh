@@ -2,7 +2,7 @@
 set -euo pipefail
 source "$(dirname -- "${BASH_SOURCE[0]}")/../lib/common.sh"
 STAGES_WRAP="${STAGES_WRAP:-$ONEESAN_ROOT/scripts/run/b300x8-joint-nextself-hybrid8-select-stages.sh}"
-GENERATOR="${GENERATOR:-$ONEESAN_ROOT/scripts/build/gen-b300-grand-selector-staget.py}"
+GENERATOR="${GENERATOR:-$ONEESAN_ROOT/scripts/build/gen-b300-grand-selector-staget-compat.py}"
 PATCH_ONLY="${PATCH_ONLY:-0}"
 [[ "$PATCH_ONLY" == 0 || "$PATCH_ONLY" == 1 ]] || exit 2
 [[ -s "$STAGES_WRAP" && -s "$GENERATOR" ]] || exit 2
