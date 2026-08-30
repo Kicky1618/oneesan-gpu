@@ -8,10 +8,10 @@ PROFILE_FILE="${PROFILE_FILE:-$ONEESAN_ROOT/work/b300_hbm_profile_refined21.env}
 STAGE_F_ENV="${STAGE_F_ENV:-$ONEESAN_ROOT/work/b300_nextgen_hybrid8_nextself_staged_winner.env}"
 STAGEJ_WINNER_ENV="${STAGEJ_WINNER_ENV:-$ONEESAN_ROOT/work/b300_nextgen_hybrid8_nextmate_geometry_stagej_staged_winner.env}"
 STAGEJ_PREPARE_ENV="${STAGEJ_PREPARE_ENV:-$ONEESAN_ROOT/work/b300_nextgen_hybrid8_nextmate_geometry_stagej_fullprime_n27_prepared.env}"
-ARCH="${ARCH:-native}"; MOD="${MOD:-4294967291}"; TARGET_MIB="${TARGET_MIB:-65536}"; MAX_WINDOW="${MAX_WINDOW:-14}"
+ARCH="${ARCH:-native}"; MOD="${MOD:-4294967291}"; TARGET_MIB="${TARGET_MIB:-65536}"; MAX_WINDOW="${MAX_WINDOW:-14}"; NGPU="${NGPU:-8}"
 RUN_STAGED="${RUN_STAGED:-1}"; SELECT_ONLY="${SELECT_ONLY:-1}"; REBUILD_BUCKETS="${REBUILD_BUCKETS:-1}"; PREPARE_ONLY="${PREPARE_ONLY:-0}"
 MIN_SPEEDUP="${MIN_SPEEDUP:-1.002}"; EVICT_LIST="${EVICT_LIST:-default normal last}"
-STAGED_PREFIX="${STAGED_PREFIX:-$ONEESAN_ROOT/work/b300_nextgen_hybrid8_mate_evict_stagek_staged}"
+STAGED_PREFIX="${STAGED_PREFIX:-$ONEESAN_ROOT/work/b300_nextgen_hybrid8_mate_evict_stagek_staged_g${NGPU}}"
 WINNER_ENV="${WINNER_ENV:-${STAGED_PREFIX}_winner.env}"
 MANIFEST="${MANIFEST:-${WINNER_ENV%.env}_promotion-inputs.sha256}"
 RACE_PREFIX="${RACE_PREFIX:-$ONEESAN_ROOT/work/b300_nextgen_hybrid8_mate_evict_stagek_fullprime_n27}"
@@ -19,6 +19,7 @@ PREPARE_ENV="${PREPARE_ENV:-${RACE_PREFIX}_prepared.env}"
 PROMOTION_ENV="${PROMOTION_ENV:-${RACE_PREFIX}_promotion.env}"
 for x in RUN_STAGED SELECT_ONLY REBUILD_BUCKETS PREPARE_ONLY; do v="${!x}"; [[ "$v" == 0 || "$v" == 1 ]] || exit 2; done
 for x in MOD TARGET_MIB MAX_WINDOW; do v="${!x}"; [[ "$v" =~ ^[1-9][0-9]*$ ]] || { echo "$x must be positive integer" >&2; exit 2; }; done
+[[ "$NGPU" =~ ^[1-8]$ ]] || { echo 'NGPU must be 1..8' >&2; exit 2; }
 for f in "$PROFILE_FILE" "$STAGE_F_ENV" "$STAGEJ_WINNER_ENV" "$STAGEJ_PREPARE_ENV"; do [[ -s "$f" ]] || { echo "missing Stage-K input=$f" >&2; exit 2; }; done
 command -v sha256sum >/dev/null || exit 2
 python3 - "$MIN_SPEEDUP" <<'PY'
@@ -47,17 +48,18 @@ sha256sum -c "$B300_STAGEJ_PREPARED_MANIFEST" >/dev/null || {
 STAGEJ_MANIFEST_SHA="$(sha256sum "$B300_STAGEJ_PREPARED_MANIFEST" | awk '{print $1}')"
 
 if [[ "$RUN_STAGED" == 1 ]]; then
-  echo '=== Stage K mate-eviction staged calibration ===' >&2
+  echo "=== Stage K mate-eviction staged calibration ngpu=$NGPU ===" >&2
   STAGE_F_ENV="$STAGE_F_ENV" STAGEJ_WINNER_ENV="$STAGEJ_WINNER_ENV" STAGEJ_PREPARE_ENV="$STAGEJ_PREPARE_ENV" \
-    ARCH="$ARCH" MOD="$MOD" TARGET_MIB="$TARGET_MIB" MAX_WINDOW="$MAX_WINDOW" EVICT_LIST="$EVICT_LIST" MIN_SPEEDUP="$MIN_SPEEDUP" \
+    ARCH="$ARCH" MOD="$MOD" TARGET_MIB="$TARGET_MIB" MAX_WINDOW="$MAX_WINDOW" NGPU="$NGPU" EVICT_LIST="$EVICT_LIST" MIN_SPEEDUP="$MIN_SPEEDUP" \
     PREFIX="$STAGED_PREFIX" FINAL_ENV="$WINNER_ENV" bash "$ONEESAN_ROOT/scripts/bench/b300-nextgen-hybrid8-mate-evict-staged-calibrate.sh"
 fi
 [[ -s "$WINNER_ENV" ]] || { echo "missing Stage-K winner env=$WINNER_ENV" >&2; exit 3; }
 # shellcheck disable=SC1090
 source "$WINNER_ENV"
-for k in B300_STAGEK_STAGED_VALIDATED B300_STAGEK_FINAL_ENABLED B300_STAGEK_SELF_WIDTH B300_STAGEK_SELF_DISTANCE B300_STAGEK_SELF_EVICT B300_STAGEK_MATE_WIDTH B300_STAGEK_MATE_DISTANCE B300_STAGEK_BASE_MATE_EVICT B300_STAGEK_FINAL_MATE_EVICT B300_STAGEK_FINAL_BIN B300_STAGEK_FINAL_THREADS B300_STAGEK_FINAL_SPEEDUP B300_STAGEK_FINAL_SPILL_FREE B300_STAGEK_CONTROL_BIN B300_STAGEK_CONTROL_THREADS B300_STAGEK_FINAL_STAGE_ROWS B300_STAGEK_FINAL_STAGE_RESIDUE; do
+for k in B300_STAGEK_STAGED_VALIDATED B300_STAGEK_FINAL_ENABLED B300_STAGEK_NGPU B300_STAGEK_SELF_WIDTH B300_STAGEK_SELF_DISTANCE B300_STAGEK_SELF_EVICT B300_STAGEK_MATE_WIDTH B300_STAGEK_MATE_DISTANCE B300_STAGEK_BASE_MATE_EVICT B300_STAGEK_FINAL_MATE_EVICT B300_STAGEK_FINAL_BIN B300_STAGEK_FINAL_THREADS B300_STAGEK_FINAL_SPEEDUP B300_STAGEK_FINAL_SPILL_FREE B300_STAGEK_CONTROL_BIN B300_STAGEK_CONTROL_THREADS B300_STAGEK_FINAL_STAGE_ROWS B300_STAGEK_FINAL_STAGE_RESIDUE; do
   [[ -n "${!k+x}" ]] || { echo "Stage-K winner env missing $k" >&2; exit 3; }
 done
+[[ "$B300_STAGEK_NGPU" == "$NGPU" ]] || { echo "Stage-K GPU count mismatch requested=$NGPU winner=$B300_STAGEK_NGPU" >&2; exit 3; }
 [[ "$B300_STAGEK_STAGED_VALIDATED" == 1 && "$B300_STAGEK_FINAL_ENABLED" == 1 && "$B300_STAGEK_FINAL_SPILL_FREE" == 1 ]] || { echo 'Stage K did not survive staged validation' >&2; exit 4; }
 for w in "$B300_STAGEK_SELF_WIDTH" "$B300_STAGEK_MATE_WIDTH"; do case "$w" in 1|2|4|8) ;; *) exit 3;; esac; done
 for d in "$B300_STAGEK_SELF_DISTANCE" "$B300_STAGEK_MATE_DISTANCE"; do case "$d" in 1|2|4) ;; *) exit 3;; esac; done
@@ -85,6 +87,7 @@ control_label="stagek_mateevict_${B300_STAGEK_BASE_MATE_EVICT}_control"
 cat >"$PROMOTION_ENV" <<EOF
 B300_STAGEK_PROMOTION_VALIDATED=1
 B300_STAGEK_PROMOTION_MOD=$MOD
+B300_STAGEK_PROMOTION_NGPU=$NGPU
 B300_STAGEK_PROMOTION_BIN=$(printf '%q' "$B300_STAGEK_FINAL_BIN")
 B300_STAGEK_PROMOTION_BIN_SHA256=$FINAL_SHA
 B300_STAGEK_PROMOTION_THREADS=$B300_STAGEK_FINAL_THREADS
@@ -113,6 +116,7 @@ EOF
 {
   printf 'B300_STAGEK_PREPARED=1\n'
   printf 'B300_STAGEK_PREPARED_MOD=%q\n' "$MOD"
+  printf 'B300_STAGEK_PREPARED_NGPU=%q\n' "$NGPU"
   printf 'B300_STAGEK_PREPARED_BIN=%q\n' "$B300_STAGEK_FINAL_BIN"
   printf 'B300_STAGEK_PREPARED_LABEL=%q\n' "$label"
   printf 'B300_STAGEK_PREPARED_THREADS=%q\n' "$B300_STAGEK_FINAL_THREADS"
@@ -133,10 +137,11 @@ EOF
 } >"$PREPARE_ENV"
 if [[ "$PREPARE_ONLY" == 1 ]]; then
   cat "$PREPARE_ENV"
-  echo "STAGE K PREPARED mod=$MOD mate_evict=${B300_STAGEK_FINAL_MATE_EVICT} baseline=${B300_STAGEK_BASE_MATE_EVICT} speedup=${B300_STAGEK_FINAL_SPEEDUP}x env=$PREPARE_ENV" >&2
+  echo "STAGE K PREPARED mod=$MOD ngpu=$NGPU mate_evict=${B300_STAGEK_FINAL_MATE_EVICT} baseline=${B300_STAGEK_BASE_MATE_EVICT} speedup=${B300_STAGEK_FINAL_SPEEDUP}x env=$PREPARE_ENV" >&2
   exit 0
 fi
 
+[[ "$NGPU" == 8 ]] || { echo 'Stage-K complete-prime promotion requires NGPU=8; use PREPARE_ONLY=1 for local screening' >&2; exit 2; }
 echo "=== Stage K full-prime race: $label vs $control_label vs profiled warp/orbit ===" >&2
 exec env PROFILE_FILE="$PROFILE_FILE" ARCH="$ARCH" SMOKE_PRIME="$MOD" MAX_WINDOW="$MAX_WINDOW" FORCED_TARGET_MIB="$TARGET_MIB" \
   FORCED_OVERRIDE_BIN="$B300_STAGEK_FINAL_BIN" FORCED_OVERRIDE_LABEL="$label" FORCED_OVERRIDE_THREADS="$B300_STAGEK_FINAL_THREADS" \
