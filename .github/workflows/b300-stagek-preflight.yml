@@ -7,6 +7,10 @@ on:
       - 'scripts/bench/b300-grand-stagek-contract-preflight.sh'
       - 'scripts/bench/b300-nextgen-hybrid8-mate-evict-sweep.sh'
       - 'scripts/bench/b300-nextgen-hybrid8-mate-evict-staged-calibrate.sh'
+      - 'scripts/bench/b300-nextgen-hybrid8-prefetch-guard-staged-calibrate.sh'
+      - 'scripts/bench/b300-nextgen-hybrid8-mate-load-policy-sweep.sh'
+      - 'scripts/bench/b300-nextgen-hybrid8-mate-load-policy-staged-calibrate.sh'
+      - 'scripts/bench/b300-stagem-preflight.sh'
       - 'scripts/bench/b300-mainrec-hybrid8-mate-load-policy-preflight.sh'
       - 'scripts/build/gen-b300-mainrec-hybrid8-mate-load-policy.py'
       - 'scripts/build/b300-forced-nextgen-hybrid8-mate-load-policy.sh'
@@ -29,6 +33,10 @@ on:
       - 'scripts/bench/b300-grand-stagek-contract-preflight.sh'
       - 'scripts/bench/b300-nextgen-hybrid8-mate-evict-sweep.sh'
       - 'scripts/bench/b300-nextgen-hybrid8-mate-evict-staged-calibrate.sh'
+      - 'scripts/bench/b300-nextgen-hybrid8-prefetch-guard-staged-calibrate.sh'
+      - 'scripts/bench/b300-nextgen-hybrid8-mate-load-policy-sweep.sh'
+      - 'scripts/bench/b300-nextgen-hybrid8-mate-load-policy-staged-calibrate.sh'
+      - 'scripts/bench/b300-stagem-preflight.sh'
       - 'scripts/bench/b300-mainrec-hybrid8-mate-load-policy-preflight.sh'
       - 'scripts/build/gen-b300-mainrec-hybrid8-mate-load-policy.py'
       - 'scripts/build/b300-forced-nextgen-hybrid8-mate-load-policy.sh'
@@ -67,6 +75,8 @@ jobs:
           python3 -m py_compile scripts/build/gen-b300-mainrec-hybrid8-mate-load-policy.py
           bash -n scripts/build/b300-forced-nextgen-hybrid8-mate-load-policy.sh
           bash scripts/bench/b300-mainrec-hybrid8-mate-load-policy-preflight.sh
+      - name: Validate Stage L to Stage M isolation
+        run: bash scripts/bench/b300-stagem-preflight.sh
       - name: Validate exact promotion and checkpoint compatibility
         run: bash scripts/bench/b300-grand-exact-promotion-preflight.sh
       - name: Validate independent exact CRT verifier
