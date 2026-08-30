@@ -13,9 +13,14 @@ on:
       - 'scripts/bench/b300-stageq-preflight.sh'
       - 'scripts/bench/b300-grand-stageq-contract-preflight.sh'
       - 'scripts/bench/b300-grand-stageq-firstpass-preflight.sh'
+      - 'scripts/bench/b300-grand-stageq-exact-promotion-preflight.sh'
+      - 'scripts/bench/b300-grand-latest-entrypoint-preflight.sh'
       - 'scripts/run/b300x8-nextgen-hybrid8-stageq-ilp8-count-cg-l2-staged-fullprime-race.sh'
       - 'scripts/run/b300x8-joint-nextself-hybrid8-select-stageq.sh'
       - 'scripts/run/b300x8-grand-firstpass-stageq.sh'
+      - 'scripts/run/b300x8-grand-promote-exact-stageq.sh'
+      - 'scripts/run/b300x8-grand-firstpass-latest.sh'
+      - 'scripts/run/b300x8-grand-promote-exact-latest.sh'
       - '.github/workflows/b300-stageq-preflight.yml'
   pull_request:
     paths:
@@ -29,9 +34,14 @@ on:
       - 'scripts/bench/b300-stageq-preflight.sh'
       - 'scripts/bench/b300-grand-stageq-contract-preflight.sh'
       - 'scripts/bench/b300-grand-stageq-firstpass-preflight.sh'
+      - 'scripts/bench/b300-grand-stageq-exact-promotion-preflight.sh'
+      - 'scripts/bench/b300-grand-latest-entrypoint-preflight.sh'
       - 'scripts/run/b300x8-nextgen-hybrid8-stageq-ilp8-count-cg-l2-staged-fullprime-race.sh'
       - 'scripts/run/b300x8-joint-nextself-hybrid8-select-stageq.sh'
       - 'scripts/run/b300x8-grand-firstpass-stageq.sh'
+      - 'scripts/run/b300x8-grand-promote-exact-stageq.sh'
+      - 'scripts/run/b300x8-grand-firstpass-latest.sh'
+      - 'scripts/run/b300x8-grand-promote-exact-latest.sh'
       - '.github/workflows/b300-stageq-preflight.yml'
   workflow_dispatch:
 
@@ -52,3 +62,7 @@ jobs:
         run: bash scripts/bench/b300-grand-stageq-contract-preflight.sh
       - name: Validate Stage Q grand firstpass contract
         run: bash scripts/bench/b300-grand-stageq-firstpass-preflight.sh
+      - name: Validate Stage Q exact provenance
+        run: bash scripts/bench/b300-grand-stageq-exact-promotion-preflight.sh
+      - name: Validate latest grand entrypoints
+        run: bash scripts/bench/b300-grand-latest-entrypoint-preflight.sh
