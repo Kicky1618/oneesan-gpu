@@ -9,8 +9,8 @@ need(){ grep -Fq "$2" "$1" || { echo "Stage-T marker missing in $1: $2" >&2; exi
 for s in \
   'Stage T requires Stage-R ILP2 pair/block policy marker' \
   'Stage T changed ILP8 high-state kernel' \
-  'b300_mainrec_staget_ilp2_mate_load_policy_cg' \
-  'b300_mainrec_staget_ilp2_mate_load_policy_cs' \
+  "helper=f'b300_mainrec_staget_ilp2_mate_load_policy_{policy}'" \
+  "intrinsic='__ldcg' if policy=='cg' else '__ldcs'" \
   'high_policy=' \
   'high_l2_bytes=' \
   'stages_preserved='; do need "$GEN" "$s"; done
