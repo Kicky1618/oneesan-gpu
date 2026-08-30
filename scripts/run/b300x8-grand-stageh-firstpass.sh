@@ -12,13 +12,14 @@ STAGEH_MIN_SPEEDUP="${STAGEH_MIN_SPEEDUP:-1.002}"
 PREFIX="${PREFIX:-$ONEESAN_ROOT/work/b300_grand_stageh_firstpass_n27}"
 BASE_PREFIX="${BASE_PREFIX:-${PREFIX}.base}"; BASE_SELECTED_ENV="${BASE_SELECTED_ENV:-${BASE_PREFIX}.selected.env}"; STAGE_F_ENV="${STAGE_F_ENV:-${BASE_PREFIX}.hybrid8-nextself_winner.env}"
 BASE_GRAND_ENV="${BASE_GRAND_ENV:-${BASE_PREFIX}.race_grand.env}"
-INTEGRATED_STAGEH_PREPARE="${INTEGRATED_STAGEH_PREPARE:-${BASE_PREFIX}.stageh-nextmate.prepared.env}"
+INTEGRATED_STAGEJ_PREPARE="${INTEGRATED_STAGEJ_PREPARE:-${BASE_PREFIX}.stagej-mategeo.prepared.env}"
+INTEGRATED_LEGACY_STAGEH_PREPARE="${INTEGRATED_LEGACY_STAGEH_PREPARE:-${BASE_PREFIX}.stageh-nextmate.prepared.env}"
 STAGEH_PREFIX="${STAGEH_PREFIX:-${PREFIX}.stageh}"; STAGEH_ENV="${STAGEH_ENV:-${STAGEH_PREFIX}_winner.env}"; STAGEH_PREPARE_ENV="${STAGEH_PREPARE_ENV:-${PREFIX}.stageh.prepared.env}"; STAGEH_RACE_PREFIX="${STAGEH_RACE_PREFIX:-${PREFIX}.stageh.promote}"
 FINAL_RACE_PREFIX="${FINAL_RACE_PREFIX:-${PREFIX}.race}"; FINAL_RESULT="${FINAL_RESULT:-${FINAL_RACE_PREFIX}.tsv}"; FINAL_LOG="${FINAL_LOG:-${PREFIX}.log}"; SELECTED_ENV="${SELECTED_ENV:-${PREFIX}.selected.env}"
 STAGEH_META="${STAGEH_META:-${PREFIX}.meta}"
 mkdir -p "$(dirname "$SELECTED_ENV")" "$(dirname "$FINAL_LOG")" "$WORK_ROOT"
 
-echo '=== Stage H grand: existing grand first-pass ===' >&2
+echo '=== Stage H compatibility: existing grand first-pass ===' >&2
 PROFILE_FILE="$PROFILE_FILE" ARCH="$ARCH" MAX_WINDOW="$MAX_WINDOW" SMOKE_PRIME="$SMOKE_PRIME" FORCED_TARGET_MIB="$FORCED_TARGET_MIB" BUCKET_TARGET_MIB="$BUCKET_TARGET_MIB" REBUILD_BUCKETS="$REBUILD_BUCKETS" WORK_ROOT="$WORK_ROOT" PREFIX="$BASE_PREFIX" \
   STAGEH_MIN_SPEEDUP="$STAGEH_MIN_SPEEDUP" \
   bash "$ONEESAN_ROOT/scripts/run/b300x8-grand-firstpass.sh" 27
@@ -32,26 +33,36 @@ BASE_PROFILE_FILE="$B300_GRAND_SELECTED_PROFILE_FILE"; BASE_PROFILE_SHA="$B300_G
 BASE_SMOKE_PRIME="$B300_GRAND_SELECTED_SMOKE_PRIME"; BASE_MAX_WINDOW="$B300_GRAND_SELECTED_MAX_WINDOW"
 [[ -x "$BASE_BIN" ]] || exit 3
 
-# Current grand selectors evaluate Stage H before the one complete-prime race.
-# If that provenance is present, do not stage or race Stage H a second time.
+# Current grand selectors integrate mate geometry as Stage J and expose the old
+# B300_GRAND_STAGEH_* keys as compatibility aliases. If that provenance is
+# present, never stage/race the legacy Stage-H path a second time.
 if [[ -s "$BASE_GRAND_ENV" ]] && grep -q '^B300_GRAND_STAGEH_OK=' "$BASE_GRAND_ENV"; then
   # shellcheck disable=SC1090
   source "$BASE_GRAND_ENV"
   APPLICABLE="${B300_GRAND_HYBRID8_NEXTSELF_OK:-0}"
   PROMOTED=0
-  if [[ "${B300_GRAND_STAGEH_OK:-0}" == 1 && "$B300_GRAND_MODE" == stageh_nextmate_* && "$BASE_BIN" == "$B300_GRAND_PRIMARY_BIN" ]]; then
-    PROMOTED=1
+  if [[ "${B300_GRAND_STAGEH_OK:-0}" == 1 && "$BASE_BIN" == "$B300_GRAND_PRIMARY_BIN" ]]; then
+    case "$B300_GRAND_MODE" in
+      stagej_mategeo_*|stageh_nextmate_*) PROMOTED=1 ;;
+    esac
   fi
   H_SPEED=0
   H_HIGH=0
   H_PREPARE=""
-  if [[ -s "$INTEGRATED_STAGEH_PREPARE" ]]; then
+  if [[ -s "$INTEGRATED_STAGEJ_PREPARE" ]]; then
     # shellcheck disable=SC1090
-    source "$INTEGRATED_STAGEH_PREPARE"
+    source "$INTEGRATED_STAGEJ_PREPARE"
+    if [[ "${B300_STAGEJ_PREPARED:-0}" == 1 ]]; then
+      H_SPEED="${B300_STAGEJ_PREPARED_STAGED_SPEEDUP:-0}"
+      H_PREPARE="$INTEGRATED_STAGEJ_PREPARE"
+    fi
+  elif [[ -s "$INTEGRATED_LEGACY_STAGEH_PREPARE" ]]; then
+    # shellcheck disable=SC1090
+    source "$INTEGRATED_LEGACY_STAGEH_PREPARE"
     if [[ "${B300_STAGEH_PREPARED:-0}" == 1 ]]; then
       H_SPEED="${B300_STAGEH_PREPARED_SPEEDUP:-0}"
       H_HIGH="${B300_STAGEH_PREPARED_HIGH_S:-0}"
-      H_PREPARE="$INTEGRATED_STAGEH_PREPARE"
+      H_PREPARE="$INTEGRATED_LEGACY_STAGEH_PREPARE"
     fi
   fi
   cp "$BASE_SELECTED_ENV" "$SELECTED_ENV"
