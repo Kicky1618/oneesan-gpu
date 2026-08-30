@@ -70,7 +70,7 @@ jobs:
         run: bash scripts/bench/b300-grand-stages-exact-promotion-preflight.sh
       - name: Validate Stage S exact control-path pinning
         run: bash scripts/bench/b300-grand-stages-exact-controlpath-preflight.sh
-      - name: Validate latest Stage S entrypoints
+      - name: Validate latest Stage T entrypoints
         run: bash scripts/bench/b300-grand-latest-entrypoint-preflight.sh
-      - name: Validate latest Stage S environment preflight
+      - name: Validate latest Stage T environment preflight
         run: bash scripts/bench/b300-latest-environment-preflight-test.sh
