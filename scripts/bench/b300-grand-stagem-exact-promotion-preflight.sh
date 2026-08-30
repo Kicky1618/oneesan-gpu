@@ -116,6 +116,15 @@ bad_speed="$tmp/bad-speed.env"; cp "$new" "$bad_speed"; sed -i 's/B300_GRAND_SEL
 run_canon_bad "$bad_speed"
 grep -Fq 'accepted Stage-M speedup is below threshold' "$tmp/canon-bad.err" || { cat "$tmp/canon-bad.err" >&2; exit 3; }
 
+# Even a correctly hashed grand summary must not be able to redefine the
+# selected contract values used for its own semantic comparison.
+printf 'B300_GRAND_SELECTED_STAGEM_POLICY=cs\n' >>"$grand"
+shadow_summary="$tmp/summary-shadow.env"; cp "$new" "$shadow_summary"
+shadow_sha="$(sha256sum "$grand" | awk '{print $1}')"
+sed -i "s/^B300_GRAND_SELECTED_GRAND_SUMMARY_SHA256=.*/B300_GRAND_SELECTED_GRAND_SUMMARY_SHA256=$shadow_sha/" "$shadow_summary"
+run_canon_bad "$shadow_summary"
+grep -Fq 'readonly variable' "$tmp/canon-bad.err" || { cat "$tmp/canon-bad.err" >&2; exit 3; }
+
 [[ "$(wc -l <"$calls")" == 2 ]] || { echo 'fake wrapper promoter should run only for old+valid contracts' >&2; exit 3; }
 [[ "$(wc -l <"$canon_calls")" == 3 ]] || { echo 'canonical core should run only for old+control-shadow+valid contracts' >&2; exit 3; }
-echo 'b300-grand-stagem-exact-promotion-preflight OK legacy_schema3=1 stage_l_semantics=1 stage_m_requires_l=1 summary_policy_binding=1 canonical_direct=1 summary_sha_binding=1 threshold_binding=1 control_path_pinned=1 rejection_before_promoter=1 gpu_work=0'
+echo 'b300-grand-stagem-exact-promotion-preflight OK legacy_schema3=1 stage_l_semantics=1 stage_m_requires_l=1 summary_policy_binding=1 canonical_direct=1 summary_sha_binding=1 threshold_binding=1 control_path_pinned=1 summary_selected_namespace_locked=1 rejection_before_promoter=1 gpu_work=0'

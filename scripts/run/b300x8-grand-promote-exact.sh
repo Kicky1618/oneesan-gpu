@@ -15,6 +15,13 @@ readonly CORE_PROMOTER_PATH="${CORE_PROMOTER:-$ONEESAN_ROOT/scripts/run/b300x8-g
 # shellcheck disable=SC1090
 source "$SELECTED_ENV_PATH"
 
+# The hashed grand summary is also a sourced shell artifact. Freeze the selected
+# contract namespace before sourcing any downstream artifact so it cannot alter
+# the values against which its own Stage-L/M provenance is checked.
+mapfile -t selected_contract_keys < <(compgen -A variable B300_GRAND_SELECTED_)
+((${#selected_contract_keys[@]})) || { echo 'selected contract namespace is empty' >&2; exit 3; }
+readonly "${selected_contract_keys[@]}"
+
 stagel_keys=(
   B300_GRAND_SELECTED_STAGEL_ENABLED B300_GRAND_SELECTED_STAGEL_MIN_SPEEDUP
   B300_GRAND_SELECTED_STAGEL_ACCEPTED B300_GRAND_SELECTED_STAGEL_PROFILE
@@ -103,7 +110,7 @@ if (( HAS_L || HAS_M )); then
     [[ "${B300_GRAND_STAGEL_INTEGRATED:-0}" == 1 ]] || { echo 'grand summary missing Stage-L integration' >&2; exit 3; }
     [[ "${B300_GRAND_STAGEL_OK:-0}" == "$B300_GRAND_SELECTED_STAGEL_ACCEPTED" ]] || { echo 'Stage-L accepted flag differs from grand summary' >&2; exit 3; }
     [[ "${B300_GRAND_STAGEL_PROFILE:-bb}" == "$B300_GRAND_SELECTED_STAGEL_PROFILE" ]] || { echo 'Stage-L profile differs from grand summary' >&2; exit 3; }
-    [[ "${B300_GRAND_STAGEL_SELF_GUARD:-branch}" == "$B300_GRAND_SELECTED_STAGEL_SELF_GUARD" && "${B300_GRAND_STAGEL_MATE_GUARD:-branch}" == "$B300_GRAND_SELECTED_STAGEL_MATE_GUARD" ]] || { echo 'Stage-L guards differ from grand summary' >&2; exit 3; }
+    [[ "${B300_GRAND_STAGEL_SELF_GUARD:-branch}" == "$B300_GRAND_SELECTED_STAGEL_SELF_GUARD" && "$B300_GRAND_STAGEL_MATE_GUARD" == "$B300_GRAND_SELECTED_STAGEL_MATE_GUARD" ]] || { echo 'Stage-L guards differ from grand summary' >&2; exit 3; }
   fi
   if (( HAS_M )); then
     [[ "${B300_GRAND_STAGEM_INTEGRATED:-0}" == 1 ]] || { echo 'grand summary missing Stage-M integration' >&2; exit 3; }
