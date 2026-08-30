@@ -62,7 +62,7 @@ jobs:
         run: bash scripts/bench/b300-stagek-preflight.sh
       - name: Validate canonical integrated Stage K first-pass
         run: bash scripts/bench/b300-grand-stagek-contract-preflight.sh
-      - name: Validate Stage L mate load cache-policy transform
+      - name: Validate Stage M mate load cache-policy transform
         run: |
           python3 -m py_compile scripts/build/gen-b300-mainrec-hybrid8-mate-load-policy.py
           bash -n scripts/build/b300-forced-nextgen-hybrid8-mate-load-policy.sh
