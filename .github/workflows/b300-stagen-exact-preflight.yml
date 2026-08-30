@@ -3,6 +3,9 @@ name: B300 Stage N exact preflight
 on:
   push:
     paths:
+      - 'scripts/build/gen-b300-grand-firstpass-stagen.py'
+      - 'scripts/run/b300x8-grand-firstpass-stagen.sh'
+      - 'scripts/bench/b300-grand-stagen-firstpass-preflight.sh'
       - 'scripts/run/b300x8-grand-promote-exact-stagen.sh'
       - 'scripts/run/b300x8-grand-promote-exact-stagem.sh'
       - 'scripts/run/b300x8-grand-promote-exact.sh'
@@ -14,6 +17,9 @@ on:
       - '.github/workflows/b300-stagen-exact-preflight.yml'
   pull_request:
     paths:
+      - 'scripts/build/gen-b300-grand-firstpass-stagen.py'
+      - 'scripts/run/b300x8-grand-firstpass-stagen.sh'
+      - 'scripts/bench/b300-grand-stagen-firstpass-preflight.sh'
       - 'scripts/run/b300x8-grand-promote-exact-stagen.sh'
       - 'scripts/run/b300x8-grand-promote-exact-stagem.sh'
       - 'scripts/run/b300x8-grand-promote-exact.sh'
@@ -34,6 +40,8 @@ jobs:
     timeout-minutes: 5
     steps:
       - uses: actions/checkout@v4
+      - name: Validate Stage N firstpass selected contract
+        run: bash scripts/bench/b300-grand-stagen-firstpass-preflight.sh
       - name: Validate Stage N exact provenance
         run: bash scripts/bench/b300-grand-stagen-exact-promotion-preflight.sh
       - name: Validate Stage L M exact provenance
