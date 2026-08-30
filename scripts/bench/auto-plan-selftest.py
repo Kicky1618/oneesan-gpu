@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import importlib.util
 import os
+import sys
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -10,6 +11,7 @@ PLAN_PATH = ROOT / "scripts" / "run" / "auto-plan.py"
 spec = importlib.util.spec_from_file_location("oneesan_auto_plan", PLAN_PATH)
 assert spec is not None and spec.loader is not None
 mod = importlib.util.module_from_spec(spec)
+sys.modules[spec.name] = mod
 spec.loader.exec_module(mod)
 
 for key in (
