@@ -2,10 +2,10 @@
 set -euo pipefail
 source "$(dirname -- "${BASH_SOURCE[0]}")/../lib/common.sh"
 
-ARCH="${ARCH:-native}"; MOD="${MOD:-4294967291}"; ROWS="${ROWS:-1}"; TARGET_MIB="${TARGET_MIB:-65536}"; MAX_WINDOW="${MAX_WINDOW:-14}"
+ARCH="${ARCH:-native}"; MOD="${MOD:-4294967291}"; ROWS="${ROWS:-1}"; TARGET_MIB="${TARGET_MIB:-65536}"; MAX_WINDOW="${MAX_WINDOW:-14}"; NGPU="${NGPU:-8}"
 HIGH_DROP_CHUNK="${HIGH_DROP_CHUNK:-0}"; BASE_RECURRENCE_ILP="${BASE_RECURRENCE_ILP:-2}"; RANDOM_CG="${RANDOM_CG:-0}"; RANDOM_CG_L2_FETCH_BYTES="${RANDOM_CG_L2_FETCH_BYTES:-0}"; PREFETCH_L2="${PREFETCH_L2:-0}"; DUALMASK="${DUALMASK:-0}"; CLOSURE_BATCH="${CLOSURE_BATCH:-0}"; MAXRREGCOUNT="${MAXRREGCOUNT:-0}"
 THRESHOLDS="${ILP8_THRESHOLDS:-0 262144 524288 1048576 2097152 4194304 8388608}"; THREADS_LIST="${THREADS_LIST:-128 256 512}"; REPEATS="${REPEATS:-1}"; SAMPLE_INTERVAL="${SAMPLE_INTERVAL:-0.15}"
-PREFIX="${PREFIX:-$ONEESAN_ROOT/work/b300_nextgen_hybrid8_h${HIGH_DROP_CHUNK}_basei${BASE_RECURRENCE_ILP}_cg${RANDOM_CG}_l2${RANDOM_CG_L2_FETCH_BYTES}_pre${PREFETCH_L2}_d${DUALMASK}_b${CLOSURE_BATCH}_r${MAXRREGCOUNT}_row${ROWS}}"
+PREFIX="${PREFIX:-$ONEESAN_ROOT/work/b300_nextgen_hybrid8_h${HIGH_DROP_CHUNK}_basei${BASE_RECURRENCE_ILP}_cg${RANDOM_CG}_l2${RANDOM_CG_L2_FETCH_BYTES}_pre${PREFETCH_L2}_d${DUALMASK}_b${CLOSURE_BATCH}_r${MAXRREGCOUNT}_row${ROWS}_g${NGPU}}"
 LOGDIR="${LOGDIR:-${PREFIX}_logs}"; RESULT="${RESULT:-${PREFIX}.tsv}"; RESOURCE="${RESOURCE:-${PREFIX}_ptxas.tsv}"; WINNER_ENV="${WINNER_ENV:-${PREFIX}_winner.env}"
 PARSER="$ONEESAN_ROOT/scripts/bench/parse-ptxas-resources.py"
 mkdir -p "$LOGDIR" "$ONEESAN_BUILD_DIR" "$(dirname "$RESULT")"
@@ -18,6 +18,7 @@ case "$RANDOM_CG_L2_FETCH_BYTES" in 0|64|128|256) ;; *) exit 2;; esac
 case "$CLOSURE_BATCH" in 0|2|4) ;; *) exit 2;; esac
 [[ "$MAXRREGCOUNT" =~ ^[0-9]+$ ]] && ((MAXRREGCOUNT==0 || (MAXRREGCOUNT>=32 && MAXRREGCOUNT<=255))) || exit 2
 [[ "$ROWS" =~ ^[1-9][0-9]*$ ]] && ((ROWS<=28)) || exit 2
+[[ "$NGPU" =~ ^[1-8]$ ]] || { echo 'NGPU must be 1..8' >&2; exit 2; }
 [[ "$REPEATS" =~ ^[1-9][0-9]*$ ]] || exit 2
 python3 - "$SAMPLE_INTERVAL" <<'PY'
 import sys
@@ -33,7 +34,8 @@ for z in "${threshold_list[@]}"; do
 done
 command -v nvcc >/dev/null || { echo 'nvcc required' >&2; exit 2; }
 command -v nvidia-smi >/dev/null || { echo 'nvidia-smi required' >&2; exit 2; }
-(( $(nvidia-smi --query-gpu=index --format=csv,noheader | wc -l) >= 8 )) || { echo 'need 8 visible GPUs' >&2; exit 2; }
+VISIBLE_GPUS="$(nvidia-smi --query-gpu=index --format=csv,noheader | wc -l)"
+(( VISIBLE_GPUS >= NGPU )) || { echo "need $NGPU visible GPU(s), found $VISIBLE_GPUS" >&2; exit 2; }
 
 printf 'profile\tmode\tthreshold\trecurrence_ilp\tbinary\tbuild_err\n' >"$LOGDIR/binaries.tsv"
 build_one(){
@@ -62,7 +64,7 @@ done <"$LOGDIR/binaries.tsv"
 sample_mem(){
   local pid="$1" out="$2"; : >"$out"
   while kill -0 "$pid" 2>/dev/null; do
-    nvidia-smi --query-gpu=utilization.memory --format=csv,noheader,nounits 2>/dev/null | awk '{s+=$1;n++;if($1>m)m=$1}END{if(n)printf "%.6f %.6f\n",s/n,m}' >>"$out" || true
+    nvidia-smi --query-gpu=utilization.memory --format=csv,noheader,nounits 2>/dev/null | head -n "$NGPU" | awk '{s+=$1;n++;if($1>m)m=$1}END{if(n)printf "%.6f %.6f\n",s/n,m}' >>"$out" || true
     sleep "$SAMPLE_INTERVAL"
   done
 }
@@ -72,7 +74,7 @@ run_one(){
   local profile="$1" mode="$2" threshold="$3" ilp="$4" bin="$5" t="$6" r="$7"
   local so="$LOGDIR/${profile}_t${t}_r${r}.out" se="$LOGDIR/${profile}_t${t}_r${r}.err" mem="$LOGDIR/${profile}_t${t}_r${r}.mem"
   set +e
-  B300_ROW_LIMIT="$ROWS" GRIDFP_THREADS="$t" "$bin" 27 "$TARGET_MIB" "$MAX_WINDOW" 8 "$MOD" >"$so" 2>"$se" & local pid=$!
+  B300_ROW_LIMIT="$ROWS" GRIDFP_THREADS="$t" "$bin" 27 "$TARGET_MIB" "$MAX_WINDOW" "$NGPU" "$MOD" >"$so" 2>"$se" & local pid=$!
   sample_mem "$pid" "$mem" & local sp=$!
   wait "$pid"; local rc=$?
   set -e
@@ -90,15 +92,15 @@ for t in $THREADS_LIST; do
   while IFS=$'\t' read -r profile mode threshold ilp bin err; do
     [[ "$profile" == profile ]] && continue
     for ((r=1;r<=REPEATS;++r)); do
-      echo "=== hybrid-ILP8 profile=$profile mode=$mode threshold=$threshold ilp=$ilp threads=$t repeat=$r ===" >&2
+      echo "=== hybrid-ILP8 profile=$profile mode=$mode threshold=$threshold ilp=$ilp threads=$t repeat=$r ngpu=$NGPU ===" >&2
       run_one "$profile" "$mode" "$threshold" "$ilp" "$bin" "$t" "$r"
     done
   done <"$LOGDIR/binaries.tsv"
 done
 
-python3 - "$RESULT" "$RESOURCE" "$LOGDIR/binaries.tsv" "$WINNER_ENV" <<'PY'
+python3 - "$RESULT" "$RESOURCE" "$LOGDIR/binaries.tsv" "$WINNER_ENV" "$NGPU" <<'PY'
 import csv,math,statistics,sys,shlex
-result,resource,bins_path,winner=sys.argv[1:]
+result,resource,bins_path,winner,ngpu=sys.argv[1:]
 rows=list(csv.DictReader(open(result),delimiter='\t')); rr=list(csv.DictReader(open(resource),delimiter='\t'))
 if not rows: raise SystemExit('no hybrid ILP8 results')
 res={r['residue'] for r in rows}
@@ -127,7 +129,7 @@ if not clean: raise SystemExit('no spill-free hybrid ILP8 candidate')
 key=lambda x:(x[0],-x[6] if not math.isnan(x[6]) else math.inf)
 best=min(clean,key=key)
 for x in sorted(med,key=key):
-    print('HYBRID8',f'profile={x[1]}',f'mode={x[2]}',f'threshold={x[3]}',f'ilp={x[4]}',f'threads={x[5]}',f'wall_s={x[0]:.9f}',f'speedup_vs_baseline={base[0]/x[0]:.6f}x',f'mc_avg_pct={x[6]:.3f}',f'regs_max={x[7]}',f'spill_store={x[8]}',f'spill_load={x[9]}',f'spill_free={int(x[10])}',f'resource_rows={x[11]}',file=sys.stderr)
+    print('HYBRID8',f'profile={x[1]}',f'mode={x[2]}',f'threshold={x[3]}',f'ilp={x[4]}',f'threads={x[5]}',f'wall_s={x[0]:.9f}',f'speedup_vs_baseline={base[0]/x[0]:.6f}x',f'mc_avg_pct={x[6]:.3f}',f'regs_max={x[7]}',f'spill_store={x[8]}',f'spill_load={x[9]}',f'spill_free={int(x[10])}',f'resource_rows={x[11]}',f'ngpu={ngpu}',file=sys.stderr)
 b=bins[best[1]]
 def q(x): return shlex.quote(str(x))
 with open(winner,'w') as f:
@@ -136,10 +138,11 @@ with open(winner,'w') as f:
         ('B300_HYBRID8_WINNER_THRESHOLD',best[3]),('B300_HYBRID8_WINNER_RECURRENCE_ILP',best[4]),('B300_HYBRID8_WINNER_THREADS',best[5]),
         ('B300_HYBRID8_WINNER_WALL_S',f'{best[0]:.9f}'),('B300_HYBRID8_WINNER_SPEEDUP_VS_BASELINE',f'{base[0]/best[0]:.9f}'),
         ('B300_HYBRID8_WINNER_MC_AVG_PCT',f'{best[6]:.3f}'),('B300_HYBRID8_WINNER_REGISTERS_MAX',best[7]),
-        ('B300_HYBRID8_WINNER_SPILL_STORE_BYTES',best[8]),('B300_HYBRID8_WINNER_SPILL_LOAD_BYTES',best[9]),('B300_HYBRID8_RESIDUE',next(iter(res)))):
+        ('B300_HYBRID8_WINNER_SPILL_STORE_BYTES',best[8]),('B300_HYBRID8_WINNER_SPILL_LOAD_BYTES',best[9]),('B300_HYBRID8_RESIDUE',next(iter(res))),('B300_HYBRID8_NGPU',ngpu)):
         f.write(k+'='+q(v)+'\n')
 print('b300_nextgen_hybrid8_exact_intermediate_match=1')
 print('b300_nextgen_hybrid8_residue='+next(iter(res)))
+print('b300_nextgen_hybrid8_ngpu='+ngpu)
 print(f'b300_nextgen_hybrid8_baseline_profile={base[1]}')
 print(f'b300_nextgen_hybrid8_baseline_wall_s={base[0]:.9f}')
 print(f'b300_nextgen_hybrid8_best_profile={best[1]}')
@@ -153,4 +156,4 @@ print(f'b300_nextgen_hybrid8_best_mc_avg_pct={best[6]:.3f}')
 print('b300_nextgen_hybrid8_winner_env='+winner)
 PY
 cat "$RESOURCE"
-echo "b300-nextgen-hybrid-ilp8-sweep OK result=$RESULT resources=$RESOURCE winner_env=$WINNER_ENV" >&2
+echo "b300-nextgen-hybrid-ilp8-sweep OK result=$RESULT resources=$RESOURCE winner_env=$WINNER_ENV ngpu=$NGPU" >&2
