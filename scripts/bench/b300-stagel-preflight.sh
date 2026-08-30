@@ -35,15 +35,19 @@ for s in \
   'SEARCH_ROWS="${SEARCH_ROWS:-1}"' \
   'VALIDATE_ROWS="${VALIDATE_ROWS:-4 8}"' \
   'GUARD_LIST="${GUARD_LIST:-bb pb bp pp}"' \
+  'SWEEP="$ONEESAN_ROOT/scripts/bench/b300-nextgen-hybrid8-prefetch-guard-sweep.sh"' \
   'B300_STAGEL_UPSTREAM_KIND' \
-  'FATAL Stage-L/upstream residue mismatch' \
-  'FATAL Stage-L/Stage-F residue mismatch' \
-  'FATAL Stage-L/Stage-E residue mismatch' \
-  'SELECTED_PROFILE="$B300_STAGEL_PROFILE"' \
+  'FATAL Stage-L/upstream-final residue mismatch' \
+  'FATAL Stage-L/Stage-F-final residue mismatch' \
+  'FATAL Stage-L/Stage-E-final residue mismatch' \
+  'SELECTED="$B300_STAGEL_PROFILE"' \
+  'B300_STAGEL_BASE_SPILL_FREE' \
+  'run_stage "$rows" "bb $SELECTED"' \
   'B300_STAGEL_STAGED_VALIDATED=' \
   'B300_STAGEL_FINAL_ENABLED=' \
   'B300_STAGEL_FINAL_SELF_GUARD=' \
   'B300_STAGEL_FINAL_MATE_GUARD=' \
+  'B300_STAGEL_SEARCH_PROFILES=' \
   'B300_STAGEL_FINAL_STAGE_RESIDUE='; do need "$STAGED" "$s" staged; done
 
 for s in \
@@ -81,13 +85,14 @@ if 'GUARD_LIST="${GUARD_LIST:-bb pb bp pp}"' not in sweep:
     raise SystemExit('Stage-L joint guard search missing')
 if 'run_stage "$SEARCH_ROWS" "$GUARD_LIST"' not in staged:
     raise SystemExit('Stage-L search list missing')
-if 'run_stage "$rows" "bb $SELECTED_PROFILE"' not in staged:
+if 'run_stage "$rows" "bb $SELECTED"' not in staged:
     raise SystemExit('Stage-L validation does not lock chosen guard profile')
+if 'b300-nextgen-hybrid8-guard-sweep.sh' in staged:
+    raise SystemExit('Stage-L staged still references deleted legacy guard sweep')
 # Stage M may now precede Stage L in final candidate priority. Verify the L
 # branch itself still preserves the five-forced-slot mapping for M rejection.
 m=re.search(r'elif \(\(STAGEL_OK && NEXTSELF_OK\)\); then(.*?)elif \(\(STAGEL_OK\)\); then',grand,re.S)
 if not m:
-    # Legacy L-only grand begins with if rather than elif.
     m=re.search(r'if \(\(STAGEL_OK && NEXTSELF_OK\)\); then(.*?)elif \(\(STAGEL_OK\)\); then',grand,re.S)
 if not m: raise SystemExit('Stage-L grand branch missing')
 b=m.group(1)
@@ -97,4 +102,4 @@ for slot,candidate in required.items():
 print('stagel_guard_contract_structure=OK')
 PY
 
-echo 'b300-stagel-preflight OK namespace=guard_only joint_profiles=bb,pb,bp,pp stagej_stagek_upstream=1 exact_residue=1 ptxas_spill=1 row_scoped_residue=1 search_rows=1 validate_rows=4,8 promotion_manifest=1 grand_integrated=1 complete_prime_races=1 gpu_work=0'
+echo 'b300-stagel-preflight OK namespace=guard_only joint_profiles=bb,pb,bp,pp canonical_sweep=1 deleted_legacy_sweep_rejected=1 stagej_stagek_upstream=1 exact_residue=1 ptxas_spill=1 row_scoped_residue=1 search_rows=1 validate_rows=4,8 promotion_manifest=1 grand_integrated=1 complete_prime_races=1 gpu_work=0'
