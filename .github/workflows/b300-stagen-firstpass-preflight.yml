@@ -1,0 +1,32 @@
+name: B300 Stage N firstpass preflight
+
+on:
+  push:
+    paths:
+      - 'scripts/build/gen-b300-grand-firstpass-stagen.py'
+      - 'scripts/run/b300x8-grand-firstpass-stagen.sh'
+      - 'scripts/run/b300x8-grand-firstpass.sh'
+      - 'scripts/run/b300x8-joint-nextself-hybrid8-select-stagen.sh'
+      - 'scripts/bench/b300-grand-stagen-firstpass-preflight.sh'
+      - '.github/workflows/b300-stagen-firstpass-preflight.yml'
+  pull_request:
+    paths:
+      - 'scripts/build/gen-b300-grand-firstpass-stagen.py'
+      - 'scripts/run/b300x8-grand-firstpass-stagen.sh'
+      - 'scripts/run/b300x8-grand-firstpass.sh'
+      - 'scripts/run/b300x8-joint-nextself-hybrid8-select-stagen.sh'
+      - 'scripts/bench/b300-grand-stagen-firstpass-preflight.sh'
+      - '.github/workflows/b300-stagen-firstpass-preflight.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  preflight:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - name: Validate Stage N grand firstpass overlay
+        run: bash scripts/bench/b300-grand-stagen-firstpass-preflight.sh
