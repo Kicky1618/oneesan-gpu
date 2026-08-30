@@ -6,7 +6,23 @@ HYBRID="$ONEESAN_ROOT/scripts/build/gen-b300-main-recurrence-hybrid-ilp8.py"
 SELF="$ONEESAN_ROOT/scripts/build/gen-b300-mainrec-hybrid8-next-self-prefetch.py"
 MATE="$ONEESAN_ROOT/scripts/build/gen-b300-mainrec-hybrid8-next-mate-prefetch.py"
 LOAD="$ONEESAN_ROOT/scripts/build/gen-b300-mainrec-hybrid8-mate-load-policy.py"
+BUILDER="$ONEESAN_ROOT/scripts/build/b300-forced-nextgen-hybrid8-mate-load-policy.sh"
 for f in "$HYBRID" "$SELF" "$MATE" "$LOAD"; do python3 -m py_compile "$f"; done
+bash -n "$BUILDER"
+
+# Stage L must change only the ILP8 mate-load cache policy. In particular, a
+# preceding predicated-guard winner must not silently fall back to branch mode.
+for s in \
+  'SELF_GUARD="${SELF_GUARD:-branch}"' \
+  'MATE_GUARD="${MATE_GUARD:-branch}"' \
+  'for name in SELF_GUARD MATE_GUARD' \
+  'SELF_GUARD="$SELF_GUARD" MATE_GUARD="$MATE_GUARD"' \
+  'self_geometry width=$SELF_WIDTH distance=$SELF_DISTANCE evict=$SELF_EVICT guard=$SELF_GUARD' \
+  'mate_geometry width=$MATE_WIDTH distance=$MATE_DISTANCE evict=$MATE_EVICT guard=$MATE_GUARD' \
+  'guard_policy_preserved=1'; do
+  grep -Fq "$s" "$BUILDER" || { echo "mate-load builder guard-preservation marker missing: $s" >&2; exit 3; }
+done
+
 TMP="$(mktemp -d)"; trap 'rm -rf "$TMP"' EXIT
 BASE="$TMP/base.cu"
 cat >"$BASE" <<'CU'
@@ -64,4 +80,4 @@ python3 "$LOAD" "$MATE_SRC" "$TMP/bad.cu" ca >/dev/null 2>"$TMP/bad.err"; rc=$?
 set -e
 ((rc!=0)); grep -Fq 'POLICY must be cg or cs' "$TMP/bad.err"
 
-echo 'b300-mainrec-hybrid8-mate-load-policy-preflight OK policies=cg,cs lanes=8 scope=ilp8_mate_reads_only self_prefetch_preserved=1 mate_prefetch_preserved=1 mate_writes_unchanged=1 double_transform_rejected=1 invalid_policy_rejected=1 gpu_work=0'
+echo 'b300-mainrec-hybrid8-mate-load-policy-preflight OK policies=cg,cs lanes=8 scope=ilp8_mate_reads_only self_prefetch_preserved=1 mate_prefetch_preserved=1 guard_policy_preserved=1 mate_writes_unchanged=1 double_transform_rejected=1 invalid_policy_rejected=1 gpu_work=0'
