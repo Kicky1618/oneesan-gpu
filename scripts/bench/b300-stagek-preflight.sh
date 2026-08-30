@@ -24,7 +24,14 @@ for s in \
   'B300_STAGEK_EVICT" != "$SELECTED_EV' \
   'B300_STAGEK_FINAL_MATE_EVICT'; do grep -Fq "$s" "$STAGED" || { echo "Stage-K staged marker missing: $s" >&2; exit 3; }; done
 for s in \
-  'sha256sum "$WINNER_ENV" "$STAGE_F_ENV" "$STAGEJ_WINNER_ENV" "$STAGEJ_PREPARE_ENV" "$B300_STAGEK_FINAL_BIN" "$B300_STAGEK_CONTROL_BIN"' \
+  'B300_STAGEJ_PREPARED_MOD' \
+  'Stage-K/Stage-J modulus mismatch' \
+  'sha256sum -c "$B300_STAGEJ_PREPARED_MANIFEST"' \
+  'sha256sum "$WINNER_ENV" "$STAGE_F_ENV" "$STAGEJ_WINNER_ENV" "$STAGEJ_PREPARE_ENV" "$B300_STAGEJ_PREPARED_MANIFEST" "$B300_STAGEK_FINAL_BIN" "$B300_STAGEK_CONTROL_BIN"' \
+  'B300_STAGEK_PROMOTION_MOD=' \
+  'B300_STAGEK_PROMOTION_STAGEJ_MANIFEST_SHA256=' \
+  'B300_STAGEK_PREPARED_MOD=' \
+  'B300_STAGEK_PREPARED_STAGEJ_MANIFEST=' \
   'B300_STAGEK_PREPARED=1' \
   'B300_STAGEK_PROMOTION_MATE_EVICT' \
   'Stage-K promotion fingerprint mismatch'; do grep -Fq "$s" "$PROMOTE" || { echo "Stage-K promotion marker missing: $s" >&2; exit 3; }; done
@@ -49,4 +56,4 @@ if s.count('b300x8-race-external-forced-profiled-once.sh') != 1: raise SystemExi
 if 'K_RC==4' not in s or 'retaining Stage J candidate' not in s: raise SystemExit('Stage-K rejection fallback missing')
 print('stagek_single_fullprime_contract=OK')
 PY
-echo 'b300_stagek_preflight=OK bash_syntax=OK exact=OK spill=OK high_s=OK staged_lock=OK manifest=OK stagej_fallback=OK single_fullprime=OK normalized_continue=OK gpu_work=0 actions_triggered=0'
+echo 'b300_stagek_preflight=OK bash_syntax=OK exact=OK spill=OK high_s=OK staged_lock=OK stagej_modulus=OK stagej_manifest=OK manifest=OK stagej_fallback=OK single_fullprime=OK normalized_continue=OK gpu_work=0 actions_triggered=0'
