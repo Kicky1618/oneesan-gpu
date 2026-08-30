@@ -15,6 +15,7 @@ on:
       - 'scripts/bench/b300-grand-stagep-firstpass-preflight.sh'
       - 'scripts/bench/b300-grand-stagep-exact-promotion-preflight.sh'
       - 'scripts/bench/b300-grand-latest-entrypoint-preflight.sh'
+      - 'scripts/bench/b300-latest-environment-preflight-test.sh'
       - 'scripts/run/b300x8-nextgen-hybrid8-stagep-mate-cg-l2-staged-fullprime-race.sh'
       - 'scripts/run/b300x8-joint-nextself-hybrid8-select-stageo.sh'
       - 'scripts/run/b300x8-joint-nextself-hybrid8-select-stagep.sh'
@@ -24,6 +25,7 @@ on:
       - 'scripts/run/b300x8-grand-promote-exact-stageo.sh'
       - 'scripts/run/b300x8-grand-promote-exact-stagep.sh'
       - 'scripts/run/b300x8-grand-promote-exact-latest.sh'
+      - 'scripts/run/b300x8-grand-latest-preflight.sh'
       - '.github/workflows/b300-stagep-preflight.yml'
   pull_request:
     paths:
@@ -39,6 +41,7 @@ on:
       - 'scripts/bench/b300-grand-stagep-firstpass-preflight.sh'
       - 'scripts/bench/b300-grand-stagep-exact-promotion-preflight.sh'
       - 'scripts/bench/b300-grand-latest-entrypoint-preflight.sh'
+      - 'scripts/bench/b300-latest-environment-preflight-test.sh'
       - 'scripts/run/b300x8-nextgen-hybrid8-stagep-mate-cg-l2-staged-fullprime-race.sh'
       - 'scripts/run/b300x8-joint-nextself-hybrid8-select-stageo.sh'
       - 'scripts/run/b300x8-joint-nextself-hybrid8-select-stagep.sh'
@@ -48,6 +51,7 @@ on:
       - 'scripts/run/b300x8-grand-promote-exact-stageo.sh'
       - 'scripts/run/b300x8-grand-promote-exact-stagep.sh'
       - 'scripts/run/b300x8-grand-promote-exact-latest.sh'
+      - 'scripts/run/b300x8-grand-latest-preflight.sh'
       - '.github/workflows/b300-stagep-preflight.yml'
   workflow_dispatch:
 
@@ -72,3 +76,5 @@ jobs:
         run: bash scripts/bench/b300-grand-stagep-exact-promotion-preflight.sh
       - name: Validate latest grand entrypoints
         run: bash scripts/bench/b300-grand-latest-entrypoint-preflight.sh
+      - name: Exercise latest B300 environment preflight
+        run: bash scripts/bench/b300-latest-environment-preflight-test.sh
