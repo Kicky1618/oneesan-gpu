@@ -13,9 +13,11 @@ on:
       - 'scripts/bench/b300-stages-preflight.sh'
       - 'scripts/bench/b300-grand-stages-contract-preflight.sh'
       - 'scripts/bench/b300-grand-stages-firstpass-preflight.sh'
+      - 'scripts/bench/b300-grand-stages-exact-promotion-preflight.sh'
       - 'scripts/run/b300x8-nextgen-hybrid8-stages-ilp2-cg-l2-staged-fullprime-race.sh'
       - 'scripts/run/b300x8-joint-nextself-hybrid8-select-stages.sh'
       - 'scripts/run/b300x8-grand-firstpass-stages.sh'
+      - 'scripts/run/b300x8-grand-promote-exact-stages.sh'
       - '.github/workflows/b300-stages-preflight.yml'
   pull_request:
     paths:
@@ -29,9 +31,11 @@ on:
       - 'scripts/bench/b300-stages-preflight.sh'
       - 'scripts/bench/b300-grand-stages-contract-preflight.sh'
       - 'scripts/bench/b300-grand-stages-firstpass-preflight.sh'
+      - 'scripts/bench/b300-grand-stages-exact-promotion-preflight.sh'
       - 'scripts/run/b300x8-nextgen-hybrid8-stages-ilp2-cg-l2-staged-fullprime-race.sh'
       - 'scripts/run/b300x8-joint-nextself-hybrid8-select-stages.sh'
       - 'scripts/run/b300x8-grand-firstpass-stages.sh'
+      - 'scripts/run/b300x8-grand-promote-exact-stages.sh'
       - '.github/workflows/b300-stages-preflight.yml'
   workflow_dispatch:
 
@@ -50,3 +54,5 @@ jobs:
         run: bash scripts/bench/b300-grand-stages-contract-preflight.sh
       - name: Validate Stage S grand firstpass contract
         run: bash scripts/bench/b300-grand-stages-firstpass-preflight.sh
+      - name: Validate Stage S exact provenance
+        run: bash scripts/bench/b300-grand-stages-exact-promotion-preflight.sh
