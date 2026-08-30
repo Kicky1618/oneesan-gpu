@@ -3,7 +3,7 @@ set -euo pipefail
 source "$(dirname -- "${BASH_SOURCE[0]}")/../lib/common.sh"
 
 STAGEN_WRAP="${STAGEN_WRAP:-$ONEESAN_ROOT/scripts/run/b300x8-grand-firstpass-stagen.sh}"
-GENERATOR="${GENERATOR:-$ONEESAN_ROOT/scripts/build/gen-b300-grand-firstpass-stageo.py}"
+GENERATOR="${GENERATOR:-$ONEESAN_ROOT/scripts/build/gen-b300-grand-firstpass-stageo-compat.py}"
 PATCH_ONLY="${PATCH_ONLY:-0}"
 [[ "$PATCH_ONLY" == 0 || "$PATCH_ONLY" == 1 ]] || { echo 'PATCH_ONLY must be 0/1' >&2; exit 2; }
 [[ -s "$STAGEN_WRAP" && -s "$GENERATOR" ]] || { echo 'Stage-O firstpass source/generator missing' >&2; exit 2; }
