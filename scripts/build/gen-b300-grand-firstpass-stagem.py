@@ -10,6 +10,8 @@ src=pathlib.Path(sys.argv[1]); out=pathlib.Path(sys.argv[2]); s=src.read_text()
 
 def rep(old:str,new:str,label:str)->None:
     global s
+    if new in s:
+        return
     n=s.count(old)
     if n!=1: raise SystemExit(f'{label}: expected one anchor, got {n}')
     s=s.replace(old,new,1)
