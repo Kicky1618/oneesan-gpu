@@ -4,6 +4,7 @@ on:
   push:
     paths:
       - 'scripts/build/b300-forced-nextgen.sh'
+      - 'scripts/build/b300-forced-nextgen-hybrid8-self-mate-geometry.sh'
       - 'scripts/build/gen-b300-low-drop-chunk.py'
       - 'scripts/build/gen-b300-low-window-drop-cache.py'
       - 'scripts/build/gen-b300-main-recurrence-ilp.py'
@@ -18,6 +19,7 @@ on:
       - 'scripts/bench/b300-low-window-drop-cache-proof.sh'
       - 'scripts/bench/b300-main-recurrence-production-generate-proof.sh'
       - 'scripts/bench/b300-mainrec-hybrid8-next-mate-preflight.sh'
+      - 'scripts/bench/b300-mainrec-self-mate-independent-geometry-preflight.sh'
       - 'scripts/bench/b300-grand-selector-contract-preflight.sh'
       - 'scripts/bench/b300-grand-stageg-contract-preflight.sh'
       - 'scripts/bench/b300-grand-stageh-contract-preflight.sh'
@@ -53,6 +55,7 @@ on:
   pull_request:
     paths:
       - 'scripts/build/b300-forced-nextgen.sh'
+      - 'scripts/build/b300-forced-nextgen-hybrid8-self-mate-geometry.sh'
       - 'scripts/build/gen-b300-low-drop-chunk.py'
       - 'scripts/build/gen-b300-low-window-drop-cache.py'
       - 'scripts/build/gen-b300-main-recurrence-ilp.py'
@@ -67,6 +70,7 @@ on:
       - 'scripts/bench/b300-low-window-drop-cache-proof.sh'
       - 'scripts/bench/b300-main-recurrence-production-generate-proof.sh'
       - 'scripts/bench/b300-mainrec-hybrid8-next-mate-preflight.sh'
+      - 'scripts/bench/b300-mainrec-self-mate-independent-geometry-preflight.sh'
       - 'scripts/bench/b300-grand-selector-contract-preflight.sh'
       - 'scripts/bench/b300-grand-stageg-contract-preflight.sh'
       - 'scripts/bench/b300-grand-stageh-contract-preflight.sh'
@@ -124,6 +128,8 @@ jobs:
         run: bash scripts/bench/b300-mainrec-hybrid8-nextself-transform-preflight.sh
       - name: Validate hybrid8 next-mate transform composition
         run: bash scripts/bench/b300-mainrec-hybrid8-next-mate-preflight.sh
+      - name: Validate independent self and mate prefetch geometry
+        run: bash scripts/bench/b300-mainrec-self-mate-independent-geometry-preflight.sh
       - name: Validate joint hybrid8 and next-self promotion chain
         run: bash scripts/bench/b300-joint-nextgen-hybrid8-preflight.sh
       - name: Validate grand next-self + hybrid8 selector
