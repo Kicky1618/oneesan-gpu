@@ -102,10 +102,10 @@ grep -Fq 'b300_grand_selector_contract_preflight=OK' "$CONTRACT" || { echo 'gran
 
 for s in \
   'PREPARE_ONLY=1 PREPARE_ENV="$JOINT_PREPARE_ENV"' \
-  'NEXTSELF_RC == 4' \
-  'HYBRID_RC == 4' \
-  'HYBRID_NS_RC == 4' \
-  'STAGEH_RC == 4' \
+  'NEXTSELF_RC==4' \
+  'HYBRID_RC==4' \
+  'HYBRID_NS_RC==4' \
+  'STAGEH_RC==4' \
   'RUN_STAGEH="${RUN_STAGEH:-1}"' \
   'STAGEH_MIN_SPEEDUP="${STAGEH_MIN_SPEEDUP:-1.002}"' \
   'b300x8-nextgen-hybrid8-nextmate-staged-fullprime-race.sh' \
