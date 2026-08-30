@@ -2,11 +2,12 @@
 set -euo pipefail
 source "$(dirname -- "${BASH_SOURCE[0]}")/../lib/common.sh"
 
+GRAND="$ONEESAN_ROOT/scripts/run/b300x8-joint-nextself-hybrid8-select.sh"
 FIRST="$ONEESAN_ROOT/scripts/run/b300x8-grand-stageh-firstpass.sh"
 STAGED="$ONEESAN_ROOT/scripts/run/b300x8-nextgen-hybrid8-nextmate-staged-fullprime-race.sh"
 PROMOTE="$ONEESAN_ROOT/scripts/run/b300x8-grand-promote-exact.sh"
 VERIFY="$ONEESAN_ROOT/scripts/run/b300x8-grand-verify-exact.sh"
-for f in "$FIRST" "$STAGED" "$PROMOTE" "$VERIFY"; do
+for f in "$GRAND" "$FIRST" "$STAGED" "$PROMOTE" "$VERIFY"; do
   [[ -f "$f" ]] || { echo "missing Stage-H dependency=$f" >&2; exit 2; }
   bash -n "$f"
 done
@@ -24,9 +25,26 @@ for s in \
 done
 
 for s in \
+  'RUN_STAGEH="${RUN_STAGEH:-1}"' \
+  'STAGEH_MIN_SPEEDUP="${STAGEH_MIN_SPEEDUP:-1.002}"' \
+  'INPUT_ENV="$HYBRID_NS_WINNER_ENV"' \
+  'B300_STAGEH_PREPARED_BIN' \
+  'MODE=stageh_nextmate_grand' \
+  'B300_GRAND_STAGEH_OK' \
+  'B300_GRAND_STAGEH_WIDTH' \
+  'B300_GRAND_STAGEH_DISTANCE'; do
+  grep -Fq "$s" "$GRAND" || { echo "integrated Stage-H grand marker missing: $s" >&2; exit 3; }
+done
+
+for s in \
   'WORK_ROOT="${WORK_ROOT:-$ONEESAN_ROOT/work}"' \
   'WORK_ROOT="$WORK_ROOT" PREFIX="$BASE_PREFIX"' \
-  'WORK_ROOT="$WORK_ROOT"' \
+  'BASE_GRAND_ENV="${BASE_GRAND_ENV:-${BASE_PREFIX}.race_grand.env}"' \
+  "grep -q '^B300_GRAND_STAGEH_OK=' \"\$BASE_GRAND_ENV\"" \
+  'B300_GRAND_STAGEH_REASON=integrated_in_grand' \
+  'B300_GRAND_STAGEH_SELECTED_SCHEMA=1' \
+  'B300_GRAND_STAGEH_SELECTED_VALIDATED=1' \
+  'B300_GRAND_STAGEH_SELECTED_RACE_RESULT_SHA256=' \
   'BEST_WORK="$WORK_ROOT/b300_exact_singlepass_' \
   'FINAL_RESULT_SHA="$(sha256sum "$FINAL_RESULT"' \
   "{'schema':3,'binary_sha256':bsha,'profile_sha256':psha}" \
@@ -37,7 +55,6 @@ for s in \
   'B300_GRAND_SELECTED_SMOKE_PRIME=' \
   'B300_GRAND_SELECTED_RACE_RESULT_SHA256=' \
   'B300_GRAND_SELECTED_FIRSTPASS_META=' \
-  'B300_GRAND_STAGEH_SELECTED_RACE_RESULT_SHA256=' \
   'normalized_contract=1'; do
   grep -Fq "$s" "$FIRST" || { echo "Stage-H normalized contract marker missing: $s" >&2; exit 3; }
 done
@@ -49,10 +66,8 @@ for s in \
   'checkpoint fingerprint mismatch'; do
   grep -Fq "$s" "$PROMOTE" || { echo "hardened promotion marker missing for Stage H: $s" >&2; exit 3; }
 done
-for s in \
-  'verify_b300_exact_result.py' \
-  'B300 GRAND VERIFY COMPLETE'; do
+for s in 'verify_b300_exact_result.py' 'B300 GRAND VERIFY COMPLETE'; do
   grep -Fq "$s" "$VERIFY" || { echo "exact verifier wrapper marker missing: $s" >&2; exit 3; }
 done
 
-echo 'b300-grand-stageh-contract-preflight OK staged_manifest=1 normalized_selection=1 checkpoint_schema3=1 race_fingerprint=1 work_root=1 hardened_promotion=1 independent_verifier=1 gpu_work=0'
+echo 'b300-grand-stageh-contract-preflight OK staged_manifest=1 integrated_grand=1 no_duplicate_fullprime=1 normalized_selection=1 checkpoint_schema3=1 race_fingerprint=1 work_root=1 hardened_promotion=1 independent_verifier=1 gpu_work=0'
