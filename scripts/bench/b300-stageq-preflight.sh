@@ -5,8 +5,9 @@ GEN="$ONEESAN_ROOT/scripts/build/gen-b300-mainrec-ilp8-pair-block-cg-l2-policy.p
 BUILDER="$ONEESAN_ROOT/scripts/build/b300-forced-nextgen-hybrid8-stageq-ilp8-count-cg-l2-policy.sh"
 PROOF="$ONEESAN_ROOT/scripts/bench/b300-mainrec-ilp8-pair-block-cg-l2-policy-preflight.sh"
 SWEEP="$ONEESAN_ROOT/scripts/bench/b300-nextgen-hybrid8-stageq-ilp8-count-cg-l2-sweep.sh"
+STAGED="$ONEESAN_ROOT/scripts/bench/b300-nextgen-hybrid8-stageq-ilp8-count-cg-l2-staged-calibrate.sh"
 python3 -m py_compile "$GEN"
-for f in "$BUILDER" "$PROOF" "$SWEEP"; do [[ -f "$f" ]] || { echo "missing Stage-Q dependency=$f" >&2; exit 2; }; bash -n "$f"; done
+for f in "$BUILDER" "$PROOF" "$SWEEP" "$STAGED"; do [[ -f "$f" ]] || { echo "missing Stage-Q dependency=$f" >&2; exit 2; }; bash -n "$f"; done
 bash "$PROOF"
 need(){ local x="$1"; grep -Fq "$x" "$BUILDER" || { echo "Stage-Q builder marker missing: $x" >&2; exit 3; }; }
 for x in \
@@ -20,10 +21,10 @@ for x in \
   'stage_q_scope=ilp8_count_cg_l2_only' \
   'ilp2_exact_upstream=1' \
   'mate_policy_preserved=1'; do need "$x"; done
-python3 - "$GEN" "$BUILDER" "$SWEEP" <<'PY'
+python3 - "$GEN" "$BUILDER" "$SWEEP" "$STAGED" <<'PY'
 from pathlib import Path
 import sys
-s=Path(sys.argv[1]).read_text(); b=Path(sys.argv[2]).read_text(); w=Path(sys.argv[3]).read_text()
+s=Path(sys.argv[1]).read_text(); b=Path(sys.argv[2]).read_text(); w=Path(sys.argv[3]).read_text(); t=Path(sys.argv[4]).read_text()
 for q in ('main_pull_kernel_ilp2','main_pull_kernel_ilp8_hybrid','b300_mainrec_stageq_ilp8_pair_load_cg','b300_mainrec_stageq_ilp8_block_load_cg'):
     if q not in s: raise SystemExit('Stage-Q generator missing '+q)
 if "if s[ilp2_start2:ilp2_end2] != ilp2_before" not in s:
@@ -55,6 +56,21 @@ if pos_o<0 or pos_p<0 or pos_o>=pos_p:
     raise SystemExit('Stage-Q sweep must resolve O before allowing P provenance checks')
 if w.find('if [[ "$UPSTREAM_KIND" == stagep || ( "$UPSTREAM_KIND" == auto && "$P_VALID" == 1 ) ]]')<0:
     raise SystemExit('Stage-Q auto path does not prefer valid Stage P')
-print('stageq_contract_structure=OK sweep_exact_control=1 auto_p_o_n=1 residue_gate=1 spill_gate=1')
+for q in (
+    'SEARCH_ROWS="${SEARCH_ROWS:-1}"', 'VALIDATE_ROWS="${VALIDATE_ROWS:-4 8}"',
+    'RESOLVED_UPSTREAM="$B300_STAGEQ_UPSTREAM_KIND"',
+    'UP_PAIR="$B300_STAGEQ_UPSTREAM_PAIR_L2_BYTES"', 'UP_BLOCK="$B300_STAGEQ_UPSTREAM_BLOCK_L2_BYTES"',
+    'UP_MANIFEST="$B300_STAGEQ_UPSTREAM_MANIFEST"',
+    '[[ "$B300_STAGEQ_UPSTREAM_MANIFEST" == "$UP_MANIFEST" ]]',
+    'FATAL Stage-Q/upstream residue mismatch',
+    'validation_pair="$UP_PAIR"', 'validation_block="$UP_BLOCK"',
+    '[[ "$B300_STAGEQ_PAIR_L2_BYTES" != "$SELECTED_PAIR" || "$B300_STAGEQ_BLOCK_L2_BYTES" != "$SELECTED_BLOCK"',
+    'FINAL_PAIR="$UP_PAIR"; FINAL_BLOCK="$UP_BLOCK"; FINAL_BIN="$B300_STAGEQ_CONTROL_BIN"',
+    'B300_STAGEQ_STAGED_VALIDATED=', 'B300_STAGEQ_FINAL_ENABLED=', 'B300_STAGEQ_FINAL_SPILL_FREE=1',
+):
+    if q not in t: raise SystemExit('Stage-Q staged calibration missing contract '+q)
+if t.find('for rows in $VALIDATE_ROWS "$UP_ROWS"')<0:
+    raise SystemExit('Stage-Q staged validation does not include upstream row')
+print('stageq_contract_structure=OK sweep_exact_control=1 auto_p_o_n=1 residue_gate=1 spill_gate=1 staged_1_4_8=1 selected_tuple_survival=1 fallback_upstream=1')
 PY
-echo 'b300_stageq_preflight=OK stage_q=ilp8_count_cg_l2 upstream=stagen_or_stageo_or_stagep auto_priority=P_O_N exact_upstream_control=1 ilp2_exact_upstream=1 stagep_preserved=1 pair_block_independent=1 residue_gate=1 ptxas_spill=1 sizes=0,64,128,256 gpu_work=0'
+echo 'b300_stageq_preflight=OK stage_q=ilp8_count_cg_l2 upstream=stagen_or_stageo_or_stagep auto_priority=P_O_N exact_upstream_control=1 ilp2_exact_upstream=1 stagep_preserved=1 pair_block_independent=1 residue_gate=1 ptxas_spill=1 staged_rows=1_4_8 selected_tuple_survival=1 fallback_upstream=1 sizes=0,64,128,256 gpu_work=0'
