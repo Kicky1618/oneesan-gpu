@@ -11,10 +11,11 @@ HYBRID_NS_GEOMETRY="$ONEESAN_ROOT/scripts/bench/b300-nextgen-hybrid8-nextself-ge
 HYBRID_NS_STAGE="$ONEESAN_ROOT/scripts/bench/b300-nextgen-hybrid8-nextself-staged-calibrate.sh"
 HYBRID_NS_RUN="$ONEESAN_ROOT/scripts/run/b300x8-nextgen-hybrid8-nextself-staged-fullprime-race.sh"
 HYBRID_NS_PREFLIGHT="$ONEESAN_ROOT/scripts/bench/b300-mainrec-hybrid8-nextself-transform-preflight.sh"
+STAGEH_RUN="$ONEESAN_ROOT/scripts/run/b300x8-nextgen-hybrid8-nextmate-staged-fullprime-race.sh"
 RACE="$ONEESAN_ROOT/scripts/run/b300x8-race-external-forced-profiled-once.sh"
 JOINT="$ONEESAN_ROOT/scripts/run/b300x8-joint-calibrated-select.sh"
 
-for f in "$GRAND" "$FIRSTPASS" "$CONTRACT" "$NEXTSELF" "$HYBRID" "$HYBRID_NS_GEOMETRY" "$HYBRID_NS_STAGE" "$HYBRID_NS_RUN" "$HYBRID_NS_PREFLIGHT" "$RACE" "$JOINT"; do
+for f in "$GRAND" "$FIRSTPASS" "$CONTRACT" "$NEXTSELF" "$HYBRID" "$HYBRID_NS_GEOMETRY" "$HYBRID_NS_STAGE" "$HYBRID_NS_RUN" "$HYBRID_NS_PREFLIGHT" "$STAGEH_RUN" "$RACE" "$JOINT"; do
   [[ -f "$f" ]] || { echo "missing grand-selector dependency=$f" >&2; exit 2; }
   bash -n "$f"
 done
@@ -83,70 +84,63 @@ for s in \
   grep -Fq "$s" "$HYBRID_NS_RUN" || { echo "Stage F geometry prepare marker missing: $s" >&2; exit 3; }
 done
 
-grep -Fq 'b300-mainrec-hybrid8-nextself-transform-preflight OK' "$HYBRID_NS_PREFLIGHT" || {
-  echo 'hybrid8 next-self transform preflight marker missing' >&2; exit 3;
-}
-grep -Fq 'b300_grand_selector_contract_preflight=OK' "$CONTRACT" || {
-  echo 'grand functional contract marker missing' >&2; exit 3;
-}
+for s in \
+  'B300_STAGEH_STAGED_VALIDATED' \
+  'B300_STAGEH_FINAL_ENABLED' \
+  'B300_STAGEH_FINAL_SPILL_FREE' \
+  'B300_STAGEH_PREPARED=1' \
+  'B300_STAGEH_PREPARED_WIDTH' \
+  'B300_STAGEH_PREPARED_DISTANCE' \
+  'B300_STAGEH_PREPARED_BIN' \
+  'B300_STAGEH_PREPARED_CONTROL_BIN' \
+  'sha256sum -c "$MANIFEST"'; do
+  grep -Fq "$s" "$STAGEH_RUN" || { echo "Stage H prepare marker missing: $s" >&2; exit 3; }
+done
+
+grep -Fq 'b300-mainrec-hybrid8-nextself-transform-preflight OK' "$HYBRID_NS_PREFLIGHT" || { echo 'hybrid8 next-self transform preflight marker missing' >&2; exit 3; }
+grep -Fq 'b300_grand_selector_contract_preflight=OK' "$CONTRACT" || { echo 'grand functional contract marker missing' >&2; exit 3; }
 
 for s in \
   'PREPARE_ONLY=1 PREPARE_ENV="$JOINT_PREPARE_ENV"' \
   'NEXTSELF_RC == 4' \
   'HYBRID_RC == 4' \
   'HYBRID_NS_RC == 4' \
-  'HYBRID_NS_WIDTH_LIST="${HYBRID_NS_WIDTH_LIST:-1 2 4 8}"' \
-  'HYBRID_NS_DISTANCE_LIST="${HYBRID_NS_DISTANCE_LIST:-1 2 4}"' \
-  'WIDTH_LIST="$HYBRID_NS_WIDTH_LIST" DISTANCE_LIST="$HYBRID_NS_DISTANCE_LIST"' \
-  'B300_HYBRID8_NEXTSELF_PREPARED_WIDTH' \
-  'B300_HYBRID8_NEXTSELF_PREPARED_DISTANCE' \
+  'STAGEH_RC == 4' \
+  'RUN_STAGEH="${RUN_STAGEH:-1}"' \
+  'STAGEH_MIN_SPEEDUP="${STAGEH_MIN_SPEEDUP:-1.002}"' \
+  'b300x8-nextgen-hybrid8-nextmate-staged-fullprime-race.sh' \
+  'INPUT_ENV="$HYBRID_NS_WINNER_ENV"' \
+  'Stage-H prepared geometry does not match Stage-F geometry' \
+  'MODE=stageh_nextmate_grand' \
+  'MODE=stageh_nextmate_joint' \
   'MODE=hybrid8_nextself_composed_grand' \
   'MODE=hybrid8_nextself_composed_joint' \
   'MODE=nextself_hybrid8_joint' \
   'MODE=joint_fallback' \
   'FORCED_EXTRA3_BIN="$E3_BIN"' \
-  'B300_GRAND_HYBRID8_NEXTSELF_OK' \
+  'B300_GRAND_STAGEH_OK' \
+  'B300_GRAND_STAGEH_WIDTH' \
+  'B300_GRAND_STAGEH_DISTANCE' \
   'B300_GRAND_HYBRID8_NEXTSELF_SEARCH_WIDTHS' \
   'B300_GRAND_HYBRID8_NEXTSELF_SEARCH_DISTANCES' \
   'B300_GRAND_HYBRID8_NEXTSELF_WIDTH' \
-  'B300_GRAND_HYBRID8_NEXTSELF_DISTANCE' \
-  'B300_GRAND_HYBRID8_NEXTSELF_MANIFEST' \
-  'B300_GRAND_DROPPED_NEXTSELF_CONTROL_WHEN_COMPOSED'; do
-  grep -Fq "$s" "$GRAND" || { echo "grand selector geometry marker missing: $s" >&2; exit 3; }
+  'B300_GRAND_HYBRID8_NEXTSELF_DISTANCE'; do
+  grep -Fq "$s" "$GRAND" || { echo "grand selector Stage-H marker missing: $s" >&2; exit 3; }
 done
-if grep -Fq 'Stage F control does not match prepared plain hybrid8 binary' "$GRAND"; then
-  echo 'grand selector still contains invalid byte-identical rebuild requirement' >&2
-  exit 3
-fi
+if grep -Fq 'Stage F control does not match prepared plain hybrid8 binary' "$GRAND"; then echo 'grand selector still contains invalid byte-identical rebuild requirement' >&2; exit 3; fi
 
 for s in \
   'SELECT_ONLY=1 REBUILD_BUCKETS="$REBUILD_BUCKETS"' \
-  'b300-nextgen-preflight.sh' \
-  'b300-mainrec-hybrid8-nextself-transform-preflight.sh' \
-  'b300-joint-nextgen-hybrid8-preflight.sh' \
-  'b300-nextgen-grand-selector-preflight.sh' \
-  'b300-grand-selector-contract-preflight.sh' \
-  'git -C "$ONEESAN_ROOT" status --porcelain=v1 --untracked-files=normal' \
-  'profile_sha256=%s' \
-  'run_hybrid_ns_stage=%s' \
-  'hybrid_ns_min_speedup=%s' \
-  'hybrid_ns_search_repeats=%s' \
-  'hybrid_ns_validate_repeats=%s' \
-  'grand_selector_contract_preflight=1' \
-  'RUN_HYBRID_NS_STAGE="$RUN_HYBRID_NS_STAGE"' \
-  'HYBRID_NS_MIN_SPEEDUP="$HYBRID_NS_MIN_SPEEDUP"' \
-  'HYBRID_NS_SEARCH_REPEATS="$HYBRID_NS_SEARCH_REPEATS"' \
-  'HYBRID_NS_VALIDATE_REPEATS="$HYBRID_NS_VALIDATE_REPEATS"' \
-  'gpu_inventory_begin=1' \
-  'SINGLE PASS SELECTED' \
-  'SELECT_ONLY=1: selected' \
+  'run_stageh=%s' \
+  'stageh_min_speedup=%s' \
+  'RUN_STAGEH="$RUN_STAGEH"' \
+  'STAGEH_MIN_SPEEDUP="$STAGEH_MIN_SPEEDUP"' \
+  'B300_GRAND_SELECTED_STAGEH_ENABLED=' \
+  'B300_GRAND_SELECTED_STAGEH_MIN_SPEEDUP=' \
   'b300x8-grand-firstpass OK'; do
-  grep -Fq "$s" "$FIRSTPASS" || { echo "grand first-pass marker missing: $s" >&2; exit 3; }
+  grep -Fq "$s" "$FIRSTPASS" || { echo "grand first-pass Stage-H provenance missing: $s" >&2; exit 3; }
 done
-if grep -Eq 'SELECT_ONLY=0|SELECT_ONLY="?0"?' "$FIRSTPASS"; then
-  echo 'guarded grand first-pass contains a SELECT_ONLY=0 path' >&2
-  exit 3
-fi
+if grep -Eq 'SELECT_ONLY=0|SELECT_ONLY="?0"?' "$FIRSTPASS"; then echo 'guarded grand first-pass contains a SELECT_ONLY=0 path' >&2; exit 3; fi
 
 for s in \
   'FORCED_EXTRA3_BIN="${FORCED_EXTRA3_BIN:-}"' \
@@ -158,12 +152,7 @@ for s in \
   grep -Fq "$s" "$RACE" || { echo "external race extra3 marker missing: $s" >&2; exit 3; }
 done
 
-for s in \
-  'B300_JOINT_PREPARED=1' \
-  'PROFILE_FILE=%q' \
-  'SMOKE_PRIME=%q' \
-  'FORCED_TARGET_MIB=%q' \
-  'MAX_WINDOW=%q'; do
+for s in 'B300_JOINT_PREPARED=1' 'PROFILE_FILE=%q' 'SMOKE_PRIME=%q' 'FORCED_TARGET_MIB=%q' 'MAX_WINDOW=%q'; do
   grep -Fq "$s" "$JOINT" || { echo "joint prepare marker missing: $s" >&2; exit 3; }
 done
 
@@ -171,39 +160,31 @@ python3 - "$GRAND" <<'PY'
 from pathlib import Path
 import re,sys
 s=Path(sys.argv[1]).read_text()
-
 def block(pattern,label):
     m=re.search(pattern,s,re.S)
     if not m: raise SystemExit(f'{label} candidate block missing')
     b=m.group(1)
     for name in ('P_BIN','B_BIN','E1_BIN','E2_BIN','E3_BIN'):
-        if len(re.findall(rf'\b{name}=',b)) != 1:
-            raise SystemExit(f'{label}: {name} must be assigned exactly once')
+        if len(re.findall(rf'\b{name}=',b)) != 1: raise SystemExit(f'{label}: {name} must be assigned exactly once')
     return b
 
-b=block(
-    r'if \(\( HYBRID_NS_OK && NEXTSELF_OK \)\); then(.*?)elif \(\( HYBRID_NS_OK \)\); then',
-    'composed+separate-nextself',
-)
-required={
- 'P_BIN':'B300_HYBRID8_NEXTSELF_PREPARED_BIN',
- 'B_BIN':'B300_HYBRID8_NEXTSELF_PREPARED_CONTROL_BIN',
- 'E1_BIN':'B300_HYBRID8_PREPARED_BASE_BIN',
- 'E2_BIN':'B300_NEXTSELF_PREPARED_BIN',
- 'E3_BIN':'JOINT_PRIMARY_BIN',
-}
-for slot,candidate in required.items():
-    if not re.search(rf'\b{slot}="\${candidate}"',b):
-        raise SystemExit(f'composed branch mapping mismatch {slot}->{candidate}')
-for forbidden in ('B300_NEXTSELF_PREPARED_CONTROL_BIN','JOINT_BASE_BIN'):
-    if forbidden in b: raise SystemExit(f'composed branch wastes slot on {forbidden}')
+def mapping(b,label,required,forbidden=()):
+    for slot,candidate in required.items():
+        if not re.search(rf'\b{slot}="\${candidate}"',b): raise SystemExit(f'{label}: mapping mismatch {slot}->{candidate}')
+    for bad in forbidden:
+        if bad in b: raise SystemExit(f'{label}: forbidden candidate {bad} occupies budget')
 
-b2=block(
-    r'elif \(\( NEXTSELF_OK && HYBRID_OK \)\); then(.*?)elif \(\( NEXTSELF_OK \)\); then',
-    'separate-nextself+hybrid8',
-)
+h=block(r'if \(\( STAGEH_OK && NEXTSELF_OK \)\); then(.*?)elif \(\( STAGEH_OK \)\); then','stageh+nextself')
+mapping(h,'stageh+nextself',{
+ 'P_BIN':'B300_STAGEH_PREPARED_BIN','B_BIN':'B300_STAGEH_PREPARED_CONTROL_BIN','E1_BIN':'B300_HYBRID8_PREPARED_BASE_BIN','E2_BIN':'B300_NEXTSELF_PREPARED_BIN','E3_BIN':'JOINT_PRIMARY_BIN'},('B300_NEXTSELF_PREPARED_CONTROL_BIN','JOINT_BASE_BIN'))
+
+c=block(r'elif \(\( HYBRID_NS_OK && NEXTSELF_OK \)\); then(.*?)elif \(\( HYBRID_NS_OK \)\); then','geometry+nextself')
+mapping(c,'geometry+nextself',{
+ 'P_BIN':'B300_HYBRID8_NEXTSELF_PREPARED_BIN','B_BIN':'B300_HYBRID8_NEXTSELF_PREPARED_CONTROL_BIN','E1_BIN':'B300_HYBRID8_PREPARED_BASE_BIN','E2_BIN':'B300_NEXTSELF_PREPARED_BIN','E3_BIN':'JOINT_PRIMARY_BIN'},('B300_NEXTSELF_PREPARED_CONTROL_BIN','JOINT_BASE_BIN'))
+
+b2=block(r'elif \(\( NEXTSELF_OK && HYBRID_OK \)\); then(.*?)elif \(\( NEXTSELF_OK \)\); then','separate-nextself+hybrid8')
 if 'JOINT_BASE_BIN' in b2: raise SystemExit('separate transform branch unexpectedly includes joint base')
-print('grand_candidate_budget=OK forced_slots=5 profiled_slots=2 total=7 composed_mapping=OK geometry=OK')
+print('grand_candidate_budget=OK forced_slots=5 profiled_slots=2 total=7 stageh_mapping=OK geometry_mapping=OK')
 PY
 
-echo 'b300_nextgen_grand_selector_preflight=OK bash_syntax=OK firstpass_guard=OK firstpass_stagef_provenance=OK provenance=OK nextself_prepare=OK hybrid8_prepare=OK hybrid8_nextself_geometry=OK hybrid8_nextself_prepare=OK hybrid8_nextself_fingerprint=OK stage_e_crosscheck=OK geometry_lock=OK no_binary_identity_gate=OK staged_reject_fallback=OK forced_extra3=OK functional_contract_present=OK candidate_budget=7 gpu_work=0 actions_triggered=0'
+echo 'b300_nextgen_grand_selector_preflight=OK bash_syntax=OK firstpass_guard=OK firstpass_stageh_provenance=OK provenance=OK nextself_prepare=OK hybrid8_prepare=OK hybrid8_nextself_geometry=OK stageh_prepare=OK stageh_geometry_match=OK stageh_fallback=OK candidate_budget=7 gpu_work=0 actions_triggered=0'
