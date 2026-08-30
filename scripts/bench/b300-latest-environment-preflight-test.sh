@@ -54,7 +54,7 @@ chmod +x "$tmp/bin/nvcc"
 run_env=(PATH="$tmp/bin:$PATH" TARGET_MIB=1024 GRIDFP_VRAM_RESERVE_MIB=128 MIN_HOST_AVAILABLE_MIB=1 STRICT_B300_MODEL=1 ALLOW_DIRTY_WORKTREE=0)
 
 env "${run_env[@]}" bash "$PRE" 27 >"$tmp/good.out" 2>"$tmp/good.err"
-grep -Fq 'b300_latest_preflight=OK stage=R ' "$tmp/good.out" || { cat "$tmp/good.out" >&2; exit 3; }
+grep -Fq 'b300_latest_preflight=OK stage=S ' "$tmp/good.out" || { cat "$tmp/good.out" >&2; exit 3; }
 grep -Fq 'full_p2p=1' "$tmp/good.out" || exit 3
 grep -Fq 'strict_b300_model=1' "$tmp/good.out" || exit 3
 
@@ -74,4 +74,4 @@ env "${run_env[@]}" FAKE_P2P_FAIL=1 REQUIRE_FULL_P2P=0 bash "$PRE" 27 >"$tmp/p2p
 grep -Fq 'full_p2p=0' "$tmp/p2p-warn.out" || exit 3
 grep -Fq 'warning: full GPU peer access unavailable rc=5' "$tmp/p2p-warn.err" || exit 3
 
-echo 'b300-latest-environment-preflight-test OK latest_stage=R good=1 vram_fail_closed=1 p2p_fail_closed=1 p2p_override=1 gpu_work=0'
+echo 'b300-latest-environment-preflight-test OK latest_stage=S good=1 vram_fail_closed=1 p2p_fail_closed=1 p2p_override=1 gpu_work=0'
