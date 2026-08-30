@@ -8,8 +8,9 @@ MATE="$ONEESAN_ROOT/scripts/build/gen-b300-mainrec-hybrid8-next-mate-prefetch.py
 BUILDER="$ONEESAN_ROOT/scripts/build/b300-forced-nextgen-hybrid8-self-mate-geometry.sh"
 SWEEP="$ONEESAN_ROOT/scripts/bench/b300-nextgen-hybrid8-nextmate-geometry-sweep.sh"
 STAGED="$ONEESAN_ROOT/scripts/bench/b300-nextgen-hybrid8-nextmate-geometry-staged-calibrate.sh"
+PROMOTE="$ONEESAN_ROOT/scripts/run/b300x8-nextgen-hybrid8-nextmate-geometry-staged-fullprime-race.sh"
 for f in "$HYBRID" "$SELF" "$MATE"; do python3 -m py_compile "$f"; done
-for f in "$BUILDER" "$SWEEP" "$STAGED"; do bash -n "$f"; done
+for f in "$BUILDER" "$SWEEP" "$STAGED" "$PROMOTE"; do bash -n "$f"; done
 
 for s in \
   'SELF_WIDTH=' 'SELF_DISTANCE=' 'MATE_WIDTH=' 'MATE_DISTANCE=' \
@@ -46,6 +47,24 @@ for s in \
   'B300_STAGEI_SEARCH_MATE_WIDTHS' \
   'B300_STAGEI_SEARCH_MATE_DISTANCES'; do
   grep -Fq "$s" "$STAGED" || { echo "Stage-I staged marker missing: $s" >&2; exit 3; }
+done
+for s in \
+  'B300_STAGEI_STAGED_VALIDATED' \
+  'B300_STAGEI_FINAL_ENABLED' \
+  'MANIFEST="${MANIFEST:-${WINNER_ENV%.env}_promotion-inputs.sha256}"' \
+  'sha256sum "$WINNER_ENV" "$INPUT_ENV" "$B300_STAGEI_FINAL_BIN" "$B300_STAGEI_CONTROL_BIN"' \
+  'sha256sum -c "$MANIFEST"' \
+  'B300_STAGEI_PROMOTION_BIN_SHA256' \
+  'B300_STAGEI_PROMOTION_CONTROL_SHA256' \
+  'B300_STAGEI_PROMOTION_MATE_WIDTH' \
+  'B300_STAGEI_PROMOTION_MATE_DISTANCE' \
+  'B300_STAGEI_PROMOTION_INPUT_STAGE_F_ENV_SHA256' \
+  'PREPARE_ONLY="${PREPARE_ONLY:-0}"' \
+  'B300_STAGEI_PREPARED=1' \
+  'B300_STAGEI_PREPARED_BIN=' \
+  'B300_STAGEI_PREPARED_CONTROL_BIN=' \
+  'b300x8-race-external-forced-profiled-once.sh'; do
+  grep -Fq "$s" "$PROMOTE" || { echo "Stage-I promotion marker missing: $s" >&2; exit 3; }
 done
 
 TMP="$(mktemp -d)"; trap 'rm -rf "$TMP"' EXIT
@@ -97,4 +116,4 @@ for md in 1 2 4; do
 done
 [[ "$count" == 12 ]]
 
-echo 'b300-mainrec-self-mate-independent-geometry-preflight OK self_geometry=w4d2 mate_geometries=12 self_advance_locked=16grid mate_advance_independent=1 exact_prefetch_counts=1 builder_decoupled=1 sweep_exact_gate=1 spill_gate=1 staged_rows=1,4,8 staged_geometry_lock=1 gpu_work=0'
+echo 'b300-mainrec-self-mate-independent-geometry-preflight OK self_geometry=w4d2 mate_geometries=12 self_advance_locked=16grid mate_advance_independent=1 exact_prefetch_counts=1 builder_decoupled=1 sweep_exact_gate=1 spill_gate=1 staged_rows=1,4,8 staged_geometry_lock=1 promotion_manifest=1 prepare_contract=1 gpu_work=0'
