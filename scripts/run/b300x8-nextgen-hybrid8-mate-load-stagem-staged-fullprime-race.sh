@@ -1,0 +1,157 @@
+#!/usr/bin/env bash
+set -euo pipefail
+source "$(dirname -- "${BASH_SOURCE[0]}")/../lib/common.sh"
+
+N="${1:-27}"; if (($#>0)); then shift; fi
+[[ "$N" == 27 ]] || { echo 'Stage-M mate-load promotion targets n=27' >&2; exit 2; }
+PROFILE_FILE="${PROFILE_FILE:-$ONEESAN_ROOT/work/b300_hbm_profile_refined21.env}"
+STAGE_F_ENV="${STAGE_F_ENV:-$ONEESAN_ROOT/work/b300_nextgen_hybrid8_nextself_staged_winner.env}"
+STAGEL_WINNER_ENV="${STAGEL_WINNER_ENV:-$ONEESAN_ROOT/work/b300_nextgen_hybrid8_prefetch_guard_stagel_g8_winner.env}"
+STAGEL_PREPARE_ENV="${STAGEL_PREPARE_ENV:-$ONEESAN_ROOT/work/b300_nextgen_hybrid8_prefetch_guard_stagel_fullprime_n27_prepared.env}"
+ARCH="${ARCH:-native}"; MOD="${MOD:-4294967291}"; TARGET_MIB="${TARGET_MIB:-65536}"; MAX_WINDOW="${MAX_WINDOW:-14}"; NGPU="${NGPU:-8}"
+RUN_STAGED="${RUN_STAGED:-1}"; PREPARE_ONLY="${PREPARE_ONLY:-0}"; SELECT_ONLY="${SELECT_ONLY:-1}"; REBUILD_BUCKETS="${REBUILD_BUCKETS:-1}"
+MIN_SPEEDUP="${MIN_SPEEDUP:-1.002}"; POLICY_LIST="${POLICY_LIST:-default cg cs}"
+STAGED_PREFIX="${STAGED_PREFIX:-$ONEESAN_ROOT/work/b300_nextgen_hybrid8_mate_load_stagem_g${NGPU}}"
+WINNER_ENV="${WINNER_ENV:-${STAGED_PREFIX}_winner.env}"
+MANIFEST="${MANIFEST:-${WINNER_ENV%.env}_promotion-inputs.sha256}"
+RACE_PREFIX="${RACE_PREFIX:-$ONEESAN_ROOT/work/b300_nextgen_hybrid8_mate_load_stagem_fullprime_n27}"
+PREPARE_ENV="${PREPARE_ENV:-${RACE_PREFIX}_prepared.env}"
+PROMOTION_ENV="${PROMOTION_ENV:-${RACE_PREFIX}_promotion.env}"
+for x in RUN_STAGED PREPARE_ONLY SELECT_ONLY REBUILD_BUCKETS; do v="${!x}"; [[ "$v" == 0 || "$v" == 1 ]] || exit 2; done
+[[ "$NGPU" =~ ^[1-8]$ ]] || exit 2
+for x in MOD TARGET_MIB MAX_WINDOW; do v="${!x}"; [[ "$v" =~ ^[1-9][0-9]*$ ]] || exit 2; done
+python3 - "$MIN_SPEEDUP" <<'PY'
+import sys
+if float(sys.argv[1]) < 1.0: raise SystemExit('MIN_SPEEDUP must be >=1')
+PY
+for f in "$PROFILE_FILE" "$STAGE_F_ENV" "$STAGEL_WINNER_ENV" "$STAGEL_PREPARE_ENV"; do [[ -s "$f" ]] || { echo "missing Stage-M input=$f" >&2; exit 2; }; done
+command -v sha256sum >/dev/null || exit 2
+
+# Stage M is strictly downstream of the exact Stage-L prepared candidate.
+# Bind modulus, GPU count and the full Stage-L promotion manifest before GPU work.
+# shellcheck disable=SC1090
+source "$STAGEL_PREPARE_ENV"
+for k in B300_STAGEL_PREPARED B300_STAGEL_PREPARED_MOD B300_STAGEL_PREPARED_NGPU \
+  B300_STAGEL_PREPARED_SELF_WIDTH B300_STAGEL_PREPARED_SELF_DISTANCE B300_STAGEL_PREPARED_SELF_EVICT \
+  B300_STAGEL_PREPARED_MATE_WIDTH B300_STAGEL_PREPARED_MATE_DISTANCE B300_STAGEL_PREPARED_MATE_EVICT \
+  B300_STAGEL_PREPARED_SELF_GUARD B300_STAGEL_PREPARED_MATE_GUARD B300_STAGEL_PREPARED_BIN \
+  B300_STAGEL_PREPARED_THREADS B300_STAGEL_PREPARED_MANIFEST; do
+  [[ -n "${!k+x}" ]] || { echo "Stage-L prepare missing $k" >&2; exit 3; }
+done
+[[ "$B300_STAGEL_PREPARED" == 1 ]] || exit 3
+[[ "$B300_STAGEL_PREPARED_MOD" == "$MOD" ]] || { echo "Stage-M/Stage-L modulus mismatch stagem=$MOD stagel=$B300_STAGEL_PREPARED_MOD" >&2; exit 3; }
+[[ "$B300_STAGEL_PREPARED_NGPU" == "$NGPU" ]] || { echo "Stage-M/Stage-L GPU count mismatch stagem=$NGPU stagel=$B300_STAGEL_PREPARED_NGPU" >&2; exit 3; }
+[[ -x "$B300_STAGEL_PREPARED_BIN" && -s "$B300_STAGEL_PREPARED_MANIFEST" ]] || exit 3
+sha256sum -c "$B300_STAGEL_PREPARED_MANIFEST" >/dev/null || { echo 'Stage-L promotion manifest failed before Stage M' >&2; exit 3; }
+STAGEL_MANIFEST_SHA="$(sha256sum "$B300_STAGEL_PREPARED_MANIFEST" | awk '{print $1}')"
+SW="$B300_STAGEL_PREPARED_SELF_WIDTH"; SD="$B300_STAGEL_PREPARED_SELF_DISTANCE"; SE="$B300_STAGEL_PREPARED_SELF_EVICT"; SG="$B300_STAGEL_PREPARED_SELF_GUARD"
+MW="$B300_STAGEL_PREPARED_MATE_WIDTH"; MD="$B300_STAGEL_PREPARED_MATE_DISTANCE"; ME="$B300_STAGEL_PREPARED_MATE_EVICT"; MG="$B300_STAGEL_PREPARED_MATE_GUARD"
+
+if [[ "$RUN_STAGED" == 1 ]]; then
+  STAGE_F_ENV="$STAGE_F_ENV" STAGEL_GUARD_ENV="$STAGEL_WINNER_ENV" ARCH="$ARCH" MOD="$MOD" TARGET_MIB="$TARGET_MIB" MAX_WINDOW="$MAX_WINDOW" NGPU="$NGPU" \
+    MIN_SPEEDUP="$MIN_SPEEDUP" POLICY_LIST="$POLICY_LIST" PREFIX="$STAGED_PREFIX" FINAL_ENV="$WINNER_ENV" \
+    bash "$ONEESAN_ROOT/scripts/bench/b300-nextgen-hybrid8-mate-load-policy-staged-calibrate.sh"
+fi
+[[ -s "$WINNER_ENV" ]] || { echo "missing Stage-M winner=$WINNER_ENV" >&2; exit 3; }
+# shellcheck disable=SC1090
+source "$WINNER_ENV"
+for k in B300_STAGEM_STAGED_VALIDATED B300_STAGEM_FINAL_ENABLED B300_STAGEM_NGPU B300_STAGEM_POLICY \
+  B300_STAGEM_FINAL_BIN B300_STAGEM_FINAL_THREADS B300_STAGEM_FINAL_SPEEDUP B300_STAGEM_FINAL_SPILL_FREE \
+  B300_STAGEM_CONTROL_BIN B300_STAGEM_CONTROL_THREADS B300_STAGEM_SELF_WIDTH B300_STAGEM_SELF_DISTANCE \
+  B300_STAGEM_SELF_EVICT B300_STAGEM_SELF_GUARD B300_STAGEM_MATE_WIDTH B300_STAGEM_MATE_DISTANCE \
+  B300_STAGEM_MATE_EVICT B300_STAGEM_MATE_GUARD B300_STAGEM_FINAL_STAGE_ROWS B300_STAGEM_FINAL_STAGE_RESIDUE \
+  B300_STAGEM_INPUT_STAGE_F_ENV B300_STAGEM_INPUT_STAGEL_GUARD_ENV; do
+  [[ -n "${!k+x}" ]] || { echo "Stage-M winner missing $k" >&2; exit 3; }
+done
+[[ "$B300_STAGEM_STAGED_VALIDATED" == 1 && "$B300_STAGEM_FINAL_ENABLED" == 1 && "$B300_STAGEM_FINAL_SPILL_FREE" == 1 ]] || { echo 'Stage M did not survive staged validation' >&2; exit 4; }
+[[ "$B300_STAGEM_NGPU" == "$NGPU" ]] || exit 3
+case "$B300_STAGEM_POLICY" in cg|cs) ;; *) echo 'Stage-M final policy must be cg or cs' >&2; exit 4;; esac
+[[ "$B300_STAGEM_SELF_WIDTH" == "$SW" && "$B300_STAGEM_SELF_DISTANCE" == "$SD" && "$B300_STAGEM_SELF_EVICT" == "$SE" && "$B300_STAGEM_SELF_GUARD" == "$SG" && \
+   "$B300_STAGEM_MATE_WIDTH" == "$MW" && "$B300_STAGEM_MATE_DISTANCE" == "$MD" && "$B300_STAGEM_MATE_EVICT" == "$ME" && "$B300_STAGEM_MATE_GUARD" == "$MG" ]] || {
+  echo 'Stage-M changed Stage-L geometry/eviction/guard policy' >&2; exit 3
+}
+[[ "$B300_STAGEM_INPUT_STAGE_F_ENV" == "$STAGE_F_ENV" && "$B300_STAGEM_INPUT_STAGEL_GUARD_ENV" == "$STAGEL_WINNER_ENV" ]] || { echo 'Stage-M input provenance drift' >&2; exit 3; }
+[[ -x "$B300_STAGEM_FINAL_BIN" && -x "$B300_STAGEM_CONTROL_BIN" ]] || exit 3
+[[ "$B300_STAGEM_CONTROL_BIN" == "$B300_STAGEL_PREPARED_BIN" ]] || { echo 'Stage-M control is not exact Stage-L prepared binary' >&2; exit 3; }
+python3 - "$B300_STAGEM_FINAL_SPEEDUP" "$MIN_SPEEDUP" <<'PY'
+import sys
+if float(sys.argv[1]) < float(sys.argv[2]): raise SystemExit('Stage-M speedup below threshold')
+PY
+
+if [[ "$RUN_STAGED" == 1 ]]; then
+  tmp="${MANIFEST}.tmp"; mkdir -p "$(dirname "$MANIFEST")"
+  sha256sum "$WINNER_ENV" "$STAGE_F_ENV" "$STAGEL_WINNER_ENV" "$STAGEL_PREPARE_ENV" "$B300_STAGEL_PREPARED_MANIFEST" \
+    "$B300_STAGEM_FINAL_BIN" "$B300_STAGEM_CONTROL_BIN" >"$tmp"
+  mv "$tmp" "$MANIFEST"
+else
+  [[ -s "$MANIFEST" ]] || { echo 'missing Stage-M promotion manifest' >&2; exit 3; }
+fi
+sha256sum -c "$MANIFEST" >/dev/null || { echo 'Stage-M promotion fingerprint mismatch' >&2; exit 3; }
+FINAL_SHA="$(sha256sum "$B300_STAGEM_FINAL_BIN" | awk '{print $1}')"; CONTROL_SHA="$(sha256sum "$B300_STAGEM_CONTROL_BIN" | awk '{print $1}')"
+WINNER_SHA="$(sha256sum "$WINNER_ENV" | awk '{print $1}')"; STAGEF_SHA="$(sha256sum "$STAGE_F_ENV" | awk '{print $1}')"; STAGEL_WINNER_SHA="$(sha256sum "$STAGEL_WINNER_ENV" | awk '{print $1}')"; STAGEL_PREPARE_SHA="$(sha256sum "$STAGEL_PREPARE_ENV" | awk '{print $1}')"; MANIFEST_SHA="$(sha256sum "$MANIFEST" | awk '{print $1}')"
+label="stagem_mateload_${B300_STAGEM_POLICY}_sw${SW}d${SD}_mw${MW}d${MD}_sev${SE}_mev${ME}_sg${SG}_mg${MG}"
+control_label="stagem_mateload_default_control"
+cat >"$PROMOTION_ENV" <<EOF
+B300_STAGEM_PROMOTION_VALIDATED=1
+B300_STAGEM_PROMOTION_MOD=$MOD
+B300_STAGEM_PROMOTION_NGPU=$NGPU
+B300_STAGEM_PROMOTION_POLICY=$B300_STAGEM_POLICY
+B300_STAGEM_PROMOTION_BIN=$(printf '%q' "$B300_STAGEM_FINAL_BIN")
+B300_STAGEM_PROMOTION_BIN_SHA256=$FINAL_SHA
+B300_STAGEM_PROMOTION_THREADS=$B300_STAGEM_FINAL_THREADS
+B300_STAGEM_PROMOTION_CONTROL_BIN=$(printf '%q' "$B300_STAGEM_CONTROL_BIN")
+B300_STAGEM_PROMOTION_CONTROL_SHA256=$CONTROL_SHA
+B300_STAGEM_PROMOTION_CONTROL_THREADS=$B300_STAGEM_CONTROL_THREADS
+B300_STAGEM_PROMOTION_SPEEDUP=$B300_STAGEM_FINAL_SPEEDUP
+B300_STAGEM_PROMOTION_STAGE_F_ENV_SHA256=$STAGEF_SHA
+B300_STAGEM_PROMOTION_STAGEL_WINNER_ENV_SHA256=$STAGEL_WINNER_SHA
+B300_STAGEM_PROMOTION_STAGEL_PREPARE_ENV_SHA256=$STAGEL_PREPARE_SHA
+B300_STAGEM_PROMOTION_STAGEL_MANIFEST=$(printf '%q' "$B300_STAGEL_PREPARED_MANIFEST")
+B300_STAGEM_PROMOTION_STAGEL_MANIFEST_SHA256=$STAGEL_MANIFEST_SHA
+B300_STAGEM_PROMOTION_MANIFEST=$(printf '%q' "$MANIFEST")
+B300_STAGEM_PROMOTION_MANIFEST_SHA256=$MANIFEST_SHA
+B300_STAGEM_PROMOTION_WINNER_ENV_SHA256=$WINNER_SHA
+EOF
+
+if [[ "$PREPARE_ONLY" == 1 ]]; then
+  mkdir -p "$(dirname "$PREPARE_ENV")"
+  {
+    printf 'B300_STAGEM_PREPARED=1\n'
+    printf 'B300_STAGEM_PREPARED_MOD=%q\n' "$MOD"
+    printf 'B300_STAGEM_PREPARED_NGPU=%q\n' "$NGPU"
+    printf 'B300_STAGEM_PREPARED_POLICY=%q\n' "$B300_STAGEM_POLICY"
+    printf 'B300_STAGEM_PREPARED_SELF_WIDTH=%q\n' "$SW"
+    printf 'B300_STAGEM_PREPARED_SELF_DISTANCE=%q\n' "$SD"
+    printf 'B300_STAGEM_PREPARED_SELF_EVICT=%q\n' "$SE"
+    printf 'B300_STAGEM_PREPARED_SELF_GUARD=%q\n' "$SG"
+    printf 'B300_STAGEM_PREPARED_MATE_WIDTH=%q\n' "$MW"
+    printf 'B300_STAGEM_PREPARED_MATE_DISTANCE=%q\n' "$MD"
+    printf 'B300_STAGEM_PREPARED_MATE_EVICT=%q\n' "$ME"
+    printf 'B300_STAGEM_PREPARED_MATE_GUARD=%q\n' "$MG"
+    printf 'B300_STAGEM_PREPARED_BIN=%q\n' "$B300_STAGEM_FINAL_BIN"
+    printf 'B300_STAGEM_PREPARED_LABEL=%q\n' "$label"
+    printf 'B300_STAGEM_PREPARED_THREADS=%q\n' "$B300_STAGEM_FINAL_THREADS"
+    printf 'B300_STAGEM_PREPARED_CONTROL_BIN=%q\n' "$B300_STAGEM_CONTROL_BIN"
+    printf 'B300_STAGEM_PREPARED_CONTROL_LABEL=%q\n' "$control_label"
+    printf 'B300_STAGEM_PREPARED_CONTROL_THREADS=%q\n' "$B300_STAGEM_CONTROL_THREADS"
+    printf 'B300_STAGEM_PREPARED_STAGED_SPEEDUP=%q\n' "$B300_STAGEM_FINAL_SPEEDUP"
+    printf 'B300_STAGEM_PREPARED_STAGEL_MANIFEST=%q\n' "$B300_STAGEL_PREPARED_MANIFEST"
+    printf 'B300_STAGEM_PREPARED_MANIFEST=%q\n' "$MANIFEST"
+    printf 'B300_STAGEM_PREPARED_MANIFEST_SHA256=%q\n' "$MANIFEST_SHA"
+    printf 'B300_STAGEM_PREPARED_FINAL_BIN_SHA256=%q\n' "$FINAL_SHA"
+    printf 'B300_STAGEM_PREPARED_CONTROL_BIN_SHA256=%q\n' "$CONTROL_SHA"
+    printf 'B300_STAGEM_PREPARED_FINAL_STAGE_ROWS=%q\n' "$B300_STAGEM_FINAL_STAGE_ROWS"
+    printf 'B300_STAGEM_PREPARED_FINAL_STAGE_RESIDUE=%q\n' "$B300_STAGEM_FINAL_STAGE_RESIDUE"
+    printf 'B300_STAGEM_PREPARED_PROMOTION_ENV=%q\n' "$PROMOTION_ENV"
+  } >"$PREPARE_ENV"
+  cat "$PREPARE_ENV"
+  echo "STAGE M PREPARED mod=$MOD ngpu=$NGPU policy=$B300_STAGEM_POLICY speedup=${B300_STAGEM_FINAL_SPEEDUP}x guards=$SG/$MG" >&2
+  exit 0
+fi
+
+[[ "$NGPU" == 8 ]] || { echo 'Stage-M complete-prime promotion requires NGPU=8; use PREPARE_ONLY=1 for local screening' >&2; exit 2; }
+exec env PROFILE_FILE="$PROFILE_FILE" ARCH="$ARCH" SMOKE_PRIME="$MOD" MAX_WINDOW="$MAX_WINDOW" FORCED_TARGET_MIB="$TARGET_MIB" \
+  FORCED_OVERRIDE_BIN="$B300_STAGEM_FINAL_BIN" FORCED_OVERRIDE_LABEL="$label" FORCED_OVERRIDE_THREADS="$B300_STAGEM_FINAL_THREADS" \
+  FORCED_BASE_BIN="$B300_STAGEM_CONTROL_BIN" FORCED_BASE_LABEL="$control_label" FORCED_BASE_THREADS="$B300_STAGEM_CONTROL_THREADS" \
+  REBUILD_BUCKETS="$REBUILD_BUCKETS" SELECT_ONLY="$SELECT_ONLY" PREFIX="$RACE_PREFIX" \
+  "$ONEESAN_ROOT/scripts/run/b300x8-race-external-forced-profiled-once.sh" 27 "$@"
