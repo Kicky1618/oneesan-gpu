@@ -25,14 +25,14 @@ for c in "${required_cmds[@]}"; do command -v "$c" >/dev/null || { echo "missing
 required_files=(
   scripts/run/b300x8-grand-firstpass-latest.sh
   scripts/run/b300x8-grand-promote-exact-latest.sh
-  scripts/run/b300x8-grand-firstpass-stager.sh
-  scripts/run/b300x8-grand-promote-exact-stager.sh
-  scripts/run/b300x8-joint-nextself-hybrid8-select-stager.sh
-  scripts/run/b300x8-nextgen-hybrid8-stager-ilp2-load-policy-staged-fullprime-race.sh
-  scripts/bench/b300-stager-preflight.sh
-  scripts/bench/b300-grand-stager-contract-preflight.sh
-  scripts/bench/b300-grand-stager-firstpass-preflight.sh
-  scripts/bench/b300-grand-stager-exact-promotion-preflight.sh
+  scripts/run/b300x8-grand-firstpass-stages.sh
+  scripts/run/b300x8-grand-promote-exact-stages.sh
+  scripts/run/b300x8-joint-nextself-hybrid8-select-stages.sh
+  scripts/run/b300x8-nextgen-hybrid8-stages-ilp2-cg-l2-staged-fullprime-race.sh
+  scripts/bench/b300-stages-preflight.sh
+  scripts/bench/b300-grand-stages-contract-preflight.sh
+  scripts/bench/b300-grand-stages-firstpass-preflight.sh
+  scripts/bench/b300-grand-stages-exact-promotion-preflight.sh
 )
 for rel in "${required_files[@]}"; do [[ -s "$ONEESAN_ROOT/$rel" ]] || { echo "missing latest-chain artifact=$rel" >&2; exit 3; }; done
 
@@ -104,5 +104,5 @@ fi
 
 TOPO="$(nvidia-smi topo -m 2>&1 || true)"
 printf '%s\n' "$TOPO"
-printf 'b300_latest_preflight=OK stage=R head=%s dirty=%s ngpu=%s target_mib=%s reserve_mib=%s min_gpu_free_mib=%s host_available_mib=%s driver=%s full_p2p=%s strict_b300_model=%s\n' \
+printf 'b300_latest_preflight=OK stage=S head=%s dirty=%s ngpu=%s target_mib=%s reserve_mib=%s min_gpu_free_mib=%s host_available_mib=%s driver=%s full_p2p=%s strict_b300_model=%s\n' \
   "$HEAD_SHA" "$DIRTY" "$NGPU" "$TARGET_MIB" "$GRIDFP_VRAM_RESERVE_MIB" "$MIN_FREE_REQ" "$HOST_AVAIL_MIB" "$DRIVER" "$((P2P_RC==0))" "$STRICT_B300_MODEL"
