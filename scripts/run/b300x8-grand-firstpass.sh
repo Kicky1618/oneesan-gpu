@@ -25,6 +25,8 @@ NEXTSELF_VALIDATE_REPEATS="${NEXTSELF_VALIDATE_REPEATS:-1}"
 NEXTSELF_MIN_SPEEDUP="${NEXTSELF_MIN_SPEEDUP:-1.01}"
 HYBRID_MIN_SPEEDUP="${HYBRID_MIN_SPEEDUP:-1.01}"
 HYBRID_NS_MIN_SPEEDUP="${HYBRID_NS_MIN_SPEEDUP:-1.01}"
+HYBRID_NS_WIDTH_LIST="${HYBRID_NS_WIDTH_LIST:-1 2 4 8}"
+HYBRID_NS_DISTANCE_LIST="${HYBRID_NS_DISTANCE_LIST:-1 2 4}"
 HYBRID_NS_SEARCH_REPEATS="${HYBRID_NS_SEARCH_REPEATS:-1}"
 HYBRID_NS_VALIDATE_REPEATS="${HYBRID_NS_VALIDATE_REPEATS:-1}"
 PREFIX="${PREFIX:-$ONEESAN_ROOT/work/b300_grand_firstpass_n27}"
@@ -48,6 +50,14 @@ done
 for x in NEXTSELF_SEARCH_REPEATS NEXTSELF_VALIDATE_REPEATS HYBRID_NS_SEARCH_REPEATS HYBRID_NS_VALIDATE_REPEATS; do
   v="${!x}"; [[ "$v" =~ ^[1-9][0-9]*$ ]] || { echo "$x must be >=1" >&2; exit 2; }
 done
+widths=()
+for w in $HYBRID_NS_WIDTH_LIST; do case "$w" in 1|2|4|8) ;; *) echo "bad HYBRID_NS_WIDTH_LIST entry=$w" >&2; exit 2;; esac; seen=0; for old in "${widths[@]}"; do [[ "$old" == "$w" ]] && seen=1; done; ((seen)) || widths+=("$w"); done
+((${#widths[@]})) || { echo 'HYBRID_NS_WIDTH_LIST must not be empty' >&2; exit 2; }
+HYBRID_NS_WIDTH_LIST="${widths[*]}"
+distances=()
+for d in $HYBRID_NS_DISTANCE_LIST; do case "$d" in 1|2|4) ;; *) echo "bad HYBRID_NS_DISTANCE_LIST entry=$d" >&2; exit 2;; esac; seen=0; for old in "${distances[@]}"; do [[ "$old" == "$d" ]] && seen=1; done; ((seen)) || distances+=("$d"); done
+((${#distances[@]})) || { echo 'HYBRID_NS_DISTANCE_LIST must not be empty' >&2; exit 2; }
+HYBRID_NS_DISTANCE_LIST="${distances[*]}"
 python3 - "$NEXTSELF_MIN_SPEEDUP" "$HYBRID_MIN_SPEEDUP" "$HYBRID_NS_MIN_SPEEDUP" <<'PY'
 import sys
 for name,v in zip(('NEXTSELF_MIN_SPEEDUP','HYBRID_MIN_SPEEDUP','HYBRID_NS_MIN_SPEEDUP'),map(float,sys.argv[1:])):
@@ -96,6 +106,8 @@ PROFILE_SHA="$(sha256sum "$PROFILE_FILE" | awk '{print $1}')"
   printf 'nextself_min_speedup=%s\n' "$NEXTSELF_MIN_SPEEDUP"
   printf 'hybrid_min_speedup=%s\n' "$HYBRID_MIN_SPEEDUP"
   printf 'hybrid_ns_min_speedup=%s\n' "$HYBRID_NS_MIN_SPEEDUP"
+  printf 'hybrid_ns_width_list=%s\n' "$HYBRID_NS_WIDTH_LIST"
+  printf 'hybrid_ns_distance_list=%s\n' "$HYBRID_NS_DISTANCE_LIST"
   printf 'hybrid_ns_search_repeats=%s\n' "$HYBRID_NS_SEARCH_REPEATS"
   printf 'hybrid_ns_validate_repeats=%s\n' "$HYBRID_NS_VALIDATE_REPEATS"
   printf 'hybrid8_nextself_transform_preflight=1\n'
@@ -119,7 +131,7 @@ bash "$ONEESAN_ROOT/scripts/bench/b300-joint-nextgen-hybrid8-preflight.sh"
 bash "$ONEESAN_ROOT/scripts/bench/b300-nextgen-grand-selector-preflight.sh"
 bash "$ONEESAN_ROOT/scripts/bench/b300-grand-selector-contract-preflight.sh"
 
-echo "=== B300 grand first-pass: n=27 head=${HEAD_SHA:0:12} GPUs=$GPU_COUNT SELECT_ONLY=1 ===" >&2
+echo "=== B300 grand first-pass: n=27 head=${HEAD_SHA:0:12} GPUs=$GPU_COUNT SELECT_ONLY=1 geometry_widths=[$HYBRID_NS_WIDTH_LIST] geometry_distances=[$HYBRID_NS_DISTANCE_LIST] ===" >&2
 set +e
 PROFILE_FILE="$PROFILE_FILE" ARCH="$ARCH" MAX_WINDOW="$MAX_WINDOW" SMOKE_PRIME="$SMOKE_PRIME" \
   FORCED_TARGET_MIB="$FORCED_TARGET_MIB" BUCKET_TARGET_MIB="$BUCKET_TARGET_MIB" WORK_ROOT="$WORK_ROOT" RACE_PREFIX="$RACE_PREFIX" \
@@ -129,6 +141,7 @@ PROFILE_FILE="$PROFILE_FILE" ARCH="$ARCH" MAX_WINDOW="$MAX_WINDOW" SMOKE_PRIME="
   NEXTSELF_VALIDATE_ROWS="$NEXTSELF_VALIDATE_ROWS" NEXTSELF_SEARCH_REPEATS="$NEXTSELF_SEARCH_REPEATS" \
   NEXTSELF_VALIDATE_REPEATS="$NEXTSELF_VALIDATE_REPEATS" NEXTSELF_MIN_SPEEDUP="$NEXTSELF_MIN_SPEEDUP" \
   HYBRID_MIN_SPEEDUP="$HYBRID_MIN_SPEEDUP" HYBRID_NS_MIN_SPEEDUP="$HYBRID_NS_MIN_SPEEDUP" \
+  HYBRID_NS_WIDTH_LIST="$HYBRID_NS_WIDTH_LIST" HYBRID_NS_DISTANCE_LIST="$HYBRID_NS_DISTANCE_LIST" \
   HYBRID_NS_SEARCH_REPEATS="$HYBRID_NS_SEARCH_REPEATS" HYBRID_NS_VALIDATE_REPEATS="$HYBRID_NS_VALIDATE_REPEATS" \
   PREFIX="$PREFIX" bash "$ONEESAN_ROOT/scripts/run/b300x8-joint-nextself-hybrid8-select.sh" 27 "$@" \
   2>&1 | tee "$LOG"
@@ -224,6 +237,8 @@ PY
   printf 'B300_GRAND_SELECTED_THREADS=%q\n' "$RUN_THREADS"
   printf 'B300_GRAND_SELECTED_TARGET_MIB=%q\n' "$RUN_TARGET"
   printf 'B300_GRAND_SELECTED_MAX_WINDOW=%q\n' "$MAX_WINDOW"
+  printf 'B300_GRAND_SELECTED_GEOMETRY_WIDTH_LIST=%q\n' "$HYBRID_NS_WIDTH_LIST"
+  printf 'B300_GRAND_SELECTED_GEOMETRY_DISTANCE_LIST=%q\n' "$HYBRID_NS_DISTANCE_LIST"
   printf 'B300_GRAND_SELECTED_WORK_DIR=%q\n' "$BEST_WORK"
   printf 'B300_GRAND_SELECTED_CHECKPOINT=%q\n' "$CHECKPOINT"
   printf 'B300_GRAND_SELECTED_RACE_PREFIX=%q\n' "$RACE_PREFIX"
@@ -245,6 +260,8 @@ PY
   printf 'race_prefix=%s\n' "$RACE_PREFIX"
   printf 'race_result=%s\n' "$RACE_RESULT"
   printf 'race_result_sha256=%s\n' "$RACE_SHA"
+  printf 'geometry_width_list=%s\n' "$HYBRID_NS_WIDTH_LIST"
+  printf 'geometry_distance_list=%s\n' "$HYBRID_NS_DISTANCE_LIST"
   printf 'promotion_contract=1\n'
 } >>"$META"
 
