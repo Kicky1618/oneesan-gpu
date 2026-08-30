@@ -35,6 +35,59 @@ python3 - "$B300_STAGET_FINAL_SPEEDUP" "$MIN_SPEEDUP" <<'PY'
 import sys
 if float(sys.argv[1]) < float(sys.argv[2]): raise SystemExit('Stage-T speedup below threshold')
 PY
+
+# Bind and verify Stage R first. Stage S is an optional low-state Count/L2 refinement
+# whose exact control must be this prepared Stage-R winner.
+# shellcheck disable=SC1090
+source "$STAGER_PREPARE_ENV"
+[[ "${B300_STAGER_PREPARED:-0}" == 1 && "$B300_STAGER_PREPARED_MOD" == "$MOD" && "$B300_STAGER_PREPARED_NGPU" == "$NGPU" ]] || { echo 'Stage-T/Stage-R prepare mismatch' >&2; exit 3; }
+[[ -x "$B300_STAGER_PREPARED_BIN" && -s "$B300_STAGER_PREPARED_MANIFEST" ]] || { echo 'Stage-T Stage-R prepared binary/manifest missing' >&2; exit 3; }
+sha256sum -c "$B300_STAGER_PREPARED_MANIFEST" >/dev/null || { echo 'Stage-R manifest mismatch before Stage T promotion' >&2; exit 3; }
+[[ "$B300_STAGET_STAGER_UPSTREAM_KIND" == "$B300_STAGER_PREPARED_UPSTREAM_KIND" ]] || { echo 'Stage-T Stage-R upstream provenance drift' >&2; exit 3; }
+
+# Resolve high-state mate provenance from the exact Stage-R upstream.
+EXPECTED_HIGH_MATE_POLICY=''
+EXPECTED_HIGH_MATE_L2=0
+case "$B300_STAGER_PREPARED_UPSTREAM_KIND" in
+  stageq)
+    [[ -s "$STAGEQ_PREPARE_ENV" ]] || { echo 'Stage-T Stage-Q prepare missing for high mate provenance' >&2; exit 3; }
+    # shellcheck disable=SC1090
+    source "$STAGEQ_PREPARE_ENV"
+    [[ "${B300_STAGEQ_PREPARED:-0}" == 1 && "$B300_STAGEQ_PREPARED_MOD" == "$MOD" && "$B300_STAGEQ_PREPARED_NGPU" == "$NGPU" ]] || { echo 'Stage-T/Stage-Q prepare mismatch' >&2; exit 3; }
+    [[ "$B300_STAGER_PREPARED_CONTROL_BIN" == "$B300_STAGEQ_PREPARED_BIN" ]] || { echo 'Stage-R control is not exact Stage-Q winner before Stage T' >&2; exit 3; }
+    EXPECTED_HIGH_MATE_POLICY="$B300_STAGEQ_PREPARED_MATE_LOAD_POLICY"
+    EXPECTED_HIGH_MATE_L2="$B300_STAGEQ_PREPARED_MATE_CG_L2_BYTES"
+    ;;
+  stagep)
+    [[ -s "$STAGEP_PREPARE_ENV" ]] || { echo 'Stage-T Stage-P prepare missing for high mate provenance' >&2; exit 3; }
+    # shellcheck disable=SC1090
+    source "$STAGEP_PREPARE_ENV"
+    [[ "${B300_STAGEP_PREPARED:-0}" == 1 && "$B300_STAGEP_PREPARED_MOD" == "$MOD" && "$B300_STAGEP_PREPARED_NGPU" == "$NGPU" ]] || { echo 'Stage-T/Stage-P prepare mismatch' >&2; exit 3; }
+    [[ "$B300_STAGER_PREPARED_CONTROL_BIN" == "$B300_STAGEP_PREPARED_BIN" ]] || { echo 'Stage-R control is not exact Stage-P winner before Stage T' >&2; exit 3; }
+    EXPECTED_HIGH_MATE_POLICY="$B300_STAGEP_PREPARED_MATE_LOAD_POLICY"
+    EXPECTED_HIGH_MATE_L2="$B300_STAGEP_PREPARED_MATE_L2_BYTES"
+    ;;
+  stageo)
+    [[ -s "$STAGEO_PREPARE_ENV" ]] || { echo 'Stage-T Stage-O prepare missing for high mate provenance' >&2; exit 3; }
+    # shellcheck disable=SC1090
+    source "$STAGEO_PREPARE_ENV"
+    [[ "${B300_STAGEO_PREPARED:-0}" == 1 && "$B300_STAGEO_PREPARED_MOD" == "$MOD" && "$B300_STAGEO_PREPARED_NGPU" == "$NGPU" ]] || { echo 'Stage-T/Stage-O prepare mismatch' >&2; exit 3; }
+    [[ "$B300_STAGER_PREPARED_CONTROL_BIN" == "$B300_STAGEO_PREPARED_BIN" ]] || { echo 'Stage-R control is not exact Stage-O winner before Stage T' >&2; exit 3; }
+    EXPECTED_HIGH_MATE_POLICY="$B300_STAGEO_PREPARED_MATE_LOAD_POLICY"
+    EXPECTED_HIGH_MATE_L2=0
+    ;;
+  stagen)
+    [[ "$B300_STAGER_PREPARED_CONTROL_BIN" == "$B300_STAGEN_PREPARED_BIN" ]] || { echo 'Stage-R control is not exact Stage-N winner before Stage T' >&2; exit 3; }
+    EXPECTED_HIGH_MATE_POLICY="$B300_STAGEN_PREPARED_MATE_LOAD_POLICY"
+    EXPECTED_HIGH_MATE_L2=0
+    ;;
+  *) echo 'bad Stage-R upstream before Stage T' >&2; exit 3;;
+esac
+case "$EXPECTED_HIGH_MATE_POLICY" in default|cg|cs) ;; *) echo 'bad expected Stage-T high mate policy' >&2; exit 3;; esac
+case "$EXPECTED_HIGH_MATE_L2" in 0|64|128|256) ;; *) echo 'bad expected Stage-T high mate L2' >&2; exit 3;; esac
+[[ "$EXPECTED_HIGH_MATE_POLICY" == cg || "$EXPECTED_HIGH_MATE_L2" == 0 ]] || { echo 'non-cg high mate policy cannot carry L2 hint' >&2; exit 3; }
+[[ "$B300_STAGET_HIGH_MATE_POLICY" == "$EXPECTED_HIGH_MATE_POLICY" && "$B300_STAGET_HIGH_MATE_L2_BYTES" == "$EXPECTED_HIGH_MATE_L2" ]] || { echo 'Stage-T changed high mate provenance' >&2; exit 3; }
+
 # Bind the exact prepared immediate upstream selected by T: S when accepted, otherwise R.
 case "$B300_STAGET_UPSTREAM_KIND" in
   stages)
@@ -48,13 +101,13 @@ case "$B300_STAGET_UPSTREAM_KIND" in
     ;;
   stager)
     UP_BIN="$B300_STAGER_PREPARED_BIN"; UP_THREADS="$B300_STAGER_PREPARED_THREADS"; UP_MAN="$B300_STAGER_PREPARED_MANIFEST"; UP_LABEL="$B300_STAGER_PREPARED_LABEL"
-    [[ "$B300_STAGET_STAGER_UPSTREAM_KIND" == "$B300_STAGER_PREPARED_UPSTREAM_KIND" && "$B300_STAGET_LOW_PAIR_POLICY" == "$B300_STAGER_PREPARED_PAIR_POLICY" && "$B300_STAGET_LOW_BLOCK_POLICY" == "$B300_STAGER_PREPARED_BLOCK_POLICY" && "$B300_STAGET_LOW_PAIR_L2_BYTES" == 0 && "$B300_STAGET_LOW_BLOCK_L2_BYTES" == 0 ]] || { echo 'Stage-T lost Stage-R low Count provenance' >&2; exit 3; }
+    [[ "$B300_STAGET_LOW_PAIR_POLICY" == "$B300_STAGER_PREPARED_PAIR_POLICY" && "$B300_STAGET_LOW_BLOCK_POLICY" == "$B300_STAGER_PREPARED_BLOCK_POLICY" && "$B300_STAGET_LOW_PAIR_L2_BYTES" == 0 && "$B300_STAGET_LOW_BLOCK_L2_BYTES" == 0 ]] || { echo 'Stage-T lost Stage-R low Count provenance' >&2; exit 3; }
     ;;
   *) echo 'bad Stage-T immediate upstream' >&2; exit 3;;
 esac
 [[ -x "$UP_BIN" && -s "$UP_MAN" ]] || exit 3; sha256sum -c "$UP_MAN" >/dev/null || { echo 'Stage-T upstream manifest failed' >&2; exit 3; }
 [[ "$B300_STAGET_CONTROL_BIN" == "$UP_BIN" ]] || { echo 'Stage-T control is not exact prepared immediate upstream binary' >&2; exit 3; }
-# High Count provenance is always inherited from R; high mate provenance is inherited from M/P through the same R lineage.
+# High Count provenance is always inherited from R.
 [[ "$B300_STAGET_HIGH_PAIR_POLICY" == "$B300_STAGER_PREPARED_HIGH_PAIR_POLICY" && "$B300_STAGET_HIGH_BLOCK_POLICY" == "$B300_STAGER_PREPARED_HIGH_BLOCK_POLICY" && "$B300_STAGET_HIGH_PAIR_L2_BYTES" == "$B300_STAGER_PREPARED_HIGH_PAIR_L2_BYTES" && "$B300_STAGET_HIGH_BLOCK_L2_BYTES" == "$B300_STAGER_PREPARED_HIGH_BLOCK_L2_BYTES" ]] || { echo 'Stage-T changed high Count provenance' >&2; exit 3; }
 [[ -x "$B300_STAGET_FINAL_BIN" ]] || exit 3
 if [[ "$RUN_STAGED" == 1 ]]; then
