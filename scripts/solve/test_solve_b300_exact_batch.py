@@ -19,6 +19,40 @@ class ExactBatchSafetyTest(unittest.TestCase):
             with self.assertRaises(SystemExit):
                 batch.load_checkpoint(cp, 27, bad)
 
+    def test_race_schema3_checkpoint_is_adopted_without_downgrade(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            cp = Path(td) / "checkpoint.json"
+            stored = {
+                "schema": batch.RACE_CHECKPOINT_SCHEMA,
+                "binary_sha256": "a" * 64,
+                "profile_sha256": "b" * 64,
+            }
+            cp.write_text(json.dumps({
+                "n": 27,
+                "solver_fingerprint": stored,
+                "residues": {"13": {"residue": 7, "wall_s": 1.0}},
+            }))
+            fp = {"schema": batch.CHECKPOINT_SCHEMA, "binary_sha256": "a" * 64}
+            residues = batch.load_checkpoint(cp, 27, fp)
+            self.assertEqual(residues[13]["residue"], 7)
+            self.assertEqual(fp, stored)
+
+    def test_race_schema3_checkpoint_requires_matching_binary(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            cp = Path(td) / "checkpoint.json"
+            cp.write_text(json.dumps({
+                "n": 27,
+                "solver_fingerprint": {
+                    "schema": batch.RACE_CHECKPOINT_SCHEMA,
+                    "binary_sha256": "b" * 64,
+                    "profile_sha256": "c" * 64,
+                },
+                "residues": {},
+            }))
+            fp = {"schema": batch.CHECKPOINT_SCHEMA, "binary_sha256": "a" * 64}
+            with self.assertRaises(SystemExit):
+                batch.load_checkpoint(cp, 27, fp)
+
     def test_legacy_checkpoint_without_fingerprint_is_rejected(self) -> None:
         with tempfile.TemporaryDirectory() as td:
             cp = Path(td) / "checkpoint.json"
@@ -39,6 +73,31 @@ class ExactBatchSafetyTest(unittest.TestCase):
             with self.assertRaises(SystemExit):
                 batch.load_checkpoint(cp, 27, fp)
 
+    def test_invalid_cached_wall_time_is_rejected(self) -> None:
+        for wall in (-1.0, float("nan"), float("inf")):
+            with self.subTest(wall=wall), tempfile.TemporaryDirectory() as td:
+                cp = Path(td) / "checkpoint.json"
+                fp = {"schema": batch.CHECKPOINT_SCHEMA, "binary_sha256": "a" * 64}
+                cp.write_text(json.dumps({
+                    "n": 27,
+                    "solver_fingerprint": fp,
+                    "residues": {"13": {"residue": 7, "wall_s": wall}},
+                }))
+                with self.assertRaises(SystemExit):
+                    batch.load_checkpoint(cp, 27, fp)
+
+    def test_malformed_cached_record_is_rejected(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            cp = Path(td) / "checkpoint.json"
+            fp = {"schema": batch.CHECKPOINT_SCHEMA, "binary_sha256": "a" * 64}
+            cp.write_text(json.dumps({
+                "n": 27,
+                "solver_fingerprint": fp,
+                "residues": {"13": "not-an-object"},
+            }))
+            with self.assertRaises(SystemExit):
+                batch.load_checkpoint(cp, 27, fp)
+
     def test_finish_rejects_candidate_above_rigorous_bound(self) -> None:
         with tempfile.TemporaryDirectory() as td:
             fp = {"schema": batch.CHECKPOINT_SCHEMA, "binary_sha256": "a" * 64}
@@ -54,6 +113,7 @@ class ExactBatchSafetyTest(unittest.TestCase):
             root = Path(td)
             fp = {"schema": batch.CHECKPOINT_SCHEMA, "binary_sha256": "c" * 64}
             residues = {13: {"residue": 7, "wall_s": 2.5}}
+            batch.save_checkpoint(root / "checkpoint.json", 1, fp, residues)
             rc = batch.finish(root, 1, 10, [13], residues, fp)
             self.assertEqual(rc, 0)
             text = (root / "exact.txt").read_text()
