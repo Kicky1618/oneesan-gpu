@@ -13,9 +13,11 @@ on:
       - 'scripts/bench/b300-stager-preflight.sh'
       - 'scripts/bench/b300-grand-stager-contract-preflight.sh'
       - 'scripts/bench/b300-grand-stager-firstpass-preflight.sh'
+      - 'scripts/bench/b300-grand-stager-exact-promotion-preflight.sh'
       - 'scripts/run/b300x8-nextgen-hybrid8-stager-ilp2-load-policy-staged-fullprime-race.sh'
       - 'scripts/run/b300x8-joint-nextself-hybrid8-select-stager.sh'
       - 'scripts/run/b300x8-grand-firstpass-stager.sh'
+      - 'scripts/run/b300x8-grand-promote-exact-stager.sh'
       - '.github/workflows/b300-stager-preflight.yml'
   pull_request:
     paths:
@@ -29,9 +31,11 @@ on:
       - 'scripts/bench/b300-stager-preflight.sh'
       - 'scripts/bench/b300-grand-stager-contract-preflight.sh'
       - 'scripts/bench/b300-grand-stager-firstpass-preflight.sh'
+      - 'scripts/bench/b300-grand-stager-exact-promotion-preflight.sh'
       - 'scripts/run/b300x8-nextgen-hybrid8-stager-ilp2-load-policy-staged-fullprime-race.sh'
       - 'scripts/run/b300x8-joint-nextself-hybrid8-select-stager.sh'
       - 'scripts/run/b300x8-grand-firstpass-stager.sh'
+      - 'scripts/run/b300x8-grand-promote-exact-stager.sh'
       - '.github/workflows/b300-stager-preflight.yml'
   workflow_dispatch:
 
@@ -52,3 +56,5 @@ jobs:
         run: bash scripts/bench/b300-grand-stager-contract-preflight.sh
       - name: Validate Stage R grand firstpass contract
         run: bash scripts/bench/b300-grand-stager-firstpass-preflight.sh
+      - name: Validate Stage R exact provenance
+        run: bash scripts/bench/b300-grand-stager-exact-promotion-preflight.sh
