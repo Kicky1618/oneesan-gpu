@@ -1,0 +1,32 @@
+name: B300 Stage Q preflight
+
+on:
+  push:
+    paths:
+      - 'scripts/build/gen-b300-mainrec-ilp8-pair-block-cg-l2-policy.py'
+      - 'scripts/build/b300-forced-nextgen-hybrid8-stageq-ilp8-count-cg-l2-policy.sh'
+      - 'scripts/bench/b300-mainrec-ilp8-pair-block-cg-l2-policy-preflight.sh'
+      - 'scripts/bench/b300-stageq-preflight.sh'
+      - '.github/workflows/b300-stageq-preflight.yml'
+  pull_request:
+    paths:
+      - 'scripts/build/gen-b300-mainrec-ilp8-pair-block-cg-l2-policy.py'
+      - 'scripts/build/b300-forced-nextgen-hybrid8-stageq-ilp8-count-cg-l2-policy.sh'
+      - 'scripts/bench/b300-mainrec-ilp8-pair-block-cg-l2-policy-preflight.sh'
+      - 'scripts/bench/b300-stageq-preflight.sh'
+      - '.github/workflows/b300-stageq-preflight.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  preflight:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - name: Validate Stage Q ILP8 Count CG L2 transform
+        run: bash scripts/bench/b300-mainrec-ilp8-pair-block-cg-l2-policy-preflight.sh
+      - name: Validate Stage Q composition contract
+        run: bash scripts/bench/b300-stageq-preflight.sh
