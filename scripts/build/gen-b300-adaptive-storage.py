@@ -22,7 +22,7 @@ def replace_once(old: str, new: str, label: str) -> None:
 
 replace_once(
     "#include <cuda_runtime.h>\n",
-    "#include <cuda_runtime.h>\n#include <cuda.h>\n",
+    "#include <cuda_runtime.h>\n#include <string>\n",
     "CUDA include",
 )
 replace_once(
@@ -39,34 +39,26 @@ struct AdaptiveStateStorage {
     bool managed=false;
 
     struct Mapping {
-        CUdeviceptr addr=0;
+        char* addr=nullptr;
         size_t bytes=0;
-        CUmemGenericAllocationHandle handle=0;
+        cudaMemGenericAllocationHandle_t handle{};
         int device=0;
     };
-
-    static const char* cu_error_name(CUresult e) {
-        const char* name=nullptr;
-        return cuGetErrorName(e,&name)==CUDA_SUCCESS && name ? name : "CUDA_ERROR_UNKNOWN";
-    }
 
     static size_t align_up(size_t x,size_t a) {
         return ((x+a-1)/a)*a;
     }
 
     bool try_vmm(Code mainN,Code blockN,int ng,int reserve_mib) {
-        CUresult ce=cuInit(0);
-        if(ce!=CUDA_SUCCESS){std::cerr<<"adaptive VMM: cuInit failed: "<<cu_error_name(ce)<<"\n";return false;}
-
         size_t gran=0;
         for(int d=0;d<ng;++d){
-            CUmemAllocationProp prop{};
-            prop.type=CU_MEM_ALLOCATION_TYPE_PINNED;
-            prop.location.type=CU_MEM_LOCATION_TYPE_DEVICE;
+            cudaMemAllocationProp prop{};
+            prop.type=cudaMemAllocationTypePinned;
+            prop.location.type=cudaMemLocationTypeDevice;
             prop.location.id=d;
             size_t g=0;
-            ce=cuMemGetAllocationGranularity(&g,&prop,CU_MEM_ALLOC_GRANULARITY_MINIMUM);
-            if(ce!=CUDA_SUCCESS){std::cerr<<"adaptive VMM: granularity query failed on gpu "<<d<<": "<<cu_error_name(ce)<<"\n";return false;}
+            cudaError_t e=cudaMemGetAllocationGranularity(&g,&prop,cudaMemAllocationGranularityMinimum);
+            if(e!=cudaSuccess){std::cerr<<"adaptive VMM: granularity query failed on gpu "<<d<<": "<<cudaGetErrorString(e)<<"\n";cudaGetLastError();return false;}
             gran=std::max(gran,g);
         }
         if(!gran)return false;
@@ -115,17 +107,19 @@ struct AdaptiveStateStorage {
             ++assigned;
         }
 
-        CUdeviceptr base=0;
-        ce=cuMemAddressReserve(&base,total_span,gran,0,0);
-        if(ce!=CUDA_SUCCESS){std::cerr<<"adaptive VMM: address reserve failed: "<<cu_error_name(ce)<<"\n";return false;}
+        void* reserved=nullptr;
+        cudaError_t e=cudaMemAddressReserve(&reserved,total_span,gran,nullptr,0);
+        if(e!=cudaSuccess){std::cerr<<"adaptive VMM: address reserve failed: "<<cudaGetErrorString(e)<<"\n";cudaGetLastError();return false;}
+        char* base=static_cast<char*>(reserved);
 
         std::vector<Mapping> mappings;
         auto cleanup=[&](){
             for(auto it=mappings.rbegin();it!=mappings.rend();++it){
-                cuMemUnmap(it->addr,it->bytes);
-                cuMemRelease(it->handle);
+                cudaMemUnmap(it->addr,it->bytes);
+                cudaMemRelease(it->handle);
             }
-            cuMemAddressFree(base,total_span);
+            cudaMemAddressFree(base,total_span);
+            cudaGetLastError();
         };
 
         const size_t max_chunk_bytes=size_t(2048)<<20;
@@ -136,22 +130,24 @@ struct AdaptiveStateStorage {
             while(left){
                 size_t units=std::min(left,max_chunk_units);
                 size_t bytes=units*gran;
-                CUmemAllocationProp prop{};
-                prop.type=CU_MEM_ALLOCATION_TYPE_PINNED;
-                prop.location.type=CU_MEM_LOCATION_TYPE_DEVICE;
+                cudaMemAllocationProp prop{};
+                prop.type=cudaMemAllocationTypePinned;
+                prop.location.type=cudaMemLocationTypeDevice;
                 prop.location.id=d;
-                CUmemGenericAllocationHandle handle=0;
-                ce=cuMemCreate(&handle,bytes,&prop,0);
-                if(ce!=CUDA_SUCCESS){
-                    std::cerr<<"adaptive VMM: physical allocation failed on gpu "<<d<<": "<<cu_error_name(ce)<<"\n";
+                cudaMemGenericAllocationHandle_t handle{};
+                e=cudaMemCreate(&handle,bytes,&prop,0);
+                if(e!=cudaSuccess){
+                    std::cerr<<"adaptive VMM: physical allocation failed on gpu "<<d<<": "<<cudaGetErrorString(e)<<"\n";
+                    cudaGetLastError();
                     cleanup();
                     return false;
                 }
-                CUdeviceptr addr=base+offset;
-                ce=cuMemMap(addr,bytes,0,handle,0);
-                if(ce!=CUDA_SUCCESS){
-                    std::cerr<<"adaptive VMM: map failed on gpu "<<d<<": "<<cu_error_name(ce)<<"\n";
-                    cuMemRelease(handle);
+                char* addr=base+offset;
+                e=cudaMemMap(addr,bytes,0,handle,0);
+                if(e!=cudaSuccess){
+                    std::cerr<<"adaptive VMM: map failed on gpu "<<d<<": "<<cudaGetErrorString(e)<<"\n";
+                    cudaGetLastError();
+                    cudaMemRelease(handle);
                     cleanup();
                     return false;
                 }
@@ -162,24 +158,25 @@ struct AdaptiveStateStorage {
         }
         if(offset!=total_span){cleanup();return false;}
 
-        std::vector<CUmemAccessDesc> access(ng);
+        std::vector<cudaMemAccessDesc> access(ng);
         for(int d=0;d<ng;++d){
-            access[d].location.type=CU_MEM_LOCATION_TYPE_DEVICE;
+            access[d].location.type=cudaMemLocationTypeDevice;
             access[d].location.id=d;
-            access[d].flags=CU_MEM_ACCESS_FLAGS_PROT_READWRITE;
+            access[d].flags=cudaMemAccessFlagsProtReadWrite;
         }
-        ce=cuMemSetAccess(base,total_span,access.data(),access.size());
-        if(ce!=CUDA_SUCCESS){
-            std::cerr<<"adaptive VMM: peer access mapping failed: "<<cu_error_name(ce)<<"\n";
+        e=cudaMemSetAccess(base,total_span,access.data(),access.size());
+        if(e!=cudaSuccess){
+            std::cerr<<"adaptive VMM: peer access mapping failed: "<<cudaGetErrorString(e)<<"\n";
+            cudaGetLastError();
             cleanup();
             return false;
         }
 
         for(auto const& m:mappings){
             ck(cudaSetDevice(m.device),"adaptive VMM zero set device");
-            ck(cudaMemset(reinterpret_cast<void*>(m.addr),0,m.bytes),"adaptive VMM zero");
+            ck(cudaMemset(m.addr,0,m.bytes),"adaptive VMM zero");
         }
-        for(auto const& m:mappings)cuMemRelease(m.handle);
+        for(auto const& m:mappings)ck(cudaMemRelease(m.handle),"adaptive VMM release handle");
 
         main_ptr=reinterpret_cast<Count*>(base);
         block_ptr=reinterpret_cast<Count*>(base+main_span);
