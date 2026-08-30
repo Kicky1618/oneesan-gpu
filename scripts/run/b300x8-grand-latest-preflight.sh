@@ -43,7 +43,7 @@ if ((DIRTY)) && [[ "$ALLOW_DIRTY_WORKTREE" != 1 ]]; then
 fi
 
 require_nvcc_version_at_least nvcc 12 8 'Blackwell/B300 build path'
-DRIVER="$(nvidia-smi --query-gpu=driver_version --format=csv,noheader | head -n1 | tr -d '[:space:]')"
+DRIVER="$(nvidia-smi --query-gpu=driver_version --format=csv,noheader | sed -n '1p' | tr -d '[:space:]')"
 VISIBLE="$(nvidia-smi --query-gpu=index --format=csv,noheader | wc -l)"
 ((VISIBLE>=NGPU)) || { echo "need $NGPU visible GPUs, found $VISIBLE" >&2; exit 4; }
 
@@ -57,7 +57,7 @@ BAD_MODEL=0; BAD_MEM=0; BAD_MODE=0; COUNT=0
 while IFS=',' read -r idx name total free mode; do
   idx="${idx//[[:space:]]/}"; name="$(sed 's/^[[:space:]]*//;s/[[:space:]]*$//' <<<"$name")"
   total="${total//[[:space:]]/}"; free="${free//[[:space:]]/}"; mode="$(sed 's/^[[:space:]]*//;s/[[:space:]]*$//' <<<"$mode")"
-  ((COUNT++))
+  ((++COUNT))
   ((COUNT<=NGPU)) || continue
   [[ "$name" == *B300* ]] || BAD_MODEL=1
   [[ "$free" =~ ^[0-9]+$ ]] && ((free>=MIN_FREE_REQ)) || { echo "GPU $idx free VRAM ${free}MiB < required ${MIN_FREE_REQ}MiB" >&2; BAD_MEM=1; }
@@ -80,6 +80,7 @@ HOST_AVAIL_MIB=$((HOST_AVAIL_KIB/1024))
 cat >"$P2P_SRC" <<'CU'
 #include <cuda_runtime.h>
 #include <cstdio>
+#include <cstdlib>
 int main(int argc,char**argv){
   int need=8; if(argc>1) need=std::atoi(argv[1]);
   int n=0; cudaError_t e=cudaGetDeviceCount(&n); if(e!=cudaSuccess){std::fprintf(stderr,"cudaGetDeviceCount: %s\n",cudaGetErrorString(e));return 2;}
