@@ -1,0 +1,32 @@
+name: B300 Stage P preflight
+
+on:
+  push:
+    paths:
+      - 'scripts/build/gen-b300-mainrec-hybrid8-mate-cg-l2-policy.py'
+      - 'scripts/build/b300-forced-nextgen-hybrid8-stagep-mate-cg-l2-policy.sh'
+      - 'scripts/bench/b300-mainrec-hybrid8-mate-cg-l2-policy-preflight.sh'
+      - 'scripts/bench/b300-stagep-preflight.sh'
+      - '.github/workflows/b300-stagep-preflight.yml'
+  pull_request:
+    paths:
+      - 'scripts/build/gen-b300-mainrec-hybrid8-mate-cg-l2-policy.py'
+      - 'scripts/build/b300-forced-nextgen-hybrid8-stagep-mate-cg-l2-policy.sh'
+      - 'scripts/bench/b300-mainrec-hybrid8-mate-cg-l2-policy-preflight.sh'
+      - 'scripts/bench/b300-stagep-preflight.sh'
+      - '.github/workflows/b300-stagep-preflight.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  preflight:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - name: Validate Stage P mate CG L2 transform
+        run: bash scripts/bench/b300-mainrec-hybrid8-mate-cg-l2-policy-preflight.sh
+      - name: Validate Stage P composition contract
+        run: bash scripts/bench/b300-stagep-preflight.sh
