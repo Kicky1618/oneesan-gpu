@@ -16,14 +16,13 @@ bash "$SOURCE_PROOF" >/dev/null
 need(){ local f="$1" s="$2" label="$3"; grep -Fq "$s" "$f" || { echo "$label marker missing: $s" >&2; exit 3; }; }
 
 for s in \
-  'PROFILE_LIST="${PROFILE_LIST:-bb pb bp pp}"' \
-  'PROFILE_LIST must include bb control' \
+  'GUARD_LIST="${GUARD_LIST:-bb pb bp pp}"' \
+  'GUARD_LIST must include bb baseline' \
   'UPSTREAM_PREPARE_ENV=' \
-  'UPSTREAM_WINNER_ENV=' \
-  'kind=stagek' \
-  'kind=stagej' \
-  'SELF_GUARD="$sg" MATE_GUARD="$mg"' \
-  'FATAL Stage-L residue mismatch' \
+  'UPSTREAM_KIND=stagek' \
+  'UPSTREAM_KIND=stagej' \
+  'SELF_GUARD="$SG" MATE_GUARD="$MG"' \
+  'FATAL guard residue mismatch' \
   'main_pull_kernel_ilp2' \
   'main_pull_kernel_ilp8_hybrid' \
   'clean=len(rv)>=2 and ss==0 and sl==0' \
@@ -78,12 +77,18 @@ python3 - "$SWEEP" "$STAGED" "$GRAND" <<'PY'
 from pathlib import Path
 import re,sys
 sweep,staged,grand=map(lambda p:Path(p).read_text(),sys.argv[1:])
-# Search is joint over both guard axes; validation must lock the chosen profile.
-if "PROFILE_LIST=\"${PROFILE_LIST:-bb pb bp pp}\"" not in sweep: raise SystemExit('Stage-L joint guard search missing')
-if 'run_stage "$SEARCH_ROWS" "$GUARD_LIST"' not in staged: raise SystemExit('Stage-L search list missing')
-if 'run_stage "$rows" "bb $SELECTED_PROFILE"' not in staged: raise SystemExit('Stage-L validation does not lock chosen guard profile')
-# Main grand must prioritize Stage L over K/J but retain the same five forced slots.
-m=re.search(r'if \(\(STAGEL_OK && NEXTSELF_OK\)\); then(.*?)elif \(\(STAGEL_OK\)\); then',grand,re.S)
+if 'GUARD_LIST="${GUARD_LIST:-bb pb bp pp}"' not in sweep:
+    raise SystemExit('Stage-L joint guard search missing')
+if 'run_stage "$SEARCH_ROWS" "$GUARD_LIST"' not in staged:
+    raise SystemExit('Stage-L search list missing')
+if 'run_stage "$rows" "bb $SELECTED_PROFILE"' not in staged:
+    raise SystemExit('Stage-L validation does not lock chosen guard profile')
+# Stage M may now precede Stage L in final candidate priority. Verify the L
+# branch itself still preserves the five-forced-slot mapping for M rejection.
+m=re.search(r'elif \(\(STAGEL_OK && NEXTSELF_OK\)\); then(.*?)elif \(\(STAGEL_OK\)\); then',grand,re.S)
+if not m:
+    # Legacy L-only grand begins with if rather than elif.
+    m=re.search(r'if \(\(STAGEL_OK && NEXTSELF_OK\)\); then(.*?)elif \(\(STAGEL_OK\)\); then',grand,re.S)
 if not m: raise SystemExit('Stage-L grand branch missing')
 b=m.group(1)
 required={'P_BIN':'B300_STAGEL_PREPARED_BIN','B_BIN':'B300_STAGEL_PREPARED_CONTROL_BIN','E1_BIN':'B300_HYBRID8_PREPARED_BASE_BIN','E2_BIN':'B300_NEXTSELF_PREPARED_BIN','E3_BIN':'JOINT_PRIMARY_BIN'}
