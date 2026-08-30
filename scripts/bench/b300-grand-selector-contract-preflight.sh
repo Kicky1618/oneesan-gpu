@@ -27,7 +27,8 @@ make_bin(){
 }
 for name in \
   joint-primary joint-base sat-nextself sat-control hybrid hybrid-base \
-  composed stagef-control stagei-evict stagei-control stagej-mategeo stagej-control; do
+  composed stagef-control stagei-evict stagei-control stagej-mategeo stagej-control \
+  stagek-mateevict stagek-control; do
   make_bin "$name"
 done
 
@@ -127,6 +128,7 @@ sev="${SELF_EVICT:-default}"
 mev="${MATE_EVICT:-default}"
 cat >"$PREPARE_ENV" <<EOT
 B300_STAGEJ_PREPARED=1
+B300_STAGEJ_PREPARED_MOD=${MOD:-4294967291}
 B300_STAGEJ_PREPARED_SELF_WIDTH=4
 B300_STAGEJ_PREPARED_SELF_DISTANCE=2
 B300_STAGEJ_PREPARED_MATE_WIDTH=2
@@ -141,6 +143,35 @@ B300_STAGEJ_PREPARED_CONTROL_LABEL=stagej_control_sev${sev}
 B300_STAGEJ_PREPARED_CONTROL_THREADS=512
 B300_STAGEJ_PREPARED_STAGED_SPEEDUP=1.01
 B300_STAGEJ_PREPARED_MANIFEST=$ONEESAN_ROOT/work/fake-stagej.sha256
+EOT
+EOF
+
+# Stage K refines only mate eviction priority while locking all Stage-J geometry.
+cat >"$root/scripts/run/b300x8-nextgen-hybrid8-mate-evict-stagek-staged-fullprime-race.sh" <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+rc="${FAKE_STAGEK_RC:-4}"
+((rc==0)) || exit "$rc"
+# shellcheck disable=SC1090
+source "$STAGEJ_PREPARE_ENV"
+cat >"$PREPARE_ENV" <<EOT
+B300_STAGEK_PREPARED=1
+B300_STAGEK_PREPARED_MOD=${MOD:-4294967291}
+B300_STAGEK_PREPARED_BIN=$ONEESAN_ROOT/bin/stagek-mateevict
+B300_STAGEK_PREPARED_LABEL=stagek_mateevict_last
+B300_STAGEK_PREPARED_THREADS=512
+B300_STAGEK_PREPARED_CONTROL_BIN=$ONEESAN_ROOT/bin/stagek-control
+B300_STAGEK_PREPARED_CONTROL_LABEL=stagek_mateevict_default_control
+B300_STAGEK_PREPARED_CONTROL_THREADS=512
+B300_STAGEK_PREPARED_SELF_WIDTH=$B300_STAGEJ_PREPARED_SELF_WIDTH
+B300_STAGEK_PREPARED_SELF_DISTANCE=$B300_STAGEJ_PREPARED_SELF_DISTANCE
+B300_STAGEK_PREPARED_SELF_EVICT=$B300_STAGEJ_PREPARED_SELF_EVICT
+B300_STAGEK_PREPARED_MATE_WIDTH=$B300_STAGEJ_PREPARED_MATE_WIDTH
+B300_STAGEK_PREPARED_MATE_DISTANCE=$B300_STAGEJ_PREPARED_MATE_DISTANCE
+B300_STAGEK_PREPARED_BASE_MATE_EVICT=$B300_STAGEJ_PREPARED_MATE_EVICT
+B300_STAGEK_PREPARED_MATE_EVICT=last
+B300_STAGEK_PREPARED_STAGED_SPEEDUP=1.01
+B300_STAGEK_PREPARED_MANIFEST=$ONEESAN_ROOT/work/fake-stagek.sha256
 EOT
 EOF
 
@@ -165,15 +196,16 @@ printf 'PROFILE=contract\n' >"$profile"
 grand="$root/scripts/run/b300x8-joint-nextself-hybrid8-select.sh"
 
 run_case(){
-  local name="$1" nr="$2" hr="$3" fr="$4" ir="$5" jr="$6" mode="$7"
-  shift 7
+  local name="$1" nr="$2" hr="$3" fr="$4" ir="$5" jr="$6" kr="$7" mode="$8"
+  shift 8
   local prefix="$root/work/$name" capture="$root/work/$name.capture"
   FAKE_NEXTSELF_RC="$nr" FAKE_HYBRID_RC="$hr" FAKE_STAGEF_RC="$fr" \
-    FAKE_STAGEI_RC="$ir" FAKE_STAGEJ_RC="$jr" FAKE_CAPTURE="$capture" \
+    FAKE_STAGEI_RC="$ir" FAKE_STAGEJ_RC="$jr" FAKE_STAGEK_RC="$kr" FAKE_CAPTURE="$capture" \
     PROFILE_FILE="$profile" PREFIX="$prefix" RUN_NEXTSELF_STAGE=1 RUN_HYBRID_STAGE=1 \
-    RUN_HYBRID_NS_STAGE=1 RUN_STAGEI=1 RUN_STAGEJ=1 \
+    RUN_HYBRID_NS_STAGE=1 RUN_STAGEI=1 RUN_STAGEJ=1 RUN_STAGEK=1 \
     HYBRID_NS_WIDTH_LIST='1 2 4 8' HYBRID_NS_DISTANCE_LIST='1 2 4' \
     MATE_WIDTH_LIST='1 2 4 8' MATE_DISTANCE_LIST='1 2 4' MATE_EVICT=default \
+    MATE_EVICT_LIST='default normal last' \
     bash "$grand" 27 >/dev/null 2>"$root/work/$name.err"
 
   local summary="${prefix}.race_grand.env"
@@ -191,7 +223,7 @@ run_case(){
   [[ "$B300_GRAND_HYBRID8_NEXTSELF_SEARCH_WIDTHS" == '1 2 4 8' && \
      "$B300_GRAND_HYBRID8_NEXTSELF_SEARCH_DISTANCES" == '1 2 4' ]] || exit 4
 
-  if [[ "$mode" == stagej_mategeo_* ]]; then
+  if [[ "$mode" == stagej_mategeo_* || "$mode" == stagek_mateevict_* ]]; then
     [[ "$B300_GRAND_STAGEJ_OK" == 1 ]] || exit 4
     [[ "$B300_GRAND_STAGEJ_SELF_WIDTH" == 4 && "$B300_GRAND_STAGEJ_SELF_DISTANCE" == 2 ]] || exit 4
     [[ "$B300_GRAND_STAGEJ_MATE_WIDTH" == 2 && "$B300_GRAND_STAGEJ_MATE_DISTANCE" == 1 ]] || exit 4
@@ -201,6 +233,11 @@ run_case(){
     else
       [[ "$B300_GRAND_STAGEI_OK" == 0 && "$B300_GRAND_STAGEJ_SELF_EVICT" == default ]] || exit 4
     fi
+  fi
+  if [[ "$mode" == stagek_mateevict_* ]]; then
+    [[ "$B300_GRAND_STAGEK_OK" == 1 ]] || exit 4
+    [[ "$B300_GRAND_STAGEK_BASE_MATE_EVICT" == default && "$B300_GRAND_STAGEK_MATE_EVICT" == last ]] || exit 4
+    [[ "$B300_GRAND_STAGEK_SEARCH_EVICTS" == 'default normal last' ]] || exit 4
   fi
 
   python3 - "$name" "$capture" "$root" "$@" <<'PY'
@@ -219,13 +256,15 @@ print('grand_contract_case='+name+' OK')
 PY
 }
 
-run_case all_composed            0 0 0 0 0 stagej_mategeo_grand             stagej-mategeo stagej-control hybrid-base sat-nextself joint-primary
-run_case stagej_rejected         0 0 0 0 4 stagei_selfevict_grand           stagei-evict stagei-control hybrid-base sat-nextself joint-primary
-run_case stagei_rejected         0 0 0 4 0 stagej_mategeo_grand             stagej-mategeo stagej-control hybrid-base sat-nextself joint-primary
-run_case stagei_stagej_rejected  0 0 0 4 4 hybrid8_nextself_composed_grand  composed stagef-control hybrid-base sat-nextself joint-primary
-run_case nextself_rejected       4 0 0 0 0 stagej_mategeo_joint             stagej-mategeo stagej-control hybrid-base joint-primary joint-base
-run_case stagef_rejected         0 0 4 0 0 nextself_hybrid8_joint           sat-nextself sat-control hybrid hybrid-base joint-primary
-run_case hybrid_rejected         0 4 0 0 0 nextself_joint                   sat-nextself sat-control joint-primary joint-base ''
-run_case transforms_rejected     4 4 0 0 0 joint_fallback                   joint-primary joint-base '' '' ''
+run_case stagek_composed          0 0 0 0 0 0 stagek_mateevict_grand          stagek-mateevict stagek-control hybrid-base sat-nextself joint-primary
+run_case stagek_rejected          0 0 0 0 0 4 stagej_mategeo_grand            stagej-mategeo stagej-control hybrid-base sat-nextself joint-primary
+run_case stagej_rejected          0 0 0 0 4 4 stagei_selfevict_grand          stagei-evict stagei-control hybrid-base sat-nextself joint-primary
+run_case stagei_rejected          0 0 0 4 0 4 stagej_mategeo_grand            stagej-mategeo stagej-control hybrid-base sat-nextself joint-primary
+run_case stagei_stagej_rejected   0 0 0 4 4 4 hybrid8_nextself_composed_grand composed stagef-control hybrid-base sat-nextself joint-primary
+run_case nextself_stagek          4 0 0 0 0 0 stagek_mateevict_joint          stagek-mateevict stagek-control hybrid-base joint-primary joint-base
+run_case nextself_rejected        4 0 0 0 0 4 stagej_mategeo_joint            stagej-mategeo stagej-control hybrid-base joint-primary joint-base
+run_case stagef_rejected          0 0 4 0 0 4 nextself_hybrid8_joint          sat-nextself sat-control hybrid hybrid-base joint-primary
+run_case hybrid_rejected          0 4 0 0 0 4 nextself_joint                  sat-nextself sat-control joint-primary joint-base ''
+run_case transforms_rejected      4 4 0 0 0 4 joint_fallback                  joint-primary joint-base '' '' ''
 
-echo 'b300_grand_selector_contract_preflight=OK cases=8 stagei=OK stagej_on_stagei=OK stagej_default_fallback=OK stagei_fallback=OK geometry_fallback=OK compatibility_aliases=OK candidate_env=OK select_only=OK gpu_work=0'
+echo 'b300_grand_selector_contract_preflight=OK cases=10 stagei=OK stagej=OK stagek=OK stagek_fallback=OK stagej_fallback=OK geometry_fallback=OK compatibility_aliases=OK candidate_env=OK select_only=OK gpu_work=0'
