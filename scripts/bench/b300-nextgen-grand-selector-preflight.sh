@@ -7,13 +7,14 @@ FIRSTPASS="$ONEESAN_ROOT/scripts/run/b300x8-grand-firstpass.sh"
 CONTRACT="$ONEESAN_ROOT/scripts/bench/b300-grand-selector-contract-preflight.sh"
 NEXTSELF="$ONEESAN_ROOT/scripts/run/b300x8-ilp8-nextself-staged-fullprime-race.sh"
 HYBRID="$ONEESAN_ROOT/scripts/run/b300x8-nextgen-hybrid8-staged-fullprime-race.sh"
+HYBRID_NS_GEOMETRY="$ONEESAN_ROOT/scripts/bench/b300-nextgen-hybrid8-nextself-geometry-sweep.sh"
 HYBRID_NS_STAGE="$ONEESAN_ROOT/scripts/bench/b300-nextgen-hybrid8-nextself-staged-calibrate.sh"
 HYBRID_NS_RUN="$ONEESAN_ROOT/scripts/run/b300x8-nextgen-hybrid8-nextself-staged-fullprime-race.sh"
 HYBRID_NS_PREFLIGHT="$ONEESAN_ROOT/scripts/bench/b300-mainrec-hybrid8-nextself-transform-preflight.sh"
 RACE="$ONEESAN_ROOT/scripts/run/b300x8-race-external-forced-profiled-once.sh"
 JOINT="$ONEESAN_ROOT/scripts/run/b300x8-joint-calibrated-select.sh"
 
-for f in "$GRAND" "$FIRSTPASS" "$CONTRACT" "$NEXTSELF" "$HYBRID" "$HYBRID_NS_STAGE" "$HYBRID_NS_RUN" "$HYBRID_NS_PREFLIGHT" "$RACE" "$JOINT"; do
+for f in "$GRAND" "$FIRSTPASS" "$CONTRACT" "$NEXTSELF" "$HYBRID" "$HYBRID_NS_GEOMETRY" "$HYBRID_NS_STAGE" "$HYBRID_NS_RUN" "$HYBRID_NS_PREFLIGHT" "$RACE" "$JOINT"; do
   [[ -f "$f" ]] || { echo "missing grand-selector dependency=$f" >&2; exit 2; }
   bash -n "$f"
 done
@@ -38,27 +39,48 @@ for s in \
 done
 
 for s in \
+  'WIDTH_LIST="${WIDTH_LIST:-1 2 4 8}"' \
+  'DISTANCE_LIST="${DISTANCE_LIST:-1 2 4}"' \
+  'b300_nextgen_hybrid8_nextself_geometry_sweep=1' \
+  'B300_HYBRID8_NEXTSELF_DISTANCE' \
+  'B300_HYBRID8_NEXTSELF_BEST_DISTANCE' \
+  'geometry control lacks known spill-free ILP2/ILP8 ptxas'; do
+  grep -Fq "$s" "$HYBRID_NS_GEOMETRY" || { echo "geometry sweep marker missing: $s" >&2; exit 3; }
+done
+
+for s in \
   'B300_HYBRID8_NEXTSELF_STAGED_VALIDATED' \
   'B300_HYBRID8_NEXTSELF_FINAL_ENABLED' \
+  'B300_HYBRID8_NEXTSELF_FINAL_WIDTH' \
+  'B300_HYBRID8_NEXTSELF_FINAL_DISTANCE' \
   'B300_HYBRID8_NEXTSELF_FINAL_BIN' \
   'B300_HYBRID8_NEXTSELF_CONTROL_BIN' \
   'B300_HYBRID8_NEXTSELF_FINAL_SPILL_FREE=1' \
   'B300_HYBRID8_NEXTSELF_CONTROL_SPILL_FREE=1' \
   'B300_HYBRID8_NEXTSELF_FINAL_STAGE_ROWS' \
   'B300_HYBRID8_NEXTSELF_FINAL_STAGE_RESIDUE' \
-  'stage_e_crosscheck=1'; do
-  grep -Fq "$s" "$HYBRID_NS_STAGE" || { echo "Stage F marker missing: $s" >&2; exit 3; }
+  'b300-nextgen-hybrid8-nextself-geometry-sweep.sh' \
+  'FATAL Stage-F geometry changed during validation' \
+  'B300_HYBRID8_NEXTSELF_SEARCH_DISTANCES' \
+  'stage_e_crosscheck=1' \
+  'geometry_locked=1'; do
+  grep -Fq "$s" "$HYBRID_NS_STAGE" || { echo "Stage F geometry marker missing: $s" >&2; exit 3; }
 done
 
 for s in \
   'PREPARE_ONLY="${PREPARE_ONLY:-0}"' \
   'sha256sum "$WINNER_ENV" "$B300_HYBRID8_NEXTSELF_STAGE_E_ENV" "$B300_HYBRID8_NEXTSELF_FINAL_BIN" "$B300_HYBRID8_NEXTSELF_CONTROL_BIN"' \
   'sha256sum -c "$MANIFEST"' \
+  'B300_HYBRID8_NEXTSELF_PROMOTION_WIDTH' \
+  'B300_HYBRID8_NEXTSELF_PROMOTION_DISTANCE' \
   'B300_HYBRID8_NEXTSELF_PREPARED=1' \
+  'B300_HYBRID8_NEXTSELF_PREPARED_WIDTH' \
+  'B300_HYBRID8_NEXTSELF_PREPARED_DISTANCE' \
   'B300_HYBRID8_NEXTSELF_PREPARED_BIN' \
   'B300_HYBRID8_NEXTSELF_PREPARED_CONTROL_BIN' \
-  'B300_HYBRID8_NEXTSELF_PREPARED_MANIFEST'; do
-  grep -Fq "$s" "$HYBRID_NS_RUN" || { echo "Stage F prepare marker missing: $s" >&2; exit 3; }
+  'B300_HYBRID8_NEXTSELF_PREPARED_MANIFEST' \
+  'nextgen_hybrid8_nextself_w${B300_HYBRID8_NEXTSELF_FINAL_WIDTH}_d${B300_HYBRID8_NEXTSELF_FINAL_DISTANCE}_t${B300_HYBRID8_NEXTSELF_THRESHOLD}'; do
+  grep -Fq "$s" "$HYBRID_NS_RUN" || { echo "Stage F geometry prepare marker missing: $s" >&2; exit 3; }
 done
 
 grep -Fq 'b300-mainrec-hybrid8-nextself-transform-preflight OK' "$HYBRID_NS_PREFLIGHT" || {
@@ -73,19 +95,24 @@ for s in \
   'NEXTSELF_RC == 4' \
   'HYBRID_RC == 4' \
   'HYBRID_NS_RC == 4' \
-  'RUN_HYBRID_NS_STAGE=' \
-  'b300x8-nextgen-hybrid8-nextself-staged-fullprime-race.sh' \
-  'HYBRID_NS_OK=0' \
-  'B300_HYBRID8_NEXTSELF_PREPARED' \
+  'HYBRID_NS_WIDTH_LIST="${HYBRID_NS_WIDTH_LIST:-1 2 4 8}"' \
+  'HYBRID_NS_DISTANCE_LIST="${HYBRID_NS_DISTANCE_LIST:-1 2 4}"' \
+  'WIDTH_LIST="$HYBRID_NS_WIDTH_LIST" DISTANCE_LIST="$HYBRID_NS_DISTANCE_LIST"' \
+  'B300_HYBRID8_NEXTSELF_PREPARED_WIDTH' \
+  'B300_HYBRID8_NEXTSELF_PREPARED_DISTANCE' \
   'MODE=hybrid8_nextself_composed_grand' \
   'MODE=hybrid8_nextself_composed_joint' \
   'MODE=nextself_hybrid8_joint' \
   'MODE=joint_fallback' \
   'FORCED_EXTRA3_BIN="$E3_BIN"' \
   'B300_GRAND_HYBRID8_NEXTSELF_OK' \
+  'B300_GRAND_HYBRID8_NEXTSELF_SEARCH_WIDTHS' \
+  'B300_GRAND_HYBRID8_NEXTSELF_SEARCH_DISTANCES' \
+  'B300_GRAND_HYBRID8_NEXTSELF_WIDTH' \
+  'B300_GRAND_HYBRID8_NEXTSELF_DISTANCE' \
   'B300_GRAND_HYBRID8_NEXTSELF_MANIFEST' \
   'B300_GRAND_DROPPED_NEXTSELF_CONTROL_WHEN_COMPOSED'; do
-  grep -Fq "$s" "$GRAND" || { echo "grand selector marker missing: $s" >&2; exit 3; }
+  grep -Fq "$s" "$GRAND" || { echo "grand selector geometry marker missing: $s" >&2; exit 3; }
 done
 if grep -Fq 'Stage F control does not match prepared plain hybrid8 binary' "$GRAND"; then
   echo 'grand selector still contains invalid byte-identical rebuild requirement' >&2
@@ -176,7 +203,7 @@ b2=block(
     'separate-nextself+hybrid8',
 )
 if 'JOINT_BASE_BIN' in b2: raise SystemExit('separate transform branch unexpectedly includes joint base')
-print('grand_candidate_budget=OK forced_slots=5 profiled_slots=2 total=7 composed_mapping=OK')
+print('grand_candidate_budget=OK forced_slots=5 profiled_slots=2 total=7 composed_mapping=OK geometry=OK')
 PY
 
-echo 'b300_nextgen_grand_selector_preflight=OK bash_syntax=OK firstpass_guard=OK firstpass_stagef_provenance=OK provenance=OK nextself_prepare=OK hybrid8_prepare=OK hybrid8_nextself_stageF=OK hybrid8_nextself_prepare=OK hybrid8_nextself_fingerprint=OK stage_e_crosscheck=OK no_binary_identity_gate=OK staged_reject_fallback=OK forced_extra3=OK functional_contract_present=OK candidate_budget=7 gpu_work=0 actions_triggered=0'
+echo 'b300_nextgen_grand_selector_preflight=OK bash_syntax=OK firstpass_guard=OK firstpass_stagef_provenance=OK provenance=OK nextself_prepare=OK hybrid8_prepare=OK hybrid8_nextself_geometry=OK hybrid8_nextself_prepare=OK hybrid8_nextself_fingerprint=OK stage_e_crosscheck=OK geometry_lock=OK no_binary_identity_gate=OK staged_reject_fallback=OK forced_extra3=OK functional_contract_present=OK candidate_budget=7 gpu_work=0 actions_triggered=0'
