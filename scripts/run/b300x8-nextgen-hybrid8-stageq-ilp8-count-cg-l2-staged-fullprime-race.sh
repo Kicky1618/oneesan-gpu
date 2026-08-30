@@ -44,7 +44,6 @@ PY
 [[ -s "$B300_STAGEQ_UPSTREAM_MANIFEST" ]] || { echo 'Stage-Q upstream manifest missing' >&2; exit 3; }
 sha256sum -c "$B300_STAGEQ_UPSTREAM_MANIFEST" >/dev/null || { echo 'Stage-Q upstream manifest mismatch' >&2; exit 3; }
 
-# Resolve and verify the exact N/O/P control used by staged calibration.
 RESOLVED="$B300_STAGEQ_UPSTREAM_KIND"; UP_PREPARE_ENV=''; UP_WINNER_ENV=''; UP_MANIFEST=''; UP_BIN=''; UP_THREADS=''
 case "$RESOLVED" in
   stagen)
@@ -82,10 +81,11 @@ sha256sum -c "$UP_MANIFEST" >/dev/null || { echo 'Stage-Q exact upstream fingerp
 if [[ "$RUN_STAGED" == 1 ]]; then
   tmp="${MANIFEST}.tmp"; mkdir -p "$(dirname "$MANIFEST")"
   inputs=("$WINNER_ENV" "$STAGE_F_ENV" "$STAGEN_WINNER_ENV" "$STAGEN_PREPARE_ENV" "$B300_STAGEN_PREPARED_MANIFEST")
-  [[ "$RESOLVED" == stageo || "$RESOLVED" == stagep ]] && inputs+=("$STAGEO_WINNER_ENV" "$STAGEO_PREPARE_ENV")
+  if [[ "$RESOLVED" == stageo || ( "$RESOLVED" == stagep && "$B300_STAGEQ_STAGEP_COUNT_UPSTREAM" == stageo ) ]]; then
+    inputs+=("$STAGEO_WINNER_ENV" "$STAGEO_PREPARE_ENV")
+  fi
   [[ "$RESOLVED" == stagep ]] && inputs+=("$STAGEP_WINNER_ENV" "$STAGEP_PREPARE_ENV")
   inputs+=("$UP_MANIFEST" "$B300_STAGEQ_FINAL_BIN" "$B300_STAGEQ_CONTROL_BIN")
-  # Deduplicate paths without weakening ordering/provenance.
   uniq=(); for f in "${inputs[@]}"; do seen=0; for old in "${uniq[@]}"; do [[ "$old" == "$f" ]] && seen=1; done; ((seen)) || uniq+=("$f"); done
   sha256sum "${uniq[@]}" >"$tmp"; mv "$tmp" "$MANIFEST"
 else
