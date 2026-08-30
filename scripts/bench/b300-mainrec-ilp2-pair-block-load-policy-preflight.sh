@@ -3,9 +3,9 @@ set -euo pipefail
 source "$(dirname -- "${BASH_SOURCE[0]}")/../lib/common.sh"
 NGEN="$ONEESAN_ROOT/scripts/build/gen-b300-mainrec-pair-block-load-policy.py"
 OGEN="$ONEESAN_ROOT/scripts/build/gen-b300-mainrec-pair-block-cg-l2-policy.py"
-QGEN="$ONEESAN_ROOT/scripts/build/gen-b300-mainrec-ilp2-pair-block-load-policy.py"
-python3 -m py_compile "$NGEN" "$OGEN" "$QGEN"
-tmp="$(mktemp -d "${TMPDIR:-/tmp}/oneesan-stageq-ilp2.XXXXXX")"; trap 'rm -rf "$tmp"' EXIT
+RGEN="$ONEESAN_ROOT/scripts/build/gen-b300-mainrec-ilp2-pair-block-load-policy.py"
+python3 -m py_compile "$NGEN" "$OGEN" "$RGEN"
+tmp="$(mktemp -d "${TMPDIR:-/tmp}/oneesan-stager-ilp2.XXXXXX")"; trap 'rm -rf "$tmp"' EXIT
 src="$tmp/in.cu"
 {
   cat <<'EOF'
@@ -31,8 +31,7 @@ EOF
 EOF
 } >"$src"
 
-# Basic split: Stage N uses pair=cg, block=cs in both kernels; Stage Q changes
-# only ILP2 to pair=default, block=cg.
+# Stage N uses pair=cg, block=cs in both kernels; Stage R changes only ILP2.
 python3 "$NGEN" "$src" "$tmp/n.cu" cg cs 128 >/dev/null
 python3 - "$tmp/n.cu" "$tmp/n.ilp8" <<'PY'
 from pathlib import Path
@@ -43,16 +42,16 @@ for i in range(b,len(s)):
     d += (s[i]=='{')-(s[i]=='}')
     if d==0: Path(sys.argv[2]).write_text(s[m.start():i+1]); break
 PY
-python3 "$QGEN" "$tmp/n.cu" "$tmp/q.cu" default cg >"$tmp/q.log"
-grep -Fq 'pair_policy=default block_policy=cg high_pair=cg high_block=cs' "$tmp/q.log"
+python3 "$RGEN" "$tmp/n.cu" "$tmp/r.cu" default cg >"$tmp/r.log"
+grep -Fq 'pair_policy=default block_policy=cg high_pair=cg high_block=cs' "$tmp/r.log"
 for k in 0 1; do
-  grep -Fq "const Count pair$k=hp$k?in[pj$k]:Count(0);" "$tmp/q.cu"
-  grep -Fq "const Count block$k=hb$k?b300_mainrec_stageq_ilp2_load_cg(in_block+bj$k):Count(0);" "$tmp/q.cu"
+  grep -Fq "const Count pair$k=hp$k?in[pj$k]:Count(0);" "$tmp/r.cu"
+  grep -Fq "const Count block$k=hb$k?b300_mainrec_stager_ilp2_load_cg(in_block+bj$k):Count(0);" "$tmp/r.cu"
 done
-[[ "$(grep -o 'b300_mainrec_stageq_ilp2_load_cg(in_block+bj' "$tmp/q.cu" | wc -l)" == 2 ]] || { echo 'Stage-Q CG call count mismatch' >&2; exit 3; }
-grep -Fq 'const Count self1=in[i1];' "$tmp/q.cu" || exit 3
-grep -Fq 'const MateID m1=mates[i1];' "$tmp/q.cu" || exit 3
-python3 - "$tmp/q.cu" "$tmp/n.ilp8" <<'PY'
+[[ "$(grep -o 'b300_mainrec_stager_ilp2_load_cg(in_block+bj' "$tmp/r.cu" | wc -l)" == 2 ]] || { echo 'Stage-R CG call count mismatch' >&2; exit 3; }
+grep -Fq 'const Count self1=in[i1];' "$tmp/r.cu" || exit 3
+grep -Fq 'const MateID m1=mates[i1];' "$tmp/r.cu" || exit 3
+python3 - "$tmp/r.cu" "$tmp/n.ilp8" <<'PY'
 from pathlib import Path
 import re,sys
 s=Path(sys.argv[1]).read_text(); want=Path(sys.argv[2]).read_text(); m=re.search(r'__global__\s+void\s+main_pull_kernel_ilp8_hybrid\s*\(',s); assert m
@@ -61,13 +60,12 @@ for i in range(b,len(s)):
     d += (s[i]=='{')-(s[i]=='}')
     if d==0:
         got=s[m.start():i+1]
-        if got!=want: raise SystemExit('Stage-Q changed ILP8 bytes')
+        if got!=want: raise SystemExit('Stage-R changed ILP8 bytes')
         break
 else: raise SystemExit('ILP8 close not found')
 PY
 
-# Composition with Stage O: high-state pair/block L2 hints must survive exactly,
-# while ILP2 is independently changed.
+# Composition with Stage O: high-state pair/block L2 hints must survive exactly.
 python3 "$NGEN" "$src" "$tmp/n2.cu" cg cg 128 >/dev/null
 python3 "$OGEN" "$tmp/n2.cu" "$tmp/o.cu" 64 256 >/dev/null
 python3 - "$tmp/o.cu" "$tmp/o.ilp8" <<'PY'
@@ -79,14 +77,14 @@ for i in range(b,len(s)):
     d += (s[i]=='{')-(s[i]=='}')
     if d==0: Path(sys.argv[2]).write_text(s[m.start():i+1]); break
 PY
-python3 "$QGEN" "$tmp/o.cu" "$tmp/qo.cu" cs default >"$tmp/qo.log"
-grep -Fq 'high_pair_l2=64 high_block_l2=256' "$tmp/qo.log"
-grep -Fq '// b300_mainrec_stageo_pair_block_cg_l2=1 pair_policy=cg block_policy=cg pair_l2_bytes=64 block_l2_bytes=256 base_l2_bytes=128' "$tmp/qo.cu"
+python3 "$RGEN" "$tmp/o.cu" "$tmp/ro.cu" cs default >"$tmp/ro.log"
+grep -Fq 'high_pair_l2=64 high_block_l2=256' "$tmp/ro.log"
+grep -Fq '// b300_mainrec_stageo_pair_block_cg_l2=1 pair_policy=cg block_policy=cg pair_l2_bytes=64 block_l2_bytes=256 base_l2_bytes=128' "$tmp/ro.cu"
 for k in 0 1; do
-  grep -Fq "const Count pair$k=hp$k?b300_mainrec_stageq_ilp2_load_cs(in+pj$k):Count(0);" "$tmp/qo.cu"
-  grep -Fq "const Count block$k=hb$k?in_block[bj$k]:Count(0);" "$tmp/qo.cu"
+  grep -Fq "const Count pair$k=hp$k?b300_mainrec_stager_ilp2_load_cs(in+pj$k):Count(0);" "$tmp/ro.cu"
+  grep -Fq "const Count block$k=hb$k?in_block[bj$k]:Count(0);" "$tmp/ro.cu"
 done
-python3 - "$tmp/qo.cu" "$tmp/o.ilp8" <<'PY'
+python3 - "$tmp/ro.cu" "$tmp/o.ilp8" <<'PY'
 from pathlib import Path
 import re,sys
 s=Path(sys.argv[1]).read_text(); want=Path(sys.argv[2]).read_text(); m=re.search(r'__global__\s+void\s+main_pull_kernel_ilp8_hybrid\s*\(',s); assert m
@@ -94,18 +92,17 @@ b=s.find('{',m.end()); d=0
 for i in range(b,len(s)):
     d += (s[i]=='{')-(s[i]=='}')
     if d==0:
-        if s[m.start():i+1]!=want: raise SystemExit('Stage-Q changed Stage-O ILP8 bytes')
+        if s[m.start():i+1]!=want: raise SystemExit('Stage-R changed Stage-O ILP8 bytes')
         break
 PY
 
-# Double transform and missing Stage N must fail closed.
 set +e
-python3 "$QGEN" "$tmp/q.cu" "$tmp/double.cu" default cg >/dev/null 2>"$tmp/double.err"; rc=$?
+python3 "$RGEN" "$tmp/r.cu" "$tmp/double.cu" default cg >/dev/null 2>"$tmp/double.err"; rc=$?
 set -e
-((rc!=0)) && grep -Fq 'already contains Stage-Q' "$tmp/double.err" || { echo 'Stage-Q double transform not rejected' >&2; exit 3; }
+((rc!=0)) && grep -Fq 'already contains Stage-R' "$tmp/double.err" || { echo 'Stage-R double transform not rejected' >&2; exit 3; }
 set +e
-python3 "$QGEN" "$src" "$tmp/non.cu" default cg >/dev/null 2>"$tmp/non.err"; rc=$?
+python3 "$RGEN" "$src" "$tmp/non.cu" default cg >/dev/null 2>"$tmp/non.err"; rc=$?
 set -e
-((rc!=0)) && grep -Fq 'requires Stage-N' "$tmp/non.err" || { echo 'Stage-Q accepted source without Stage N' >&2; exit 3; }
+((rc!=0)) && grep -Fq 'Stage R requires Stage-N' "$tmp/non.err" || { echo 'Stage-R accepted source without Stage N' >&2; exit 3; }
 
-echo 'b300-mainrec-ilp2-pair-block-load-policy-preflight OK stage=Q low_pair_policies=default,cg,cs low_block_policies=default,cg,cs ilp2_lanes=2 ilp8_byte_identical=1 stageo_l2_preserved=1 self_unchanged=1 mate_unchanged=1 double_transform_rejected=1 gpu_work=0'
+echo 'b300-mainrec-ilp2-pair-block-load-policy-preflight OK stage=R low_pair_policies=default,cg,cs low_block_policies=default,cg,cs ilp2_lanes=2 ilp8_byte_identical=1 stageo_l2_preserved=1 self_unchanged=1 mate_unchanged=1 double_transform_rejected=1 gpu_work=0'
