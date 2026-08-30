@@ -5,21 +5,27 @@ on:
     paths:
       - 'scripts/build/gen-b300-mainrec-ilp2-pair-block-cg-l2-policy.py'
       - 'scripts/build/b300-forced-nextgen-hybrid8-stages-ilp2-cg-l2-policy.sh'
+      - 'scripts/build/gen-b300-grand-selector-stages.py'
       - 'scripts/bench/b300-mainrec-ilp2-pair-block-cg-l2-policy-preflight.sh'
       - 'scripts/bench/b300-nextgen-hybrid8-stages-ilp2-cg-l2-sweep.sh'
       - 'scripts/bench/b300-nextgen-hybrid8-stages-ilp2-cg-l2-staged-calibrate.sh'
       - 'scripts/bench/b300-stages-preflight.sh'
+      - 'scripts/bench/b300-grand-stages-contract-preflight.sh'
       - 'scripts/run/b300x8-nextgen-hybrid8-stages-ilp2-cg-l2-staged-fullprime-race.sh'
+      - 'scripts/run/b300x8-joint-nextself-hybrid8-select-stages.sh'
       - '.github/workflows/b300-stages-preflight.yml'
   pull_request:
     paths:
       - 'scripts/build/gen-b300-mainrec-ilp2-pair-block-cg-l2-policy.py'
       - 'scripts/build/b300-forced-nextgen-hybrid8-stages-ilp2-cg-l2-policy.sh'
+      - 'scripts/build/gen-b300-grand-selector-stages.py'
       - 'scripts/bench/b300-mainrec-ilp2-pair-block-cg-l2-policy-preflight.sh'
       - 'scripts/bench/b300-nextgen-hybrid8-stages-ilp2-cg-l2-sweep.sh'
       - 'scripts/bench/b300-nextgen-hybrid8-stages-ilp2-cg-l2-staged-calibrate.sh'
       - 'scripts/bench/b300-stages-preflight.sh'
+      - 'scripts/bench/b300-grand-stages-contract-preflight.sh'
       - 'scripts/run/b300x8-nextgen-hybrid8-stages-ilp2-cg-l2-staged-fullprime-race.sh'
+      - 'scripts/run/b300x8-joint-nextself-hybrid8-select-stages.sh'
       - '.github/workflows/b300-stages-preflight.yml'
   workflow_dispatch:
 
@@ -34,3 +40,5 @@ jobs:
       - uses: actions/checkout@v4
       - name: Validate Stage S transform, sweep, staged, and promotion contracts
         run: bash scripts/bench/b300-stages-preflight.sh
+      - name: Validate Stage S grand selector contract
+        run: bash scripts/bench/b300-grand-stages-contract-preflight.sh
