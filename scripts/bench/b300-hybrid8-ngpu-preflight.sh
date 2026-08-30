@@ -35,11 +35,18 @@ for s in \
   'SEARCH_ROWS="${SEARCH_ROWS:-1}"' \
   'VALIDATE_ROWS="${VALIDATE_ROWS:-4 8}"' \
   'SEARCH_THRESHOLDS="${SEARCH_THRESHOLDS:-0 262144 1048576 4194304}"' \
-  'VALIDATE_THRESHOLD="${VALIDATE_THRESHOLD:-0}"' \
+  'VALIDATE_THRESHOLD="${VALIDATE_THRESHOLD:-auto}"' \
+  'FORCE_ILP8_ROWS="${FORCE_ILP8_ROWS:-8}"' \
+  'SEARCH_THRESHOLD="$B300_HYBRID8_WINNER_THRESHOLD"' \
+  'SELECTED_THRESHOLD="$SEARCH_THRESHOLD"' \
+  'run_stage "$rows" "$SELECTED_THRESHOLD"' \
+  'run_stage "$FORCE_ILP8_ROWS" 0 forced_ilp8' \
   'b300_nextgen_hybrid8_exact_intermediate_match=1' \
   'b300_nextgen_hybrid8_ngpu=$NGPU' \
+  'selected_validate_threshold=$SELECTED_THRESHOLD' \
+  'forced_ilp8_rows=$FORCE_ILP8_ROWS' \
   'b300_local_sm86_hybrid8_staged=OK'; do
   grep -Fq "$s" "$STAGED" || { echo "local staged marker missing: $s" >&2; exit 3; }
 done
 
-echo 'b300_hybrid8_ngpu_preflight=OK default_b300_gpus=8 local_sm86_gpus=1 residue_gate=canonical spill_gate=canonical staged_rows=1,4,8 gpu_work=0 actions_triggered=0'
+echo 'b300_hybrid8_ngpu_preflight=OK default_b300_gpus=8 local_sm86_gpus=1 residue_gate=canonical spill_gate=canonical staged_rows=1,4,8 selected_threshold_gate=1 forced_ilp8_deep_gate=1 gpu_work=0 actions_triggered=0'
