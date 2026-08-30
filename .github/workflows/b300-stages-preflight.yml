@@ -4,12 +4,14 @@ on:
   push:
     paths:
       - 'scripts/build/gen-b300-mainrec-ilp2-pair-block-cg-l2-policy.py'
+      - 'scripts/build/b300-forced-nextgen-hybrid8-stages-ilp2-cg-l2-policy.sh'
       - 'scripts/bench/b300-mainrec-ilp2-pair-block-cg-l2-policy-preflight.sh'
       - 'scripts/bench/b300-stages-preflight.sh'
       - '.github/workflows/b300-stages-preflight.yml'
   pull_request:
     paths:
       - 'scripts/build/gen-b300-mainrec-ilp2-pair-block-cg-l2-policy.py'
+      - 'scripts/build/b300-forced-nextgen-hybrid8-stages-ilp2-cg-l2-policy.sh'
       - 'scripts/bench/b300-mainrec-ilp2-pair-block-cg-l2-policy-preflight.sh'
       - 'scripts/bench/b300-stages-preflight.sh'
       - '.github/workflows/b300-stages-preflight.yml'
@@ -24,5 +26,5 @@ jobs:
     timeout-minutes: 5
     steps:
       - uses: actions/checkout@v4
-      - name: Validate Stage S ILP2 pair block CG L2 transform
+      - name: Validate Stage S ILP2 pair block CG L2 transform and composition
         run: bash scripts/bench/b300-stages-preflight.sh
