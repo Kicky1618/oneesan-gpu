@@ -17,7 +17,8 @@ REBUILD_BUCKETS="${REBUILD_BUCKETS:-1}"
 RUN_NEXTSELF_STAGE="${RUN_NEXTSELF_STAGE:-1}"
 RUN_HYBRID_STAGE="${RUN_HYBRID_STAGE:-1}"
 RUN_HYBRID_NS_STAGE="${RUN_HYBRID_NS_STAGE:-1}"
-RUN_STAGEH="${RUN_STAGEH:-1}"
+RUN_STAGEI="${RUN_STAGEI:-1}"
+RUN_STAGEJ="${RUN_STAGEJ:-${RUN_STAGEH:-1}}"
 NEXTSELF_THREADS="${NEXTSELF_THREADS:-256}"
 NEXTSELF_SEARCH_ROWS="${NEXTSELF_SEARCH_ROWS:-1}"
 NEXTSELF_VALIDATE_ROWS="${NEXTSELF_VALIDATE_ROWS:-4 8}"
@@ -30,15 +31,20 @@ HYBRID_NS_WIDTH_LIST="${HYBRID_NS_WIDTH_LIST:-1 2 4 8}"
 HYBRID_NS_DISTANCE_LIST="${HYBRID_NS_DISTANCE_LIST:-1 2 4}"
 HYBRID_NS_SEARCH_REPEATS="${HYBRID_NS_SEARCH_REPEATS:-1}"
 HYBRID_NS_VALIDATE_REPEATS="${HYBRID_NS_VALIDATE_REPEATS:-1}"
-STAGEH_MIN_SPEEDUP="${STAGEH_MIN_SPEEDUP:-1.002}"
+STAGEI_MIN_SPEEDUP="${STAGEI_MIN_SPEEDUP:-1.002}"
+STAGEJ_MIN_SPEEDUP="${STAGEJ_MIN_SPEEDUP:-${STAGEH_MIN_SPEEDUP:-1.002}}"
+MATE_WIDTH_LIST="${MATE_WIDTH_LIST:-1 2 4 8}"
+MATE_DISTANCE_LIST="${MATE_DISTANCE_LIST:-1 2 4}"
+MATE_EVICT="${MATE_EVICT:-default}"
 PREFIX="${PREFIX:-$ONEESAN_ROOT/work/b300_grand_firstpass_n27}"
 RACE_PREFIX="${RACE_PREFIX:-${PREFIX}.race}"
 LOG="${LOG:-${PREFIX}.log}"
 META="${META:-${PREFIX}.meta}"
 SELECTED_ENV="${SELECTED_ENV:-${PREFIX}.selected.env}"
 RACE_RESULT="${RACE_RESULT:-${RACE_PREFIX}.tsv}"
+GRAND_SUMMARY_ENV="${GRAND_SUMMARY_ENV:-${RACE_PREFIX}_grand.env}"
 
-for x in REBUILD_BUCKETS RUN_NEXTSELF_STAGE RUN_HYBRID_STAGE RUN_HYBRID_NS_STAGE RUN_STAGEH; do
+for x in REBUILD_BUCKETS RUN_NEXTSELF_STAGE RUN_HYBRID_STAGE RUN_HYBRID_NS_STAGE RUN_STAGEI RUN_STAGEJ; do
   v="${!x}"
   [[ "$v" == 0 || "$v" == 1 ]] || { echo "$x must be 0/1" >&2; exit 2; }
 done
@@ -46,23 +52,31 @@ for x in MAX_WINDOW FORCED_TARGET_MIB BUCKET_TARGET_MIB; do
   v="${!x}"; [[ "$v" =~ ^[1-9][0-9]*$ ]] || { echo "$x must be positive integer" >&2; exit 2; }
 done
 [[ "$SMOKE_PRIME" =~ ^[1-9][0-9]*$ ]] || { echo 'SMOKE_PRIME must be positive integer' >&2; exit 2; }
-[[ "$NEXTSELF_THREADS" =~ ^[0-9]+$ ]] && ((NEXTSELF_THREADS>=32 && NEXTSELF_THREADS<=768 && NEXTSELF_THREADS%32==0)) || {
+[[ "$NEXTSELF_THREADS" =~ ^[0-9]+$ ]] && (( NEXTSELF_THREADS>=32 && NEXTSELF_THREADS<=768 && NEXTSELF_THREADS%32==0 )) || {
   echo 'NEXTSELF_THREADS must be warp multiple 32..768' >&2; exit 2;
 }
 for x in NEXTSELF_SEARCH_REPEATS NEXTSELF_VALIDATE_REPEATS HYBRID_NS_SEARCH_REPEATS HYBRID_NS_VALIDATE_REPEATS; do
   v="${!x}"; [[ "$v" =~ ^[1-9][0-9]*$ ]] || { echo "$x must be >=1" >&2; exit 2; }
 done
-widths=()
-for w in $HYBRID_NS_WIDTH_LIST; do case "$w" in 1|2|4|8) ;; *) echo "bad HYBRID_NS_WIDTH_LIST entry=$w" >&2; exit 2;; esac; seen=0; for old in "${widths[@]}"; do [[ "$old" == "$w" ]] && seen=1; done; ((seen)) || widths+=("$w"); done
-((${#widths[@]})) || { echo 'HYBRID_NS_WIDTH_LIST must not be empty' >&2; exit 2; }
-HYBRID_NS_WIDTH_LIST="${widths[*]}"
-distances=()
-for d in $HYBRID_NS_DISTANCE_LIST; do case "$d" in 1|2|4) ;; *) echo "bad HYBRID_NS_DISTANCE_LIST entry=$d" >&2; exit 2;; esac; seen=0; for old in "${distances[@]}"; do [[ "$old" == "$d" ]] && seen=1; done; ((seen)) || distances+=("$d"); done
-((${#distances[@]})) || { echo 'HYBRID_NS_DISTANCE_LIST must not be empty' >&2; exit 2; }
-HYBRID_NS_DISTANCE_LIST="${distances[*]}"
-python3 - "$NEXTSELF_MIN_SPEEDUP" "$HYBRID_MIN_SPEEDUP" "$HYBRID_NS_MIN_SPEEDUP" "$STAGEH_MIN_SPEEDUP" <<'PY'
+normalize_widths(){
+  local raw="$1" out=() w old seen
+  for w in $raw; do case "$w" in 1|2|4|8) ;; *) echo "bad width=$w" >&2; exit 2;; esac; seen=0; for old in "${out[@]}"; do [[ "$old" == "$w" ]] && seen=1; done; ((seen)) || out+=("$w"); done
+  ((${#out[@]})) || { echo 'width list must not be empty' >&2; exit 2; }; printf '%s' "${out[*]}"
+}
+normalize_distances(){
+  local raw="$1" out=() d old seen
+  for d in $raw; do case "$d" in 1|2|4) ;; *) echo "bad distance=$d" >&2; exit 2;; esac; seen=0; for old in "${out[@]}"; do [[ "$old" == "$d" ]] && seen=1; done; ((seen)) || out+=("$d"); done
+  ((${#out[@]})) || { echo 'distance list must not be empty' >&2; exit 2; }; printf '%s' "${out[*]}"
+}
+HYBRID_NS_WIDTH_LIST="$(normalize_widths "$HYBRID_NS_WIDTH_LIST")"
+HYBRID_NS_DISTANCE_LIST="$(normalize_distances "$HYBRID_NS_DISTANCE_LIST")"
+MATE_WIDTH_LIST="$(normalize_widths "$MATE_WIDTH_LIST")"
+MATE_DISTANCE_LIST="$(normalize_distances "$MATE_DISTANCE_LIST")"
+case "$MATE_EVICT" in default|normal|last) ;; *) echo 'MATE_EVICT must be default,normal,last' >&2; exit 2;; esac
+python3 - "$NEXTSELF_MIN_SPEEDUP" "$HYBRID_MIN_SPEEDUP" "$HYBRID_NS_MIN_SPEEDUP" "$STAGEI_MIN_SPEEDUP" "$STAGEJ_MIN_SPEEDUP" <<'PY'
 import sys
-for name,v in zip(('NEXTSELF_MIN_SPEEDUP','HYBRID_MIN_SPEEDUP','HYBRID_NS_MIN_SPEEDUP','STAGEH_MIN_SPEEDUP'),map(float,sys.argv[1:])):
+names=('NEXTSELF_MIN_SPEEDUP','HYBRID_MIN_SPEEDUP','HYBRID_NS_MIN_SPEEDUP','STAGEI_MIN_SPEEDUP','STAGEJ_MIN_SPEEDUP')
+for name,v in zip(names,map(float,sys.argv[1:])):
     if v < 1.0: raise SystemExit(f'{name} must be >=1')
 PY
 [[ -f "$PROFILE_FILE" ]] || { echo "missing PROFILE_FILE=$PROFILE_FILE" >&2; exit 2; }
@@ -80,7 +94,7 @@ HEAD_DIRTY=0
 PROFILE_SHA="$(sha256sum "$PROFILE_FILE" | awk '{print $1}')"
 
 {
-  printf 'schema=2\n'
+  printf 'schema=3\n'
   printf 'n=%s\n' "$N"
   printf 'head_sha=%s\n' "$HEAD_SHA"
   printf 'head_dirty=%s\n' "$HEAD_DIRTY"
@@ -95,12 +109,14 @@ PROFILE_SHA="$(sha256sum "$PROFILE_FILE" | awk '{print $1}')"
   printf 'work_root=%s\n' "$WORK_ROOT"
   printf 'race_prefix=%s\n' "$RACE_PREFIX"
   printf 'race_result=%s\n' "$RACE_RESULT"
+  printf 'grand_summary_env=%s\n' "$GRAND_SUMMARY_ENV"
   printf 'select_only=1\n'
   printf 'rebuild_buckets=%s\n' "$REBUILD_BUCKETS"
   printf 'run_nextself_stage=%s\n' "$RUN_NEXTSELF_STAGE"
   printf 'run_hybrid_stage=%s\n' "$RUN_HYBRID_STAGE"
   printf 'run_hybrid_ns_stage=%s\n' "$RUN_HYBRID_NS_STAGE"
-  printf 'run_stageh=%s\n' "$RUN_STAGEH"
+  printf 'run_stagei=%s\n' "$RUN_STAGEI"
+  printf 'run_stagej=%s\n' "$RUN_STAGEJ"
   printf 'nextself_threads=%s\n' "$NEXTSELF_THREADS"
   printf 'nextself_search_rows=%s\n' "$NEXTSELF_SEARCH_ROWS"
   printf 'nextself_validate_rows=%s\n' "$NEXTSELF_VALIDATE_ROWS"
@@ -113,8 +129,12 @@ PROFILE_SHA="$(sha256sum "$PROFILE_FILE" | awk '{print $1}')"
   printf 'hybrid_ns_distance_list=%s\n' "$HYBRID_NS_DISTANCE_LIST"
   printf 'hybrid_ns_search_repeats=%s\n' "$HYBRID_NS_SEARCH_REPEATS"
   printf 'hybrid_ns_validate_repeats=%s\n' "$HYBRID_NS_VALIDATE_REPEATS"
-  printf 'stageh_min_speedup=%s\n' "$STAGEH_MIN_SPEEDUP"
-  printf 'hybrid8_nextself_transform_preflight=1\n'
+  printf 'stagei_min_speedup=%s\n' "$STAGEI_MIN_SPEEDUP"
+  printf 'stagej_min_speedup=%s\n' "$STAGEJ_MIN_SPEEDUP"
+  printf 'stagej_mate_width_list=%s\n' "$MATE_WIDTH_LIST"
+  printf 'stagej_mate_distance_list=%s\n' "$MATE_DISTANCE_LIST"
+  printf 'stagej_mate_evict=%s\n' "$MATE_EVICT"
+  printf 'stagei_namespace_contract_preflight=1\n'
   printf 'grand_selector_contract_preflight=1\n'
   printf 'nvcc_version_begin=1\n'
   nvcc --version | sed 's/^/nvcc: /'
@@ -131,22 +151,26 @@ fi
 echo '=== B300 grand first-pass: GPU-free preflight ===' >&2
 bash "$ONEESAN_ROOT/scripts/bench/b300-nextgen-preflight.sh"
 bash "$ONEESAN_ROOT/scripts/bench/b300-mainrec-hybrid8-nextself-transform-preflight.sh"
+bash "$ONEESAN_ROOT/scripts/bench/b300-mainrec-self-mate-independent-geometry-preflight.sh"
 bash "$ONEESAN_ROOT/scripts/bench/b300-joint-nextgen-hybrid8-preflight.sh"
+bash "$ONEESAN_ROOT/scripts/bench/b300-stagei-namespace-contract-preflight.sh"
 bash "$ONEESAN_ROOT/scripts/bench/b300-nextgen-grand-selector-preflight.sh"
 bash "$ONEESAN_ROOT/scripts/bench/b300-grand-selector-contract-preflight.sh"
 
-echo "=== B300 grand first-pass: n=27 head=${HEAD_SHA:0:12} GPUs=$GPU_COUNT SELECT_ONLY=1 geometry_widths=[$HYBRID_NS_WIDTH_LIST] geometry_distances=[$HYBRID_NS_DISTANCE_LIST] stageh=$RUN_STAGEH ===" >&2
+echo "=== B300 grand first-pass: n=27 head=${HEAD_SHA:0:12} GPUs=$GPU_COUNT SELECT_ONLY=1 self_geometry=[$HYBRID_NS_WIDTH_LIST]x[$HYBRID_NS_DISTANCE_LIST] mate_geometry=[$MATE_WIDTH_LIST]x[$MATE_DISTANCE_LIST] ===" >&2
 set +e
 PROFILE_FILE="$PROFILE_FILE" ARCH="$ARCH" MAX_WINDOW="$MAX_WINDOW" SMOKE_PRIME="$SMOKE_PRIME" \
   FORCED_TARGET_MIB="$FORCED_TARGET_MIB" BUCKET_TARGET_MIB="$BUCKET_TARGET_MIB" WORK_ROOT="$WORK_ROOT" RACE_PREFIX="$RACE_PREFIX" \
   SELECT_ONLY=1 REBUILD_BUCKETS="$REBUILD_BUCKETS" \
-  RUN_NEXTSELF_STAGE="$RUN_NEXTSELF_STAGE" RUN_HYBRID_STAGE="$RUN_HYBRID_STAGE" RUN_HYBRID_NS_STAGE="$RUN_HYBRID_NS_STAGE" RUN_STAGEH="$RUN_STAGEH" \
-  NEXTSELF_THREADS="$NEXTSELF_THREADS" NEXTSELF_SEARCH_ROWS="$NEXTSELF_SEARCH_ROWS" \
-  NEXTSELF_VALIDATE_ROWS="$NEXTSELF_VALIDATE_ROWS" NEXTSELF_SEARCH_REPEATS="$NEXTSELF_SEARCH_REPEATS" \
-  NEXTSELF_VALIDATE_REPEATS="$NEXTSELF_VALIDATE_REPEATS" NEXTSELF_MIN_SPEEDUP="$NEXTSELF_MIN_SPEEDUP" \
+  RUN_NEXTSELF_STAGE="$RUN_NEXTSELF_STAGE" RUN_HYBRID_STAGE="$RUN_HYBRID_STAGE" RUN_HYBRID_NS_STAGE="$RUN_HYBRID_NS_STAGE" \
+  RUN_STAGEI="$RUN_STAGEI" RUN_STAGEJ="$RUN_STAGEJ" \
+  NEXTSELF_THREADS="$NEXTSELF_THREADS" NEXTSELF_SEARCH_ROWS="$NEXTSELF_SEARCH_ROWS" NEXTSELF_VALIDATE_ROWS="$NEXTSELF_VALIDATE_ROWS" \
+  NEXTSELF_SEARCH_REPEATS="$NEXTSELF_SEARCH_REPEATS" NEXTSELF_VALIDATE_REPEATS="$NEXTSELF_VALIDATE_REPEATS" NEXTSELF_MIN_SPEEDUP="$NEXTSELF_MIN_SPEEDUP" \
   HYBRID_MIN_SPEEDUP="$HYBRID_MIN_SPEEDUP" HYBRID_NS_MIN_SPEEDUP="$HYBRID_NS_MIN_SPEEDUP" \
   HYBRID_NS_WIDTH_LIST="$HYBRID_NS_WIDTH_LIST" HYBRID_NS_DISTANCE_LIST="$HYBRID_NS_DISTANCE_LIST" \
-  HYBRID_NS_SEARCH_REPEATS="$HYBRID_NS_SEARCH_REPEATS" HYBRID_NS_VALIDATE_REPEATS="$HYBRID_NS_VALIDATE_REPEATS" STAGEH_MIN_SPEEDUP="$STAGEH_MIN_SPEEDUP" \
+  HYBRID_NS_SEARCH_REPEATS="$HYBRID_NS_SEARCH_REPEATS" HYBRID_NS_VALIDATE_REPEATS="$HYBRID_NS_VALIDATE_REPEATS" \
+  STAGEI_MIN_SPEEDUP="$STAGEI_MIN_SPEEDUP" STAGEJ_MIN_SPEEDUP="$STAGEJ_MIN_SPEEDUP" \
+  MATE_WIDTH_LIST="$MATE_WIDTH_LIST" MATE_DISTANCE_LIST="$MATE_DISTANCE_LIST" MATE_EVICT="$MATE_EVICT" \
   PREFIX="$PREFIX" bash "$ONEESAN_ROOT/scripts/run/b300x8-joint-nextself-hybrid8-select.sh" 27 "$@" \
   2>&1 | tee "$LOG"
 rc=${PIPESTATUS[0]}
@@ -158,15 +182,16 @@ if (( rc != 0 )); then
   exit "$rc"
 fi
 
-grep -Fq 'SINGLE PASS SELECTED' "$LOG" || {
-  echo "grand first-pass completed without SINGLE PASS SELECTED marker: $LOG" >&2
-  exit 4
-}
-grep -Fq 'SELECT_ONLY=1: selected' "$LOG" || {
-  echo "grand first-pass did not stop at SELECT_ONLY boundary: $LOG" >&2
-  exit 4
-}
+grep -Fq 'SINGLE PASS SELECTED' "$LOG" || { echo "grand first-pass completed without SINGLE PASS SELECTED marker: $LOG" >&2; exit 4; }
+grep -Fq 'SELECT_ONLY=1: selected' "$LOG" || { echo "grand first-pass did not stop at SELECT_ONLY boundary: $LOG" >&2; exit 4; }
 [[ -s "$RACE_RESULT" ]] || { echo "grand first-pass race result missing: $RACE_RESULT" >&2; exit 4; }
+[[ -s "$GRAND_SUMMARY_ENV" ]] || { echo "grand summary env missing: $GRAND_SUMMARY_ENV" >&2; exit 4; }
+# shellcheck disable=SC1090
+source "$GRAND_SUMMARY_ENV"
+[[ "${B300_GRAND_PREPARED:-0}" == 1 && "${B300_GRAND_STAGEJ_INTEGRATED:-0}" == 1 && "${B300_GRAND_STAGEI_NAMESPACE_ISOLATED:-0}" == 1 ]] || {
+  echo 'grand Stage-I/J provenance markers missing' >&2; exit 4;
+}
+GRAND_SUMMARY_SHA="$(sha256sum "$GRAND_SUMMARY_ENV" | awk '{print $1}')"
 
 SELECTED_LINE="$(grep -F 'SINGLE PASS SELECTED' "$LOG" | tail -n1)"
 WIN="$(python3 - "$RACE_RESULT" "$SELECTED_LINE" <<'PY'
@@ -180,8 +205,7 @@ if len(res)!=1: raise SystemExit('single-pass result residue mismatch')
 b=min(ok,key=lambda x:float(x['wall_s']))
 m=re.search(r'backend=([^ ]+) profile=([^ ]+) wall_s=([^ ]+) residue=([^ ]+)',line)
 if not m: raise SystemExit('selected_line parse failed')
-if (b['backend'],b['profile'],b['wall_s'],b['residue']) != m.groups():
-    raise SystemExit('selected_line does not match TSV winner')
+if (b['backend'],b['profile'],b['wall_s'],b['residue']) != m.groups(): raise SystemExit('selected_line does not match TSV winner')
 print('\t'.join((b['backend'],b['profile'],b['binary'],b['residue'],b['wall_s'])))
 PY
 )"
@@ -203,7 +227,7 @@ case "$BEST" in
   *)
     [[ "$BEST_PROFILE" =~ ^t([0-9]+)$ ]] || { echo "forced winner profile must encode threads: $BEST_PROFILE" >&2; exit 4; }
     RUN_THREADS="${BASH_REMATCH[1]}"
-    ((RUN_THREADS>=32 && RUN_THREADS<=1024 && RUN_THREADS%32==0)) || { echo "bad selected forced threads=$RUN_THREADS" >&2; exit 4; }
+    (( RUN_THREADS>=32 && RUN_THREADS<=1024 && RUN_THREADS%32==0 )) || { echo "bad selected forced threads=$RUN_THREADS" >&2; exit 4; }
     ;;
 esac
 
@@ -216,14 +240,13 @@ with open(binp,'rb') as f:
 d=json.load(open(cp))
 if int(d.get('n',-1)) != 27: raise SystemExit('checkpoint n mismatch')
 fp=d.get('solver_fingerprint',{})
-if fp.get('schema') != 3 or fp.get('binary_sha256') != h.hexdigest() or fp.get('profile_sha256') != profile_sha:
-    raise SystemExit('checkpoint solver fingerprint mismatch')
+if fp.get('schema') != 3 or fp.get('binary_sha256') != h.hexdigest() or fp.get('profile_sha256') != profile_sha: raise SystemExit('checkpoint solver fingerprint mismatch')
 r=d.get('residues',{}).get(str(int(prime)))
 if not r or int(r.get('residue',-1)) != int(residue): raise SystemExit('checkpoint smoke residue missing/mismatch')
 PY
 
 {
-  printf 'B300_GRAND_SELECTED_SCHEMA=1\n'
+  printf 'B300_GRAND_SELECTED_SCHEMA=2\n'
   printf 'B300_GRAND_SELECTED_VALIDATED=1\n'
   printf 'B300_GRAND_SELECTED_N=27\n'
   printf 'B300_GRAND_SELECTED_HEAD_SHA=%q\n' "$HEAD_SHA"
@@ -243,14 +266,32 @@ PY
   printf 'B300_GRAND_SELECTED_MAX_WINDOW=%q\n' "$MAX_WINDOW"
   printf 'B300_GRAND_SELECTED_GEOMETRY_WIDTH_LIST=%q\n' "$HYBRID_NS_WIDTH_LIST"
   printf 'B300_GRAND_SELECTED_GEOMETRY_DISTANCE_LIST=%q\n' "$HYBRID_NS_DISTANCE_LIST"
-  printf 'B300_GRAND_SELECTED_STAGEH_ENABLED=%q\n' "$RUN_STAGEH"
-  printf 'B300_GRAND_SELECTED_STAGEH_MIN_SPEEDUP=%q\n' "$STAGEH_MIN_SPEEDUP"
+  printf 'B300_GRAND_SELECTED_STAGEI_ENABLED=%q\n' "$RUN_STAGEI"
+  printf 'B300_GRAND_SELECTED_STAGEI_MIN_SPEEDUP=%q\n' "$STAGEI_MIN_SPEEDUP"
+  printf 'B300_GRAND_SELECTED_STAGEI_ACCEPTED=%q\n' "${B300_GRAND_STAGEI_OK:-0}"
+  printf 'B300_GRAND_SELECTED_STAGEI_HINT=%q\n' "${B300_GRAND_STAGEI_HINT:-default}"
+  printf 'B300_GRAND_SELECTED_STAGEJ_ENABLED=%q\n' "$RUN_STAGEJ"
+  printf 'B300_GRAND_SELECTED_STAGEJ_MIN_SPEEDUP=%q\n' "$STAGEJ_MIN_SPEEDUP"
+  printf 'B300_GRAND_SELECTED_STAGEJ_ACCEPTED=%q\n' "${B300_GRAND_STAGEJ_OK:-0}"
+  printf 'B300_GRAND_SELECTED_STAGEJ_SELF_EVICT=%q\n' "${B300_GRAND_STAGEJ_SELF_EVICT:-default}"
+  printf 'B300_GRAND_SELECTED_STAGEJ_SELF_WIDTH=%q\n' "${B300_GRAND_STAGEJ_SELF_WIDTH:-0}"
+  printf 'B300_GRAND_SELECTED_STAGEJ_SELF_DISTANCE=%q\n' "${B300_GRAND_STAGEJ_SELF_DISTANCE:-0}"
+  printf 'B300_GRAND_SELECTED_STAGEJ_MATE_WIDTH=%q\n' "${B300_GRAND_STAGEJ_MATE_WIDTH:-0}"
+  printf 'B300_GRAND_SELECTED_STAGEJ_MATE_DISTANCE=%q\n' "${B300_GRAND_STAGEJ_MATE_DISTANCE:-0}"
+  printf 'B300_GRAND_SELECTED_STAGEJ_MATE_EVICT=%q\n' "${B300_GRAND_STAGEJ_MATE_EVICT:-$MATE_EVICT}"
+  printf 'B300_GRAND_SELECTED_STAGEJ_STAGED_SPEEDUP=%q\n' "${B300_GRAND_STAGEJ_STAGED_SPEEDUP:-1.0}"
+  printf 'B300_GRAND_SELECTED_STAGEJ_SEARCH_MATE_WIDTHS=%q\n' "$MATE_WIDTH_LIST"
+  printf 'B300_GRAND_SELECTED_STAGEJ_SEARCH_MATE_DISTANCES=%q\n' "$MATE_DISTANCE_LIST"
+  printf 'B300_GRAND_SELECTED_GRAND_SUMMARY_ENV=%q\n' "$GRAND_SUMMARY_ENV"
+  printf 'B300_GRAND_SELECTED_GRAND_SUMMARY_SHA256=%q\n' "$GRAND_SUMMARY_SHA"
   printf 'B300_GRAND_SELECTED_WORK_DIR=%q\n' "$BEST_WORK"
   printf 'B300_GRAND_SELECTED_CHECKPOINT=%q\n' "$CHECKPOINT"
   printf 'B300_GRAND_SELECTED_RACE_PREFIX=%q\n' "$RACE_PREFIX"
   printf 'B300_GRAND_SELECTED_RACE_RESULT=%q\n' "$RACE_RESULT"
   printf 'B300_GRAND_SELECTED_RACE_RESULT_SHA256=%q\n' "$RACE_SHA"
   printf 'B300_GRAND_SELECTED_FIRSTPASS_META=%q\n' "$META"
+  printf 'B300_GRAND_SELECTED_STAGEH_ENABLED=%q\n' "$RUN_STAGEJ"
+  printf 'B300_GRAND_SELECTED_STAGEH_MIN_SPEEDUP=%q\n' "$STAGEJ_MIN_SPEEDUP"
 } >"$SELECTED_ENV"
 
 {
@@ -266,11 +307,23 @@ PY
   printf 'race_prefix=%s\n' "$RACE_PREFIX"
   printf 'race_result=%s\n' "$RACE_RESULT"
   printf 'race_result_sha256=%s\n' "$RACE_SHA"
+  printf 'grand_summary_env=%s\n' "$GRAND_SUMMARY_ENV"
+  printf 'grand_summary_sha256=%s\n' "$GRAND_SUMMARY_SHA"
   printf 'geometry_width_list=%s\n' "$HYBRID_NS_WIDTH_LIST"
   printf 'geometry_distance_list=%s\n' "$HYBRID_NS_DISTANCE_LIST"
-  printf 'stageh_enabled=%s\n' "$RUN_STAGEH"
-  printf 'stageh_min_speedup=%s\n' "$STAGEH_MIN_SPEEDUP"
-  printf 'promotion_contract=1\n'
+  printf 'stagei_enabled=%s\n' "$RUN_STAGEI"
+  printf 'stagei_min_speedup=%s\n' "$STAGEI_MIN_SPEEDUP"
+  printf 'stagei_accepted=%s\n' "${B300_GRAND_STAGEI_OK:-0}"
+  printf 'stagei_hint=%s\n' "${B300_GRAND_STAGEI_HINT:-default}"
+  printf 'stagej_enabled=%s\n' "$RUN_STAGEJ"
+  printf 'stagej_min_speedup=%s\n' "$STAGEJ_MIN_SPEEDUP"
+  printf 'stagej_accepted=%s\n' "${B300_GRAND_STAGEJ_OK:-0}"
+  printf 'stagej_self_geometry=w%sd%s\n' "${B300_GRAND_STAGEJ_SELF_WIDTH:-0}" "${B300_GRAND_STAGEJ_SELF_DISTANCE:-0}"
+  printf 'stagej_mate_geometry=w%sd%s\n' "${B300_GRAND_STAGEJ_MATE_WIDTH:-0}" "${B300_GRAND_STAGEJ_MATE_DISTANCE:-0}"
+  printf 'stagej_self_evict=%s\n' "${B300_GRAND_STAGEJ_SELF_EVICT:-default}"
+  printf 'stagej_mate_evict=%s\n' "${B300_GRAND_STAGEJ_MATE_EVICT:-$MATE_EVICT}"
+  printf 'stagej_staged_speedup=%s\n' "${B300_GRAND_STAGEJ_STAGED_SPEEDUP:-1.0}"
+  printf 'promotion_contract=2\n'
 } >>"$META"
 
 echo "b300x8-grand-firstpass OK log=$LOG meta=$META selected_env=$SELECTED_ENV $SELECTED_LINE" >&2
