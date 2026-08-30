@@ -11,6 +11,7 @@ ARCH="${ARCH:-native}"
 MAX_WINDOW="${MAX_WINDOW:-14}"
 PREFIX="${PREFIX:-$ONEESAN_ROOT/work/b300_joint_nextself_hybrid8_n27}"
 RACE_PREFIX="${RACE_PREFIX:-${PREFIX}.race}"
+WORK_ROOT="${WORK_ROOT:-$ONEESAN_ROOT/work}"
 
 JOINT_PREFIX="${JOINT_PREFIX:-${PREFIX}.joint}"
 JOINT_PREPARE_ENV="${JOINT_PREPARE_ENV:-${PREFIX}.joint.prepared.env}"
@@ -32,6 +33,10 @@ STAGEJ_PREFIX="${STAGEJ_PREFIX:-${PREFIX}.stagej-mategeo}"
 STAGEJ_WINNER_ENV="${STAGEJ_WINNER_ENV:-${STAGEJ_PREFIX}_winner.env}"
 STAGEJ_PREPARE_ENV="${STAGEJ_PREPARE_ENV:-${PREFIX}.stagej-mategeo.prepared.env}"
 STAGEJ_RACE_PREFIX="${STAGEJ_RACE_PREFIX:-${PREFIX}.stagej-mategeo.promote}"
+STAGEK_PREFIX="${STAGEK_PREFIX:-${PREFIX}.stagek-mateevict}"
+STAGEK_WINNER_ENV="${STAGEK_WINNER_ENV:-${STAGEK_PREFIX}_winner.env}"
+STAGEK_PREPARE_ENV="${STAGEK_PREPARE_ENV:-${PREFIX}.stagek-mateevict.prepared.env}"
+STAGEK_RACE_PREFIX="${STAGEK_RACE_PREFIX:-${PREFIX}.stagek-mateevict.promote}"
 
 SELECT_ONLY="${SELECT_ONLY:-1}"
 REBUILD_BUCKETS="${REBUILD_BUCKETS:-1}"
@@ -39,8 +44,8 @@ RUN_NEXTSELF_STAGE="${RUN_NEXTSELF_STAGE:-1}"
 RUN_HYBRID_STAGE="${RUN_HYBRID_STAGE:-1}"
 RUN_HYBRID_NS_STAGE="${RUN_HYBRID_NS_STAGE:-1}"
 RUN_STAGEI="${RUN_STAGEI:-1}"
-# RUN_STAGEH is retained only as a compatibility alias for the old fixed-mate stage.
 RUN_STAGEJ="${RUN_STAGEJ:-${RUN_STAGEH:-1}}"
+RUN_STAGEK="${RUN_STAGEK:-1}"
 NEXTSELF_THREADS="${NEXTSELF_THREADS:-256}"
 NEXTSELF_MIN_SPEEDUP="${NEXTSELF_MIN_SPEEDUP:-1.01}"
 NEXTSELF_SEARCH_ROWS="${NEXTSELF_SEARCH_ROWS:-1}"
@@ -55,11 +60,13 @@ HYBRID_NS_SEARCH_REPEATS="${HYBRID_NS_SEARCH_REPEATS:-1}"
 HYBRID_NS_VALIDATE_REPEATS="${HYBRID_NS_VALIDATE_REPEATS:-1}"
 STAGEI_MIN_SPEEDUP="${STAGEI_MIN_SPEEDUP:-1.002}"
 STAGEJ_MIN_SPEEDUP="${STAGEJ_MIN_SPEEDUP:-${STAGEH_MIN_SPEEDUP:-1.002}}"
+STAGEK_MIN_SPEEDUP="${STAGEK_MIN_SPEEDUP:-1.002}"
 MATE_WIDTH_LIST="${MATE_WIDTH_LIST:-1 2 4 8}"
 MATE_DISTANCE_LIST="${MATE_DISTANCE_LIST:-1 2 4}"
 MATE_EVICT="${MATE_EVICT:-default}"
+MATE_EVICT_LIST="${MATE_EVICT_LIST:-default normal last}"
 
-for x in SELECT_ONLY REBUILD_BUCKETS RUN_NEXTSELF_STAGE RUN_HYBRID_STAGE RUN_HYBRID_NS_STAGE RUN_STAGEI RUN_STAGEJ; do
+for x in SELECT_ONLY REBUILD_BUCKETS RUN_NEXTSELF_STAGE RUN_HYBRID_STAGE RUN_HYBRID_NS_STAGE RUN_STAGEI RUN_STAGEJ RUN_STAGEK; do
   v="${!x}"
   [[ "$v" == 0 || "$v" == 1 ]] || { echo "$x must be 0/1" >&2; exit 2; }
 done
@@ -67,9 +74,9 @@ for x in NEXTSELF_SEARCH_REPEATS NEXTSELF_VALIDATE_REPEATS HYBRID_NS_SEARCH_REPE
   v="${!x}"
   [[ "$v" =~ ^[1-9][0-9]*$ ]] || { echo "$x must be >=1" >&2; exit 2; }
 done
-python3 - "$NEXTSELF_MIN_SPEEDUP" "$HYBRID_MIN_SPEEDUP" "$HYBRID_NS_MIN_SPEEDUP" "$STAGEI_MIN_SPEEDUP" "$STAGEJ_MIN_SPEEDUP" <<'PY'
+python3 - "$NEXTSELF_MIN_SPEEDUP" "$HYBRID_MIN_SPEEDUP" "$HYBRID_NS_MIN_SPEEDUP" "$STAGEI_MIN_SPEEDUP" "$STAGEJ_MIN_SPEEDUP" "$STAGEK_MIN_SPEEDUP" <<'PY'
 import sys
-names=('NEXTSELF_MIN_SPEEDUP','HYBRID_MIN_SPEEDUP','HYBRID_NS_MIN_SPEEDUP','STAGEI_MIN_SPEEDUP','STAGEJ_MIN_SPEEDUP')
+names=('NEXTSELF_MIN_SPEEDUP','HYBRID_MIN_SPEEDUP','HYBRID_NS_MIN_SPEEDUP','STAGEI_MIN_SPEEDUP','STAGEJ_MIN_SPEEDUP','STAGEK_MIN_SPEEDUP')
 for name,v in zip(names,map(float,sys.argv[1:])):
     if v < 1.0: raise SystemExit(f'{name} must be >=1')
 PY
@@ -94,20 +101,33 @@ normalize_distances(){
   ((${#out[@]})) || { echo 'distance list must not be empty' >&2; exit 2; }
   printf '%s' "${out[*]}"
 }
+normalize_evicts(){
+  local raw="$1"; local out=() e old seen
+  for e in $raw; do
+    case "$e" in default|normal|last) ;; *) echo "bad eviction hint=$e" >&2; exit 2;; esac
+    seen=0; for old in "${out[@]}"; do [[ "$old" == "$e" ]] && seen=1; done
+    ((seen)) || out+=("$e")
+  done
+  ((${#out[@]})) || { echo 'eviction list must not be empty' >&2; exit 2; }
+  printf '%s' "${out[*]}"
+}
 HYBRID_NS_WIDTH_LIST="$(normalize_widths "$HYBRID_NS_WIDTH_LIST")"
 HYBRID_NS_DISTANCE_LIST="$(normalize_distances "$HYBRID_NS_DISTANCE_LIST")"
 MATE_WIDTH_LIST="$(normalize_widths "$MATE_WIDTH_LIST")"
 MATE_DISTANCE_LIST="$(normalize_distances "$MATE_DISTANCE_LIST")"
+MATE_EVICT_LIST="$(normalize_evicts "$MATE_EVICT_LIST")"
 case "$MATE_EVICT" in default|normal|last) ;; *) echo 'MATE_EVICT must be default,normal,last' >&2; exit 2;; esac
+case " $MATE_EVICT_LIST " in *" $MATE_EVICT "*) ;; *) echo 'MATE_EVICT_LIST must include MATE_EVICT baseline' >&2; exit 2;; esac
 [[ "$NEXTSELF_THREADS" =~ ^[0-9]+$ ]] && (( NEXTSELF_THREADS >= 32 && NEXTSELF_THREADS <= 768 && NEXTSELF_THREADS % 32 == 0 )) || { echo 'NEXTSELF_THREADS must be warp multiple 32..768' >&2; exit 2; }
 [[ "$MAX_WINDOW" =~ ^[1-9][0-9]*$ ]] || { echo 'MAX_WINDOW must be positive integer' >&2; exit 2; }
 [[ -f "$PROFILE_FILE" ]] || { echo "missing profile: $PROFILE_FILE" >&2; exit 2; }
 mkdir -p "$(dirname "$JOINT_PREPARE_ENV")" "$(dirname "$NEXTSELF_PREPARE_ENV")" "$(dirname "$HYBRID_PREPARE_ENV")" \
-  "$(dirname "$HYBRID_NS_PREPARE_ENV")" "$(dirname "$EVICT_PREPARE_ENV")" "$(dirname "$STAGEJ_PREPARE_ENV")" "$(dirname "$RACE_PREFIX")"
+  "$(dirname "$HYBRID_NS_PREPARE_ENV")" "$(dirname "$EVICT_PREPARE_ENV")" "$(dirname "$STAGEJ_PREPARE_ENV")" \
+  "$(dirname "$STAGEK_PREPARE_ENV")" "$(dirname "$RACE_PREFIX")" "$WORK_ROOT"
 
 # Joint calibrated fallback and profiled bucket candidates.
 echo '=== grand selector: prepare joint calibrated candidates ===' >&2
-PROFILE_FILE="$PROFILE_FILE" ARCH="$ARCH" MAX_WINDOW="$MAX_WINDOW" PREFIX="$JOINT_PREFIX" PREPARE_ONLY=1 PREPARE_ENV="$JOINT_PREPARE_ENV" \
+PROFILE_FILE="$PROFILE_FILE" ARCH="$ARCH" MAX_WINDOW="$MAX_WINDOW" WORK_ROOT="$WORK_ROOT" PREFIX="$JOINT_PREFIX" PREPARE_ONLY=1 PREPARE_ENV="$JOINT_PREPARE_ENV" \
   SELECT_ONLY=1 REBUILD_BUCKETS="$REBUILD_BUCKETS" bash "$ONEESAN_ROOT/scripts/run/b300x8-joint-calibrated-select.sh" 27
 [[ -s "$JOINT_PREPARE_ENV" ]] || { echo "joint prepare env missing: $JOINT_PREPARE_ENV" >&2; exit 3; }
 # shellcheck disable=SC1090
@@ -184,8 +204,7 @@ if (( HYBRID_OK )); then
   fi
 fi
 
-# Official Stage I: self-prefetch L2 eviction hint. The wrapper exports only
-# B300_EVICT_* so historical Stage-I mate-geometry variables cannot collide.
+# Stage I: self-prefetch L2 eviction hint under a collision-free namespace.
 EVICT_OK=0; EVICT_RC=0
 if (( HYBRID_NS_OK )); then
   set +e
@@ -209,8 +228,7 @@ if (( HYBRID_NS_OK )); then
   fi
 fi
 
-# Stage J: independent mate-prefetch geometry. This runner isolates its legacy
-# B300_STAGEI_* implementation inside a child process and exports B300_STAGEJ_*.
+# Stage J: independent mate-prefetch geometry.
 STAGEJ_SELF_EVICT=default
 (( EVICT_OK )) && STAGEJ_SELF_EVICT="$B300_EVICT_HINT"
 STAGEJ_OK=0; STAGEJ_RC=0
@@ -237,9 +255,35 @@ if (( HYBRID_NS_OK )); then
   fi
 fi
 
+# Stage K: refine only mate-prefetch eviction priority after Stage J geometry is fixed.
+# It is staged before the one complete-prime race, so no post-grand second race is needed.
+STAGEK_OK=0; STAGEK_RC=0
+if (( STAGEJ_OK )); then
+  set +e
+  PROFILE_FILE="$PROFILE_FILE" STAGE_F_ENV="$HYBRID_NS_WINNER_ENV" STAGEJ_WINNER_ENV="$STAGEJ_WINNER_ENV" STAGEJ_PREPARE_ENV="$STAGEJ_PREPARE_ENV" \
+    ARCH="$ARCH" TARGET_MIB="$TARGET_MIB" MAX_WINDOW="$MAX_WINDOW" MOD="$PRIME" RUN_STAGED="$RUN_STAGEK" PREPARE_ONLY=1 \
+    MIN_SPEEDUP="$STAGEK_MIN_SPEEDUP" EVICT_LIST="$MATE_EVICT_LIST" STAGED_PREFIX="$STAGEK_PREFIX" WINNER_ENV="$STAGEK_WINNER_ENV" \
+    RACE_PREFIX="$STAGEK_RACE_PREFIX" PREPARE_ENV="$STAGEK_PREPARE_ENV" \
+    bash "$ONEESAN_ROOT/scripts/run/b300x8-nextgen-hybrid8-mate-evict-stagek-staged-fullprime-race.sh" 27
+  STAGEK_RC=$?
+  set -e
+  if (( STAGEK_RC == 0 )); then
+    # shellcheck disable=SC1090
+    source "$STAGEK_PREPARE_ENV"
+    [[ "${B300_STAGEK_PREPARED:-0}" == 1 && -x "$B300_STAGEK_PREPARED_BIN" && -x "$B300_STAGEK_PREPARED_CONTROL_BIN" ]] || exit 3
+    [[ "$B300_STAGEK_PREPARED_SELF_WIDTH" == "$B300_STAGEJ_PREPARED_SELF_WIDTH" && "$B300_STAGEK_PREPARED_SELF_DISTANCE" == "$B300_STAGEJ_PREPARED_SELF_DISTANCE" ]] || { echo 'Stage-K self geometry drift' >&2; exit 3; }
+    [[ "$B300_STAGEK_PREPARED_MATE_WIDTH" == "$B300_STAGEJ_PREPARED_MATE_WIDTH" && "$B300_STAGEK_PREPARED_MATE_DISTANCE" == "$B300_STAGEJ_PREPARED_MATE_DISTANCE" ]] || { echo 'Stage-K mate geometry drift' >&2; exit 3; }
+    [[ "$B300_STAGEK_PREPARED_SELF_EVICT" == "$B300_STAGEJ_PREPARED_SELF_EVICT" ]] || { echo 'Stage-K self eviction drift' >&2; exit 3; }
+    [[ "$B300_STAGEK_PREPARED_BASE_MATE_EVICT" == "$B300_STAGEJ_PREPARED_MATE_EVICT" ]] || { echo 'Stage-K baseline mate eviction drift' >&2; exit 3; }
+    STAGEK_OK=1
+  elif (( STAGEK_RC == 4 )); then
+    echo 'grand selector: Stage-K mate eviction rejected; retaining Stage J' >&2
+  else
+    exit "$STAGEK_RC"
+  fi
+fi
+
 # Candidate budget: five forced-like candidates plus profiled warp/orbit = 7.
-# Stage J's control already contains the selected Stage-I self eviction when
-# Stage I survived, so adding Stage J never consumes an extra forced slot.
 P_BIN=""; P_LABEL=""; P_THREADS=256
 B_BIN=""; B_LABEL=""; B_THREADS=256
 E1_BIN=""; E1_LABEL=""; E1_THREADS=256
@@ -247,7 +291,21 @@ E2_BIN=""; E2_LABEL=""; E2_THREADS=256
 E3_BIN=""; E3_LABEL=""; E3_THREADS=256
 MODE=""
 
-if (( STAGEJ_OK && NEXTSELF_OK )); then
+if (( STAGEK_OK && NEXTSELF_OK )); then
+  MODE=stagek_mateevict_grand
+  P_BIN="$B300_STAGEK_PREPARED_BIN"; P_LABEL="$B300_STAGEK_PREPARED_LABEL"; P_THREADS="$B300_STAGEK_PREPARED_THREADS"
+  B_BIN="$B300_STAGEK_PREPARED_CONTROL_BIN"; B_LABEL="$B300_STAGEK_PREPARED_CONTROL_LABEL"; B_THREADS="$B300_STAGEK_PREPARED_CONTROL_THREADS"
+  E1_BIN="$B300_HYBRID8_PREPARED_BASE_BIN"; E1_LABEL="$B300_HYBRID8_PREPARED_BASE_LABEL"; E1_THREADS="$B300_HYBRID8_PREPARED_BASE_THREADS"
+  E2_BIN="$B300_NEXTSELF_PREPARED_BIN"; E2_LABEL="$B300_NEXTSELF_PREPARED_LABEL"; E2_THREADS="$B300_NEXTSELF_PREPARED_THREADS"
+  E3_BIN="$JOINT_PRIMARY_BIN"; E3_LABEL="$JOINT_PRIMARY_LABEL"; E3_THREADS="$JOINT_PRIMARY_THREADS"
+elif (( STAGEK_OK )); then
+  MODE=stagek_mateevict_joint
+  P_BIN="$B300_STAGEK_PREPARED_BIN"; P_LABEL="$B300_STAGEK_PREPARED_LABEL"; P_THREADS="$B300_STAGEK_PREPARED_THREADS"
+  B_BIN="$B300_STAGEK_PREPARED_CONTROL_BIN"; B_LABEL="$B300_STAGEK_PREPARED_CONTROL_LABEL"; B_THREADS="$B300_STAGEK_PREPARED_CONTROL_THREADS"
+  E1_BIN="$B300_HYBRID8_PREPARED_BASE_BIN"; E1_LABEL="$B300_HYBRID8_PREPARED_BASE_LABEL"; E1_THREADS="$B300_HYBRID8_PREPARED_BASE_THREADS"
+  E2_BIN="$JOINT_PRIMARY_BIN"; E2_LABEL="$JOINT_PRIMARY_LABEL"; E2_THREADS="$JOINT_PRIMARY_THREADS"
+  if [[ -n "$JOINT_BASE_BIN" && "$JOINT_BASE_BIN" != "$JOINT_PRIMARY_BIN" ]]; then E3_BIN="$JOINT_BASE_BIN"; E3_LABEL="$JOINT_BASE_LABEL"; E3_THREADS="$JOINT_BASE_THREADS"; fi
+elif (( STAGEJ_OK && NEXTSELF_OK )); then
   MODE=stagej_mategeo_grand
   P_BIN="$B300_STAGEJ_PREPARED_BIN"; P_LABEL="$B300_STAGEJ_PREPARED_LABEL"; P_THREADS="$B300_STAGEJ_PREPARED_THREADS"
   B_BIN="$B300_STAGEJ_PREPARED_CONTROL_BIN"; B_LABEL="$B300_STAGEJ_PREPARED_CONTROL_LABEL"; B_THREADS="$B300_STAGEJ_PREPARED_CONTROL_THREADS"
@@ -321,8 +379,8 @@ done
 
 SUMMARY_ENV="${RACE_PREFIX}_grand.env"
 DROP_JOINT_BASE=0; DROP_NEXTSELF_CONTROL=0
-case "$MODE" in nextself_hybrid8_joint|hybrid8_nextself_composed_grand|stagei_selfevict_grand|stagej_mategeo_grand) DROP_JOINT_BASE=1;; esac
-case "$MODE" in hybrid8_nextself_composed_grand|stagei_selfevict_grand|stagej_mategeo_grand) DROP_NEXTSELF_CONTROL=1;; esac
+case "$MODE" in nextself_hybrid8_joint|hybrid8_nextself_composed_grand|stagei_selfevict_grand|stagej_mategeo_grand|stagek_mateevict_grand) DROP_JOINT_BASE=1;; esac
+case "$MODE" in hybrid8_nextself_composed_grand|stagei_selfevict_grand|stagej_mategeo_grand|stagek_mateevict_grand) DROP_NEXTSELF_CONTROL=1;; esac
 {
   printf 'B300_GRAND_PREPARED=1\n'
   printf 'B300_GRAND_MODE=%q\n' "$MODE"
@@ -345,7 +403,14 @@ case "$MODE" in hybrid8_nextself_composed_grand|stagei_selfevict_grand|stagej_ma
   printf 'B300_GRAND_STAGEJ_MANIFEST=%q\n' "${B300_STAGEJ_PREPARED_MANIFEST:-}"
   printf 'B300_GRAND_STAGEJ_SEARCH_MATE_WIDTHS=%q\n' "$MATE_WIDTH_LIST"
   printf 'B300_GRAND_STAGEJ_SEARCH_MATE_DISTANCES=%q\n' "$MATE_DISTANCE_LIST"
-  # Compatibility aliases: old Stage-H readers now see the stronger Stage-J result.
+  printf 'B300_GRAND_STAGEK_OK=%q\n' "$STAGEK_OK"
+  printf 'B300_GRAND_STAGEK_MIN_SPEEDUP=%q\n' "$STAGEK_MIN_SPEEDUP"
+  printf 'B300_GRAND_STAGEK_BASE_MATE_EVICT=%q\n' "${B300_STAGEK_PREPARED_BASE_MATE_EVICT:-$MATE_EVICT}"
+  printf 'B300_GRAND_STAGEK_MATE_EVICT=%q\n' "${B300_STAGEK_PREPARED_MATE_EVICT:-$MATE_EVICT}"
+  printf 'B300_GRAND_STAGEK_STAGED_SPEEDUP=%q\n' "${B300_STAGEK_PREPARED_STAGED_SPEEDUP:-1.0}"
+  printf 'B300_GRAND_STAGEK_MANIFEST=%q\n' "${B300_STAGEK_PREPARED_MANIFEST:-}"
+  printf 'B300_GRAND_STAGEK_SEARCH_EVICTS=%q\n' "$MATE_EVICT_LIST"
+  # Compatibility aliases: old Stage-H readers see the stronger Stage-J geometry.
   printf 'B300_GRAND_STAGEH_OK=%q\n' "$STAGEJ_OK"
   printf 'B300_GRAND_STAGEH_MIN_SPEEDUP=%q\n' "$STAGEJ_MIN_SPEEDUP"
   printf 'B300_GRAND_STAGEH_SELF_EVICT=%q\n' "$STAGEJ_SELF_EVICT"
@@ -368,12 +433,15 @@ case "$MODE" in hybrid8_nextself_composed_grand|stagei_selfevict_grand|stagej_ma
   printf 'B300_GRAND_SMOKE_PRIME=%q\n' "$PRIME"
   printf 'B300_GRAND_TARGET_MIB=%q\n' "$TARGET_MIB"
   printf 'B300_GRAND_MAX_WINDOW=%q\n' "$MAX_WINDOW"
+  printf 'B300_GRAND_WORK_ROOT=%q\n' "$WORK_ROOT"
   printf 'B300_GRAND_STAGEJ_INTEGRATED=1\n'
+  printf 'B300_GRAND_STAGEK_INTEGRATED=1\n'
   printf 'B300_GRAND_STAGEI_NAMESPACE_ISOLATED=1\n'
+  printf 'B300_GRAND_COMPLETE_PRIME_RACES=1\n'
 } >"$SUMMARY_ENV"
 cat "$SUMMARY_ENV" >&2
 
-exec env PROFILE_FILE="$PROFILE_FILE" ARCH="$ARCH" SMOKE_PRIME="$PRIME" FORCED_TARGET_MIB="$TARGET_MIB" MAX_WINDOW="$MAX_WINDOW" \
+exec env PROFILE_FILE="$PROFILE_FILE" ARCH="$ARCH" SMOKE_PRIME="$PRIME" FORCED_TARGET_MIB="$TARGET_MIB" MAX_WINDOW="$MAX_WINDOW" WORK_ROOT="$WORK_ROOT" \
   FORCED_OVERRIDE_BIN="$P_BIN" FORCED_OVERRIDE_LABEL="$P_LABEL" FORCED_OVERRIDE_THREADS="$P_THREADS" \
   FORCED_BASE_BIN="$B_BIN" FORCED_BASE_LABEL="$B_LABEL" FORCED_BASE_THREADS="$B_THREADS" \
   FORCED_EXTRA_BIN="$E1_BIN" FORCED_EXTRA_LABEL="$E1_LABEL" FORCED_EXTRA_THREADS="$E1_THREADS" \
