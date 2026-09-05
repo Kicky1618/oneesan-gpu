@@ -294,9 +294,13 @@ class Tuner:
                     if admitted:
                         candidates.append(c)
                 except (RuntimeError, subprocess.TimeoutExpired) as exc:
-                    record.update(admitted=False, error=str(exc))
+                    record.update(admitted=False, error=str(exc), phase='planning')
                     print(f'Skip planning {c}: {exc}', flush=True)
         if not candidates:
+            failures = [r for r in self.planning if r.get('error')]
+            if failures:
+                details = '; '.join(f"{r['config']}: {r['error']}" for r in failures[:3])
+                raise RuntimeError('no usable configuration; planning/build failures occurred: ' + details)
             raise RuntimeError('no memory-feasible full-P2P GPU configuration for the target size')
         # Compilation and CPU memory planning are outside the GPU benchmark budget.
         for c in candidates:

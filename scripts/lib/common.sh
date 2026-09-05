@@ -33,6 +33,8 @@ require_uint() {
     echo "$name must be an unsigned decimal integer; got: $value" >&2
     return 2
   fi
+}
+
 require_nvcc_version_at_least() {
   local nvcc_bin="${1:-nvcc}" min_major="${2:?missing minimum CUDA major}" min_minor="${3:-0}" reason="${4:-requested CUDA target}"
   command -v "$nvcc_bin" >/dev/null || { echo "$nvcc_bin not found" >&2; return 2; }

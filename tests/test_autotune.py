@@ -116,6 +116,12 @@ class AutotuneTests(unittest.TestCase):
             self.assertIsNone(tuner.measure(a.Config((0,)), float('inf')))
         self.assertEqual(tuner.results[0]['status'], 'failed')
 
+    def test_planning_failure_is_not_reported_as_memory_rejection(self):
+        tuner = a.Tuner(self.args(), hardware(1), self.root)
+        with patch.object(tuner, 'binary', side_effect=RuntimeError('syntax error')):
+            with self.assertRaisesRegex(RuntimeError, 'planning/build failures'):
+                tuner.search()
+
     def test_timeout_kills_solver_descendants(self):
         marker = self.root / 'should-not-exist'
         script = self.root / 'spawn.py'
