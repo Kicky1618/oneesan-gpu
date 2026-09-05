@@ -5,8 +5,9 @@
 #include <unordered_map>
 #include <utility>
 #include <vector>
+#include <boost/multiprecision/cpp_int.hpp>
 
-using Count = unsigned long long;
+using Count = boost::multiprecision::cpp_int;
 
 struct State {
     std::vector<uint8_t> degree;

@@ -1,11 +1,12 @@
 # ZDD output
 
-There are now two ZDD builders.
+There are now three ZDD builders.
 
 1. `src/cpp/oneesan_zdd_replay.cpp` is the preferred **Grid-FP replay exporter**. It starts from the same initial `MateID`, uses the same main/blocked state representation, and calls the same horizontal-inclusion transition function as the factorized CUDA kernel through `src/common/gridfp_transition.hpp`.
 2. `src/cpp/oneesan_zdd.cpp` is an independent SIMPATH-style frontier implementation based on vertex degrees and connected components. It is kept as a correctness oracle.
+3. `src/cpp/oneesan_zdd_replay_horizontal.cpp` is a projected replay builder containing only horizontal decision variables. Its header records `projection_horizontal 1`; it is useful when studying variable order or a compact projected family, but it is not a full-edge export.
 
-Both produce a ZDD whose members are exactly the full edge sets of simple paths from the upper-left corner to the lower-right corner of an `(n+1) x (n+1)` grid graph. Every real horizontal and vertical grid edge is a ZDD variable.
+The first two produce a ZDD whose members are exactly the full edge sets of simple paths from the upper-left corner to the lower-right corner of an `(n+1) x (n+1)` grid graph. Every real horizontal and vertical grid edge is a ZDD variable. The horizontal replay builder projects out forced vertical edges.
 
 ## How replay reconstruction works
 
@@ -69,6 +70,15 @@ Increase the RAPiDD node arena when needed:
 MAX_NODES=67108864 \
   ./scripts/run/zdd-replay.sh 12 work/zdd/replay_n12.zdd
 ```
+
+
+## Horizontal projection builder
+
+`src/cpp/oneesan_zdd_replay_horizontal.cpp` replays the same Grid-FP horizontal decisions but
+omits the forced vertical-edge variables. It therefore has `(n+1)n` variables instead of all
+`2n(n+1)` grid edges. Its ONEESAN header includes `projection_horizontal 1` so consumers can
+reject it when a full-edge ZDD is required. It accepts the same `n`, output path, optional
+`max_nodes`, and optional `--sapporo FILE` arguments as the full replay exporter.
 
 ## Independent builder
 

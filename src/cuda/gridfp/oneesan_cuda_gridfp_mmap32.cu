@@ -5,6 +5,7 @@
 #include <cstdlib>
 #include <cstring>
 #include <iostream>
+#include <stdexcept>
 #include <numeric>
 #include <vector>
 #include <cerrno>
@@ -236,8 +237,8 @@ __global__ void main_group_kernel(const Count* in,Code n,Count* out_main,Count* 
         case NR:case NL:{if(p==1){MateID t=msetpair(m,p,w==NR?RN:LN);Code j=rank_group(t,D_MAIN_W,D_MAIN_FIXED,D_MAIN_OCC,D_MAIN_DP);atomic_add_mod(out_main+j,c);}else{MateID t=mshrink(m,p);Code j=rank_group(t,D_BLOCK_W,D_BLOCK_FIXED,D_BLOCK_OCC,D_BLOCK_DP);atomic_add_mod(out_block+j,c);}break;}
         case RN:{MateID t=msetpair(m,p,NR);Code j=rank_group(t,D_MAIN_W,D_MAIN_FIXED,D_MAIN_OCC,D_MAIN_DP);atomic_add_mod(out_main+j,c);break;}
         case LN:{MateID t=msetpair(m,p,NL);Code j=rank_group(t,D_MAIN_W,D_MAIN_FIXED,D_MAIN_OCC,D_MAIN_DP);atomic_add_mod(out_main+j,c);break;}
-        case LL:{MateID t=msetpair(m,p,NN);int q=p-1,s=1;while(s){--q;auto v=mget(t,q);if(v==L)++s;else if(v==R)--s;}t=mset(t,q,L);if(p==1){Code j=rank_group(t,D_MAIN_W,D_MAIN_FIXED,D_MAIN_OCC,D_MAIN_DP);atomic_add_mod(out_main+j,c);}else{t=mshrink(t,p-1);Code j=rank_group(t,D_BLOCK_W,D_BLOCK_FIXED,D_BLOCK_OCC,D_BLOCK_DP);atomic_add_mod(out_block+j,c);}break;}
-        case RR:{MateID t=msetpair(m,p,NN);int q=p,s=1;while(s){++q;auto v=mget(t,q);if(v==L)--s;else if(v==R)++s;}t=mset(t,q,R);if(p==1){Code j=rank_group(t,D_MAIN_W,D_MAIN_FIXED,D_MAIN_OCC,D_MAIN_DP);atomic_add_mod(out_main+j,c);}else{t=mshrink(t,p-1);Code j=rank_group(t,D_BLOCK_W,D_BLOCK_FIXED,D_BLOCK_OCC,D_BLOCK_DP);atomic_add_mod(out_block+j,c);}break;}
+        case LL:{MateID t=msetpair(m,p,NN);int q=p-1,s=1;while(s){--q;if(q<0)break;auto v=mget(t,q);if(v==L)++s;else if(v==R)--s;}if(s)break;t=mset(t,q,L);if(p==1){Code j=rank_group(t,D_MAIN_W,D_MAIN_FIXED,D_MAIN_OCC,D_MAIN_DP);atomic_add_mod(out_main+j,c);}else{t=mshrink(t,p-1);Code j=rank_group(t,D_BLOCK_W,D_BLOCK_FIXED,D_BLOCK_OCC,D_BLOCK_DP);atomic_add_mod(out_block+j,c);}break;}
+        case RR:{MateID t=msetpair(m,p,NN);int q=p,s=1;while(s){++q;if(q>=D_MAIN_W)break;auto v=mget(t,q);if(v==L)--s;else if(v==R)++s;}if(s)break;t=mset(t,q,R);if(p==1){Code j=rank_group(t,D_MAIN_W,D_MAIN_FIXED,D_MAIN_OCC,D_MAIN_DP);atomic_add_mod(out_main+j,c);}else{t=mshrink(t,p-1);Code j=rank_group(t,D_BLOCK_W,D_BLOCK_FIXED,D_BLOCK_OCC,D_BLOCK_DP);atomic_add_mod(out_block+j,c);}break;}
         case RL:{MateID t=msetpair(m,p,NN);if(p==1){Code j=rank_group(t,D_MAIN_W,D_MAIN_FIXED,D_MAIN_OCC,D_MAIN_DP);atomic_add_mod(out_main+j,c);}else{t=mshrink(t,p-1);Code j=rank_group(t,D_BLOCK_W,D_BLOCK_FIXED,D_BLOCK_OCC,D_BLOCK_DP);atomic_add_mod(out_block+j,c);}break;}
         default:break;
         }
@@ -249,10 +250,20 @@ struct MappedCounts {
     void open_file(const std::string& fn,size_t count){
         path=fn; n=count; bytes=n*sizeof(Count);
         fd=::open(path.c_str(),O_RDWR|O_CREAT|O_TRUNC,0644);
-        if(fd<0){perror("open mmap file");std::exit(2);}
-        if(ftruncate(fd,(off_t)bytes)!=0){perror("ftruncate");std::exit(2);}
+        if(fd<0){
+            int e=errno;
+            throw std::runtime_error(std::string("open mmap file: ")+std::strerror(e));
+        }
+        auto fail_opened=[&](const char* what,int e){
+            ::close(fd); fd=-1;
+            ::unlink(path.c_str());
+            throw std::runtime_error(std::string(what)+": "+std::strerror(e));
+        };
+        if(ftruncate(fd,(off_t)bytes)!=0)fail_opened("ftruncate",errno);
+        int falloc_rc=posix_fallocate(fd,0,(off_t)bytes);
+        if(falloc_rc!=0)fail_opened("posix_fallocate",falloc_rc);
         void* q=mmap(nullptr,bytes,PROT_READ|PROT_WRITE,MAP_SHARED,fd,0);
-        if(q==MAP_FAILED){perror("mmap");std::exit(2);}
+        if(q==MAP_FAILED)fail_opened("mmap",errno);
         p=(Count*)q; madvise(p,bytes,MADV_RANDOM);
     }
     void close_file(){
@@ -263,7 +274,7 @@ struct MappedCounts {
     Count& operator[](size_t i){return p[i];}
 };
 
-static void drop_pages(Count* base,Code off,Code len){
+[[maybe_unused]] static void drop_pages(Count* base,Code off,Code len){
     if(!len)return; long ps=sysconf(_SC_PAGESIZE); uintptr_t a=(uintptr_t)(base+off), b=(uintptr_t)(base+off+len);
     uintptr_t aa=a&~(uintptr_t(ps-1)), bb=(b+ps-1)&~(uintptr_t(ps-1));
     madvise((void*)aa,bb-aa,MADV_DONTNEED);
@@ -278,7 +289,11 @@ static void scatter(Count* global,const std::vector<Interval>& iv,const std::vec
 static Code rank_full(MateID m,int width){Code r=0;int h=1;for(int pos=width-1;pos>=0;--pos){auto s=mget(m,pos);if(s>N)r+=H_DP[pos][h];if(s>R&&h>0)r+=H_DP[pos][h-1];if(s==R)--h;else if(s==L)++h;}return r;}
 
 int main(int argc,char**argv){
-    int n=argc>1?std::atoi(argv[1]):10; Count mod=argc>2?std::strtoull(argv[2],nullptr,10):2305843009213693951ULL;
+    int n=argc>1?std::atoi(argv[1]):10;
+    unsigned long long raw_mod=4294967291ULL;
+    if(argc>2){char*end=nullptr;errno=0;raw_mod=std::strtoull(argv[2],&end,10);if(errno==ERANGE||end==argv[2]||*end!='\0'||argv[2][0]=='-'){std::cerr<<"invalid modulus: "<<argv[2]<<"\n";return 1;}}
+    if(raw_mod<2||raw_mod>0xffffffffULL){std::cerr<<"32-bit backend modulus must be in [2, 4294967295], got "<<raw_mod<<"\n";return 1;}
+    Count mod=(Count)raw_mod;
     int W=n+1;if(n<2||W>MAXW){std::cerr<<"stream prototype supports n=2..27\n";return 1;}
     build_full_dp();ck(cudaMemcpyToSymbol(D_FULL_DP,H_DP,sizeof(H_DP)),"full dp");ck(cudaMemcpyToSymbol(D_MOD,&mod,sizeof(mod)),"mod");
     Code mainN=H_DP[W][1], blockN=H_DP[W-1][1];
@@ -286,7 +301,16 @@ int main(int argc,char**argv){
     std::string store_dir = argc>5 ? argv[5] : ".gridfp_store";
     std::filesystem::create_directories(store_dir);
     MappedCounts mainv,blockv;
-    mainv.open_file(store_dir+"/main.bin",mainN); blockv.open_file(store_dir+"/blocked.bin",blockN);
+    const std::string main_path=store_dir+"/main.bin", block_path=store_dir+"/blocked.bin";
+    try{
+        mainv.open_file(main_path,mainN);
+        blockv.open_file(block_path,blockN);
+    }catch(const std::exception& e){
+        mainv.close_file(); blockv.close_file();
+        ::unlink(main_path.c_str()); ::unlink(block_path.c_str());
+        std::cerr<<"external-store allocation failed: "<<e.what()<<"\n";
+        return 2;
+    }
     MateID init=MateID(R)<<(2*(W-1));mainv[rank_full(init,W)]=1;
     Count *dA=nullptr,*dB=nullptr,*dD=nullptr;Code capM=0,capD=0;
     std::vector<Count> hA,hB,hD;

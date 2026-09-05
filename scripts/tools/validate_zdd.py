@@ -54,36 +54,27 @@ def main() -> int:
     if root > 1 and root not in nodes:
         raise SystemExit(f"root node {root} not present")
 
-    # Validate ordering and reachability while computing exact cardinalities.
-    memo = {0: 0, 1: 1}
-    visiting = set()
-
-    def count(nid: int) -> int:
-        if nid in memo:
-            return memo[nid]
-        if nid not in nodes:
-            raise SystemExit(f"dangling node reference {nid}")
-        if nid in visiting:
-            raise SystemExit(f"cycle involving node {nid}")
-        visiting.add(nid)
-        level, low, high = nodes[nid]
+    # Validate ordering first. Strictly decreasing child levels make the graph
+    # acyclic, so cardinalities can be computed iteratively in increasing level
+    # order without depending on Python's recursion limit.
+    for nid, (level, low, high) in nodes.items():
         if not (1 <= level <= variables):
             raise SystemExit(f"node {nid}: bad level {level}")
         for child in (low, high):
-            if child > 1:
-                if child not in nodes:
-                    raise SystemExit(f"node {nid}: dangling child {child}")
-                child_level = nodes[child][0]
-                if child_level >= level:
-                    raise SystemExit(
-                        f"node {nid}: child {child} level {child_level} is not below parent level {level}"
-                    )
-        value = count(low) + count(high)
-        visiting.remove(nid)
-        memo[nid] = value
-        return value
+            if child <= 1:
+                continue
+            if child not in nodes:
+                raise SystemExit(f"node {nid}: dangling child {child}")
+            child_level = nodes[child][0]
+            if child_level >= level:
+                raise SystemExit(
+                    f"node {nid}: child {child} level {child_level} is not below parent level {level}"
+                )
 
-    exact = count(root)
+    memo = {0: 0, 1: 1}
+    for nid, (_, low, high) in sorted(nodes.items(), key=lambda item: item[1][0]):
+        memo[nid] = memo[low] + memo[high]
+    exact = memo[root]
 
     reachable = set()
     stack = [root]

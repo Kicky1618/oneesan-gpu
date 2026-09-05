@@ -33,7 +33,7 @@ To reconstruct the exact count with CRT instead of computing only one residue:
 ./scripts/run/local.sh 18 --exact
 ```
 
-The exact run is checkpointed under `work/b300_exact_n18/` and can be resumed with the same command. To verify the exact pipeline without running every CRT modulus:
+The exact run is checkpointed under `work/b300_exact_n18/` and can be resumed with the same command **only with the same solver binary**. Exact checkpoint format V3 records the binary SHA-256 and Git commit, adds a SHA-256 integrity checksum over the canonical checkpoint payload, rejects duplicate/unknown/missing JSON fields, and uses fsync + atomic rename before a residue is considered durable. Legacy V1/V2 checkpoints and checkpoints produced by a different binary are rejected. To verify the exact pipeline without running every CRT modulus:
 
 ```bash
 ./scripts/run/local.sh 18 --exact --max-runs 1
@@ -48,6 +48,21 @@ GRIDFP_VRAM_RESERVE_MIB=1536 \
 ```
 
 Larger `n` values require rapidly increasing state memory; the B300 x8 path below is the intended route for `n=27`.
+
+## Automatic GPU configuration (GROUPBATCH, n=20..27)
+
+Detect visible GPUs, check full P2P connectivity and memory capacity, benchmark
+configuration candidates, then launch the checkpointed exact CRT solver:
+
+```bash
+python3 scripts/run/autotune.py 27
+```
+
+The default n=20 benchmark is a proxy for larger problems, so the chosen settings
+are the best measured candidates rather than a guarantee of a global optimum.
+Use `--detect-only` for inventory, `--tune-only` to save settings without solving,
+or `--reuse` to reuse matching hardware/binary settings after memory validation.
+See [configuration search, limits, and examples](docs/autotune.md).
 
 ## B300 x8: exact n=27
 
@@ -79,22 +94,41 @@ ARCH=native ./scripts/run/b300x8-exact.sh 27
 
 This command automatically:
 
-1. builds `src/cuda/b300/oneesan_cuda_gridfp_b300_hbm32_forced2window_opt_batch.cu` if necessary;
+1. builds `src/cuda/b300/oneesan_cuda_gridfp_b300_hbm32_factorized_reverse2_row6crt20_batch.cu` if necessary;
 2. allocates/shards the authoritative state across 8 GPUs;
 3. evaluates the required near-`2^32` CRT moduli in one process;
 4. checkpoints each completed residue;
 5. reconstructs the exact integer once the CRT modulus is large enough.
 
-For `n=27`, the rigorous bound is `count <= 2^(n^2) = 2^729`. The current prime set therefore needs 23 near-32-bit primes, giving a 736-bit CRT modulus.
+For `n=27`, the solver uses a rigorous checkerboard-strip upper bound with row partition `[9, 9, 9]`. The bound has 633 bits, so 20 near-`2^32` primes are sufficient; their product has 640 bits.
 
 Checkpoint and final result files are written to:
 
 ```text
 work/b300_exact_n27/checkpoint.json
 work/b300_exact_n27/exact.txt
+work/b300_exact_n27/exact_manifest.json
 ```
 
-A stopped run can be resumed with the same command; completed residues are reused.
+A stopped run can be resumed with the same command; completed residues are reused. On successful
+completion, the runner writes both `exact.txt` and `exact_manifest.json`. The manifest contains
+the full CRT congruence list, checkerboard-strip bound provenance, solver binary SHA-256, exact
+checkpoint SHA-256, `exact.txt` SHA-256, optional build-provenance SHA-256, and its own SHA-256
+integrity checksum. New builds use `ONEESAN_BUILD_PROVENANCE_V2`: besides the recursive quoted-include
+source closure, n=27 row-6 builds record the exact rational certificate, CRT20 generator, verifier,
+and shared path-bound/prime source as auxiliary generation dependencies. Legacy V1 sidecars remain
+readable. The V3 exact-result verifier recomputes the checkerboard-strip bound with an implementation independent of the runner, checks
+each CRT modulus for 64-bit primality and coprimality, reconstructs CRT from scratch, and then
+checks the checkpoint and result-file hashes. With `--verify-sources`, a V2 row-6 provenance also
+requires the canonical four auxiliary-generation roles and reruns the exact-rational certificate
+check against the current generated CRT20 header. Verify it with:
+
+```bash
+./scripts/tools/verify_exact_result.py work/b300_exact_n27/exact_manifest.json \
+  --binary build/oneesan_cuda_gridfp_b300_hbm32_batch_n27 \
+  --verify-sources
+```
+
 
 To compute only one new residue as a smoke test:
 
@@ -136,17 +170,7 @@ Output:
 build/oneesan_cuda_gridfp_b300_hbm32_batch_n27
 ```
 
-Single-modulus binary:
-
-```bash
-N=27 ARCH=native ./scripts/build/b300-hbm32.sh
-```
-
-Output:
-
-```text
-build/oneesan_cuda_gridfp_b300_hbm32_n27
-```
+The same optimized batch binary is also used for one-residue runs; passing a single modulus avoids maintaining a separate slower n=27 execution path.
 
 `ARCH=native` is preferred when building directly on the target B300 node. An explicit architecture can still be supplied through `ARCH` when needed.
 
@@ -158,6 +182,8 @@ build/oneesan_cuda_gridfp_b300_hbm32_n27
 | `TARGET_MIB` | `16384` | requested scratch arena per GPU |
 | `MAX_WINDOW` | `14` | maximum transition window |
 | `GRIDFP_VRAM_RESERVE_MIB` | `8192` | HBM kept free after authoritative-state allocation |
+| `GRIDFP_BOUNDED_PREFIX_K` | `6` for `n=27` | initialize directly after six rows |
+| `GRIDFP_ROW6_LANES` | `4` | CUDA lanes cooperating on each row-6 initialized state |
 | `ARCH` | `native` | CUDA architecture passed to `nvcc` |
 | `ONEESAN_BUILD_DIR` | `./build` | build output directory |
 
@@ -186,8 +212,23 @@ TARGET_MIB=245760 ./scripts/run/b300x8-mmap.sh \
   /fast-local-storage/gridfp-n26
 ```
 
-For `n=27`, a single 64-bit-residue external state is roughly 3.88 TiB, so use local NVMe/RAID rather than a network filesystem.
+For `n=27`, the two 64-bit-residue external state files total roughly 3.79 TiB. The backend preallocates them with `posix_fallocate()` before computation so ENOSPC fails early. The multi-GPU mmap runner now uses crash-safe per-group undo journals and a durable completion bitmap by default, so rerunning the same command resumes from the interrupted transition window. `GRIDFP_FRESH=1` explicitly starts over; `GRIDFP_RESUME=0` is available only when benchmark speed is more important than crash recovery. Use local NVMe/RAID rather than a network filesystem and leave additional temporary space for in-flight undo journals.
 
+
+## Correctness audit
+
+Before a long record attempt or release, run the repository-wide local correctness gate:
+
+```bash
+./scripts/test/correctness.sh
+```
+
+It checks exact/CRT checkpoint safety, arbitrary-precision CPU golden values, ZDD validation,
+mmap persistence/corruption/crash-restart behavior, shell input hardening, formal-source hygiene,
+and (when `nvcc` is installed) the production Grid-FP partition invariant. On a real NVIDIA
+machine, `./scripts/test/mmap-fault-integration.sh` additionally injects crashes at all three
+durable mmap transaction boundaries and compares every resumed residue with an uninterrupted
+baseline.
 
 ## ZDD output
 

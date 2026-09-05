@@ -1,0 +1,32 @@
+name: correctness
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  reference-and-safety:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - name: Correctness audit
+        run: ./scripts/test/correctness.sh
+
+  sanitizers:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - name: ASan + UBSan
+        run: ./scripts/test/sanitizers.sh
+
+  formal:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: leanprover/lean-action@v1
+        with:
+          lake-package-directory: formal

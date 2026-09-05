@@ -1,4 +1,5 @@
 #include <cuda_runtime.h>
+#include "../../common/mmap_resume.hpp"
 #include <algorithm>
 #include <atomic>
 #include <chrono>
@@ -15,6 +16,8 @@
 #include <cstdlib>
 #include <cstring>
 #include <iostream>
+#include <limits>
+#include <stdexcept>
 #include <numeric>
 #include <vector>
 
@@ -240,8 +243,8 @@ __global__ void main_group_kernel(const Count* in,Code n,Count* out_main,Count* 
         case NR:case NL:{if(p==1){MateID t=msetpair(m,p,w==NR?RN:LN);Code j=rank_group(t,D_MAIN_W,D_MAIN_FIXED,D_MAIN_OCC,D_MAIN_DP);atomic_add_mod(out_main+j,c);}else{MateID t=mshrink(m,p);Code j=rank_group(t,D_BLOCK_W,D_BLOCK_FIXED,D_BLOCK_OCC,D_BLOCK_DP);atomic_add_mod(out_block+j,c);}break;}
         case RN:{MateID t=msetpair(m,p,NR);Code j=rank_group(t,D_MAIN_W,D_MAIN_FIXED,D_MAIN_OCC,D_MAIN_DP);atomic_add_mod(out_main+j,c);break;}
         case LN:{MateID t=msetpair(m,p,NL);Code j=rank_group(t,D_MAIN_W,D_MAIN_FIXED,D_MAIN_OCC,D_MAIN_DP);atomic_add_mod(out_main+j,c);break;}
-        case LL:{MateID t=msetpair(m,p,NN);int q=p-1,s=1;while(s){--q;auto v=mget(t,q);if(v==L)++s;else if(v==R)--s;}t=mset(t,q,L);if(p==1){Code j=rank_group(t,D_MAIN_W,D_MAIN_FIXED,D_MAIN_OCC,D_MAIN_DP);atomic_add_mod(out_main+j,c);}else{t=mshrink(t,p-1);Code j=rank_group(t,D_BLOCK_W,D_BLOCK_FIXED,D_BLOCK_OCC,D_BLOCK_DP);atomic_add_mod(out_block+j,c);}break;}
-        case RR:{MateID t=msetpair(m,p,NN);int q=p,s=1;while(s){++q;auto v=mget(t,q);if(v==L)--s;else if(v==R)++s;}t=mset(t,q,R);if(p==1){Code j=rank_group(t,D_MAIN_W,D_MAIN_FIXED,D_MAIN_OCC,D_MAIN_DP);atomic_add_mod(out_main+j,c);}else{t=mshrink(t,p-1);Code j=rank_group(t,D_BLOCK_W,D_BLOCK_FIXED,D_BLOCK_OCC,D_BLOCK_DP);atomic_add_mod(out_block+j,c);}break;}
+        case LL:{MateID t=msetpair(m,p,NN);int q=p-1,s=1;while(s){--q;if(q<0)break;auto v=mget(t,q);if(v==L)++s;else if(v==R)--s;}if(s)break;t=mset(t,q,L);if(p==1){Code j=rank_group(t,D_MAIN_W,D_MAIN_FIXED,D_MAIN_OCC,D_MAIN_DP);atomic_add_mod(out_main+j,c);}else{t=mshrink(t,p-1);Code j=rank_group(t,D_BLOCK_W,D_BLOCK_FIXED,D_BLOCK_OCC,D_BLOCK_DP);atomic_add_mod(out_block+j,c);}break;}
+        case RR:{MateID t=msetpair(m,p,NN);int q=p,s=1;while(s){++q;if(q>=D_MAIN_W)break;auto v=mget(t,q);if(v==L)--s;else if(v==R)++s;}if(s)break;t=mset(t,q,R);if(p==1){Code j=rank_group(t,D_MAIN_W,D_MAIN_FIXED,D_MAIN_OCC,D_MAIN_DP);atomic_add_mod(out_main+j,c);}else{t=mshrink(t,p-1);Code j=rank_group(t,D_BLOCK_W,D_BLOCK_FIXED,D_BLOCK_OCC,D_BLOCK_DP);atomic_add_mod(out_block+j,c);}break;}
         case RL:{MateID t=msetpair(m,p,NN);if(p==1){Code j=rank_group(t,D_MAIN_W,D_MAIN_FIXED,D_MAIN_OCC,D_MAIN_DP);atomic_add_mod(out_main+j,c);}else{t=mshrink(t,p-1);Code j=rank_group(t,D_BLOCK_W,D_BLOCK_FIXED,D_BLOCK_OCC,D_BLOCK_DP);atomic_add_mod(out_block+j,c);}break;}
         default:break;
         }
@@ -254,13 +257,33 @@ static Code rank_full(MateID m,int width){Code r=0;int h=1;for(int pos=width-1;p
 
 struct MappedCounts {
     int fd=-1; Count* p=nullptr; size_t n=0, bytes=0; std::string path;
-    void open_file(const std::string& fn,size_t count){
+    void open_file(const std::string& fn,size_t count,bool fresh){
         path=fn;n=count;bytes=n*sizeof(Count);
-        fd=::open(path.c_str(),O_RDWR|O_CREAT|O_TRUNC,0644);
-        if(fd<0){perror("open mmap file");std::exit(2);}
-        if(ftruncate(fd,(off_t)bytes)!=0){perror("ftruncate");std::exit(2);}
+        const int flags=fresh?(O_RDWR|O_CREAT|O_TRUNC):O_RDWR;
+        fd=::open(path.c_str(),flags,0644);
+        if(fd<0){
+            int e=errno;
+            throw std::runtime_error(std::string("open mmap file: ")+std::strerror(e));
+        }
+        auto fail_opened=[&](const char* what,int e,bool remove_file){
+            ::close(fd); fd=-1;
+            if(remove_file)::unlink(path.c_str());
+            throw std::runtime_error(std::string(what)+": "+std::strerror(e));
+        };
+        if(fresh){
+            if(ftruncate(fd,(off_t)bytes)!=0)fail_opened("ftruncate",errno,true);
+            int falloc_rc=posix_fallocate(fd,0,(off_t)bytes);
+            if(falloc_rc!=0)fail_opened("posix_fallocate",falloc_rc,true);
+        }else{
+            struct stat st{};
+            if(fstat(fd,&st)!=0)fail_opened("fstat",errno,false);
+            if(static_cast<uint64_t>(st.st_size)!=static_cast<uint64_t>(bytes)){
+                ::close(fd);fd=-1;
+                throw std::runtime_error("external-store file size mismatch for resume: "+path);
+            }
+        }
         void* q=mmap(nullptr,bytes,PROT_READ|PROT_WRITE,MAP_SHARED,fd,0);
-        if(q==MAP_FAILED){perror("mmap");std::exit(2);}
+        if(q==MAP_FAILED)fail_opened("mmap",errno,fresh);
         p=(Count*)q;
         madvise(p,bytes,MADV_RANDOM);
     }
@@ -277,6 +300,234 @@ static void gather_raw(const Count* global,const std::vector<Interval>& iv,std::
 }
 static void scatter_raw(Count* global,const std::vector<Interval>& iv,const std::vector<Count>& local){
     for(auto const& x:iv)std::memcpy(global+x.global,local.data()+x.local,size_t(x.len)*sizeof(Count));
+}
+
+static unsigned long long parse_u64_arg(const char* text,const char* name){
+    if(!text||!*text||text[0]=='-')throw std::invalid_argument(std::string("invalid ")+name+": "+(text?text:""));
+    char* end=nullptr;errno=0;
+    unsigned long long v=std::strtoull(text,&end,10);
+    if(errno==ERANGE||end==text||*end!='\0')throw std::invalid_argument(std::string("invalid ")+name+": "+text);
+    return v;
+}
+
+static int parse_int_arg(const char* text,const char* name){
+    const auto v=parse_u64_arg(text,name);
+    if(v>static_cast<unsigned long long>(std::numeric_limits<int>::max()))
+        throw std::invalid_argument(std::string(name)+" is too large: "+text);
+    return static_cast<int>(v);
+}
+
+static bool env_flag(const char* name,bool default_value){
+    const char* v=std::getenv(name);
+    if(!v)return default_value;
+    if(std::strcmp(v,"1")==0||std::strcmp(v,"true")==0||std::strcmp(v,"yes")==0)return true;
+    if(std::strcmp(v,"0")==0||std::strcmp(v,"false")==0||std::strcmp(v,"no")==0)return false;
+    throw std::runtime_error(std::string(name)+" must be one of 0/1/false/true/no/yes");
+}
+
+static void maybe_fault_inject(uint32_t group,const char* phase){
+    const char* gp=std::getenv("GRIDFP_FAULT_GROUP");
+    const char* pp=std::getenv("GRIDFP_FAULT_PHASE");
+    if(!gp||!pp)return;
+    char* end=nullptr;errno=0;
+    unsigned long long want=std::strtoull(gp,&end,10);
+    if(errno==ERANGE||end==gp||*end!='\0'||want>0xffffffffULL)return;
+    if(static_cast<uint32_t>(want)!=group||std::strcmp(pp,phase)!=0)return;
+    std::cerr<<"FAULT_INJECT group="<<group<<" phase="<<phase<<" exit=86\n"<<std::flush;
+    ::_exit(86);
+}
+
+struct ResumeCoordinator {
+    using Checkpoint=oneesan::mmap_resume::Checkpoint;
+    bool enabled=false;
+    int n=0;
+    std::filesystem::path store_dir, checkpoint_path, undo_dir;
+    Checkpoint cp;
+    bool has_checkpoint=false;
+    std::mutex mu;
+
+    ResumeCoordinator()=default;
+    ResumeCoordinator(bool use_resume,int n_,const std::filesystem::path& store)
+        :enabled(use_resume),n(n_),store_dir(store),checkpoint_path(store/"checkpoint.state"),undo_dir(store/"undo"){}
+
+    bool checkpoint_exists()const{return enabled&&std::filesystem::exists(checkpoint_path);}
+
+    void load(){
+        if(!checkpoint_exists())return;
+        cp=oneesan::mmap_resume::load_checkpoint(checkpoint_path);
+        has_checkpoint=true;
+    }
+
+    void validate_identity(Count mod,int target_mib,int max_window,uint64_t fingerprint,Code mainN,Code blockN)const{
+        if(!has_checkpoint)return;
+        oneesan::mmap_resume::validate_checkpoint_identity(
+            cp,n,static_cast<uint64_t>(mod),target_mib,max_window,fingerprint,
+            static_cast<uint64_t>(mainN),static_cast<uint64_t>(blockN));
+    }
+
+    void validate_position(int W)const{
+        if(!has_checkpoint)return;
+        if(cp.row<0||cp.row>=W)throw std::runtime_error("checkpoint row outside grid");
+        if(cp.p_hi<1||cp.p_hi>=W||cp.p_lo<1||cp.p_lo>cp.p_hi)
+            throw std::runtime_error("checkpoint window outside valid p range");
+        if(cp.groups==0)throw std::runtime_error("checkpoint has zero groups");
+    }
+
+    void begin_window(int row,const WindowPlan& wp,uint32_t groups,Count mod,int target_mib,int max_window,
+                      uint64_t fingerprint,Code mainN,Code blockN){
+        if(!enabled)return;
+        std::lock_guard<std::mutex> lock(mu);
+        if(has_checkpoint&&cp.row==row&&cp.p_hi==wp.p_hi&&cp.p_lo==wp.p_lo&&cp.groups==groups)return;
+        if(has_checkpoint&&!cp.complete&&cp.groups!=0&&!cp.all_done()){
+            throw std::runtime_error("attempted to advance past an incomplete mmap checkpoint window");
+        }
+        cp={};
+        cp.n=n;
+        cp.modulus=static_cast<uint64_t>(mod);
+        cp.target_mib=target_mib;
+        cp.max_window=max_window;
+        cp.executable_fingerprint=fingerprint;
+        cp.main_count=static_cast<uint64_t>(mainN);
+        cp.block_count=static_cast<uint64_t>(blockN);
+        cp.row=row;
+        cp.p_hi=wp.p_hi;
+        cp.p_lo=wp.p_lo;
+        cp.groups=groups;
+        cp.done.assign((groups+7)/8,0);
+        cp.complete=false;
+        oneesan::mmap_resume::save_checkpoint_atomic(checkpoint_path,cp);
+        has_checkpoint=true;
+    }
+
+    bool done(uint32_t g){
+        if(!enabled)return false;
+        std::lock_guard<std::mutex> lock(mu);
+        return cp.is_done(g);
+    }
+
+    std::filesystem::path journal_path(uint32_t g)const{
+        return oneesan::mmap_resume::journal_name(undo_dir,cp.row,cp.p_hi,cp.p_lo,g);
+    }
+
+    void prepare_journal(uint32_t g,Code main_count,Code block_count,
+                         const std::vector<Count>& main_data,const std::vector<Count>& block_data){
+        if(!enabled)return;
+        const auto h=oneesan::mmap_resume::make_journal_header(
+            n,cp.row,cp.p_hi,cp.p_lo,g,static_cast<uint64_t>(main_count),static_cast<uint64_t>(block_count));
+        oneesan::mmap_resume::write_journal_atomic(journal_path(g),h,
+            main_data.data(),static_cast<size_t>(main_count),
+            block_data.data(),static_cast<size_t>(block_count));
+    }
+
+    void mark_done(uint32_t g){
+        if(!enabled)return;
+        std::lock_guard<std::mutex> lock(mu);
+        if(cp.is_done(g))return;
+        cp.mark_done(g);
+        oneesan::mmap_resume::save_checkpoint_atomic(checkpoint_path,cp);
+    }
+
+    void commit_group(uint32_t g,Count* main_base,const std::vector<Interval>& mi,
+                      Count* block_base,const std::vector<Interval>& di){
+        if(!enabled)return;
+        oneesan::mmap_resume::sync_intervals(main_base,mi);
+        oneesan::mmap_resume::sync_intervals(block_base,di);
+        maybe_fault_inject(g,"scatter");
+        mark_done(g);
+        maybe_fault_inject(g,"commit");
+        oneesan::mmap_resume::durable_unlink(journal_path(g));
+    }
+
+    void commit_empty(uint32_t g){
+        if(!enabled)return;
+        mark_done(g);
+    }
+
+    void recover_group(uint32_t g,int W,const WindowPlan& wp,Count* main_base,Count* block_base){
+        if(!enabled||done(g)){
+            if(enabled){
+                const auto path=journal_path(g);
+                if(std::filesystem::exists(path))oneesan::mmap_resume::durable_unlink(path);
+            }
+            return;
+        }
+        const auto path=journal_path(g);
+        if(!std::filesystem::exists(path))return;
+        uint32_t mf,mo,bf,bo;
+        window_masks(W,wp.p_hi,wp.p_lo,wp.fixed_pos,g,mf,mo,bf,bo);
+        GroupSpec ms=make_spec(W,mf,mo),ds=make_spec(W-1,bf,bo);
+        auto mi=make_intervals(ms),di=make_intervals(ds);
+        const auto expected=oneesan::mmap_resume::make_journal_header(
+            n,cp.row,cp.p_hi,cp.p_lo,g,static_cast<uint64_t>(ms.size),static_cast<uint64_t>(ds.size));
+        std::cerr<<"recovering incomplete group g="<<g<<" from "<<path<<"\n";
+        oneesan::mmap_resume::restore_journal(path,expected,main_base,mi,block_base,di);
+        oneesan::mmap_resume::durable_unlink(path);
+    }
+
+    void cleanup_temps(){
+        if(!enabled||!std::filesystem::exists(undo_dir))return;
+        for(const auto& e:std::filesystem::directory_iterator(undo_dir)){
+            if(!e.is_regular_file())continue;
+            const auto name=e.path().filename().string();
+            if(name.size()>=4&&name.substr(name.size()-4)==".tmp"){
+                ::unlink(e.path().c_str());
+            }
+        }
+        oneesan::mmap_resume::fsync_directory(undo_dir);
+    }
+
+    void finish(){
+        if(!enabled)return;
+        std::lock_guard<std::mutex> lock(mu);
+        if(cp.groups!=0&&!cp.all_done())throw std::runtime_error("cannot mark mmap run complete with unfinished groups");
+        cp.complete=true;
+        oneesan::mmap_resume::save_checkpoint_atomic(checkpoint_path,cp);
+    }
+};
+
+static int partition_selftest(){
+    build_full_dp();
+    uint64_t cases=0,groups_checked=0;
+    for(int W=3;W<=10;++W){
+        for(int p_hi=W-1;p_hi>=1;--p_hi){
+            for(int p_lo=1;p_lo<=p_hi;++p_lo){
+                const auto cand=window_candidates(W,p_hi,p_lo);
+                for(size_t k=0;k<=cand.size();++k){
+                    std::vector<int> fp(cand.begin(),cand.begin()+static_cast<std::ptrdiff_t>(k));
+                    if(k>=31)throw std::runtime_error("partition selftest group-bit overflow");
+                    const uint32_t ng=1u<<k;
+                    std::vector<int> main_owner(static_cast<size_t>(H_DP[W][1]),-1);
+                    std::vector<int> block_owner(static_cast<size_t>(H_DP[W-1][1]),-1);
+                    for(uint32_t g=0;g<ng;++g){
+                        uint32_t mf,mo,bf,bo;
+                        window_masks(W,p_hi,p_lo,fp,g,mf,mo,bf,bo);
+                        const auto ms=make_spec(W,mf,mo),ds=make_spec(W-1,bf,bo);
+                        const auto mi=make_intervals(ms),di=make_intervals(ds);
+                        auto mark=[&](std::vector<int>& owner,const std::vector<Interval>& iv,const char* which){
+                            for(const auto& x:iv){
+                                for(Code j=0;j<x.len;++j){
+                                    const size_t at=static_cast<size_t>(x.global+j);
+                                    if(at>=owner.size())throw std::runtime_error(std::string("partition interval out of range: ")+which);
+                                    if(owner[at]!=-1)throw std::runtime_error(std::string("partition overlap: ")+which);
+                                    owner[at]=static_cast<int>(g);
+                                }
+                            }
+                        };
+                        mark(main_owner,mi,"main");
+                        mark(block_owner,di,"blocked");
+                        ++groups_checked;
+                    }
+                    if(std::find(main_owner.begin(),main_owner.end(),-1)!=main_owner.end())
+                        throw std::runtime_error("partition gap: main");
+                    if(std::find(block_owner.begin(),block_owner.end(),-1)!=block_owner.end())
+                        throw std::runtime_error("partition gap: blocked");
+                    ++cases;
+                }
+            }
+        }
+    }
+    std::cout<<"gridfp partition selftest: PASS cases="<<cases<<" groups="<<groups_checked<<"\n";
+    return 0;
 }
 
 struct DeviceCtx {
@@ -325,13 +576,13 @@ struct DeviceCtx {
 static void process_group(DeviceCtx& c,
                           int W,const WindowPlan& wp,int g,
                           Count* mainv,Count* blockv,
-                          int threads){
+                          int threads,ResumeCoordinator& resume){
     auto t0=std::chrono::steady_clock::now();
     ck(cudaSetDevice(c.dev),"cudaSetDevice worker");
     uint32_t mf,mo,bf,bo;
     window_masks(W,wp.p_hi,wp.p_lo,wp.fixed_pos,(uint32_t)g,mf,mo,bf,bo);
     GroupSpec ms=make_spec(W,mf,mo), ds=make_spec(W-1,bf,bo);
-    if(!ms.size && !ds.size)return;
+    if(!ms.size && !ds.size){resume.commit_empty(static_cast<uint32_t>(g));return;}
     auto mi=make_intervals(ms), di=make_intervals(ds);
     c.maxGM=std::max(c.maxGM,ms.size);
     c.maxGD=std::max(c.maxGD,ds.size);
@@ -342,6 +593,8 @@ static void process_group(DeviceCtx& c,
     // gather/scatter by different GPU workers touches disjoint external ranges.
     gather_raw(mainv,mi,c.hM);
     gather_raw(blockv,di,c.hD);
+    resume.prepare_journal(static_cast<uint32_t>(g),ms.size,ds.size,c.hM,c.hD);
+    maybe_fault_inject(static_cast<uint32_t>(g),"journal");
     c.transferred += double(ms.size+ds.size)*sizeof(Count);
     if(ms.size)ck(cudaMemcpy(c.dA,c.hM.data(),size_t(ms.size)*sizeof(Count),cudaMemcpyHostToDevice),"H2D main");
     if(ds.size)ck(cudaMemcpy(c.dD,c.hD.data(),size_t(ds.size)*sizeof(Count),cudaMemcpyHostToDevice),"H2D block");
@@ -373,17 +626,30 @@ static void process_group(DeviceCtx& c,
     c.transferred += double(ms.size+ds.size)*sizeof(Count);
     scatter_raw(mainv,mi,c.hM);
     scatter_raw(blockv,di,c.hD);
+    resume.commit_group(static_cast<uint32_t>(g),mainv,mi,blockv,di);
     c.groups_done += 1;
     c.state_slots_done += static_cast<unsigned long long>(ms.size + ds.size);
     c.active_s += std::chrono::duration<double>(std::chrono::steady_clock::now()-t0).count();
 }
 
 int main(int argc,char**argv){
-    int n=argc>1?std::atoi(argv[1]):10;
-    Count mod=argc>2?std::strtoull(argv[2],nullptr,10):2305843009213693951ULL;
-    int target_mib=argc>3?std::atoi(argv[3]):256;      // per GPU
-    int max_window=argc>4?std::atoi(argv[4]):(n+1-1);
-    int requested_gpus=argc>5?std::atoi(argv[5]):0;   // 0 = all visible GPUs
+    if(const char* selftest=std::getenv("GRIDFP_PARTITION_SELFTEST")){
+        if(std::strcmp(selftest,"1")==0){
+            try{return partition_selftest();}
+            catch(const std::exception&e){std::cerr<<"partition selftest failed: "<<e.what()<<"\n";return 7;}
+        }
+    }
+    int n=10,target_mib=256,max_window=0,requested_gpus=0;
+    Count mod=2305843009213693951ULL;
+    try{
+        if(argc>1)n=parse_int_arg(argv[1],"n");
+        if(argc>2)mod=static_cast<Count>(parse_u64_arg(argv[2],"modulus"));
+        if(argc>3)target_mib=parse_int_arg(argv[3],"target_mib");
+        max_window=argc>4?parse_int_arg(argv[4],"max_window"):n;
+        if(argc>5)requested_gpus=parse_int_arg(argv[5],"gpu_count");
+    }catch(const std::exception&e){std::cerr<<e.what()<<"\n";return 1;}
+    if(mod<2){std::cerr<<"modulus must be >= 2\n";return 1;}
+    if(target_mib<1||max_window<1){std::cerr<<"target_mib and max_window must be positive\n";return 1;}
     int W=n+1;
     if(n<2||W>MAXW){std::cerr<<"multi GPU solver supports n=2..27\n";return 1;}
     build_full_dp();
@@ -418,17 +684,62 @@ int main(int argc,char**argv){
     Code mainN=H_DP[W][1], blockN=H_DP[W-1][1];
     std::string store_dir=argc>6?argv[6]:".gridfp_multigpu_store";
     std::filesystem::create_directories(store_dir);
+    const bool resume_enabled=env_flag("GRIDFP_RESUME",true);
+    const bool force_fresh=env_flag("GRIDFP_FRESH",false);
+    oneesan::mmap_resume::DirectoryLock store_lock;
+    try{store_lock.acquire(store_dir);}catch(const std::exception&e){std::cerr<<e.what()<<"\n";return 2;}
+    ResumeCoordinator resume(resume_enabled,n,store_dir);
+    if(force_fresh){
+        std::error_code ec;
+        std::filesystem::remove(resume.checkpoint_path,ec);
+        std::filesystem::remove_all(resume.undo_dir,ec);
+        oneesan::mmap_resume::fsync_directory(store_dir);
+    }else if(!resume_enabled&&std::filesystem::exists(resume.checkpoint_path)){
+        std::cerr<<"checkpoint exists but GRIDFP_RESUME=0; set GRIDFP_FRESH=1 to discard it safely\n";
+        return 2;
+    }
+    const uint64_t executable_fingerprint=resume_enabled?oneesan::mmap_resume::self_fingerprint():0;
+    try{resume.load();resume.validate_identity(mod,target_mib,max_window,executable_fingerprint,mainN,blockN);resume.validate_position(W);resume.cleanup_temps();}
+    catch(const std::exception&e){std::cerr<<"resume checkpoint rejected: "<<e.what()<<"\n";return 2;}
+    const bool resuming=resume.has_checkpoint;
     MappedCounts mainv,blockv;
-    mainv.open_file(store_dir+"/main.bin",mainN);
-    blockv.open_file(store_dir+"/blocked.bin",blockN);
-    MateID init=MateID(R)<<(2*(W-1)); mainv[rank_full(init,W)]=1;
+    const std::string main_path=store_dir+"/main.bin", block_path=store_dir+"/blocked.bin";
+    try{
+        mainv.open_file(main_path,mainN,!resuming);
+        blockv.open_file(block_path,blockN,!resuming);
+    }catch(const std::exception& e){
+        mainv.close_file(); blockv.close_file();
+        if(!resuming){::unlink(main_path.c_str());::unlink(block_path.c_str());}
+        std::cerr<<"external-store allocation failed: "<<e.what()<<"\n";
+        return 2;
+    }
+    MateID init=MateID(R)<<(2*(W-1));
+    if(!resuming){
+        const Code init_rank=rank_full(init,W);
+        mainv[init_rank]=1;
+        std::vector<Interval> init_iv{{init_rank,0,1}};
+        oneesan::mmap_resume::sync_intervals(mainv.p,init_iv);
+    }else{
+        std::cerr<<"resuming external store at row="<<resume.cp.row+1<<" p_hi="<<resume.cp.p_hi
+                 <<" complete="<<resume.cp.complete<<"\n";
+    }
     int threads=256;
     size_t target_bytes=size_t(std::max(1,target_mib))<<20;
     int total_windows=0,max_groups=0,max_window_len=0;
+    uint64_t max_journal_reserve_bytes=0;
     auto wall0=std::chrono::steady_clock::now();
 
-    for(int row=0;row<W;++row){
-        int p_hi=W-1;
+    if(resuming&&resume.cp.complete){
+        const Count ans=mainv[rank_full(MateID(R),W)];
+        std::cout<<"backend=gridfp-multigpu-mmap n="<<n<<" residue="<<ans<<" modulus="<<mod
+                 <<" gpus="<<ngpu<<" resumed_complete=1 store_dir="<<store_dir<<"\n";
+        for(auto& c:ctx)c.destroy();
+        return 0;
+    }
+
+    const int start_row=resuming?resume.cp.row:0;
+    for(int row=start_row;row<W;++row){
+        int p_hi=(resuming&&row==start_row)?resume.cp.p_hi:W-1;
         while(p_hi>=1){
             WindowPlan wp; bool found=false;
             for(int p_lo=std::max(1,p_hi-max_window+1);p_lo<=p_hi;++p_lo){
@@ -445,37 +756,90 @@ int main(int argc,char**argv){
             int k=wp.fixed_pos.size();
             if(k>=31){std::cerr<<"too many group bits\n";return 4;}
             int ng=1<<k;
+            try{
+                resume.begin_window(row,wp,static_cast<uint32_t>(ng),mod,target_mib,max_window,
+                                    executable_fingerprint,mainN,blockN);
+                for(int g=0;g<ng;++g)resume.recover_group(static_cast<uint32_t>(g),W,wp,mainv.p,blockv.p);
+            }catch(const std::exception&e){
+                std::cerr<<"resume recovery failed: "<<e.what()<<"\n";
+                return 5;
+            }
             ++total_windows; max_groups=std::max(max_groups,ng);
             max_window_len=std::max(max_window_len,wp.p_hi-wp.p_lo+1);
-            struct JobOrder { int g; Code work; };
+            struct JobOrder { int g; Code work; Code journal_slots; };
             std::vector<JobOrder> jobs; jobs.reserve(ng);
             for(int g=0;g<ng;++g){
                 uint32_t mf,mo,bf,bo;
                 window_masks(W,wp.p_hi,wp.p_lo,wp.fixed_pos,(uint32_t)g,mf,mo,bf,bo);
                 GroupSpec ms=make_spec(W,mf,mo), ds=make_spec(W-1,bf,bo);
-                jobs.push_back({g,2*ms.size+ds.size}); // two main buffers + deferred work
+                jobs.push_back({g,2*ms.size+ds.size,ms.size+ds.size}); // VRAM work and undo payload
+            }
+            if(resume.enabled){
+                std::vector<Code> journal_sizes;journal_sizes.reserve(jobs.size());
+                for(const auto& j:jobs)if(!resume.done(static_cast<uint32_t>(j.g)))journal_sizes.push_back(j.journal_slots);
+                std::sort(journal_sizes.begin(),journal_sizes.end(),std::greater<Code>());
+                uint64_t need=0;
+                for(size_t i=0;i<std::min<size_t>(static_cast<size_t>(ngpu),journal_sizes.size());++i)
+                    need+=static_cast<uint64_t>(journal_sizes[i])*sizeof(Count);
+                max_journal_reserve_bytes=std::max(max_journal_reserve_bytes,need);
+                try{
+                    const auto avail=std::filesystem::space(store_dir).available;
+                    constexpr uint64_t kSafety=64ULL<<20;
+                    if(avail<need+kSafety){
+                        std::cerr<<"insufficient space for crash-safe journals before row="<<row+1
+                                 <<" p="<<wp.p_hi<<".."<<wp.p_lo<<": need="<<need
+                                 <<" available="<<avail<<" (plus 64 MiB safety)\n";
+                        return 6;
+                    }
+                }catch(const std::exception&e){
+                    std::cerr<<"cannot query journal filesystem capacity: "<<e.what()<<"\n";
+                    return 6;
+                }
             }
             std::sort(jobs.begin(),jobs.end(),[](auto const& a,auto const& b){return a.work>b.work;});
             std::vector<int> order(ng); for(int q=0;q<ng;++q)order[q]=jobs[q].g;
 
             std::atomic<int> next{0};
+            std::atomic<bool> worker_failed{false};
+            std::mutex worker_error_mu;
+            std::exception_ptr worker_error;
             std::vector<std::thread> workers;
             workers.reserve(ngpu);
             for(int d=0;d<ngpu;++d){
                 workers.emplace_back([&,d]{
-                    for(;;){
-                        int q=next.fetch_add(1,std::memory_order_relaxed);
-                        if(q>=ng)break;
-                        process_group(ctx[d],W,wp,order[q],mainv.p,blockv.p,threads);
+                    try{
+                        for(;;){
+                            if(worker_failed.load(std::memory_order_relaxed))break;
+                            int q=next.fetch_add(1,std::memory_order_relaxed);
+                            if(q>=ng)break;
+                            const int g=order[q];
+                            if(resume.done(static_cast<uint32_t>(g)))continue;
+                            process_group(ctx[d],W,wp,g,mainv.p,blockv.p,threads,resume);
+                        }
+                    }catch(...){
+                        worker_failed.store(true,std::memory_order_relaxed);
+                        std::lock_guard<std::mutex> lock(worker_error_mu);
+                        if(!worker_error)worker_error=std::current_exception();
                     }
                 });
             }
             for(auto& th:workers)th.join();
+            if(worker_error){
+                try{std::rethrow_exception(worker_error);}
+                catch(const std::exception&e){std::cerr<<"group worker failed: "<<e.what()<<"\n";}
+                return 5;
+            }
+            if(resume.enabled&&!resume.cp.all_done()){
+                std::cerr<<"internal error: window finished with incomplete checkpoint bitmap\n";
+                return 5;
+            }
             p_hi=wp.p_lo-1;
         }
         std::cerr<<"row "<<row+1<<"/"<<W<<" windows="<<total_windows<<"\n";
     }
 
+    try{resume.finish();}
+    catch(const std::exception&e){std::cerr<<"failed to finalize resume checkpoint: "<<e.what()<<"\n";return 5;}
     double wall_s=std::chrono::duration<double>(std::chrono::steady_clock::now()-wall0).count();
     Count ans=mainv[rank_full(MateID(R),W)];
     Code maxGM=0,maxGD=0;size_t maxIntervals=0;double transferred=0,active_sum=0,active_max=0;
@@ -500,6 +864,8 @@ int main(int argc,char**argv){
              <<" target_mib_per_gpu="<<target_mib<<" max_window_cfg="<<max_window
              <<" transfer_gib="<<transferred/(1ull<<30)
              <<" worker_active_sum_s="<<active_sum<<" worker_active_max_s="<<active_max
-             <<" wall_s="<<wall_s<<" store_dir="<<store_dir<<"\n";
+             <<" max_journal_reserve_bytes="<<max_journal_reserve_bytes
+             <<" wall_s="<<wall_s<<" resume="<<(resume_enabled?1:0)<<" resumed="<<(resuming?1:0)
+             <<" store_dir="<<store_dir<<"\n";
     for(auto& c:ctx)c.destroy();
 }

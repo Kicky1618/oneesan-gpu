@@ -236,8 +236,8 @@ __global__ void main_group_kernel(const Count* in,Code n,Count* out_main,Count* 
         case NR:case NL:{if(p==1){MateID t=msetpair(m,p,w==NR?RN:LN);Code j=rank_group(t,D_MAIN_W,D_MAIN_FIXED,D_MAIN_OCC,D_MAIN_DP);atomic_add_mod(out_main+j,c);}else{MateID t=mshrink(m,p);Code j=rank_group(t,D_BLOCK_W,D_BLOCK_FIXED,D_BLOCK_OCC,D_BLOCK_DP);atomic_add_mod(out_block+j,c);}break;}
         case RN:{MateID t=msetpair(m,p,NR);Code j=rank_group(t,D_MAIN_W,D_MAIN_FIXED,D_MAIN_OCC,D_MAIN_DP);atomic_add_mod(out_main+j,c);break;}
         case LN:{MateID t=msetpair(m,p,NL);Code j=rank_group(t,D_MAIN_W,D_MAIN_FIXED,D_MAIN_OCC,D_MAIN_DP);atomic_add_mod(out_main+j,c);break;}
-        case LL:{MateID t=msetpair(m,p,NN);int q=p-1,s=1;while(s){--q;auto v=mget(t,q);if(v==L)++s;else if(v==R)--s;}t=mset(t,q,L);if(p==1){Code j=rank_group(t,D_MAIN_W,D_MAIN_FIXED,D_MAIN_OCC,D_MAIN_DP);atomic_add_mod(out_main+j,c);}else{t=mshrink(t,p-1);Code j=rank_group(t,D_BLOCK_W,D_BLOCK_FIXED,D_BLOCK_OCC,D_BLOCK_DP);atomic_add_mod(out_block+j,c);}break;}
-        case RR:{MateID t=msetpair(m,p,NN);int q=p,s=1;while(s){++q;auto v=mget(t,q);if(v==L)--s;else if(v==R)++s;}t=mset(t,q,R);if(p==1){Code j=rank_group(t,D_MAIN_W,D_MAIN_FIXED,D_MAIN_OCC,D_MAIN_DP);atomic_add_mod(out_main+j,c);}else{t=mshrink(t,p-1);Code j=rank_group(t,D_BLOCK_W,D_BLOCK_FIXED,D_BLOCK_OCC,D_BLOCK_DP);atomic_add_mod(out_block+j,c);}break;}
+        case LL:{MateID t=msetpair(m,p,NN);int q=p-1,s=1;while(s){--q;if(q<0)break;auto v=mget(t,q);if(v==L)++s;else if(v==R)--s;}if(s)break;t=mset(t,q,L);if(p==1){Code j=rank_group(t,D_MAIN_W,D_MAIN_FIXED,D_MAIN_OCC,D_MAIN_DP);atomic_add_mod(out_main+j,c);}else{t=mshrink(t,p-1);Code j=rank_group(t,D_BLOCK_W,D_BLOCK_FIXED,D_BLOCK_OCC,D_BLOCK_DP);atomic_add_mod(out_block+j,c);}break;}
+        case RR:{MateID t=msetpair(m,p,NN);int q=p,s=1;while(s){++q;if(q>=D_MAIN_W)break;auto v=mget(t,q);if(v==L)--s;else if(v==R)++s;}if(s)break;t=mset(t,q,R);if(p==1){Code j=rank_group(t,D_MAIN_W,D_MAIN_FIXED,D_MAIN_OCC,D_MAIN_DP);atomic_add_mod(out_main+j,c);}else{t=mshrink(t,p-1);Code j=rank_group(t,D_BLOCK_W,D_BLOCK_FIXED,D_BLOCK_OCC,D_BLOCK_DP);atomic_add_mod(out_block+j,c);}break;}
         case RL:{MateID t=msetpair(m,p,NN);if(p==1){Code j=rank_group(t,D_MAIN_W,D_MAIN_FIXED,D_MAIN_OCC,D_MAIN_DP);atomic_add_mod(out_main+j,c);}else{t=mshrink(t,p-1);Code j=rank_group(t,D_BLOCK_W,D_BLOCK_FIXED,D_BLOCK_OCC,D_BLOCK_DP);atomic_add_mod(out_block+j,c);}break;}
         default:break;
         }
@@ -258,7 +258,7 @@ struct MappedCounts {
     Count& operator[](size_t i){return p[i];}
 };
 
-static void drop_pages(Count* base,Code off,Code len){
+[[maybe_unused]] static void drop_pages(Count* base,Code off,Code len){
     if(!len)return; long ps=sysconf(_SC_PAGESIZE); uintptr_t a=(uintptr_t)(base+off), b=(uintptr_t)(base+off+len);
     uintptr_t aa=a&~(uintptr_t(ps-1)), bb=(b+ps-1)&~(uintptr_t(ps-1));
     madvise((void*)aa,bb-aa,MADV_DONTNEED);
@@ -275,7 +275,11 @@ static void scatter(Count* global,const std::vector<Interval>& iv,const std::vec
 static Code rank_full(MateID m,int width){Code r=0;int h=1;for(int pos=width-1;pos>=0;--pos){auto s=mget(m,pos);if(s>N)r+=H_DP[pos][h];if(s>R&&h>0)r+=H_DP[pos][h-1];if(s==R)--h;else if(s==L)++h;}return r;}
 
 int main(int argc,char**argv){
-    int n=argc>1?std::atoi(argv[1]):10; Count mod=argc>2?std::strtoull(argv[2],nullptr,10):2305843009213693951ULL;
+    int n=argc>1?std::atoi(argv[1]):10;
+    unsigned long long raw_mod=4294967291ULL;
+    if(argc>2){char*end=nullptr;errno=0;raw_mod=std::strtoull(argv[2],&end,10);if(errno==ERANGE||end==argv[2]||*end!='\0'||argv[2][0]=='-'){std::cerr<<"invalid modulus: "<<argv[2]<<"\n";return 1;}}
+    if(raw_mod<2||raw_mod>0xffffffffULL){std::cerr<<"32-bit backend modulus must be in [2, 4294967295], got "<<raw_mod<<"\n";return 1;}
+    Count mod=(Count)raw_mod;
     int W=n+1;if(n<2||W>MAXW){std::cerr<<"stream prototype supports n=2..27\n";return 1;}
     build_full_dp();ck(cudaMemcpyToSymbol(D_FULL_DP,H_DP,sizeof(H_DP)),"full dp");ck(cudaMemcpyToSymbol(D_MOD,&mod,sizeof(mod)),"mod");
     Code mainN=H_DP[W][1], blockN=H_DP[W-1][1];

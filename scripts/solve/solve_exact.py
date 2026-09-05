@@ -37,11 +37,16 @@ def main() -> None:
             capture_output=True,
             check=True,
         )
-        m = re.search(r"residue=(\d+).*gpu_ms=([0-9.]+)", proc.stdout)
+        m = re.search(r"residue=(\d+).*?(?:modulus|mod)=(\d+).*?gpu_ms=([0-9.]+)", proc.stdout)
         if not m:
             raise RuntimeError(f"could not parse solver output: {proc.stdout!r}")
         residue = int(m.group(1))
-        total_gpu_ms += float(m.group(2))
+        got_p = int(m.group(2))
+        if got_p != p:
+            raise RuntimeError(f"solver returned modulus {got_p}, expected {p}")
+        if not 0 <= residue < p:
+            raise RuntimeError(f"solver returned non-canonical residue {residue} for modulus {p}")
+        total_gpu_ms += float(m.group(3))
         x, M = crt_pair(x, M, residue, p)
         used += 1
         print(f"prime {used}: p={p} residue={residue} modulus_bits={M.bit_length()}", file=sys.stderr)
@@ -51,6 +56,10 @@ def main() -> None:
         raise RuntimeError(
             f"not enough CRT primes: need >{required_bits} bits, got {M.bit_length()} bits"
         )
+
+    path_bound = 1 << edges
+    if not 0 <= x < path_bound:
+        raise RuntimeError(f"CRT reconstruction violates subset bound: {x} >= 2^{edges}")
 
     print(f"n={n}")
     print(f"paths={x}")

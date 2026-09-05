@@ -15,6 +15,7 @@
 #include <cstdlib>
 #include <cstring>
 #include <iostream>
+#include <stdexcept>
 #include <numeric>
 #include <vector>
 
@@ -240,8 +241,8 @@ __global__ void main_group_kernel(const Count* in,Code n,Count* out_main,Count* 
         case NR:case NL:{if(p==1){MateID t=msetpair(m,p,w==NR?RN:LN);Code j=rank_group(t,D_MAIN_W,D_MAIN_FIXED,D_MAIN_OCC,D_MAIN_DP);atomic_add_mod(out_main+j,c);}else{MateID t=mshrink(m,p);Code j=rank_group(t,D_BLOCK_W,D_BLOCK_FIXED,D_BLOCK_OCC,D_BLOCK_DP);atomic_add_mod(out_block+j,c);}break;}
         case RN:{MateID t=msetpair(m,p,NR);Code j=rank_group(t,D_MAIN_W,D_MAIN_FIXED,D_MAIN_OCC,D_MAIN_DP);atomic_add_mod(out_main+j,c);break;}
         case LN:{MateID t=msetpair(m,p,NL);Code j=rank_group(t,D_MAIN_W,D_MAIN_FIXED,D_MAIN_OCC,D_MAIN_DP);atomic_add_mod(out_main+j,c);break;}
-        case LL:{MateID t=msetpair(m,p,NN);int q=p-1,s=1;while(s){--q;auto v=mget(t,q);if(v==L)++s;else if(v==R)--s;}t=mset(t,q,L);if(p==1){Code j=rank_group(t,D_MAIN_W,D_MAIN_FIXED,D_MAIN_OCC,D_MAIN_DP);atomic_add_mod(out_main+j,c);}else{t=mshrink(t,p-1);Code j=rank_group(t,D_BLOCK_W,D_BLOCK_FIXED,D_BLOCK_OCC,D_BLOCK_DP);atomic_add_mod(out_block+j,c);}break;}
-        case RR:{MateID t=msetpair(m,p,NN);int q=p,s=1;while(s){++q;auto v=mget(t,q);if(v==L)--s;else if(v==R)++s;}t=mset(t,q,R);if(p==1){Code j=rank_group(t,D_MAIN_W,D_MAIN_FIXED,D_MAIN_OCC,D_MAIN_DP);atomic_add_mod(out_main+j,c);}else{t=mshrink(t,p-1);Code j=rank_group(t,D_BLOCK_W,D_BLOCK_FIXED,D_BLOCK_OCC,D_BLOCK_DP);atomic_add_mod(out_block+j,c);}break;}
+        case LL:{MateID t=msetpair(m,p,NN);int q=p-1,s=1;while(s){--q;if(q<0)break;auto v=mget(t,q);if(v==L)++s;else if(v==R)--s;}if(s)break;t=mset(t,q,L);if(p==1){Code j=rank_group(t,D_MAIN_W,D_MAIN_FIXED,D_MAIN_OCC,D_MAIN_DP);atomic_add_mod(out_main+j,c);}else{t=mshrink(t,p-1);Code j=rank_group(t,D_BLOCK_W,D_BLOCK_FIXED,D_BLOCK_OCC,D_BLOCK_DP);atomic_add_mod(out_block+j,c);}break;}
+        case RR:{MateID t=msetpair(m,p,NN);int q=p,s=1;while(s){++q;if(q>=D_MAIN_W)break;auto v=mget(t,q);if(v==L)--s;else if(v==R)++s;}if(s)break;t=mset(t,q,R);if(p==1){Code j=rank_group(t,D_MAIN_W,D_MAIN_FIXED,D_MAIN_OCC,D_MAIN_DP);atomic_add_mod(out_main+j,c);}else{t=mshrink(t,p-1);Code j=rank_group(t,D_BLOCK_W,D_BLOCK_FIXED,D_BLOCK_OCC,D_BLOCK_DP);atomic_add_mod(out_block+j,c);}break;}
         case RL:{MateID t=msetpair(m,p,NN);if(p==1){Code j=rank_group(t,D_MAIN_W,D_MAIN_FIXED,D_MAIN_OCC,D_MAIN_DP);atomic_add_mod(out_main+j,c);}else{t=mshrink(t,p-1);Code j=rank_group(t,D_BLOCK_W,D_BLOCK_FIXED,D_BLOCK_OCC,D_BLOCK_DP);atomic_add_mod(out_block+j,c);}break;}
         default:break;
         }
@@ -257,10 +258,20 @@ struct MappedCounts {
     void open_file(const std::string& fn,size_t count){
         path=fn;n=count;bytes=n*sizeof(Count);
         fd=::open(path.c_str(),O_RDWR|O_CREAT|O_TRUNC,0644);
-        if(fd<0){perror("open mmap file");std::exit(2);}
-        if(ftruncate(fd,(off_t)bytes)!=0){perror("ftruncate");std::exit(2);}
+        if(fd<0){
+            int e=errno;
+            throw std::runtime_error(std::string("open mmap file: ")+std::strerror(e));
+        }
+        auto fail_opened=[&](const char* what,int e){
+            ::close(fd); fd=-1;
+            ::unlink(path.c_str());
+            throw std::runtime_error(std::string(what)+": "+std::strerror(e));
+        };
+        if(ftruncate(fd,(off_t)bytes)!=0)fail_opened("ftruncate",errno);
+        int falloc_rc=posix_fallocate(fd,0,(off_t)bytes);
+        if(falloc_rc!=0)fail_opened("posix_fallocate",falloc_rc);
         void* q=mmap(nullptr,bytes,PROT_READ|PROT_WRITE,MAP_SHARED,fd,0);
-        if(q==MAP_FAILED){perror("mmap");std::exit(2);}
+        if(q==MAP_FAILED)fail_opened("mmap",errno);
         p=(Count*)q;
         madvise(p,bytes,MADV_RANDOM);
     }
@@ -419,8 +430,16 @@ int main(int argc,char**argv){
     std::string store_dir=argc>6?argv[6]:".gridfp_multigpu_store";
     std::filesystem::create_directories(store_dir);
     MappedCounts mainv,blockv;
-    mainv.open_file(store_dir+"/main.bin",mainN);
-    blockv.open_file(store_dir+"/blocked.bin",blockN);
+    const std::string main_path=store_dir+"/main.bin", block_path=store_dir+"/blocked.bin";
+    try{
+        mainv.open_file(main_path,mainN);
+        blockv.open_file(block_path,blockN);
+    }catch(const std::exception& e){
+        mainv.close_file(); blockv.close_file();
+        ::unlink(main_path.c_str()); ::unlink(block_path.c_str());
+        std::cerr<<"external-store allocation failed: "<<e.what()<<"\n";
+        return 2;
+    }
     MateID init=MateID(R)<<(2*(W-1)); mainv[rank_full(init,W)]=1;
     int threads=256;
     size_t target_bytes=size_t(std::max(1,target_mib))<<20;

@@ -1,0 +1,1151 @@
+#include <cuda_runtime.h>
+#include <cuda/atomic>
+#include <algorithm>
+#include <atomic>
+#include <chrono>
+#include <thread>
+#include <array>
+#include <cstdint>
+#include <cstdlib>
+#include <cstring>
+#include <iostream>
+#include <numeric>
+#include <functional>
+#include <vector>
+#include "../../common/gridfp_transition.hpp"
+#include "row3_automaton_generated.hpp"
+#include "row3_automaton_warp.hpp"
+
+using Count = uint32_t;
+using MateID = unsigned long long;
+using Code = unsigned long long;
+static constexpr int MAXW=28, MAXGPU=8;
+#ifndef IO_TILE_ELEMS
+#define IO_TILE_ELEMS 65536ULL
+#endif
+#ifndef TARGET_W
+#define TARGET_W 28
+#endif
+#ifndef LOW_LUT_K
+#define LOW_LUT_K 0
+#endif
+#ifndef HIGH_LUT_K
+#define HIGH_LUT_K 0
+#endif
+
+enum MateValue:uint8_t{N=0,R=1,L=2,X=3};
+enum MateValuePair:uint8_t{NN=0x0,NR=0x1,NL=0x2,NX=0x3,RN=0x4,RR=0x5,RL=0x6,RX=0x7,LN=0x8,LR=0x9,LL=0xa,LX=0xb,XN=0xc,XR=0xd,XL=0xe,XX=0xf};
+
+static Code H_DP[MAXW+1][MAXW+2];
+__constant__ Code D_FULL_DP[MAXW+1][MAXW+2];
+__constant__ Code D_BOUND_DP[MAXW+1][MAXW+2];
+__constant__ Code D_BOUND_OLD_DP[MAXW+1][MAXW+2];
+__constant__ int D_BOUND_CAP,D_BOUND_OLD_CAP;
+__constant__ uint16_t D_R3_OFF_N[19],D_R3_OFF_R[19],D_R3_OFF_L[19];
+__constant__ oneesan::row3auto::Tr D_R3_TR_N[56],D_R3_TR_R[33],D_R3_TR_L[46];
+__constant__ int16_t D_R3_BETA[18];
+__constant__ Count D_R3_UNSCALE;
+__constant__ uint8_t D_R3W_SRC[3][32*6];
+__constant__ int16_t D_R3W_CO[3][32*6];
+__constant__ int16_t D_R3W_BETA[32];
+__constant__ Code D_MAIN_DP[MAXW+1][MAXW+2];
+__constant__ Code D_BLOCK_DP[MAXW+1][MAXW+2];
+__constant__ uint32_t D_MAIN_FIXED,D_MAIN_OCC,D_BLOCK_FIXED,D_BLOCK_OCC;
+__constant__ int D_MAIN_W,D_BLOCK_W,D_NGPU;
+__constant__ Count D_MOD;
+__constant__ Count* D_MAIN_PTR[MAXGPU];
+__constant__ Count* D_BLOCK_PTR[MAXGPU];
+__constant__ Code D_MAIN_CHUNK,D_BLOCK_CHUNK;
+struct LowEntry{uint32_t mate,full_rank;};
+__constant__ LowEntry* D_LOW_ENTRIES;
+__constant__ uint32_t* D_LOW_OFFSETS;
+__constant__ uint32_t* D_LOW_LOCAL_RANK;
+struct HighEntry{uint32_t code,base;};
+__constant__ HighEntry* D_HIGH_ENTRIES_MAIN;
+__constant__ HighEntry* D_HIGH_ENTRIES_BLOCK;
+__constant__ uint32_t* D_HIGH_OFFSETS_MAIN;
+__constant__ uint32_t* D_HIGH_OFFSETS_BLOCK;
+
+__constant__ uint32_t* D_F_LOW_ALL_CODES;
+__constant__ uint32_t* D_F_LOW_MASK_CODES;
+__constant__ uint32_t* D_F_LOW_MASK_OFF;
+__constant__ uint32_t* D_F_LOW_PACKED_RANK;
+__constant__ uint32_t* D_F_HIGH_ALL_CODES;
+__constant__ uint32_t* D_F_HIGH_MASK_CODES;
+__constant__ uint32_t* D_F_HIGH_MASK_OFF;
+__constant__ uint32_t* D_F_HIGH_PACKED_RANK;
+__constant__ Code* D_F_HIGH_MAIN_BASE;
+__constant__ Code* D_F_HIGH_BLOCK_BASE;
+__constant__ uint32_t D_F_LOW_ALL_OFF[MAXW+2];
+__constant__ uint32_t D_F_HIGH_ALL_OFF[MAXW+2];
+__constant__ uint32_t D_F_MASK;
+__constant__ int D_F_FIX_LOW;
+struct FBlock { Code off,end; uint32_t stride; uint8_t he,hs,c,pad; };
+__constant__ FBlock D_F_MAIN_BLOCKS[64];
+__constant__ FBlock D_F_BLOCK_BLOCKS[32];
+__constant__ int D_F_MAIN_NBLOCKS,D_F_BLOCK_NBLOCKS;
+
+__host__ __device__ static inline MateValue mget(MateID m,int k){return MateValue((m>>(2*k))&3ULL);}
+__host__ __device__ static inline MateValuePair mpair(MateID m,int p){return MateValuePair((m>>(2*(p-1)))&15ULL);}
+__host__ __device__ static inline MateID mset(MateID m,int k,MateValue v){MateID z=3ULL<<(2*k);return (m&~z)|(MateID(v)<<(2*k));}
+__host__ __device__ static inline MateID msetpair(MateID m,int p,MateValuePair v){MateID z=15ULL<<(2*(p-1));return (m&~z)|(MateID(v)<<(2*(p-1)));}
+__host__ __device__ static inline MateID mshrink(MateID m,int k){MateID mask=(1ULL<<(2*k))-1ULL;return((m&~mask)>>2)|(m&mask);}
+__host__ __device__ static inline MateID minsert(MateID m,int k,MateValue v){MateID lowmask=k?((1ULL<<(2*k))-1ULL):0ULL;MateID lo=m&lowmask,hi=m&~lowmask;return lo|(MateID(v)<<(2*k))|(hi<<2);}
+
+static void ck(cudaError_t e,const char* w){if(e!=cudaSuccess){std::cerr<<w<<": "<<cudaGetErrorString(e)<<"\n";std::exit(1);}}
+static void build_full_dp(){for(int h=0;h<=MAXW+1;++h)H_DP[0][h]=(h==0);for(int w=1;w<=MAXW;++w)for(int h=0;h<=MAXW;++h){Code x=H_DP[w-1][h];if(h>0)x+=H_DP[w-1][h-1];if(h<MAXW+1)x+=H_DP[w-1][h+1];H_DP[w][h]=x;}}
+static void build_bounded_dp(int cap,Code out[MAXW+1][MAXW+2]){
+    std::memset(out,0,sizeof(Code)*(MAXW+1)*(MAXW+2));
+    out[0][0]=1;
+    for(int w=1;w<=MAXW;++w)for(int h=0;h<=cap;++h){Code x=out[w-1][h];if(h>0)x+=out[w-1][h-1];if(h<cap)x+=out[w-1][h+1];out[w][h]=x;}
+}
+
+
+struct GroupSpec{int width=0;uint32_t fixed=0,occ=0;Code dp[MAXW+1][MAXW+2]{};Code size=0;};
+static GroupSpec make_spec(int width,uint32_t fixed,uint32_t occ){GroupSpec s;s.width=width;s.fixed=fixed;s.occ=occ;for(int h=0;h<=MAXW+1;++h)s.dp[0][h]=(h==0);for(int w=1;w<=width;++w){int pos=w-1;bool f=(fixed>>pos)&1u,o=(occ>>pos)&1u;for(int h=0;h<=MAXW;++h){Code x=0;if(!f||!o)x+=s.dp[w-1][h];if(!f||o){if(h>0)x+=s.dp[w-1][h-1];if(h<MAXW+1)x+=s.dp[w-1][h+1];}s.dp[w][h]=x;}}s.size=s.dp[width][1];return s;}
+
+static bool allowed_host(uint32_t fixed,uint32_t occ,int pos,MateValue v){if(!((fixed>>pos)&1u))return v!=X;bool o=(occ>>pos)&1u;return o?(v==R||v==L):(v==N);}
+static MateID unrank_suffix_host(Code rank,int width,int start_h,uint32_t fixed,uint32_t occ,const Code dp[MAXW+1][MAXW+2]){
+    MateID m=0;int h=start_h;
+    for(int pos=width-1;pos>=0;--pos){
+        if(allowed_host(fixed,occ,pos,N)){Code z=dp[pos][h];if(rank<z)continue;rank-=z;}
+        if(h>0&&allowed_host(fixed,occ,pos,R)){Code z=dp[pos][h-1];if(rank<z){m|=MateID(R)<<(2*pos);--h;continue;}rank-=z;}
+        m|=MateID(L)<<(2*pos);++h;
+    }
+    return m;
+}
+static Code rank_full_suffix_host(MateID m,int width,int start_h){Code rank=0;int h=start_h;for(int pos=width-1;pos>=0;--pos){auto v=mget(m,pos);if(v>N)rank+=H_DP[pos][h];if(v>R&&h>0)rank+=H_DP[pos][h-1];if(v==R)--h;else if(v==L)++h;}return rank;}
+struct LowTablesHost{std::vector<LowEntry> entries;std::vector<uint32_t> offsets,local_rank;};
+static LowTablesHost build_low_tables(){
+    LowTablesHost t;
+    if constexpr(LOW_LUT_K==0)return t;
+    constexpr uint32_t NM=1u<<LOW_LUT_K;constexpr uint32_t NC=1u<<(2*LOW_LUT_K);
+    t.offsets.resize(size_t(NM)*(LOW_LUT_K+2));t.local_rank.assign(NC,0xffffffffu);
+    constexpr uint32_t FIX=NM-1;
+    for(uint32_t mask=0;mask<NM;++mask){
+        auto sp=make_spec(LOW_LUT_K,FIX,mask);
+        for(int h=0;h<LOW_LUT_K+2;++h){
+            t.offsets[size_t(mask)*(LOW_LUT_K+2)+h]=(uint32_t)t.entries.size();
+            Code cnt=sp.dp[LOW_LUT_K][h];
+            for(Code r=0;r<cnt;++r){MateID m=unrank_suffix_host(r,LOW_LUT_K,h,FIX,mask,sp.dp);Code fr=rank_full_suffix_host(m,LOW_LUT_K,h);if(fr>0xffffffffULL){std::cerr<<"low full rank overflow\n";std::exit(6);}uint32_t code=(uint32_t)m;t.entries.push_back({code,(uint32_t)fr});t.local_rank[code]=(uint32_t)r;}
+        }
+    }
+    std::cerr<<"low_lut K="<<LOW_LUT_K<<" entries="<<t.entries.size()<<" entries_mib="<<double(t.entries.size()*sizeof(LowEntry))/(1<<20)<<" dense_rank_mib="<<double(t.local_rank.size()*sizeof(uint32_t))/(1<<20)<<"\n";
+    return t;
+}
+
+
+struct FactorTablesHost {
+    static constexpr int STRIDE=MAXW+2;
+    std::vector<uint32_t> low_all_codes,low_mask_codes,low_mask_off,low_packed_rank;
+    std::vector<uint32_t> high_all_codes,high_mask_codes,high_mask_off,high_packed_rank;
+    std::vector<Code> high_main_base,high_block_base;
+    std::array<uint32_t,MAXW+2> low_all_off{},high_all_off{};
+};
+static uint32_t seg_occ(uint32_t code,int len){uint32_t z=0;for(int p=0;p<len;++p)if((code>>(2*p))&3u)z|=1u<<p;return z;}
+static FactorTablesHost build_factor_tables(){
+    FactorTablesHost f;
+    constexpr int L=LOW_LUT_K,H=HIGH_LUT_K,S=FactorTablesHost::STRIDE;
+    static_assert(L>0&&H>0,"factorized forced2 requires nonzero LOW/HIGH");
+    const uint32_t LM=1u<<L, HM=1u<<H;
+    std::vector<std::vector<uint32_t>> la(MAXW+1),ha(MAXW+1);
+    std::vector<std::vector<uint32_t>> lm(size_t(LM)*S),hm(size_t(HM)*S);
+    // LOW suffixes: start at h, consume positions L-1..0, end at 0.
+    for(int h0=0;h0<=L+1;++h0){
+        std::function<void(int,int,uint32_t)> rec=[&](int pos,int h,uint32_t code){
+            if(pos<0){if(h==0){la[h0].push_back(code);lm[size_t(seg_occ(code,L))*S+h0].push_back(code);}return;}
+            if(h<0||h>pos+1)return; // cannot return to zero in remaining positions
+            rec(pos-1,h,code);
+            if(h>0)rec(pos-1,h-1,code|(uint32_t(R)<<(2*pos)));
+            rec(pos-1,h+1,code|(uint32_t(::L)<<(2*pos)));
+        };rec(L-1,h0,0);
+    }
+    // HIGH prefixes: start at height 1, consume high-to-low, group by ending height.
+    std::function<void(int,int,uint32_t)> rech=[&](int pos,int h,uint32_t code){
+        if(pos<0){ha[h].push_back(code);hm[size_t(seg_occ(code,H))*S+h].push_back(code);return;}
+        rech(pos-1,h,code);
+        if(h>0)rech(pos-1,h-1,code|(uint32_t(R)<<(2*pos)));
+        rech(pos-1,h+1,code|(uint32_t(::L)<<(2*pos)));
+    };rech(H-1,1,0);
+    f.low_packed_rank.assign(size_t(1)<<(2*L),0xffffffffu);
+    f.high_packed_rank.assign(size_t(1)<<(2*H),0xffffffffu);
+    for(int h=0;h<=MAXW;++h){f.low_all_off[h]=f.low_all_codes.size();for(uint32_t r=0;r<la[h].size();++r){auto c=la[h][r];f.low_all_codes.push_back(c);f.low_packed_rank[c]=r<<L;} }
+    f.low_all_off[MAXW+1]=f.low_all_codes.size();
+    f.low_mask_off.resize(size_t(LM)*S);
+    for(uint32_t m=0;m<LM;++m)for(int h=0;h<S;++h){size_t ix=size_t(m)*S+h;f.low_mask_off[ix]=f.low_mask_codes.size();if(h<=MAXW)for(uint32_t r=0;r<lm[ix].size();++r){auto c=lm[ix][r];f.low_mask_codes.push_back(c);f.low_packed_rank[c]=(f.low_packed_rank[c]&~((1u<<L)-1u))|r;}}
+    for(int h=0;h<=MAXW;++h){f.high_all_off[h]=f.high_all_codes.size();for(uint32_t r=0;r<ha[h].size();++r){auto c=ha[h][r];f.high_all_codes.push_back(c);f.high_packed_rank[c]=r<<H;}}
+    f.high_all_off[MAXW+1]=f.high_all_codes.size();
+    f.high_mask_off.resize(size_t(HM)*S);
+    for(uint32_t m=0;m<HM;++m)for(int h=0;h<S;++h){size_t ix=size_t(m)*S+h;f.high_mask_off[ix]=f.high_mask_codes.size();if(h<=MAXW)for(uint32_t r=0;r<hm[ix].size();++r){auto c=hm[ix][r];f.high_mask_codes.push_back(c);f.high_packed_rank[c]=(f.high_packed_rank[c]&~((1u<<H)-1u))|r;}}
+    auto prefix_base=[&](uint32_t code,int offset){Code rank=0;int h=1;for(int p=H-1;p>=0;--p){MateValue v=MateValue((code>>(2*p))&3u);int fp=offset+p;if(v>N)rank+=H_DP[fp][h];if(v>R&&h>0)rank+=H_DP[fp][h-1];if(v==R)--h;else if(v==::L)++h;}return rank;};
+    f.high_main_base.resize(f.high_all_codes.size());f.high_block_base.resize(f.high_all_codes.size());
+    for(size_t i=0;i<f.high_all_codes.size();++i){f.high_main_base[i]=prefix_base(f.high_all_codes[i],L+1);f.high_block_base[i]=prefix_base(f.high_all_codes[i],L);}
+    std::cerr<<"factor tables low_all="<<f.low_all_codes.size()<<" low_mask="<<f.low_mask_codes.size()<<" low_dense_mib="<<double(f.low_packed_rank.size()*4)/(1<<20)
+             <<" high_all="<<f.high_all_codes.size()<<" high_mask="<<f.high_mask_codes.size()<<" high_dense_mib="<<double(f.high_packed_rank.size()*4)/(1<<20)<<"\n";
+    return f;
+}
+static FactorTablesHost G_FACTOR;
+static uint32_t factor_count(const std::vector<uint32_t>&off,uint32_t mask,int h){constexpr int S=FactorTablesHost::STRIDE;size_t i=size_t(mask)*S+h;return off[i+1]-off[i];}
+static std::vector<FBlock> make_factor_main_blocks(bool fix_low,uint32_t mask){
+    constexpr int L=LOW_LUT_K,H=HIGH_LUT_K;std::vector<FBlock> v;v.reserve(3*(H+2));Code off=0;
+    for(int he=0;he<=H+1;++he)for(int cv=0;cv<3;++cv){int hs=he+(cv==int(::L)?1:cv==int(::R)?-1:0);uint32_t hc=0,lc=0;if(hs>=0&&hs<=L+1){hc=fix_low?(G_FACTOR.high_all_off[he+1]-G_FACTOR.high_all_off[he]):factor_count(G_FACTOR.high_mask_off,mask,he);lc=fix_low?factor_count(G_FACTOR.low_mask_off,mask,hs):(G_FACTOR.low_all_off[hs+1]-G_FACTOR.low_all_off[hs]);}uint64_t n=uint64_t(hc)*lc;v.push_back({off,off+n,lc,(uint8_t)he,(uint8_t)std::max(0,hs),(uint8_t)cv,0});off+=n;}
+    return v;
+}
+static std::vector<FBlock> make_factor_block_blocks(bool fix_low,uint32_t mask){
+    constexpr int H=HIGH_LUT_K;std::vector<FBlock> v;v.reserve(H+2);Code off=0;
+    for(int h=0;h<=H+1;++h){uint32_t hc=fix_low?(G_FACTOR.high_all_off[h+1]-G_FACTOR.high_all_off[h]):factor_count(G_FACTOR.high_mask_off,mask,h);uint32_t lc=fix_low?factor_count(G_FACTOR.low_mask_off,mask,h):(G_FACTOR.low_all_off[h+1]-G_FACTOR.low_all_off[h]);uint64_t n=uint64_t(hc)*lc;v.push_back({off,off+n,lc,(uint8_t)h,(uint8_t)h,0,0});off+=n;}return v;
+}
+struct Interval{Code global,local,len;};
+struct HighTablesHost{std::vector<HighEntry> entries;std::vector<uint32_t> offsets;};
+static void high_enum_rec(int pos,int h,uint32_t occ,uint32_t code,int lowlen,uint64_t&base,std::vector<HighEntry>&entries){
+    if(pos<0){Code cnt=H_DP[lowlen][h];if(!cnt)return;if(base>0xffffffffULL||base+cnt>0x100000000ULL){std::cerr<<"high base overflow\n";std::exit(7);}entries.push_back({code,(uint32_t)base});base+=cnt;return;}
+    bool o=(occ>>pos)&1u;
+    if(!o){high_enum_rec(pos-1,h,occ,code,lowlen,base,entries);return;}
+    if(h>0)high_enum_rec(pos-1,h-1,occ,code|(uint32_t(R)<<(2*pos)),lowlen,base,entries);
+    high_enum_rec(pos-1,h+1,occ,code|(uint32_t(::L)<<(2*pos)),lowlen,base,entries);
+}
+static HighTablesHost build_high_tables(int width){
+    HighTablesHost t;if constexpr(HIGH_LUT_K==0)return t;
+    constexpr uint32_t NM=1u<<HIGH_LUT_K;int lowlen=width-HIGH_LUT_K;
+    t.offsets.resize(NM+1);
+    for(uint32_t mask=0;mask<NM;++mask){t.offsets[mask]=(uint32_t)t.entries.size();uint64_t base=0;high_enum_rec(HIGH_LUT_K-1,1,mask,0,lowlen,base,t.entries);}t.offsets[NM]=(uint32_t)t.entries.size();
+    std::cerr<<"high_lut width="<<width<<" K="<<HIGH_LUT_K<<" entries="<<t.entries.size()<<" entries_mib="<<double(t.entries.size()*sizeof(HighEntry))/(1<<20)<<" offsets_mib="<<double(t.offsets.size()*sizeof(uint32_t))/(1<<20)<<"\n";return t;
+}
+
+static void add_interval(std::vector<Interval>&out,Code g,Code l,Code n){if(!n)return;if(!out.empty()&&out.back().global+out.back().len==g&&out.back().local+out.back().len==l)out.back().len+=n;else out.push_back({g,l,n});}
+static void intervals_rec(const GroupSpec&s,int pos,int h,Code gbase,Code lbase,std::vector<Interval>&out){
+    if(pos<0){if(h==0)add_interval(out,gbase,lbase,1);return;}
+    uint32_t lower=(pos==31)?0xffffffffu:((1u<<(pos+1))-1u);
+    if((s.fixed&lower)==0){add_interval(out,gbase,lbase,H_DP[pos+1][h]);return;}
+    bool f=(s.fixed>>pos)&1u,o=(s.occ>>pos)&1u;
+    Code gsz=H_DP[pos][h];
+    if(!f||!o){Code lsz=s.dp[pos][h];intervals_rec(s,pos-1,h,gbase,lbase,out);lbase+=lsz;}gbase+=gsz;
+    if(h>0){gsz=H_DP[pos][h-1];if(!f||o){Code lsz=s.dp[pos][h-1];intervals_rec(s,pos-1,h-1,gbase,lbase,out);lbase+=lsz;}gbase+=gsz;}
+    if(h<MAXW+1&&(!f||o))intervals_rec(s,pos-1,h+1,gbase,lbase,out);
+}
+static std::vector<Interval> make_intervals(const GroupSpec&s){std::vector<Interval>v;v.reserve(1024);intervals_rec(s,s.width-1,1,0,0,v);Code sum=0;for(auto const&i:v)sum+=i.len;if(sum!=s.size){std::cerr<<"interval size mismatch "<<sum<<" != "<<s.size<<"\n";std::exit(2);}return v;}
+
+static Code interval_leaf_upper_rec(const GroupSpec& s,int pos,int h,Code memo[MAXW+1][MAXW+2],bool seen[MAXW+1][MAXW+2]){
+    if(pos<0)return h==0?1:0;
+    if(seen[pos][h])return memo[pos][h];
+    seen[pos][h]=true;
+    uint32_t lower=(pos==31)?0xffffffffu:((1u<<(pos+1))-1u);
+    if((s.fixed&lower)==0)return memo[pos][h]=H_DP[pos+1][h]?1:0;
+    bool f=(s.fixed>>pos)&1u,o=(s.occ>>pos)&1u;
+    Code z=0;
+    if(!f||!o)z+=interval_leaf_upper_rec(s,pos-1,h,memo,seen);
+    if(!f||o){
+        if(h>0)z+=interval_leaf_upper_rec(s,pos-1,h-1,memo,seen);
+        if(h<MAXW+1)z+=interval_leaf_upper_rec(s,pos-1,h+1,memo,seen);
+    }
+    return memo[pos][h]=z;
+}
+static Code interval_leaf_upper(const GroupSpec& s){
+    Code memo[MAXW+1][MAXW+2]{};bool seen[MAXW+1][MAXW+2]{};
+    return interval_leaf_upper_rec(s,s.width-1,1,memo,seen);
+}
+
+struct PeerInterval{Code remote,local,len;uint32_t owner,pad;};
+static std::vector<PeerInterval> make_peer_intervals(const GroupSpec&s,Code chunk,int ng,bool& use_interval){
+    constexpr Code MIN_AVG_INTERVAL_ELEMS = 65536;
+    Code est=interval_leaf_upper(s);
+    // Every shard boundary can split at most one globally ordered interval.
+    Code est_peer=est+Code(std::max(0,ng-1));
+    use_interval = est_peer==0 || s.size >= est_peer*MIN_AVG_INTERVAL_ELEMS;
+    if(!use_interval)return {};
+    auto base=make_intervals(s);std::vector<PeerInterval>out;out.reserve(base.size()+ng);
+    for(auto const&x:base){Code g=x.global,l=x.local,left=x.len;while(left){int owner=int(g/chunk);if(owner>=ng)owner=ng-1;Code shard0=Code(owner)*chunk;Code shard_end=(owner+1<ng)?shard0+chunk:~Code(0);Code take=left;if(shard_end!=~Code(0)&&g+take>shard_end)take=shard_end-g;Code remote=g-shard0;
+            if(!out.empty()&&out.back().owner==(uint32_t)owner&&out.back().remote+out.back().len==remote&&out.back().local+out.back().len==l)out.back().len+=take;else out.push_back({remote,l,take,(uint32_t)owner,0});
+            g+=take;l+=take;left-=take;}}
+    // Interval I/O wins only when the canonical layout contains reasonably long
+    // contiguous runs.  Low fixed bits can fragment a group into hundreds of
+    // thousands of tiny runs; in that case rank/unrank gather/scatter is faster.
+    use_interval = out.empty() || s.size >= Code(out.size()) * MIN_AVG_INTERVAL_ELEMS;
+    if(!use_interval) return {};
+
+    std::vector<PeerInterval> tiled;
+    size_t nt=0;
+    for(auto const& x:out) nt += size_t((x.len + IO_TILE_ELEMS - 1) / IO_TILE_ELEMS);
+    tiled.reserve(nt);
+    for(auto const& x:out){
+        Code off=0;
+        while(off<x.len){
+            Code take=std::min<Code>(x.len-off,Code(IO_TILE_ELEMS));
+            tiled.push_back({x.remote+off,x.local+off,take,x.owner,0});
+            off+=take;
+        }
+    }
+    return tiled;
+}
+
+static std::vector<int> window_candidates(int W,int hi,int lo){std::vector<int>v;for(int q=W-1;q>=0;--q)if(q<lo-1||q>hi)v.push_back(q);return v;}
+static void window_masks(int W,int hi,int lo,const std::vector<int>&fp,uint32_t group,uint32_t&mf,uint32_t&mo,uint32_t&bf,uint32_t&bo){mf=mo=bf=bo=0;for(size_t i=0;i<fp.size();++i){int q=fp[i];bool one=(group>>i)&1u;mf|=1u<<q;if(one)mo|=1u<<q;int bq=(q<lo-1)?q:q-1;bf|=1u<<bq;if(one)bo|=1u<<bq;}}
+struct WindowPlan{int p_hi=0,p_lo=0;std::vector<int>fixed_pos;size_t max_bytes=0;Code max_main=0,max_block=0;};
+static WindowPlan plan_window(int W,int hi,int lo,size_t target,int maxbits=20){WindowPlan best;best.p_hi=hi;best.p_lo=lo;auto cand=window_candidates(W,hi,lo);int klim=std::min<int>(cand.size(),maxbits);for(int k=0;k<=klim;++k){std::vector<int>fp(cand.begin(),cand.begin()+k);uint64_t ng=1ull<<k;size_t mx=0;Code mm=0,md=0;for(uint64_t g=0;g<ng;++g){uint32_t mf,mo,bf,bo;window_masks(W,hi,lo,fp,(uint32_t)g,mf,mo,bf,bo);auto ms=make_spec(W,mf,mo);auto ds=make_spec(W-1,bf,bo);size_t b=size_t(2*ms.size+2*ds.size)*sizeof(Count);if(b>mx){mx=b;mm=ms.size;md=ds.size;}if(mx>target&&k<klim)break;}if(mx<=target||k==klim){best.fixed_pos=std::move(fp);best.max_bytes=mx;best.max_main=mm;best.max_block=md;return best;}}return best;}
+
+__device__ __forceinline__ bool allowed(uint32_t fixed,uint32_t occ,int pos,MateValue v){if(!((fixed>>pos)&1u))return v!=X;bool o=(occ>>pos)&1u;return o?(v==R||v==L):(v==N);}
+__device__ __forceinline__ MateID unrank_group(Code rank,int width,uint32_t fixed,uint32_t occ,const Code dp[MAXW+1][MAXW+2]){MateID m=0;int h=1;
+#pragma unroll
+    for(int pos=MAXW-1;pos>=0;--pos){if(pos>=width)continue;if(allowed(fixed,occ,pos,N)){Code z=dp[pos][h];if(rank<z)continue;rank-=z;}if(h>0&&allowed(fixed,occ,pos,R)){Code z=dp[pos][h-1];if(rank<z){m|=MateID(R)<<(2*pos);--h;continue;}rank-=z;}m|=MateID(L)<<(2*pos);++h;}return m;}
+__device__ __forceinline__ Code rank_group(MateID m,int width,uint32_t fixed,uint32_t occ,const Code dp[MAXW+1][MAXW+2]){Code rank=0;int h=1;
+#pragma unroll
+    for(int pos=MAXW-1;pos>=0;--pos){if(pos>=width)continue;MateValue s=mget(m,pos);if(s>N&&allowed(fixed,occ,pos,N))rank+=dp[pos][h];if(s>R&&h>0&&allowed(fixed,occ,pos,R))rank+=dp[pos][h-1];if(s==R)--h;else if(s==L)++h;}return rank;}
+__device__ __forceinline__ Code rank_full_dev(MateID m,int width){Code rank=0;int h=1;
+#pragma unroll
+    for(int pos=MAXW-1;pos>=0;--pos){if(pos>=width)continue;MateValue s=mget(m,pos);if(s>N)rank+=D_FULL_DP[pos][h];if(s>R&&h>0)rank+=D_FULL_DP[pos][h-1];if(s==R)--h;else if(s==L)++h;}return rank;}
+
+template<int WIDTH> __device__ __forceinline__ Code rank_full_t(MateID m);
+
+template<int WIDTH>
+__device__ __forceinline__ bool high_lut_applicable(uint32_t fixed){
+    if constexpr(HIGH_LUT_K==0)return false;
+    else {
+        constexpr int LOW=WIDTH-HIGH_LUT_K;
+        constexpr uint32_t HM=((1u<<HIGH_LUT_K)-1u)<<LOW;
+        constexpr uint32_t WM=(WIDTH==32)?0xffffffffu:((1u<<WIDTH)-1u);
+        return LOW>=0 && (fixed&HM)==HM && (fixed&(WM^HM))==0;
+    }
+}
+
+template<int WIDTH>
+__device__ __forceinline__ int high_final_height(uint32_t code){
+    int h=1;
+#pragma unroll
+    for(int p=HIGH_LUT_K-1;p>=0;--p){
+        MateValue v=MateValue((code>>(2*p))&3u);
+        if(v==R)--h; else if(v==L)++h;
+    }
+    return h;
+}
+
+template<int WIDTH>
+__device__ __forceinline__ MateID unrank_free_suffix(Code rank,int width,int h){
+    MateID m=0;
+#pragma unroll
+    for(int pos=WIDTH-1;pos>=0;--pos){
+        if(pos>=width)continue;
+        Code z=D_FULL_DP[pos][h];
+        if(rank<z)continue;
+        rank-=z;
+        if(h>0){z=D_FULL_DP[pos][h-1];if(rank<z){m|=MateID(R)<<(2*pos);--h;continue;}rank-=z;}
+        m|=MateID(L)<<(2*pos);++h;
+    }
+    return m;
+}
+
+template<int WIDTH>
+__device__ __forceinline__ Code rank_free_suffix(MateID m,int width,int h){
+    Code rank=0;
+#pragma unroll
+    for(int pos=WIDTH-1;pos>=0;--pos){
+        if(pos>=width)continue;
+        MateValue v=mget(m,pos);
+        if(v>N)rank+=D_FULL_DP[pos][h];
+        if(v>R&&h>0)rank+=D_FULL_DP[pos][h-1];
+        if(v==R)--h;else if(v==L)++h;
+    }
+    return rank;
+}
+
+template<int WIDTH>
+__device__ __forceinline__ MateID unrank_high_lut(Code rank,uint32_t occ){
+    constexpr int LOW=WIDTH-HIGH_LUT_K;
+    constexpr uint32_t OM=(1u<<HIGH_LUT_K)-1u;
+    uint32_t mask=(occ>>LOW)&OM;
+    HighEntry* entries = WIDTH==TARGET_W ? D_HIGH_ENTRIES_MAIN : D_HIGH_ENTRIES_BLOCK;
+    uint32_t* offsets = WIDTH==TARGET_W ? D_HIGH_OFFSETS_MAIN : D_HIGH_OFFSETS_BLOCK;
+    uint32_t a=offsets[mask], b=offsets[mask+1];
+    // Find the last prefix whose base is <= rank.
+    uint32_t lo=a,hi=b;
+    while(lo+1<hi){uint32_t mid=(lo+hi)>>1;if(Code(entries[mid].base)<=rank)lo=mid;else hi=mid;}
+    HighEntry e=entries[lo];
+    int h=high_final_height<WIDTH>(e.code);
+    MateID low=unrank_free_suffix<WIDTH>(rank-Code(e.base),LOW,h);
+    return (MateID(e.code)<<(2*LOW))|low;
+}
+
+template<int WIDTH>
+__device__ __forceinline__ Code rank_high_lut(MateID m,uint32_t occ){
+    constexpr int LOW=WIDTH-HIGH_LUT_K;
+    constexpr MateID CM=(MateID(1)<<(2*HIGH_LUT_K))-1;
+    constexpr uint32_t OM=(1u<<HIGH_LUT_K)-1u;
+    uint32_t code=(uint32_t)((m>>(2*LOW))&CM);
+    uint32_t mask=(occ>>LOW)&OM;
+    HighEntry* entries = WIDTH==TARGET_W ? D_HIGH_ENTRIES_MAIN : D_HIGH_ENTRIES_BLOCK;
+    uint32_t* offsets = WIDTH==TARGET_W ? D_HIGH_OFFSETS_MAIN : D_HIGH_OFFSETS_BLOCK;
+    uint32_t lo=offsets[mask],hi=offsets[mask+1];
+    while(lo<hi){uint32_t mid=(lo+hi)>>1;if(entries[mid].code<code)lo=mid+1;else hi=mid;}
+    HighEntry e=entries[lo];
+    int h=high_final_height<WIDTH>(code);
+    constexpr MateID LM=(MateID(1)<<(2*LOW))-1;
+    return Code(e.base)+rank_free_suffix<WIDTH>(m&LM,LOW,h);
+}
+template<int WIDTH>
+__device__ __forceinline__ bool low_lut_applicable(uint32_t fixed){
+    if constexpr(LOW_LUT_K==0)return false;
+    else return (fixed&((1u<<LOW_LUT_K)-1u))==((1u<<LOW_LUT_K)-1u);
+}
+template<int WIDTH>
+__device__ __forceinline__ MateID unrank_group_t(Code rank,uint32_t fixed,uint32_t occ,const Code dp[MAXW+1][MAXW+2]){
+    if constexpr(HIGH_LUT_K>0){if(high_lut_applicable<WIDTH>(fixed))return unrank_high_lut<WIDTH>(rank,occ);}
+    MateID m=0;int h=1;
+    if constexpr(LOW_LUT_K>0){if(low_lut_applicable<WIDTH>(fixed)){
+#pragma unroll
+        for(int pos=WIDTH-1;pos>=LOW_LUT_K;--pos){
+            if(allowed(fixed,occ,pos,N)){Code z=dp[pos][h];if(rank<z)continue;rank-=z;}
+            if(h>0&&allowed(fixed,occ,pos,R)){Code z=dp[pos][h-1];if(rank<z){m|=MateID(R)<<(2*pos);--h;continue;}rank-=z;}
+            m|=MateID(L)<<(2*pos);++h;
+        }
+        uint32_t mask=occ&((1u<<LOW_LUT_K)-1u);uint32_t base=D_LOW_OFFSETS[size_t(mask)*(LOW_LUT_K+2)+h];m|=D_LOW_ENTRIES[base+(uint32_t)rank].mate;return m;
+    }}
+#pragma unroll
+    for(int pos=WIDTH-1;pos>=0;--pos){
+        if(allowed(fixed,occ,pos,N)){Code z=dp[pos][h];if(rank<z)continue;rank-=z;}
+        if(h>0&&allowed(fixed,occ,pos,R)){Code z=dp[pos][h-1];if(rank<z){m|=MateID(R)<<(2*pos);--h;continue;}rank-=z;}
+        m|=MateID(L)<<(2*pos);++h;
+    }
+    return m;
+}
+template<int WIDTH>
+__device__ __forceinline__ Code rank_group_t(MateID m,uint32_t fixed,uint32_t occ,const Code dp[MAXW+1][MAXW+2]){
+    if constexpr(HIGH_LUT_K>0){if(high_lut_applicable<WIDTH>(fixed))return rank_high_lut<WIDTH>(m,occ);}
+    Code rank=0;int h=1;
+    if constexpr(LOW_LUT_K>0){if(low_lut_applicable<WIDTH>(fixed)){
+#pragma unroll
+        for(int pos=WIDTH-1;pos>=LOW_LUT_K;--pos){MateValue v=mget(m,pos);if(v>N&&allowed(fixed,occ,pos,N))rank+=dp[pos][h];if(v>R&&h>0&&allowed(fixed,occ,pos,R))rank+=dp[pos][h-1];if(v==R)--h;else if(v==L)++h;}
+        constexpr MateID CM=(MateID(1)<<(2*LOW_LUT_K))-1;uint32_t lr=D_LOW_LOCAL_RANK[(uint32_t)(m&CM)];return rank+lr;
+    }}
+#pragma unroll
+    for(int pos=WIDTH-1;pos>=0;--pos){MateValue v=mget(m,pos);if(v>N&&allowed(fixed,occ,pos,N))rank+=dp[pos][h];if(v>R&&h>0&&allowed(fixed,occ,pos,R))rank+=dp[pos][h-1];if(v==R)--h;else if(v==L)++h;}
+    return rank;
+}
+template<int WIDTH>
+__device__ __forceinline__ int height_before_rank_pos(MateID m,int hi){
+    constexpr MateID EVEN=0x5555555555555555ULL;
+    constexpr MateID WM=(MateID(1)<<(2*WIDTH))-1ULL;
+    MateID lower=(MateID(1)<<(2*(hi+1)))-1ULL;
+    MateID pm=EVEN&WM&~lower;
+    int nr=__popcll(m&pm), nl=__popcll((m>>1)&pm);
+    return 1+nl-nr;
+}
+template<int WIDTH>
+__device__ __forceinline__ Code rank_slice_t(MateID m,int hi,int lo,int h,uint32_t fixed,uint32_t occ,const Code dp[MAXW+1][MAXW+2]){
+    Code rank=0;
+    for(int pos=hi;pos>=lo;--pos){MateValue v=mget(m,pos);if(v>N&&allowed(fixed,occ,pos,N))rank+=dp[pos][h];if(v>R&&h>0&&allowed(fixed,occ,pos,R))rank+=dp[pos][h-1];if(v==R)--h;else if(v==L)++h;}
+    return rank;
+}
+template<int WIDTH>
+__device__ __forceinline__ Code rank_same_t(Code src_rank,MateID src,MateID dst,uint32_t fixed,uint32_t occ,const Code dp[MAXW+1][MAXW+2]){
+    MateID diff=src^dst;
+    int hi=(63-__clzll(diff))/2;
+    int lo=(__ffsll((long long)diff)-1)/2;
+    int h=height_before_rank_pos<WIDTH>(src,hi);
+    Code a=rank_slice_t<WIDTH>(src,hi,lo,h,fixed,occ,dp);
+    Code b=rank_slice_t<WIDTH>(dst,hi,lo,h,fixed,occ,dp);
+    return b>=a?src_rank+(b-a):src_rank-(a-b);
+}
+template<int WIDTH>
+__device__ __forceinline__ Code rank_known_t(Code src_rank,MateID src,MateID dst,int hi,int lo,uint32_t fixed,uint32_t occ,const Code dp[MAXW+1][MAXW+2]){
+    int h=height_before_rank_pos<WIDTH>(src,hi);
+    Code a=rank_slice_t<WIDTH>(src,hi,lo,h,fixed,occ,dp);
+    Code b=rank_slice_t<WIDTH>(dst,hi,lo,h,fixed,occ,dp);
+    return b>=a?src_rank+(b-a):src_rank-(a-b);
+}
+
+template<int WIDTH>
+__device__ __forceinline__ MateID unrank_group_global_t(Code rank,uint32_t fixed,uint32_t occ,const Code dp[MAXW+1][MAXW+2],Code& global_rank){
+    if constexpr(LOW_LUT_K>0){if(low_lut_applicable<WIDTH>(fixed)){
+        MateID m=0;int h=1;global_rank=0;
+#pragma unroll
+        for(int pos=WIDTH-1;pos>=LOW_LUT_K;--pos){
+            bool chose=false;
+            if(allowed(fixed,occ,pos,N)){Code z=dp[pos][h];if(rank<z){chose=true;}else rank-=z;}
+            if(chose)continue;
+            if(h>0&&allowed(fixed,occ,pos,R)){Code z=dp[pos][h-1];if(rank<z){global_rank+=D_FULL_DP[pos][h];m|=MateID(R)<<(2*pos);--h;continue;}rank-=z;}
+            global_rank+=D_FULL_DP[pos][h]+(h>0?D_FULL_DP[pos][h-1]:0);m|=MateID(L)<<(2*pos);++h;
+        }
+        uint32_t mask=occ&((1u<<LOW_LUT_K)-1u);uint32_t base=D_LOW_OFFSETS[size_t(mask)*(LOW_LUT_K+2)+h];LowEntry e=D_LOW_ENTRIES[base+(uint32_t)rank];m|=e.mate;global_rank+=e.full_rank;return m;
+    }}
+    MateID m=unrank_group_t<WIDTH>(rank,fixed,occ,dp);global_rank=rank_full_t<WIDTH>(m);return m;
+}
+template<int WIDTH>
+__device__ __forceinline__ Code rank_full_t(MateID m){
+    Code rank=0;int h=1;
+#pragma unroll
+    for(int pos=WIDTH-1;pos>=0;--pos){MateValue v=mget(m,pos);if(v>N)rank+=D_FULL_DP[pos][h];if(v>R&&h>0)rank+=D_FULL_DP[pos][h-1];if(v==R)--h;else if(v==L)++h;}
+    return rank;
+}
+__device__ __forceinline__ Count global_load_main(Code g){int o=int(g/D_MAIN_CHUNK);if(o>=D_NGPU)o=D_NGPU-1;return D_MAIN_PTR[o][g-Code(o)*D_MAIN_CHUNK];}
+__device__ __forceinline__ Count global_load_block(Code g){int o=int(g/D_BLOCK_CHUNK);if(o>=D_NGPU)o=D_NGPU-1;return D_BLOCK_PTR[o][g-Code(o)*D_BLOCK_CHUNK];}
+__device__ __forceinline__ void global_store_main(Code g,Count v){int o=int(g/D_MAIN_CHUNK);if(o>=D_NGPU)o=D_NGPU-1;D_MAIN_PTR[o][g-Code(o)*D_MAIN_CHUNK]=v;}
+__device__ __forceinline__ void global_store_block(Code g,Count v){int o=int(g/D_BLOCK_CHUNK);if(o>=D_NGPU)o=D_NGPU-1;D_BLOCK_PTR[o][g-Code(o)*D_BLOCK_CHUNK]=v;}
+
+__device__ __forceinline__ MateID bounded_unrank(Code rank,int width,const Code dp[MAXW+1][MAXW+2],int cap){
+    MateID m=0;int h=1;
+    for(int pos=width-1;pos>=0;--pos){Code z=dp[pos][h];if(rank<z)continue;rank-=z;if(h>0){z=dp[pos][h-1];if(rank<z){m|=MateID(R)<<(2*pos);--h;continue;}rank-=z;}if(h<cap){m|=MateID(L)<<(2*pos);++h;}}
+    return m;
+}
+__device__ __forceinline__ Code bounded_rank(MateID m,int width,const Code dp[MAXW+1][MAXW+2],int cap){
+    Code rank=0;int h=1;for(int pos=width-1;pos>=0;--pos){auto v=mget(m,pos);if(v>N)rank+=dp[pos][h];if(v>R&&h>0)rank+=dp[pos][h-1];if(v==R)--h;else if(v==L)++h;}return rank;
+}
+__global__ void bounded_fill_one_kernel(Count* a,Code n){for(Code i=Code(blockIdx.x)*blockDim.x+threadIdx.x,st=Code(gridDim.x)*blockDim.x;i<n;i+=st)a[i]=1;}
+__global__ void bounded_embed_kernel(const Count*old,Code oldN,Count*neu,int width){for(Code i=Code(blockIdx.x)*blockDim.x+threadIdx.x,st=Code(gridDim.x)*blockDim.x;i<oldN;i+=st){Count c=old[i];if(!c)continue;MateID m=bounded_unrank(i,width,D_BOUND_OLD_DP,D_BOUND_OLD_CAP);Code j=bounded_rank(m,width,D_BOUND_DP,D_BOUND_CAP);neu[j]=c;}}
+__global__ void bounded_scatter_full_kernel(const Count*in,Code n,int width){for(Code i=Code(blockIdx.x)*blockDim.x+threadIdx.x,st=Code(gridDim.x)*blockDim.x;i<n;i+=st){Count c=in[i];if(!c)continue;MateID m=bounded_unrank(i,width,D_BOUND_DP,D_BOUND_CAP);global_store_main(rank_full_t<TARGET_W>(m),c);}}
+__device__ __forceinline__ uint32_t row2_coeff_exact(MateID m){
+    long long v0=1,v1=0,v2=0,v3=0,v4=0,v5=0;
+#pragma unroll
+    for(int p=TARGET_W-1;p>=0;--p){long long w0=0,w1=0,w2=0,w3=0,w4=0,w5=0;auto z=oneesan::gridfp::mget(m,p);if(z==oneesan::gridfp::N){w1=v0+2*v1;w2=-v4-v5;w3=v3;w4=-v5;w5=v2+2*v4+3*v5;}else if(z==oneesan::gridfp::R){w0=v3;w2=v0;w4=v1;}else{w0=v5;w1=v2+2*v4+2*v5;w3=v0+v1;}v0=w0;v1=w1;v2=w2;v3=w3;v4=w4;v5=w5;}
+    long long ans=v2+2*v4+2*v5;return uint32_t(ans);
+}
+__global__ void init_after_two_rows_kernel(Code total,int shard,int ng){
+    Code tid=Code(blockIdx.x)*blockDim.x+threadIdx.x,st=Code(gridDim.x)*blockDim.x;
+    for(Code q=tid;;q+=st){
+        Code brank=Code(shard)+q*Code(ng);if(brank>=total)break;Code r=brank,grank=0;int h=1;
+        long long v0=1,v1=0,v2=0,v3=0,v4=0,v5=0;
+#pragma unroll
+        for(int pos=TARGET_W-1;pos>=0;--pos){
+            MateValue z=N;Code a=D_BOUND_DP[pos][h];
+            if(r<a) z=N;
+            else {r-=a;if(h>0){a=D_BOUND_DP[pos][h-1];if(r<a)z=R;else{r-=a;z=L;}}else z=L;}
+            if(z==R){grank+=D_FULL_DP[pos][h];--h;}else if(z==L){grank+=D_FULL_DP[pos][h]+(h>0?D_FULL_DP[pos][h-1]:0);++h;}
+            long long w0=0,w1=0,w2=0,w3=0,w4=0,w5=0;
+            if(z==N){w1=v0+2*v1;w2=-v4-v5;w3=v3;w4=-v5;w5=v2+2*v4+3*v5;}
+            else if(z==R){w0=v3;w2=v0;w4=v1;}
+            else{w0=v5;w1=v2+2*v4+2*v5;w3=v0+v1;}
+            v0=w0;v1=w1;v2=w2;v3=w3;v4=w4;v5=w5;
+        }
+        Count c=Count((v2+2*v4+2*v5)%D_MOD);global_store_main(grank,c);
+    }
+}
+
+
+
+
+__device__ __forceinline__ int f_find_main(Code i){int lo=0,hi=D_F_MAIN_NBLOCKS;while(lo<hi){int m=(lo+hi)>>1;if(i<D_F_MAIN_BLOCKS[m].end)hi=m;else lo=m+1;}return lo;}
+__device__ __forceinline__ int f_find_block(Code i){int lo=0,hi=D_F_BLOCK_NBLOCKS;while(lo<hi){int m=(lo+hi)>>1;if(i<D_F_BLOCK_BLOCKS[m].end)hi=m;else lo=m+1;}return lo;}
+__device__ __forceinline__ MateID factor_unrank_main(Code i){
+    constexpr int L=LOW_LUT_K,H=HIGH_LUT_K,S=MAXW+2;int b=f_find_main(i);FBlock x=D_F_MAIN_BLOCKS[b];Code r=i-x.off;uint32_t hr=x.stride?uint32_t(r/x.stride):0,lr=x.stride?uint32_t(r-Code(hr)*x.stride):0;uint32_t hc,lc;
+    if(D_F_FIX_LOW){hc=D_F_HIGH_ALL_CODES[D_F_HIGH_ALL_OFF[x.he]+hr];lc=D_F_LOW_MASK_CODES[D_F_LOW_MASK_OFF[size_t(D_F_MASK)*S+x.hs]+lr];}
+    else{hc=D_F_HIGH_MASK_CODES[D_F_HIGH_MASK_OFF[size_t(D_F_MASK)*S+x.he]+hr];lc=D_F_LOW_ALL_CODES[D_F_LOW_ALL_OFF[x.hs]+lr];}
+    return MateID(lc)|(MateID(x.c)<<(2*L))|(MateID(hc)<<(2*(L+1)));
+}
+__device__ __forceinline__ MateID factor_unrank_block(Code i){
+    constexpr int L=LOW_LUT_K,H=HIGH_LUT_K,S=MAXW+2;int b=f_find_block(i);FBlock x=D_F_BLOCK_BLOCKS[b];Code r=i-x.off;uint32_t hr=x.stride?uint32_t(r/x.stride):0,lr=x.stride?uint32_t(r-Code(hr)*x.stride):0;uint32_t hc,lc;
+    if(D_F_FIX_LOW){hc=D_F_HIGH_ALL_CODES[D_F_HIGH_ALL_OFF[x.he]+hr];lc=D_F_LOW_MASK_CODES[D_F_LOW_MASK_OFF[size_t(D_F_MASK)*S+x.hs]+lr];}
+    else{hc=D_F_HIGH_MASK_CODES[D_F_HIGH_MASK_OFF[size_t(D_F_MASK)*S+x.he]+hr];lc=D_F_LOW_ALL_CODES[D_F_LOW_ALL_OFF[x.hs]+lr];}
+    return MateID(lc)|(MateID(hc)<<(2*L));
+}
+__device__ __forceinline__ int seg_end_height(uint32_t code,int len){constexpr uint64_t E=0x5555555555555555ULL;uint64_t m=(len==16?0xffffffffULL:((1ULL<<(2*len))-1));uint64_t e=E&m;int nr=__popcll(uint64_t(code)&e),nl=__popcll((uint64_t(code)>>1)&e);return 1+nl-nr;}
+__device__ __forceinline__ Code factor_rank_main(MateID m){
+    constexpr int L=LOW_LUT_K,H=HIGH_LUT_K;constexpr uint32_t LM=(1u<<(2*L))-1u,HM=(1u<<(2*H))-1u;uint32_t lc=uint32_t(m)&LM,hc=uint32_t((m>>(2*(L+1)))&HM);int he=seg_end_height(hc,H);int cv=int(mget(m,L));int bid=3*he+cv;FBlock x=D_F_MAIN_BLOCKS[bid];uint32_t lp=D_F_LOW_PACKED_RANK[lc],hp=D_F_HIGH_PACKED_RANK[hc];uint32_t lr=D_F_FIX_LOW?(lp&((1u<<L)-1u)):(lp>>L);uint32_t hr=D_F_FIX_LOW?(hp>>H):(hp&((1u<<H)-1u));return x.off+Code(hr)*x.stride+lr;
+}
+__device__ __forceinline__ Code factor_rank_block(MateID m){
+    constexpr int L=LOW_LUT_K,H=HIGH_LUT_K;constexpr uint32_t LM=(1u<<(2*L))-1u,HM=(1u<<(2*H))-1u;uint32_t lc=uint32_t(m)&LM,hc=uint32_t((m>>(2*L))&HM);int h=seg_end_height(hc,H);FBlock x=D_F_BLOCK_BLOCKS[h];uint32_t lp=D_F_LOW_PACKED_RANK[lc],hp=D_F_HIGH_PACKED_RANK[hc];uint32_t lr=D_F_FIX_LOW?(lp&((1u<<L)-1u)):(lp>>L);uint32_t hr=D_F_FIX_LOW?(hp>>H):(hp&((1u<<H)-1u));return x.off+Code(hr)*x.stride+lr;
+}
+__device__ __forceinline__ Code factor_global_rank_main(MateID m){
+    constexpr int L=LOW_LUT_K,H=HIGH_LUT_K;constexpr uint32_t LM=(1u<<(2*L))-1u,HM=(1u<<(2*H))-1u;uint32_t lc=uint32_t(m)&LM,hc=uint32_t((m>>(2*(L+1)))&HM);int he=seg_end_height(hc,H);uint32_t hp=D_F_HIGH_PACKED_RANK[hc],lp=D_F_LOW_PACKED_RANK[lc];uint32_t har=hp>>H,lar=lp>>L;Code rank=D_F_HIGH_MAIN_BASE[D_F_HIGH_ALL_OFF[he]+har];MateValue c=mget(m,L);if(c>N)rank+=D_FULL_DP[L][he];if(c>R&&he>0)rank+=D_FULL_DP[L][he-1];return rank+lar;
+}
+__device__ __forceinline__ Code factor_global_rank_block(MateID m){
+    constexpr int L=LOW_LUT_K,H=HIGH_LUT_K;constexpr uint32_t LM=(1u<<(2*L))-1u,HM=(1u<<(2*H))-1u;uint32_t lc=uint32_t(m)&LM,hc=uint32_t((m>>(2*L))&HM);int he=seg_end_height(hc,H);uint32_t hp=D_F_HIGH_PACKED_RANK[hc],lp=D_F_LOW_PACKED_RANK[lc];uint32_t har=hp>>H,lar=lp>>L;return D_F_HIGH_BLOCK_BASE[D_F_HIGH_ALL_OFF[he]+har]+lar;
+}
+__global__ void init_after_first_row_kernel(int shard,int ng){
+    constexpr Code total=Code(1)<<(TARGET_W-1);
+    Code tid=Code(blockIdx.x)*blockDim.x+threadIdx.x;
+    Code stride=Code(gridDim.x)*blockDim.x;
+    for(Code mask=Code(shard)+tid*Code(ng);mask<total;mask+=stride*Code(ng)){
+        MateID m=MateID(oneesan::gridfp::R)<<(2*(TARGET_W-1));
+#pragma unroll
+        for(int p=TARGET_W-1;p>=1;--p){
+            if((mask>>(p-1))&1ULL){
+                auto z=oneesan::gridfp::include_horizontal(m,TARGET_W,p);
+                m=z.mate;
+            }
+        }
+        global_store_main(factor_global_rank_main(m),Count(1));
+    }
+}
+
+__device__ __forceinline__ void atomic_add_mod(Count*p,Count v);
+__global__ void sum_first_row_states_kernel(int shard,int ng,Count* out){
+    extern __shared__ unsigned long long sh[];
+    constexpr Code total=Code(1)<<(TARGET_W-1);
+    Code tid=Code(blockIdx.x)*blockDim.x+threadIdx.x;
+    Code stride=Code(gridDim.x)*blockDim.x;
+    unsigned long long acc=0;
+    for(Code mask=Code(shard)+tid*Code(ng);mask<total;mask+=stride*Code(ng)){
+        MateID m=MateID(oneesan::gridfp::R)<<(2*(TARGET_W-1));
+#pragma unroll
+        for(int p=TARGET_W-1;p>=1;--p){
+            if((mask>>(p-1))&1ULL){auto z=oneesan::gridfp::include_horizontal(m,TARGET_W,p);m=z.mate;}
+        }
+        acc += global_load_main(factor_global_rank_main(m));
+    }
+    sh[threadIdx.x]=acc; __syncthreads();
+    for(unsigned s=blockDim.x/2;s;s>>=1){if(threadIdx.x<s)sh[threadIdx.x]+=sh[threadIdx.x+s];__syncthreads();}
+    if(threadIdx.x==0){Count v=Count(sh[0]%D_MOD);atomic_add_mod(out,v);}
+}
+
+__device__ __forceinline__ Count r3_add(Count a,Count b){Count mod=D_MOD;return a>=mod-b?a-(mod-b):a+b;}
+__device__ __forceinline__ Count pm_reduce_u64(uint64_t x){
+    uint64_t mod=D_MOD,delta=0x100000000ULL-mod;
+    if(delta>0 && delta<(1ULL<<20)){
+#pragma unroll 3
+        for(int k=0;k<3&&x>>32;++k)x=uint64_t(uint32_t(x))+(x>>32)*delta;
+        while(x>=mod)x-=mod;return Count(x);
+    }
+    return Count(x%mod);
+}
+__device__ __forceinline__ Count pm_mul(Count a,Count b){return pm_reduce_u64(uint64_t(a)*b);}
+__device__ __forceinline__ Count pm_mul_small_signed(Count a,int c){if(c==0||a==0)return 0;uint64_t x=uint64_t(a)*uint64_t(c<0?-int64_t(c):int64_t(c));Count r=pm_reduce_u64(x);return c<0?(r?D_MOD-r:0):r;}
+
+struct R3Vec {Count x0;Count x1;Count x2;Count x3;Count x4;Count x5;Count x6;Count x7;Count x8;Count x9;Count x10;Count x11;Count x12;Count x13;Count x14;Count x15;Count x16;Count x17;};
+__device__ __forceinline__ R3Vec r3_scalar_N(const R3Vec& v){R3Vec w{};
+Count s0=0;
+s0=r3_add(s0,pm_mul_small_signed(v.x7,2));
+s0=r3_add(s0,pm_mul_small_signed(v.x9,4));
+s0=r3_add(s0,pm_mul_small_signed(v.x11,6));
+s0=r3_add(s0,pm_mul_small_signed(v.x15,12));
+w.x0=s0;
+Count s1=0;
+s1=r3_add(s1,pm_mul_small_signed(v.x0,6));
+s1=r3_add(s1,pm_mul_small_signed(v.x7,2));
+s1=r3_add(s1,pm_mul_small_signed(v.x9,-2));
+s1=r3_add(s1,pm_mul_small_signed(v.x11,12));
+s1=r3_add(s1,pm_mul_small_signed(v.x15,18));
+w.x1=s1;
+Count s2=0;
+s2=r3_add(s2,pm_mul_small_signed(v.x12,31));
+s2=r3_add(s2,pm_mul_small_signed(v.x14,23));
+s2=r3_add(s2,pm_mul_small_signed(v.x16,29));
+s2=r3_add(s2,pm_mul_small_signed(v.x17,27));
+w.x2=s2;
+Count s3=0;
+s3=r3_add(s3,pm_mul_small_signed(v.x8,6));
+s3=r3_add(s3,pm_mul_small_signed(v.x13,-24));
+w.x3=s3;
+Count s4=0;
+s4=r3_add(s4,pm_mul_small_signed(v.x1,6));
+s4=r3_add(s4,pm_mul_small_signed(v.x7,-8));
+s4=r3_add(s4,pm_mul_small_signed(v.x9,20));
+s4=r3_add(s4,pm_mul_small_signed(v.x11,-18));
+s4=r3_add(s4,pm_mul_small_signed(v.x15,-24));
+w.x4=s4;
+Count s5=0;
+s5=r3_add(s5,pm_mul_small_signed(v.x12,-15));
+s5=r3_add(s5,pm_mul_small_signed(v.x14,-15));
+s5=r3_add(s5,pm_mul_small_signed(v.x16,-21));
+s5=r3_add(s5,pm_mul_small_signed(v.x17,-9));
+w.x5=s5;
+Count s6=0;
+s6=r3_add(s6,pm_mul_small_signed(v.x2,6));
+s6=r3_add(s6,pm_mul_small_signed(v.x12,-30));
+s6=r3_add(s6,pm_mul_small_signed(v.x14,-36));
+s6=r3_add(s6,pm_mul_small_signed(v.x16,-42));
+s6=r3_add(s6,pm_mul_small_signed(v.x17,-24));
+w.x6=s6;
+Count s7=0;
+s7=r3_add(s7,pm_mul_small_signed(v.x7,6));
+w.x7=s7;
+Count s8=0;
+s8=r3_add(s8,pm_mul_small_signed(v.x3,6));
+s8=r3_add(s8,pm_mul_small_signed(v.x8,12));
+s8=r3_add(s8,pm_mul_small_signed(v.x13,30));
+w.x8=s8;
+Count s9=0;
+s9=r3_add(s9,pm_mul_small_signed(v.x9,6));
+w.x9=s9;
+Count s10=0;
+s10=r3_add(s10,pm_mul_small_signed(v.x10,6));
+w.x10=s10;
+Count s11=0;
+s11=r3_add(s11,pm_mul_small_signed(v.x4,6));
+s11=r3_add(s11,pm_mul_small_signed(v.x7,4));
+s11=r3_add(s11,pm_mul_small_signed(v.x9,-4));
+s11=r3_add(s11,pm_mul_small_signed(v.x11,24));
+s11=r3_add(s11,pm_mul_small_signed(v.x15,12));
+w.x11=s11;
+Count s12=0;
+s12=r3_add(s12,pm_mul_small_signed(v.x12,6));
+w.x12=s12;
+Count s13=0;
+s13=r3_add(s13,pm_mul_small_signed(v.x13,6));
+w.x13=s13;
+Count s14=0;
+s14=r3_add(s14,pm_mul_small_signed(v.x5,6));
+s14=r3_add(s14,pm_mul_small_signed(v.x12,39));
+s14=r3_add(s14,pm_mul_small_signed(v.x14,15));
+s14=r3_add(s14,pm_mul_small_signed(v.x16,15));
+s14=r3_add(s14,pm_mul_small_signed(v.x17,27));
+w.x14=s14;
+Count s15=0;
+s15=r3_add(s15,pm_mul_small_signed(v.x15,6));
+w.x15=s15;
+Count s16=0;
+s16=r3_add(s16,pm_mul_small_signed(v.x6,6));
+s16=r3_add(s16,pm_mul_small_signed(v.x12,-9));
+s16=r3_add(s16,pm_mul_small_signed(v.x14,15));
+s16=r3_add(s16,pm_mul_small_signed(v.x16,21));
+s16=r3_add(s16,pm_mul_small_signed(v.x17,-9));
+w.x16=s16;
+Count s17=0;
+s17=r3_add(s17,pm_mul_small_signed(v.x12,-8));
+s17=r3_add(s17,pm_mul_small_signed(v.x14,2));
+s17=r3_add(s17,pm_mul_small_signed(v.x16,2));
+w.x17=s17;
+return w;}
+__device__ __forceinline__ R3Vec r3_scalar_R(const R3Vec& v){R3Vec w{};
+Count s0=0;
+s0=r3_add(s0,pm_mul_small_signed(v.x8,-2));
+s0=r3_add(s0,pm_mul_small_signed(v.x13,-4));
+w.x0=s0;
+Count s1=0;
+s1=r3_add(s1,pm_mul_small_signed(v.x8,4));
+s1=r3_add(s1,pm_mul_small_signed(v.x13,8));
+w.x1=s1;
+Count s2=0;
+s2=r3_add(s2,pm_mul_small_signed(v.x0,6));
+s2=r3_add(s2,pm_mul_small_signed(v.x9,14));
+s2=r3_add(s2,pm_mul_small_signed(v.x11,18));
+s2=r3_add(s2,pm_mul_small_signed(v.x15,18));
+w.x2=s2;
+Count s3=0;
+s3=r3_add(s3,pm_mul_small_signed(v.x10,36));
+w.x3=s3;
+Count s4=0;
+s4=r3_add(s4,pm_mul_small_signed(v.x8,-22));
+s4=r3_add(s4,pm_mul_small_signed(v.x13,-44));
+w.x4=s4;
+Count s5=0;
+s5=r3_add(s5,pm_mul_small_signed(v.x1,6));
+s5=r3_add(s5,pm_mul_small_signed(v.x9,-12));
+s5=r3_add(s5,pm_mul_small_signed(v.x11,-30));
+s5=r3_add(s5,pm_mul_small_signed(v.x15,-30));
+w.x5=s5;
+Count s7=0;
+s7=r3_add(s7,pm_mul_small_signed(v.x8,12));
+s7=r3_add(s7,pm_mul_small_signed(v.x13,24));
+w.x7=s7;
+Count s9=0;
+s9=r3_add(s9,pm_mul_small_signed(v.x3,6));
+s9=r3_add(s9,pm_mul_small_signed(v.x8,12));
+s9=r3_add(s9,pm_mul_small_signed(v.x13,30));
+w.x9=s9;
+Count s11=0;
+s11=r3_add(s11,pm_mul_small_signed(v.x8,8));
+s11=r3_add(s11,pm_mul_small_signed(v.x13,16));
+w.x11=s11;
+Count s12=0;
+s12=r3_add(s12,pm_mul_small_signed(v.x4,6));
+s12=r3_add(s12,pm_mul_small_signed(v.x9,12));
+s12=r3_add(s12,pm_mul_small_signed(v.x11,30));
+s12=r3_add(s12,pm_mul_small_signed(v.x15,12));
+w.x12=s12;
+Count s13=0;
+s13=r3_add(s13,pm_mul_small_signed(v.x10,-6));
+w.x13=s13;
+Count s15=0;
+s15=r3_add(s15,pm_mul_small_signed(v.x8,-6));
+s15=r3_add(s15,pm_mul_small_signed(v.x13,-12));
+w.x15=s15;
+Count s17=0;
+s17=r3_add(s17,pm_mul_small_signed(v.x7,6));
+s17=r3_add(s17,pm_mul_small_signed(v.x9,-16));
+s17=r3_add(s17,pm_mul_small_signed(v.x11,-6));
+s17=r3_add(s17,pm_mul_small_signed(v.x15,12));
+w.x17=s17;
+return w;}
+__device__ __forceinline__ R3Vec r3_scalar_L(const R3Vec& v){R3Vec w{};
+Count s0=0;
+s0=r3_add(s0,pm_mul_small_signed(v.x6,-4));
+s0=r3_add(s0,pm_mul_small_signed(v.x12,6));
+s0=r3_add(s0,pm_mul_small_signed(v.x14,-10));
+s0=r3_add(s0,pm_mul_small_signed(v.x16,-14));
+s0=r3_add(s0,pm_mul_small_signed(v.x17,6));
+w.x0=s0;
+Count s1=0;
+s1=r3_add(s1,pm_mul_small_signed(v.x6,8));
+s1=r3_add(s1,pm_mul_small_signed(v.x12,6));
+s1=r3_add(s1,pm_mul_small_signed(v.x14,44));
+s1=r3_add(s1,pm_mul_small_signed(v.x16,64));
+s1=r3_add(s1,pm_mul_small_signed(v.x17,6));
+w.x1=s1;
+Count s3=0;
+s3=r3_add(s3,pm_mul_small_signed(v.x0,6));
+s3=r3_add(s3,pm_mul_small_signed(v.x1,12));
+s3=r3_add(s3,pm_mul_small_signed(v.x7,-24));
+s3=r3_add(s3,pm_mul_small_signed(v.x9,-42));
+s3=r3_add(s3,pm_mul_small_signed(v.x11,-54));
+s3=r3_add(s3,pm_mul_small_signed(v.x15,-90));
+w.x3=s3;
+Count s4=0;
+s4=r3_add(s4,pm_mul_small_signed(v.x6,-44));
+s4=r3_add(s4,pm_mul_small_signed(v.x12,12));
+s4=r3_add(s4,pm_mul_small_signed(v.x14,-182));
+s4=r3_add(s4,pm_mul_small_signed(v.x16,-262));
+s4=r3_add(s4,pm_mul_small_signed(v.x17,12));
+w.x4=s4;
+Count s7=0;
+s7=r3_add(s7,pm_mul_small_signed(v.x2,6));
+s7=r3_add(s7,pm_mul_small_signed(v.x6,24));
+s7=r3_add(s7,pm_mul_small_signed(v.x12,-30));
+s7=r3_add(s7,pm_mul_small_signed(v.x14,72));
+s7=r3_add(s7,pm_mul_small_signed(v.x16,114));
+s7=r3_add(s7,pm_mul_small_signed(v.x17,-24));
+w.x7=s7;
+Count s10=0;
+s10=r3_add(s10,pm_mul_small_signed(v.x3,6));
+s10=r3_add(s10,pm_mul_small_signed(v.x8,12));
+s10=r3_add(s10,pm_mul_small_signed(v.x13,30));
+w.x10=s10;
+Count s11=0;
+s11=r3_add(s11,pm_mul_small_signed(v.x6,16));
+s11=r3_add(s11,pm_mul_small_signed(v.x12,-6));
+s11=r3_add(s11,pm_mul_small_signed(v.x14,64));
+s11=r3_add(s11,pm_mul_small_signed(v.x16,92));
+s11=r3_add(s11,pm_mul_small_signed(v.x17,-6));
+w.x11=s11;
+Count s13=0;
+s13=r3_add(s13,pm_mul_small_signed(v.x4,6));
+s13=r3_add(s13,pm_mul_small_signed(v.x7,6));
+s13=r3_add(s13,pm_mul_small_signed(v.x9,12));
+s13=r3_add(s13,pm_mul_small_signed(v.x11,30));
+s13=r3_add(s13,pm_mul_small_signed(v.x15,24));
+w.x13=s13;
+Count s15=0;
+s15=r3_add(s15,pm_mul_small_signed(v.x5,6));
+s15=r3_add(s15,pm_mul_small_signed(v.x6,-6));
+s15=r3_add(s15,pm_mul_small_signed(v.x12,30));
+s15=r3_add(s15,pm_mul_small_signed(v.x14,-24));
+s15=r3_add(s15,pm_mul_small_signed(v.x16,-42));
+s15=r3_add(s15,pm_mul_small_signed(v.x17,18));
+w.x15=s15;
+return w;}
+__device__ __forceinline__ R3Vec r3_scalar_step(const R3Vec&v,MateValue z){return z==N?r3_scalar_N(v):(z==R?r3_scalar_R(v):r3_scalar_L(v));}
+
+__device__ __forceinline__ void r3_step(uint32_t v[18],uint32_t w[18],MateValue z){
+#pragma unroll
+    for(int j=0;j<18;++j)w[j]=0;
+    const uint16_t* off = z==N?D_R3_OFF_N:(z==R?D_R3_OFF_R:D_R3_OFF_L);
+    const oneesan::row3auto::Tr* tr = z==N?D_R3_TR_N:(z==R?D_R3_TR_R:D_R3_TR_L);
+#pragma unroll
+    for(int i=0;i<18;++i){Count a=v[i];if(!a)continue;int e=off[i+1];for(int t=off[i];t<e;++t){auto q=tr[t];Count x=pm_mul_small_signed(a,q.coeff);w[q.dst]=r3_add(w[q.dst],x);}}
+}
+__device__ __forceinline__ Count r3_scalar_finish(const R3Vec& v){
+    Count ans=v.x2;
+    ans=r3_add(ans,pm_mul_small_signed(v.x5,4));
+    ans=r3_add(ans,pm_mul_small_signed(v.x6,4));
+    ans=r3_add(ans,pm_mul_small_signed(v.x12,12));
+    ans=r3_add(ans,pm_mul_small_signed(v.x14,10));
+    ans=r3_add(ans,pm_mul_small_signed(v.x16,11));
+    ans=r3_add(ans,pm_mul_small_signed(v.x17,5));
+    return ans;
+}
+__device__ __forceinline__ Count r3warp_step(Count v,int lane,int sym){
+    Count acc=0;
+#pragma unroll
+    for(int k=0;k<6;++k){
+        int idx=lane*6+k;int src=D_R3W_SRC[sym][idx];int c=D_R3W_CO[sym][idx];
+        Count x=__shfl_sync(0xffffffffu,v,src&31);
+        if(c)acc=r3_add(acc,pm_mul_small_signed(x,c));
+    }
+    return acc;
+}
+__global__ void init_after_three_rows_kernel(Code total,int shard,int ng){
+    int lane=threadIdx.x&31;
+    Code warp=Code(blockIdx.x)*(blockDim.x/32)+(threadIdx.x>>5);
+    Code warpStride=Code(gridDim.x)*(blockDim.x/32);
+    for(Code q=warp;;q+=warpStride){
+        Code brank=Code(shard)+q*Code(ng);if(brank>=total)break;
+        Code r=0,grank=0;int h=1;if(lane==0)r=brank;
+        Count v=(lane==0)?Count(1):Count(0);
+#pragma unroll
+        for(int pos=TARGET_W-1;pos>=0;--pos){
+            int zi=0;
+            if(lane==0){
+                Code a=D_BOUND_DP[pos][h];
+                if(r<a)zi=0;else{r-=a;if(h>0){a=D_BOUND_DP[pos][h-1];if(r<a)zi=1;else{r-=a;zi=2;}}else zi=2;}
+                if(zi==1){grank+=D_FULL_DP[pos][h];--h;}
+                else if(zi==2){grank+=D_FULL_DP[pos][h]+(h>0?D_FULL_DP[pos][h-1]:0);++h;}
+            }
+            zi=__shfl_sync(0xffffffffu,zi,0);
+            v=r3warp_step(v,lane,zi);
+        }
+        Count term=(lane<18)?pm_mul_small_signed(v,D_R3W_BETA[lane]):0;
+#pragma unroll
+        for(int off=16;off;off>>=1)term=r3_add(term,__shfl_down_sync(0xffffffffu,term,off));
+        if(lane==0){Count ans=pm_mul(term,D_R3_UNSCALE);global_store_main(grank,ans);}
+    }
+}
+
+__global__ void gather_main_kernel(Count*out,MateID*mates,Code n){Code i=Code(blockIdx.x)*blockDim.x+threadIdx.x,stride=Code(gridDim.x)*blockDim.x;for(;i<n;i+=stride){MateID m=factor_unrank_main(i);Code g=factor_global_rank_main(m);out[i]=global_load_main(g);if(mates)mates[i]=m;}}
+__global__ void gather_block_kernel(Count*out,Code n){Code i=Code(blockIdx.x)*blockDim.x+threadIdx.x,stride=Code(gridDim.x)*blockDim.x;for(;i<n;i+=stride){MateID m=factor_unrank_block(i);Code g=factor_global_rank_block(m);out[i]=global_load_block(g);}}
+__global__ void scatter_main_kernel(const Count*in,Code n){Code i=Code(blockIdx.x)*blockDim.x+threadIdx.x,stride=Code(gridDim.x)*blockDim.x;for(;i<n;i+=stride){MateID m=factor_unrank_main(i);Code g=factor_global_rank_main(m);global_store_main(g,in[i]);}}
+__global__ void scatter_block_kernel(const Count*in,Code n){Code i=Code(blockIdx.x)*blockDim.x+threadIdx.x,stride=Code(gridDim.x)*blockDim.x;for(;i<n;i+=stride){MateID m=factor_unrank_block(i);Code g=factor_global_rank_block(m);global_store_block(g,in[i]);}}
+
+
+template<bool BLOCK,bool SCATTER>
+__global__ void interval_io_kernel(Count*buf,const PeerInterval*iv,size_t niv){
+    for(size_t k=blockIdx.x;k<niv;k+=gridDim.x){
+        PeerInterval x=iv[k];
+        Count*peer=(BLOCK?D_BLOCK_PTR[x.owner]:D_MAIN_PTR[x.owner])+x.remote;
+        for(Code off=threadIdx.x;off<x.len;off+=blockDim.x){
+            if constexpr(SCATTER) peer[off]=buf[x.local+off];
+            else buf[x.local+off]=peer[off];
+        }
+    }
+}
+static int interval_blocks(size_t niv,int){return int(std::min<size_t>(65535,std::max<size_t>(1,niv)));}
+
+__device__ __forceinline__ void atomic_add_mod(Count*p,Count v){if(!v)return;Count mod=D_MOD;cuda::atomic_ref<Count,cuda::thread_scope_device> a(*p);Count old=a.load(cuda::memory_order_relaxed);for(;;){Count neu=(old>=mod-v)?old-(mod-v):old+v;if(a.compare_exchange_weak(old,neu,cuda::memory_order_relaxed,cuda::memory_order_relaxed))return;}}
+__global__ void bounded_main_kernel(const Count*in,Code n,Count*outM,Count*outD,int width,int p){for(Code i=Code(blockIdx.x)*blockDim.x+threadIdx.x,st=Code(gridDim.x)*blockDim.x;i<n;i+=st){Count c=in[i];if(!c)continue;MateID m=bounded_unrank(i,width,D_BOUND_DP,D_BOUND_CAP);auto z=oneesan::gridfp::include_horizontal(m,width,p);if(!z.valid)continue;if(z.blocked)atomic_add_mod(outD+bounded_rank(z.mate,width-1,D_BOUND_DP,D_BOUND_CAP),c);else atomic_add_mod(outM+bounded_rank(z.mate,width,D_BOUND_DP,D_BOUND_CAP),c);}}
+__global__ void bounded_block_kernel(const Count*in,Code n,Count*outM,int width,int p){for(Code i=Code(blockIdx.x)*blockDim.x+threadIdx.x,st=Code(gridDim.x)*blockDim.x;i<n;i+=st){Count c=in[i];if(!c)continue;MateID b=bounded_unrank(i,width-1,D_BOUND_DP,D_BOUND_CAP);MateID t=oneesan::gridfp::blocked_exclude(b,p);atomic_add_mod(outM+bounded_rank(t,width,D_BOUND_DP,D_BOUND_CAP),c);}}
+
+template<int WIDTH>
+__device__ __forceinline__ Code rank_drop_n_t(Code src_rank,MateID m,int p){Code a=0,b=0;int h=1;
+#pragma unroll
+for(int pos=WIDTH-1;pos>p;--pos){MateValue v=mget(m,pos);if(v>N&&allowed(D_MAIN_FIXED,D_MAIN_OCC,pos,N))a+=D_MAIN_DP[pos][h];if(v>R&&h>0&&allowed(D_MAIN_FIXED,D_MAIN_OCC,pos,R))a+=D_MAIN_DP[pos][h-1];int q=pos-1;if(v>N&&allowed(D_BLOCK_FIXED,D_BLOCK_OCC,q,N))b+=D_BLOCK_DP[q][h];if(v>R&&h>0&&allowed(D_BLOCK_FIXED,D_BLOCK_OCC,q,R))b+=D_BLOCK_DP[q][h-1];if(v==R)--h;else if(v==L)++h;}return b>=a?src_rank+(b-a):src_rank-(a-b);}
+__global__ void blocked_group_kernel(const Count*in,Code n,Count*out_main,int p){Code i=Code(blockIdx.x)*blockDim.x+threadIdx.x,stride=Code(gridDim.x)*blockDim.x;for(;i<n;i+=stride){Count c=in[i];if(!c)continue;MateID sm=factor_unrank_block(i);MateID t=oneesan::gridfp::blocked_exclude(sm,p);Code j=factor_rank_main(t);atomic_add_mod(out_main+j,c);}}
+__global__ void main_group_kernel(const Count*in,const MateID*mates,Code n,Count*out_main,Count*out_block,int p){Code i=Code(blockIdx.x)*blockDim.x+threadIdx.x,stride=Code(gridDim.x)*blockDim.x;for(;i<n;i+=stride){Count c=in[i];if(!c)continue;MateID m=mates?mates[i]:factor_unrank_main(i);auto z=oneesan::gridfp::include_horizontal(m,TARGET_W,p);if(!z.valid)continue;if(z.blocked)atomic_add_mod(out_block+factor_rank_block(z.mate),c);else atomic_add_mod(out_main+factor_rank_main(z.mate),c);}}
+
+__device__ __forceinline__ Count add_mod_plain(Count a,Count b){Count mod=D_MOD;return a>=mod-b?a-(mod-b):a+b;}
+
+// Reverse (target-gather) form of one Grid-FP update for p>1.  For legal
+// targets the main predecessors below are always legal states in the same
+// transition-closed occupancy group, so no rank/unrank membership roundtrip
+// is required.
+__global__ void reverse_main_group_kernel(const Count*in,const Count*din,const MateID*mates,
+        Code n,Code dn,Count*out,int p){
+    Code i=Code(blockIdx.x)*blockDim.x+threadIdx.x,stride=Code(gridDim.x)*blockDim.x;
+    for(;i<n;i+=stride){
+        MateID t=mates?mates[i]:factor_unrank_main(i); Count acc=in[i];
+        MateID pred=0; bool have=false;
+        switch(oneesan::gridfp::mpair(t,p)){
+        case oneesan::gridfp::LR: pred=oneesan::gridfp::msetpair(t,p,oneesan::gridfp::NN);have=true;break;
+        case oneesan::gridfp::NR: pred=oneesan::gridfp::msetpair(t,p,oneesan::gridfp::RN);have=true;break;
+        case oneesan::gridfp::NL: pred=oneesan::gridfp::msetpair(t,p,oneesan::gridfp::LN);have=true;break;
+        default: break;
+        }
+        if(have){Count c=in[factor_rank_main(pred)];if(c)acc=add_mod_plain(acc,c);}
+        if(oneesan::gridfp::mget(t,p)==oneesan::gridfp::N){
+            MateID b=oneesan::gridfp::mshrink(t,p);Count c=din[factor_rank_block(b)];if(c)acc=add_mod_plain(acc,c);
+        }
+        out[i]=acc;
+    }
+}
+
+
+__global__ void forward_block_only_kernel(const Count*in,const MateID*mates,Code n,Count*out_block,int p){
+    Code i=Code(blockIdx.x)*blockDim.x+threadIdx.x,stride=Code(gridDim.x)*blockDim.x;
+    for(;i<n;i+=stride){
+        Count c=in[i]; if(!c)continue;
+        MateID m=mates?mates[i]:factor_unrank_main(i);
+        auto z=oneesan::gridfp::include_horizontal(m,TARGET_W,p);
+        if(z.valid&&z.blocked)atomic_add_mod(out_block+factor_rank_block(z.mate),c);
+    }
+}
+__device__ __forceinline__ void reverse_add_main(Count&acc,const Count*in,MateID m){
+    Count c=in[factor_rank_main(m)];if(c)acc=add_mod_plain(acc,c);
+}
+__global__ void reverse_block_group_kernel(const Count*in,Code n,Count*out,Code dn,int p){
+    Code i=Code(blockIdx.x)*blockDim.x+threadIdx.x,stride=Code(gridDim.x)*blockDim.x;
+    for(;i<dn;i+=stride){
+        MateID b=factor_unrank_block(i); Count acc=0; auto low=oneesan::gridfp::mget(b,p-1);
+        if(low==oneesan::gridfp::R||low==oneesan::gridfp::L){
+            // inverse of NR/NL -> shrink(p)
+            reverse_add_main(acc,in,oneesan::gridfp::minsert(b,p,oneesan::gridfp::N));
+        }else if(low==oneesan::gridfp::N){
+            MateID u=oneesan::gridfp::minsert(b,p-1,oneesan::gridfp::N);
+            // RL is legal iff the R at the high member of the pair does not
+            // cross height zero.
+            if(height_before_rank_pos<TARGET_W>(u,p)>0)
+                reverse_add_main(acc,in,oneesan::gridfp::msetpair(u,p,oneesan::gridfp::RL));
+            // Inverse LL closure.  A candidate occurs whenever the forward
+            // closure stack is at depth one and the target carries L there.
+            int s=1;
+            for(int q=p-2;q>=0&&s>0;--q){
+                auto v=oneesan::gridfp::mget(u,q);
+                if(v==oneesan::gridfp::L&&s==1){MateID c=oneesan::gridfp::msetpair(u,p,oneesan::gridfp::LL);c=oneesan::gridfp::mset(c,q,oneesan::gridfp::R);reverse_add_main(acc,in,c);}
+                if(v==oneesan::gridfp::L)++s;else if(v==oneesan::gridfp::R)--s;
+            }
+            // Inverse RR closure, symmetrically to the right.
+            s=1;
+            for(int q=p+1;q<TARGET_W&&s>0;++q){
+                auto v=oneesan::gridfp::mget(u,q);
+                if(v==oneesan::gridfp::R&&s==1){MateID c=oneesan::gridfp::msetpair(u,p,oneesan::gridfp::RR);c=oneesan::gridfp::mset(c,q,oneesan::gridfp::L);reverse_add_main(acc,in,c);}
+                if(v==oneesan::gridfp::L)--s;else if(v==oneesan::gridfp::R)++s;
+            }
+        }
+        out[i]=acc;
+    }
+}
+
+static Code rank_full(MateID m,int width){Code r=0;int h=1;for(int pos=width-1;pos>=0;--pos){auto s=mget(m,pos);if(s>N)r+=H_DP[pos][h];if(s>R&&h>0)r+=H_DP[pos][h-1];if(s==R)--h;else if(s==L)++h;}return r;}
+
+struct DeviceCtx{
+    int dev=-1;uint8_t*arena=nullptr;size_t capArena=0;Count*dA=nullptr,*dB=nullptr,*dD=nullptr,*dE=nullptr;MateID*dMate=nullptr;PeerInterval*dIM=nullptr,*dID=nullptr;size_t capIM=0,capID=0,maxIntervals=0;double active=0;uint64_t groups=0;cudaStream_t sMain=nullptr,sBlock=nullptr;cudaEvent_t copyDone=nullptr,clearDone=nullptr,mainDone=nullptr,blockDone=nullptr;
+    void init(int d,Count mod,Count**mp,Count**bp,Code mc,Code bc,int ng){dev=d;ck(cudaSetDevice(dev),"set init");ck(cudaMemcpyToSymbol(D_FULL_DP,H_DP,sizeof(H_DP)),"full dp");ck(cudaMemcpyToSymbol(D_MOD,&mod,sizeof(mod)),"mod");ck(cudaMemcpyToSymbol(D_MAIN_PTR,mp,sizeof(Count*)*MAXGPU),"main ptrs");ck(cudaMemcpyToSymbol(D_BLOCK_PTR,bp,sizeof(Count*)*MAXGPU),"block ptrs");ck(cudaMemcpyToSymbol(D_MAIN_CHUNK,&mc,sizeof(mc)),"main chunk");ck(cudaMemcpyToSymbol(D_BLOCK_CHUNK,&bc,sizeof(bc)),"block chunk");ck(cudaMemcpyToSymbol(D_NGPU,&ng,sizeof(ng)),"ngpu");ck(cudaStreamCreateWithFlags(&sMain,cudaStreamNonBlocking),"stream main");ck(cudaStreamCreateWithFlags(&sBlock,cudaStreamNonBlocking),"stream block");ck(cudaEventCreateWithFlags(&copyDone,cudaEventDisableTiming),"event copy");ck(cudaEventCreateWithFlags(&clearDone,cudaEventDisableTiming),"event clear");ck(cudaEventCreateWithFlags(&mainDone,cudaEventDisableTiming),"event main");ck(cudaEventCreateWithFlags(&blockDone,cudaEventDisableTiming),"event block");}
+    void ensure(Code m,Code b,bool useMate,size_t im,size_t id){ck(cudaSetDevice(dev),"set ensure");auto al=[](size_t x){return(x+255)&~size_t(255);};size_t ab=al(size_t(m)*sizeof(Count)),db=al(size_t(b)*sizeof(Count)),mb=useMate?al(size_t(m)*sizeof(MateID)):0,need=2*ab+2*db+mb;if(need>capArena){if(arena)cudaFree(arena);capArena=need;ck(cudaMalloc(&arena,capArena),"scratch arena");}size_t off=0;dA=(Count*)(arena+off);off+=ab;dB=(Count*)(arena+off);off+=ab;dD=(Count*)(arena+off);off+=db;dE=(Count*)(arena+off);off+=db;dMate=useMate?(MateID*)(arena+off):nullptr;if(im>capIM){if(dIM)cudaFree(dIM);capIM=im;ck(cudaMalloc(&dIM,capIM*sizeof(PeerInterval)),"interval main");}if(id>capID){if(dID)cudaFree(dID);capID=id;ck(cudaMalloc(&dID,capID*sizeof(PeerInterval)),"interval block");}maxIntervals=std::max({maxIntervals,im,id});}
+    void destroy(){if(dev<0)return;cudaSetDevice(dev);if(arena)cudaFree(arena);if(dIM)cudaFree(dIM);if(dID)cudaFree(dID);if(copyDone)cudaEventDestroy(copyDone);if(clearDone)cudaEventDestroy(clearDone);if(mainDone)cudaEventDestroy(mainDone);if(blockDone)cudaEventDestroy(blockDone);if(sMain)cudaStreamDestroy(sMain);if(sBlock)cudaStreamDestroy(sBlock);}
+};
+
+struct PreparedGroup{
+    int g=0;
+    uint32_t mf=0,mo=0,bf=0,bo=0;
+    GroupSpec ms,ds;
+    bool use_mi=false,use_di=false;
+    std::vector<PeerInterval> mi,di;
+    Code work=0;
+};
+struct PreparedWindow{
+    WindowPlan wp;
+    std::vector<PreparedGroup> groups;
+};
+
+static PreparedGroup prepare_group(int W,const WindowPlan&wp,int g,Code mc,Code bc,int ng){
+    PreparedGroup pg;pg.g=g;
+    window_masks(W,wp.p_hi,wp.p_lo,wp.fixed_pos,(uint32_t)g,pg.mf,pg.mo,pg.bf,pg.bo);
+    pg.ms=make_spec(W,pg.mf,pg.mo);pg.ds=make_spec(W-1,pg.bf,pg.bo);
+    pg.work=2*pg.ms.size+pg.ds.size;
+    pg.mi=make_peer_intervals(pg.ms,mc,ng,pg.use_mi);
+    pg.di=make_peer_intervals(pg.ds,bc,ng,pg.use_di);
+    return pg;
+}
+
+static void process_group(DeviceCtx&c,int W,const WindowPlan&wp,const PreparedGroup&pg,int threads,size_t target){
+    auto t0=std::chrono::steady_clock::now();ck(cudaSetDevice(c.dev),"set worker");
+    auto const&ms=pg.ms;auto const&ds=pg.ds;if(!ms.size&&!ds.size)return;
+    bool fixLow=wp.p_hi>LOW_LUT_K;uint32_t fmask=fixLow?(pg.mo&((1u<<LOW_LUT_K)-1u)):((pg.mo>>(LOW_LUT_K+1))&((1u<<HIGH_LUT_K)-1u));
+    auto fmb=make_factor_main_blocks(fixLow,fmask);auto fdb=make_factor_block_blocks(fixLow,fmask);
+    if(fmb.back().end!=ms.size||fdb.back().end!=ds.size){std::cerr<<"factor size mismatch main="<<fmb.back().end<<"/"<<ms.size<<" block="<<fdb.back().end<<"/"<<ds.size<<" fixLow="<<fixLow<<" mask="<<fmask<<"\n";std::exit(20);}
+    int fm=(int)fmb.size(),fd=(int)fdb.size(),fl=fixLow?1:0;ck(cudaMemcpyToSymbol(D_F_MAIN_BLOCKS,fmb.data(),fmb.size()*sizeof(FBlock)),"factor main blocks");ck(cudaMemcpyToSymbol(D_F_BLOCK_BLOCKS,fdb.data(),fdb.size()*sizeof(FBlock)),"factor block blocks");ck(cudaMemcpyToSymbol(D_F_MAIN_NBLOCKS,&fm,sizeof(fm)),"factor main n");ck(cudaMemcpyToSymbol(D_F_BLOCK_NBLOCKS,&fd,sizeof(fd)),"factor block n");ck(cudaMemcpyToSymbol(D_F_MASK,&fmask,sizeof(fmask)),"factor mask");ck(cudaMemcpyToSymbol(D_F_FIX_LOW,&fl,sizeof(fl)),"factor mode");
+    size_t countBytes=size_t(2*ms.size+2*ds.size)*sizeof(Count),mateBytes=size_t(ms.size)*sizeof(MateID);bool useMate=!pg.use_mi&&(countBytes+mateBytes<=target);
+    c.ensure(ms.size,ds.size,useMate,pg.mi.size(),pg.di.size());
+    if(!pg.mi.empty())ck(cudaMemcpy(c.dIM,pg.mi.data(),pg.mi.size()*sizeof(PeerInterval),cudaMemcpyHostToDevice),"copy main intervals");
+    if(!pg.di.empty())ck(cudaMemcpy(c.dID,pg.di.data(),pg.di.size()*sizeof(PeerInterval),cudaMemcpyHostToDevice),"copy block intervals");
+    ck(cudaMemcpyToSymbol(D_MAIN_DP,ms.dp,sizeof(ms.dp)),"main dp");ck(cudaMemcpyToSymbol(D_BLOCK_DP,ds.dp,sizeof(ds.dp)),"block dp");
+    ck(cudaMemcpyToSymbol(D_MAIN_FIXED,&pg.mf,sizeof(pg.mf)),"mf");ck(cudaMemcpyToSymbol(D_MAIN_OCC,&pg.mo,sizeof(pg.mo)),"mo");
+    ck(cudaMemcpyToSymbol(D_BLOCK_FIXED,&pg.bf,sizeof(pg.bf)),"bf");ck(cudaMemcpyToSymbol(D_BLOCK_OCC,&pg.bo,sizeof(pg.bo)),"bo");int mw=W,bw=W-1;ck(cudaMemcpyToSymbol(D_MAIN_W,&mw,sizeof(mw)),"mw");ck(cudaMemcpyToSymbol(D_BLOCK_W,&bw,sizeof(bw)),"bw");
+    int bm=int(std::min<Code>(65535,(ms.size+threads-1)/threads)),bd=int(std::min<Code>(65535,(ds.size+threads-1)/threads));
+    if(ms.size){if(pg.use_mi)interval_io_kernel<false,false><<<interval_blocks(pg.mi.size(),threads),threads>>>(c.dA,c.dIM,pg.mi.size());else gather_main_kernel<<<bm,threads>>>(c.dA,useMate?c.dMate:nullptr,ms.size);}
+    if(ds.size){if(pg.use_di)interval_io_kernel<true,false><<<interval_blocks(pg.di.size(),threads),threads>>>(c.dD,c.dID,pg.di.size());else gather_block_kernel<<<bd,threads>>>(c.dD,ds.size);}
+    ck(cudaGetLastError(),"doubleD gather");ck(cudaDeviceSynchronize(),"doubleD gather sync");
+    Count*cur=c.dA,*nxt=c.dB,*dcur=c.dD,*dnext=c.dE;
+    for(int p=wp.p_hi;p>=wp.p_lo;--p){
+        if(p>1){
+            if(ms.size)reverse_main_group_kernel<<<bm,threads,0,c.sMain>>>(cur,dcur,useMate?c.dMate:nullptr,ms.size,ds.size,nxt,p);
+            if(ds.size)ck(cudaMemsetAsync(dnext,0,size_t(ds.size)*sizeof(Count),c.sBlock),"clear hybrid blocked");
+            if(ms.size&&ds.size)forward_block_only_kernel<<<bm,threads,0,c.sBlock>>>(cur,useMate?c.dMate:nullptr,ms.size,dnext,p);
+        }else{
+            if(ms.size)ck(cudaMemcpyAsync(nxt,cur,size_t(ms.size)*sizeof(Count),cudaMemcpyDeviceToDevice,c.sMain),"identity async");
+            if(ds.size)ck(cudaMemsetAsync(dnext,0,size_t(ds.size)*sizeof(Count),c.sBlock),"clear next D");
+            ck(cudaEventRecord(c.copyDone,c.sMain),"record copy");ck(cudaEventRecord(c.clearDone,c.sBlock),"record clear");
+            ck(cudaStreamWaitEvent(c.sMain,c.clearDone,0),"main wait clear");ck(cudaStreamWaitEvent(c.sBlock,c.copyDone,0),"block wait copy");
+            if(ms.size)main_group_kernel<<<bm,threads,0,c.sMain>>>(cur,useMate?c.dMate:nullptr,ms.size,nxt,dnext,p);
+            if(ds.size)blocked_group_kernel<<<bd,threads,0,c.sBlock>>>(dcur,ds.size,nxt,p);
+        }
+        ck(cudaGetLastError(),"doubleD transition");
+        ck(cudaEventRecord(c.mainDone,c.sMain),"record main");ck(cudaEventRecord(c.blockDone,c.sBlock),"record block");
+        ck(cudaStreamWaitEvent(c.sMain,c.blockDone,0),"main wait block");ck(cudaStreamWaitEvent(c.sBlock,c.mainDone,0),"block wait main");
+        std::swap(cur,nxt);std::swap(dcur,dnext);
+    }
+    ck(cudaStreamSynchronize(c.sMain),"main sync");ck(cudaStreamSynchronize(c.sBlock),"block sync");
+    if(ms.size){if(pg.use_mi)interval_io_kernel<false,true><<<interval_blocks(pg.mi.size(),threads),threads>>>(cur,c.dIM,pg.mi.size());else scatter_main_kernel<<<bm,threads>>>(cur,ms.size);}
+    if(ds.size){if(pg.use_di)interval_io_kernel<true,true><<<interval_blocks(pg.di.size(),threads),threads>>>(dcur,c.dID,pg.di.size());else scatter_block_kernel<<<bd,threads>>>(dcur,ds.size);}
+    ck(cudaGetLastError(),"doubleD scatter");ck(cudaDeviceSynchronize(),"group sync");c.groups++;c.active+=std::chrono::duration<double>(std::chrono::steady_clock::now()-t0).count();
+}
+
+
+static void run_bounded_prefix_single_gpu(int W,int K,Count* fullMain,int threads){
+    if(K<1)return;cudaSetDevice(0);Code dpOld[MAXW+1][MAXW+2]{},dpNew[MAXW+1][MAXW+2]{};
+    build_bounded_dp(1,dpOld);Code oldN=dpOld[W][1];Count*cur=nullptr;ck(cudaMalloc(&cur,size_t(oldN)*sizeof(Count)),"bounded cap1");int bo=int(std::min<Code>(65535,(oldN+threads-1)/threads));bounded_fill_one_kernel<<<std::max(1,bo),threads>>>(cur,oldN);ck(cudaDeviceSynchronize(),"bounded fill1");
+    for(int cap=2;cap<=K;++cap){build_bounded_dp(cap,dpNew);Code n=dpNew[W][1],dn=dpNew[W-1][1];Count *a=nullptr,*b=nullptr,*d=nullptr,*e=nullptr;ck(cudaMalloc(&a,size_t(n)*sizeof(Count)),"bounded a");ck(cudaMalloc(&b,size_t(n)*sizeof(Count)),"bounded b");ck(cudaMalloc(&d,size_t(dn)*sizeof(Count)),"bounded d");ck(cudaMalloc(&e,size_t(dn)*sizeof(Count)),"bounded e");ck(cudaMemset(a,0,size_t(n)*sizeof(Count)),"bounded zero a");ck(cudaMemset(d,0,size_t(dn)*sizeof(Count)),"bounded zero d");ck(cudaMemcpyToSymbol(D_BOUND_OLD_DP,dpOld,sizeof(dpOld)),"bounded old dp");ck(cudaMemcpyToSymbol(D_BOUND_DP,dpNew,sizeof(dpNew)),"bounded new dp");int oldcap=cap-1;ck(cudaMemcpyToSymbol(D_BOUND_OLD_CAP,&oldcap,sizeof(oldcap)),"bounded old cap");ck(cudaMemcpyToSymbol(D_BOUND_CAP,&cap,sizeof(cap)),"bounded cap");int bm=int(std::min<Code>(65535,(n+threads-1)/threads)),bd=int(std::min<Code>(65535,(dn+threads-1)/threads));int be=int(std::min<Code>(65535,(oldN+threads-1)/threads));bounded_embed_kernel<<<std::max(1,be),threads>>>(cur,oldN,a,W);ck(cudaDeviceSynchronize(),"bounded embed");cudaFree(cur);cur=a;Count*nxt=b,*dc=d,*de=e;
+        for(int p=W-1;p>=1;--p){ck(cudaMemcpy(nxt,cur,size_t(n)*sizeof(Count),cudaMemcpyDeviceToDevice),"bounded identity");ck(cudaMemset(de,0,size_t(dn)*sizeof(Count)),"bounded clear d");bounded_main_kernel<<<std::max(1,bm),threads>>>(cur,n,nxt,de,W,p);bounded_block_kernel<<<std::max(1,bd),threads>>>(dc,dn,nxt,W,p);ck(cudaDeviceSynchronize(),"bounded step");std::swap(cur,nxt);std::swap(dc,de);}cudaFree(nxt);cudaFree(dc);cudaFree(de);std::memcpy(dpOld,dpNew,sizeof(dpOld));oldN=n;std::cerr<<"bounded prefix cap="<<cap<<" states="<<n<<" block="<<dn<<"\n";
+    }
+    if(K==1){ck(cudaMemcpyToSymbol(D_BOUND_DP,dpOld,sizeof(dpOld)),"bounded final dp1");int cap=1;ck(cudaMemcpyToSymbol(D_BOUND_CAP,&cap,sizeof(cap)),"bounded final cap1");}
+    else {ck(cudaMemcpyToSymbol(D_BOUND_DP,dpOld,sizeof(dpOld)),"bounded final dp");ck(cudaMemcpyToSymbol(D_BOUND_CAP,&K,sizeof(K)),"bounded final cap");}
+    int bs=int(std::min<Code>(65535,(oldN+threads-1)/threads));bounded_scatter_full_kernel<<<std::max(1,bs),threads>>>(cur,oldN,W);ck(cudaDeviceSynchronize(),"bounded scatter full");cudaFree(cur);
+}
+
+static void make_r3warp_host(uint8_t src[3][32*6],int16_t co[3][32*6],int16_t beta[32]){
+    std::fill(&src[0][0],&src[0][0]+3*32*6,uint8_t(255));
+    std::fill(&co[0][0],&co[0][0]+3*32*6,int16_t(0));
+    std::fill(beta,beta+32,int16_t(0));
+    const uint8_t* hs[3]={oneesan::row3warp::SRC_N,oneesan::row3warp::SRC_R,oneesan::row3warp::SRC_L};
+    const int16_t* hc[3]={oneesan::row3warp::CO_N,oneesan::row3warp::CO_R,oneesan::row3warp::CO_L};
+    for(int a=0;a<3;++a)for(int i=0;i<18*6;++i){src[a][i]=hs[a][i];co[a][i]=hc[a][i];}
+    for(int i=0;i<18;++i)beta[i]=oneesan::row3warp::BETA[i];
+}
+
+int main(int argc,char**argv){
+    int n=argc>1?std::atoi(argv[1]):16;
+    int target_mib=argc>2?std::atoi(argv[2]):16384;
+    int max_window=argc>3?std::atoi(argv[3]):14;
+    int requested=argc>4?std::atoi(argv[4]):0;
+    std::vector<Count> mods;
+    for(int i=5;i<argc;++i){
+        unsigned long long raw=std::strtoull(argv[i],nullptr,10);
+        if(raw<2||raw>0xffffffffULL){std::cerr<<"HBM32 modulus must be in [2, 4294967295], got "<<raw<<"\n";return 1;}
+        mods.push_back((Count)raw);
+    }
+    if(mods.empty())mods.push_back(4294967291u);
+    int W=n+1;
+    if(n<2||W>MAXW){std::cerr<<"n=2..27\n";return 1;}
+    if(W!=TARGET_W){std::cerr<<"specialized for width "<<TARGET_W<<" (n="<<(TARGET_W-1)<<")\n";return 1;}
+    build_full_dp();G_FACTOR=build_factor_tables();
+    int visible=0;ck(cudaGetDeviceCount(&visible),"count");
+    int ng=requested<=0?visible:std::min(requested,visible);
+    if(ng<1||ng>MAXGPU){std::cerr<<"need 1..8 GPUs\n";return 2;}
+    int peers=0;
+    for(int a=0;a<ng;++a)for(int b=0;b<ng;++b)if(a!=b){int can=0;ck(cudaDeviceCanAccessPeer(&can,a,b),"can peer");if(can){cudaSetDevice(a);auto e=cudaDeviceEnablePeerAccess(b,0);if(e==cudaErrorPeerAccessAlreadyEnabled)cudaGetLastError();else ck(e,"enable peer");peers++;}}
+    if(ng>1&&peers!=ng*(ng-1)){std::cerr<<"HBM mode requires full P2P: "<<peers<<"/"<<ng*(ng-1)<<"\n";return 3;}
+
+    uint32_t *fLA[MAXGPU]{},*fLM[MAXGPU]{},*fLO[MAXGPU]{},*fLR[MAXGPU]{},*fHA[MAXGPU]{},*fHM[MAXGPU]{},*fHO[MAXGPU]{},*fHR[MAXGPU]{};Code *fHMB[MAXGPU]{},*fHBB[MAXGPU]{};
+    for(int d=0;d<ng;++d){cudaSetDevice(d);auto cp=[&](uint32_t**dst,const std::vector<uint32_t>&v,const char*w){if(v.empty())return;ck(cudaMalloc(dst,v.size()*sizeof(uint32_t)),w);ck(cudaMemcpy(*dst,v.data(),v.size()*sizeof(uint32_t),cudaMemcpyHostToDevice),w);};cp(&fLA[d],G_FACTOR.low_all_codes,"f low all");cp(&fLM[d],G_FACTOR.low_mask_codes,"f low mask");cp(&fLO[d],G_FACTOR.low_mask_off,"f low off");cp(&fLR[d],G_FACTOR.low_packed_rank,"f low rank");cp(&fHA[d],G_FACTOR.high_all_codes,"f high all");cp(&fHM[d],G_FACTOR.high_mask_codes,"f high mask");cp(&fHO[d],G_FACTOR.high_mask_off,"f high off");cp(&fHR[d],G_FACTOR.high_packed_rank,"f high rank");auto cpc=[&](Code**dst,const std::vector<Code>&v,const char*w){ck(cudaMalloc(dst,v.size()*sizeof(Code)),w);ck(cudaMemcpy(*dst,v.data(),v.size()*sizeof(Code),cudaMemcpyHostToDevice),w);};cpc(&fHMB[d],G_FACTOR.high_main_base,"f high main base");cpc(&fHBB[d],G_FACTOR.high_block_base,"f high block base");ck(cudaMemcpyToSymbol(D_F_LOW_ALL_CODES,&fLA[d],sizeof(fLA[d])),"f ptr");ck(cudaMemcpyToSymbol(D_F_LOW_MASK_CODES,&fLM[d],sizeof(fLM[d])),"f ptr");ck(cudaMemcpyToSymbol(D_F_LOW_MASK_OFF,&fLO[d],sizeof(fLO[d])),"f ptr");ck(cudaMemcpyToSymbol(D_F_LOW_PACKED_RANK,&fLR[d],sizeof(fLR[d])),"f ptr");ck(cudaMemcpyToSymbol(D_F_HIGH_ALL_CODES,&fHA[d],sizeof(fHA[d])),"f ptr");ck(cudaMemcpyToSymbol(D_F_HIGH_MASK_CODES,&fHM[d],sizeof(fHM[d])),"f ptr");ck(cudaMemcpyToSymbol(D_F_HIGH_MASK_OFF,&fHO[d],sizeof(fHO[d])),"f ptr");ck(cudaMemcpyToSymbol(D_F_HIGH_PACKED_RANK,&fHR[d],sizeof(fHR[d])),"f ptr");ck(cudaMemcpyToSymbol(D_F_HIGH_MAIN_BASE,&fHMB[d],sizeof(fHMB[d])),"f ptr");ck(cudaMemcpyToSymbol(D_F_HIGH_BLOCK_BASE,&fHBB[d],sizeof(fHBB[d])),"f ptr");ck(cudaMemcpyToSymbol(D_F_LOW_ALL_OFF,G_FACTOR.low_all_off.data(),sizeof(uint32_t)*(MAXW+2)),"f low all off");ck(cudaMemcpyToSymbol(D_F_HIGH_ALL_OFF,G_FACTOR.high_all_off.data(),sizeof(uint32_t)*(MAXW+2)),"f high all off");}
+
+    Code mainN=H_DP[W][1],blockN=H_DP[W-1][1];Code mc=(mainN+ng-1)/ng,bc=(blockN+ng-1)/ng;Count*mp[MAXGPU]{},*bp[MAXGPU]{};std::vector<Code>ml(ng),bl(ng);
+    for(int d=0;d<ng;++d){ml[d]=std::min<Code>(mc,mainN-std::min<Code>(mainN,Code(d)*mc));bl[d]=std::min<Code>(bc,blockN-std::min<Code>(blockN,Code(d)*bc));cudaSetDevice(d);if(ml[d])ck(cudaMalloc(&mp[d],size_t(ml[d])*sizeof(Count)),"auth main");if(bl[d])ck(cudaMalloc(&bp[d],size_t(bl[d])*sizeof(Count)),"auth block");}
+    std::vector<DeviceCtx>ctx(ng);for(int d=0;d<ng;++d)ctx[d].init(d,mods[0],mp,bp,mc,bc,ng);
+    size_t min_free=~size_t(0),min_total=~size_t(0);for(int d=0;d<ng;++d){ck(cudaSetDevice(d),"set meminfo");size_t f=0,t=0;ck(cudaMemGetInfo(&f,&t),"cudaMemGetInfo");min_free=std::min(min_free,f);min_total=std::min(min_total,t);}
+    int reserve_mib=std::min(8192,std::max(256,int((min_total>>20)/32)));if(const char*e=std::getenv("GRIDFP_VRAM_RESERVE_MIB")){int v=std::atoi(e);if(v>=0)reserve_mib=v;}
+    size_t requested_target=size_t(std::max(1,target_mib))<<20;size_t reserve=size_t(reserve_mib)<<20;if(min_free<=reserve+(64ull<<20)){std::cerr<<"insufficient HBM after authoritative state: min_free_mib="<<(min_free>>20)<<" reserve_mib="<<reserve_mib<<"\n";return 5;}
+    size_t target=std::min(requested_target,min_free-reserve);int effective_target_mib=int(target>>20);
+    std::cerr<<"HBM32 batch memory: auth_gib="<<double(mainN+blockN)*sizeof(Count)/(1ull<<30)<<" auth_per_gpu_gib="<<double(mainN+blockN)*sizeof(Count)/ng/(1ull<<30)<<" min_total_gib="<<double(min_total)/(1ull<<30)<<" min_free_after_auth_gib="<<double(min_free)/(1ull<<30)<<" requested_scratch_mib="<<target_mib<<" effective_scratch_mib="<<effective_target_mib<<" reserve_mib="<<reserve_mib<<" moduli="<<mods.size()<<"\n";
+
+    if constexpr(LOW_LUT_K+HIGH_LUT_K != TARGET_W-1){std::cerr<<"forced2 requires LOW+HIGH=W-1\n";return 4;}
+    int threads=256,maxgroups=0;auto prep0=std::chrono::steady_clock::now();std::vector<PreparedWindow> schedule;
+    {
+        const int ranges[2][2]={{W-1,LOW_LUT_K+1},{LOW_LUT_K,1}};
+        for(auto const& r:ranges){
+            int hi=r[0],lo=r[1];WindowPlan wp;wp.p_hi=hi;wp.p_lo=lo;wp.fixed_pos=window_candidates(W,hi,lo);
+            int k=(int)wp.fixed_pos.size();int nj=1<<k;PreparedWindow pw;pw.wp=wp;pw.groups.reserve(nj);size_t mx=0;
+            for(int g=0;g<nj;++g){auto pg=prepare_group(W,pw.wp,g,mc,bc,ng);size_t b=size_t(2*pg.ms.size+2*pg.ds.size)*sizeof(Count);mx=std::max(mx,b);pw.groups.push_back(std::move(pg));}
+            if(mx>target){std::cerr<<"forced window does not fit p="<<hi<<".."<<lo<<" max_bytes="<<mx<<" target="<<target<<"\n";return 4;}
+            maxgroups=std::max(maxgroups,nj);std::sort(pw.groups.begin(),pw.groups.end(),[](auto const&a,auto const&b){return a.work>b.work;});
+            std::cerr<<"forced window p="<<hi<<".."<<lo<<" fixed="<<k<<" groups="<<nj<<" max_mib="<<(mx>>20)<<"\n";schedule.push_back(std::move(pw));
+        }
+    }
+    double prepare_s=std::chrono::duration<double>(std::chrono::steady_clock::now()-prep0).count();std::cerr<<"prepared windows="<<schedule.size()<<" max_groups="<<maxgroups<<" prepare_s="<<prepare_s<<"\n";
+
+    MateID init=MateID(R)<<(2*(W-1));Code ig=rank_full(init,W);int io=int(ig/mc);Code fg=rank_full(MateID(R),W);int fo=int(fg/mc);Count one=1;
+    for(size_t ri=0;ri<mods.size();++ri){Count mod=mods[ri];
+        for(int d=0;d<ng;++d){ck(cudaSetDevice(d),"set residue reset");ck(cudaMemcpyToSymbol(D_MOD,&mod,sizeof(mod)),"set modulus");if(ml[d])ck(cudaMemset(mp[d],0,size_t(ml[d])*sizeof(Count)),"zero main");if(bl[d])ck(cudaMemset(bp[d],0,size_t(bl[d])*sizeof(Count)),"zero block");ck(cudaDeviceSynchronize(),"zero sync");ctx[d].active=0;ctx[d].groups=0;}
+        auto wall0=std::chrono::steady_clock::now();
+        bool directRow3=false;if(const char*e=std::getenv("GRIDFP_DIRECT_ROW3"))directRow3=std::atoi(e)!=0;bool directRow2=true;if(const char*e=std::getenv("GRIDFP_DIRECT_ROW2"))directRow2=std::atoi(e)!=0;
+        int prefixK=1;if(const char*e=std::getenv("GRIDFP_BOUNDED_PREFIX_K"))prefixK=std::max(1,std::min(W-2,std::atoi(e)));
+        if(directRow3){prefixK=3;Code bdp[MAXW+1][MAXW+2]{};build_bounded_dp(3,bdp);Code total=bdp[W][1];int cap=3;auto powmod=[&](uint64_t a,uint64_t e){uint64_t r=1;while(e){if(e&1)r=(unsigned __int128)r*a%mod;a=(unsigned __int128)a*a%mod;e>>=1;}return r;};Count scale=Count(powmod(6,W)),inv=Count(powmod(scale,uint64_t(mod)-2));for(int d=0;d<ng;++d){ck(cudaSetDevice(d),"row3 direct set");ck(cudaMemcpyToSymbol(D_BOUND_DP,bdp,sizeof(bdp)),"row3 direct dp");ck(cudaMemcpyToSymbol(D_BOUND_CAP,&cap,sizeof(cap)),"row3 direct cap");ck(cudaMemcpyToSymbol(D_R3_OFF_N,oneesan::row3auto::OFF_N,sizeof(oneesan::row3auto::OFF_N)),"r3 offn");ck(cudaMemcpyToSymbol(D_R3_OFF_R,oneesan::row3auto::OFF_R,sizeof(oneesan::row3auto::OFF_R)),"r3 offr");ck(cudaMemcpyToSymbol(D_R3_OFF_L,oneesan::row3auto::OFF_L,sizeof(oneesan::row3auto::OFF_L)),"r3 offl");ck(cudaMemcpyToSymbol(D_R3_TR_N,oneesan::row3auto::TR_N,sizeof(oneesan::row3auto::TR_N)),"r3 trn");ck(cudaMemcpyToSymbol(D_R3_TR_R,oneesan::row3auto::TR_R,sizeof(oneesan::row3auto::TR_R)),"r3 trr");ck(cudaMemcpyToSymbol(D_R3_TR_L,oneesan::row3auto::TR_L,sizeof(oneesan::row3auto::TR_L)),"r3 trl");ck(cudaMemcpyToSymbol(D_R3_BETA,oneesan::row3auto::BETA,sizeof(oneesan::row3auto::BETA)),"r3 beta");ck(cudaMemcpyToSymbol(D_R3_UNSCALE,&inv,sizeof(inv)),"r3 inv");uint8_t hws[3][32*6];int16_t hwc[3][32*6],hwb[32];make_r3warp_host(hws,hwc,hwb);ck(cudaMemcpyToSymbol(D_R3W_SRC,hws,sizeof(hws)),"r3w src");ck(cudaMemcpyToSymbol(D_R3W_CO,hwc,sizeof(hwc)),"r3w co");ck(cudaMemcpyToSymbol(D_R3W_BETA,hwb,sizeof(hwb)),"r3w beta");Code mine=(total+ng-1-d)/ng;int blocks=int(std::min<Code>(65535,(mine+threads-1)/threads));if(mine)init_after_three_rows_kernel<<<std::max(1,blocks),threads>>>(total,d,ng);}for(int d=0;d<ng;++d){ck(cudaSetDevice(d),"row3 direct sync set");ck(cudaDeviceSynchronize(),"row3 direct sync");}std::cerr<<"direct row3 states="<<total<<"\n";}
+        else if(directRow2){prefixK=2;Code bdp[MAXW+1][MAXW+2]{};build_bounded_dp(2,bdp);Code total=bdp[W][1];int cap=2;for(int d=0;d<ng;++d){ck(cudaSetDevice(d),"row2 direct set");ck(cudaMemcpyToSymbol(D_BOUND_DP,bdp,sizeof(bdp)),"row2 direct dp");ck(cudaMemcpyToSymbol(D_BOUND_CAP,&cap,sizeof(cap)),"row2 direct cap");Code mine=(total+ng-1-d)/ng;int blocks=int(std::min<Code>(65535,(mine+threads-1)/threads));if(mine)init_after_two_rows_kernel<<<std::max(1,blocks),threads>>>(total,d,ng);}for(int d=0;d<ng;++d){ck(cudaSetDevice(d),"row2 direct sync set");ck(cudaDeviceSynchronize(),"row2 direct sync");}std::cerr<<"direct row2 states="<<total<<"\n";}
+        else {if(ng!=1&&prefixK>1){std::cerr<<"bounded prefix prototype currently requires NGPU=1\n";return 31;}if(prefixK==1){for(int d=0;d<ng;++d){ck(cudaSetDevice(d),"set row1 init device");Code total=Code(1)<<(W-1);Code mine=(total+ng-1-d)/ng;int blocks=int(std::min<Code>(65535,(mine+threads-1)/threads));if(mine)init_after_first_row_kernel<<<std::max(1,blocks),threads>>>(d,ng);}for(int d=0;d<ng;++d){ck(cudaSetDevice(d),"row1 init sync set");ck(cudaDeviceSynchronize(),"row1 init sync");}}else run_bounded_prefix_single_gpu(W,prefixK,mp[0],threads);}
+        int done_windows=0;
+        for(int row=prefixK;row<W-1;++row){for(auto const&pw:schedule){int nj=(int)pw.groups.size();std::atomic<int>next{0};std::vector<std::thread>ths;ths.reserve(ng);for(int d=0;d<ng;++d)ths.emplace_back([&,d]{for(;;){int q=next.fetch_add(1,std::memory_order_relaxed);if(q>=nj)break;process_group(ctx[d],W,pw.wp,pw.groups[q],threads,target);}});for(auto&t:ths)t.join();++done_windows;}std::cerr<<"mod "<<(ri+1)<<"/"<<mods.size()<<" p="<<mod<<" row "<<row+1<<"/"<<W<<"\n";}
+        Count ans=0;
+        for(int d=0;d<ng;++d){
+            ck(cudaSetDevice(d),"final sum set");Count* da=nullptr;ck(cudaMalloc(&da,sizeof(Count)),"final sum malloc");ck(cudaMemset(da,0,sizeof(Count)),"final sum zero");
+            Code total=Code(1)<<(W-1);Code mine=(total+ng-1-d)/ng;int blocks=int(std::min<Code>(65535,(mine+threads-1)/threads));
+            if(mine)sum_first_row_states_kernel<<<std::max(1,blocks),threads,threads*sizeof(unsigned long long)>>>(d,ng,da);
+            Count x=0;ck(cudaMemcpy(&x,da,sizeof(x),cudaMemcpyDeviceToHost),"final sum copy");cudaFree(da);ans=(ans>=mod-x)?ans-(mod-x):ans+x;
+        }
+        double wall=std::chrono::duration<double>(std::chrono::steady_clock::now()-wall0).count();double mx=0,sum=0;size_t maxIntervals=0;for(auto&c:ctx){mx=std::max(mx,c.active);sum+=c.active;maxIntervals=std::max(maxIntervals,c.maxIntervals);}std::cout<<"backend=gridfp-b300-hbm32-factorized-batch n="<<n<<" residue="<<ans<<" modulus="<<mod<<" residue_index="<<ri<<" residues_total="<<mods.size()<<" gpus="<<ng<<" peers="<<peers<<" main_states="<<mainN<<" blocked_states="<<blockN<<" scratch_target_mib="<<effective_target_mib<<" windows="<<done_windows<<" max_groups="<<maxgroups<<" max_intervals="<<maxIntervals<<" active_max_s="<<mx<<" active_sum_s="<<sum<<" prepare_s="<<prepare_s<<" wall_s="<<wall<<std::endl;
+    }
+
+    for(auto&c:ctx)c.destroy();for(int d=0;d<ng;++d){cudaSetDevice(d);if(mp[d])cudaFree(mp[d]);if(bp[d])cudaFree(bp[d]);if(fLA[d])cudaFree(fLA[d]);if(fLM[d])cudaFree(fLM[d]);if(fLO[d])cudaFree(fLO[d]);if(fLR[d])cudaFree(fLR[d]);if(fHA[d])cudaFree(fHA[d]);if(fHM[d])cudaFree(fHM[d]);if(fHO[d])cudaFree(fHO[d]);if(fHR[d])cudaFree(fHR[d]);if(fHMB[d])cudaFree(fHMB[d]);if(fHBB[d])cudaFree(fHBB[d]);}
+}

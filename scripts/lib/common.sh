@@ -26,3 +26,11 @@ build_path() {
     printf '%s/%s\n' "$ONEESAN_BUILD_DIR" "$path"
   fi
 }
+
+require_uint() {
+  local name="$1" value="$2"
+  if [[ ! "$value" =~ ^[0-9]+$ ]]; then
+    echo "$name must be an unsigned decimal integer; got: $value" >&2
+    return 2
+  fi
+}

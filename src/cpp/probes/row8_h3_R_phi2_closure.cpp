@@ -1,0 +1,21 @@
+#define ROW8_CANONICAL_TRIE_NO_MAIN 1
+#include "row8_canonical_trie_verify.cpp"
+#include <array>
+#include <atomic>
+#include <fstream>
+#include <functional>
+#include <iostream>
+#include <set>
+#include <unordered_map>
+#include <omp.h>
+struct PHX{size_t operator()(Packed const&p)const noexcept{uint64_t h=0;for(auto x:p.w)h^=x+0x9e3779b97f4a7c15ULL+(h<<6)+(h>>2);return h;}};
+static void rw(int p,int nt,int bal,std::string&w,std::vector<std::pair<Packed,std::string>>&o){if(p==8){if(!nt&&!bal){Packed x;if(enc(w,x))o.push_back({x,w});}return;}if(nt>8-p)return;w[p]='N';rw(p+1,nt,bal,w,o);w[p]='U';rw(p+1,nt,bal+1,w,o);w[p]='D';rw(p+1,nt,bal-1,w,o);if(nt&&bal==0){w[p]='T';rw(p+1,nt-1,0,w,o);}}
+static auto words(int h){std::string w(8,'N');std::vector<std::pair<Packed,std::string>>v;rw(0,h,0,w,v);std::sort(v.begin(),v.end(),[](auto&a,auto&b){return a.first<b.first;});v.erase(std::unique(v.begin(),v.end(),[](auto&a,auto&b){return a.first==b.first;}),v.end());return v;}
+static bool hard3(std::string const&w){int b=0,n=0;auto fl=[&](){bool z=n>=2;b=n=0;return z;};for(char c:w){if(c=='T'){if(fl())return true;continue;}if(c=='N')continue;int d=c=='U'?1:-1;if(b==0&&d<0)++n;b+=d;}return fl();}
+static Packed mix3(std::string const&w){State s{};s.n=8;int q=1,sk=0;std::array<int,4>z{};bool got=false;for(int st=0;st<8;){int en=st;while(en<8&&w[en]!='T')++en;int b=0,ns=-1,c=0;for(int i=st;i<en;++i){if(w[i]=='N')continue;int d=w[i]=='U'?1:-1;if(b==0&&d<0)ns=i;b+=d;if(ns>=0&&b==0){if(c<2){z[2*c]=ns;z[2*c+1]=i;}++c;ns=-1;}}if(c>=2){got=true;break;}st=en+1;}if(!got)throw std::runtime_error("mix");for(int i=0;i<8;++i)if(w[i]=='T'){int c=q++;s.deg[i]=1;s.comp[i]=c;s.stack[sk++]=c;}auto add=[&](int a,int b,int st){int c=q++;s.deg[a]=s.deg[b]=1;s.comp[a]=s.comp[b]=c;s.status[c]=st;};add(z[0],z[3],1);add(z[1],z[2],0);s.sp=sk;s.ns=q;return pack(s);}
+struct HH{char m[8];uint32_t ver,mod,h,rows,states;};
+int main(){MODP=1000000007u;Vec all;int col=0;load_ck("work/formal-probes/raw_wfa_r8.ck",8,col,all);std::vector<Packed>h2,h3;for(auto&p:all){int h=unpack(p).sp;if(h==2)h2.push_back(p);else if(h==3)h3.push_back(p);}auto w2=words(2),w3=words(3);std::set<int>bad2;{std::ifstream in("work/formal-probes/canonical-matrix/h2_actual_bad_indices.txt");int x;while(in>>x)bad2.insert(x);}std::vector<int>goodCoord(h2.size(),-1);int gc=0;for(int j=0;j<(int)w2.size();++j)if(!bad2.count(j)){int i=std::lower_bound(h2.begin(),h2.end(),w2[j].first)-h2.begin();goodCoord[i]=gc++;}if(gc!=1308)throw std::runtime_error("good");std::vector<uint32_t>X((size_t)120*h2.size());{std::ifstream in("work/formal-probes/dual-basis/Phi_h2_extra_mod1000000007.bin",std::ios::binary);HH hh{};in.read((char*)&hh,sizeof(hh));if(hh.rows!=120||hh.states!=h2.size())throw std::runtime_error("extra");in.read((char*)X.data(),X.size()*4);}
+ std::unordered_map<Packed,int,PHX>s3;std::vector<std::array<Packed,2>>pairs;for(int j=0;j<(int)w3.size();++j){s3[w3[j].first]=j;if(hard3(w3[j].second)){Packed m=mix3(w3[j].second);s3[m]=j;pairs.push_back({w3[j].first,m});}}if(pairs.size()!=32)throw std::runtime_error("pairs");std::atomic<size_t>ob{0};double t0=omp_get_wtime();
+#pragma omp parallel for schedule(dynamic,128)
+ for(long long si=0;si<(long long)h3.size();++si){if(s3.find(h3[si])!=s3.end())continue;WVec v{{h3[si],1}};auto z=wcolumn(std::move(v),8,false,1);bool nz=false;std::array<uint32_t,120>a{};for(auto&e:z){int t=std::lower_bound(h2.begin(),h2.end(),e.p)-h2.begin();if(goodCoord[t]>=0){nz=true;break;}for(int k=0;k<120;++k)if(X[(size_t)k*h2.size()+t])a[k]=(a[k]+(uint64_t)e.v*X[(size_t)k*h2.size()+t])%1000000007u;}if(!nz)for(auto x:a)if(x){nz=true;break;}if(nz)ob.fetch_add(1,std::memory_order_relaxed);}
+ auto proj=[&](Packed p){std::vector<uint32_t>r(1428);WVec v{{p,1}};auto z=wcolumn(std::move(v),8,false,1);for(auto&e:z){int t=std::lower_bound(h2.begin(),h2.end(),e.p)-h2.begin();if(goodCoord[t]>=0)r[goodCoord[t]]=(r[goodCoord[t]]+e.v)%1000000007u;for(int k=0;k<120;++k)r[1308+k]=(r[1308+k]+(uint64_t)e.v*X[(size_t)k*h2.size()+t])%1000000007u;}return r;};size_t pb=0;for(auto const&p:pairs){auto a=proj(p[0]),b=proj(p[1]);if(a!=b)++pb;}double sec=omp_get_wtime()-t0;std::cout<<"h3_R_to_phi2 raw="<<h3.size()<<" outside_bad="<<ob.load()<<" pair_bad="<<pb<<" sec="<<sec<<" exact="<<(ob.load()==0&&pb==0)<<"\n";return ob.load()||pb?1:0;}

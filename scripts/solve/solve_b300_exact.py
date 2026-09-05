@@ -1,133 +1,35 @@
 #!/usr/bin/env python3
 import argparse
-import json
 import os
-import re
 import subprocess
 import sys
 from pathlib import Path
 
+from exact_safety import (
+    acquire_workdir_lock,
+    load_checkpoint,
+    save_checkpoint,
+    solver_identity,
+    validate_exact_reconstruction,
+    validate_residue,
+    write_exact_result,
+)
+
 REPO_ROOT = Path(__file__).resolve().parents[2]
 
-PRIMES = [
-    4294967291, 4294967279, 4294967231, 4294967197,
-    4294967189, 4294967161, 4294967143, 4294967111,
-    4294967087, 4294967029, 4294966997, 4294966981,
-    4294966943, 4294966927, 4294966909, 4294966877,
-    4294966829, 4294966813, 4294966769, 4294966667,
-    4294966661, 4294966657, 4294966651, 4294966639,
-    4294966619, 4294966591, 4294966583, 4294966553,
-    4294966477, 4294966447, 4294966441, 4294966427,
-    4294966373, 4294966367, 4294966337, 4294966297,
-    4294966243, 4294966237, 4294966231, 4294966217,
-    4294966187, 4294966177, 4294966163, 4294966153,
-    4294966129, 4294966121, 4294966099, 4294966087,
-]
+from path_bound import (
+    PRIMES,
+    _strip_compatible,
+    checkerboard_strip_count,
+    primes_for_bound,
+    simple_path_upper_bound,
+)
 
-RESULT_RE = re.compile(r"residue=(\d+).*?modulus=(\d+).*?wall_s=([0-9.eE+-]+)")
-
-
-def _strip_compatible(x: int, y: int, height: int) -> bool:
-    """Whether two adjacent face-bit columns avoid a 2x2 checkerboard."""
-    for r in range(height - 1):
-        a = (x >> r) & 1
-        b = (x >> (r + 1)) & 1
-        c = (y >> r) & 1
-        d = (y >> (r + 1)) & 1
-        if a != b and c != d and a != c:
-            return False
-    return True
-
-
-def checkerboard_strip_count(height: int, width: int) -> int:
-    """Count height x width binary matrices with no checkerboard 2x2 block."""
-    states = 1 << height
-    nxt = [
-        [y for y in range(states) if _strip_compatible(x, y, height)]
-        for x in range(states)
-    ]
-    dp = [1] * states
-    for _ in range(1, width):
-        ndp = [0] * states
-        for x, ys in enumerate(nxt):
-            v = dp[x]
-            if not v:
-                continue
-            for y in ys:
-                ndp[y] += v
-        dp = ndp
-    return sum(dp)
-
-
-def simple_path_upper_bound(n: int, max_strip_height: int = 9) -> tuple[int, list[int]]:
-    """Rigorous upper bound for corner-to-corner simple paths.
-
-    Fix one outer-boundary s-t path P0. Every s-t path is a T-join and can be
-    written uniquely as P0 XOR boundary(F), where F is a subset of the n^2
-    bounded faces. At an interior vertex P0 has degree zero. If the four
-    surrounding face bits form either checkerboard pattern, boundary(F) uses
-    all four incident edges, giving degree four, which a simple path cannot
-    have. Thus path count is at most the number of n x n face-bit matrices
-    without checkerboard 2x2 blocks.
-
-    To keep the bound cheap to compute, partition the rows into independent
-    strips and ignore constraints across strip boundaries. This enlarges the
-    set and therefore remains a rigorous upper bound. Dynamic programming
-    chooses the strip-height partition (up to max_strip_height) with the
-    smallest exact product.
-    """
-    if n < 1:
-        return 1, []
-    hmax = min(max_strip_height, n)
-    strip = {h: checkerboard_strip_count(h, n) for h in range(1, hmax + 1)}
-    best: list[int | None] = [None] * (n + 1)
-    parts: list[list[int] | None] = [None] * (n + 1)
-    best[0], parts[0] = 1, []
-    for rows in range(1, n + 1):
-        for h, cnt in strip.items():
-            if h > rows or best[rows - h] is None:
-                continue
-            cand = best[rows - h] * cnt
-            if best[rows] is None or cand < best[rows]:
-                best[rows] = cand
-                parts[rows] = parts[rows - h] + [h]
-    assert best[n] is not None and parts[n] is not None
-    return best[n], parts[n]
-
-
-def primes_for_bound(bound: int) -> list[int]:
-    m = 1
-    out: list[int] = []
-    for p in PRIMES:
-        out.append(p)
-        m *= p
-        if m > bound:
-            return out
-    raise SystemExit(
-        f"CRT prime capacity insufficient: product has {m.bit_length()} bits, "
-        f"bound has {bound.bit_length()} bits"
-    )
-
+from solver_output import parse_result_line
 
 def crt_pair(x: int, m: int, r: int, p: int) -> tuple[int, int]:
     t = ((r - x) % p) * pow(m, -1, p) % p
     return x + m * t, m * p
-
-
-def load_checkpoint(path: Path) -> dict[int, dict]:
-    if not path.exists():
-        return {}
-    data = json.loads(path.read_text())
-    return {int(k): v for k, v in data.get("residues", {}).items()}
-
-
-def save_checkpoint(path: Path, n: int, residues: dict[int, dict]) -> None:
-    tmp = path.with_suffix(path.suffix + ".tmp")
-    tmp.write_text(json.dumps({
-        "n": n,
-        "residues": {str(k): v for k, v in residues.items()},
-    }, indent=2, sort_keys=True) + "\n")
-    tmp.replace(path)
 
 
 def main() -> int:
@@ -140,6 +42,16 @@ def main() -> int:
     ap.add_argument("--work-dir", default=None)
     ap.add_argument("--max-runs", type=int, default=0, help="0 = run until the exact bound is reached; useful for smoke tests")
     args = ap.parse_args()
+    if not 2 <= args.n <= 27:
+        ap.error("n must be in 2..27 for the B300 production solvers")
+    if args.target_mib < 1:
+        ap.error("--target-mib must be at least 1")
+    if args.max_window < 1:
+        ap.error("--max-window must be at least 1")
+    if not 0 <= args.gpus <= 8:
+        ap.error("--gpus must be in 0..8 (0 = all visible GPUs)")
+    if args.max_runs < 0:
+        ap.error("--max-runs must be nonnegative")
 
     n = args.n
     path_bound, strip_partition = simple_path_upper_bound(n)
@@ -150,22 +62,29 @@ def main() -> int:
         f"({required_bits} bits), strips={strip_partition}, CRT primes={len(prefix)}",
         file=sys.stderr,
     )
-    binary = Path(args.binary) if args.binary else REPO_ROOT / "build" / f"oneesan_cuda_gridfp_b300_hbm32_n{n}"
+    binary = Path(args.binary) if args.binary else REPO_ROOT / "build" / f"oneesan_cuda_gridfp_b300_hbm32_batch_n{n}"
     if not binary.exists():
         raise SystemExit(f"binary not found: {binary}")
     binary = binary.resolve()
 
     work = Path(args.work_dir) if args.work_dir else REPO_ROOT / "work" / f"b300_exact_n{n}"
     work.mkdir(parents=True, exist_ok=True)
+    try:
+        _lock_fd = acquire_workdir_lock(work)
+    except RuntimeError as exc:
+        raise SystemExit(str(exc)) from exc
     checkpoint = work / "checkpoint.json"
-    residues = load_checkpoint(checkpoint)
+    try:
+        identity = solver_identity(
+            binary, REPO_ROOT, expected_compile_args=[f"-DTARGET_W={n + 1}"],
+        )
+        residues = load_checkpoint(checkpoint, n=n, identity=identity)
+    except ValueError as exc:
+        raise SystemExit(str(exc)) from exc
 
-    # Reject a checkpoint for another n instead of silently combining residues.
-    if checkpoint.exists():
-        meta = json.loads(checkpoint.read_text())
-        if int(meta.get("n", -1)) != n:
-            raise SystemExit(f"checkpoint {checkpoint} belongs to n={meta.get('n')}")
-
+    unexpected_moduli = sorted(set(residues) - set(prefix))
+    if unexpected_moduli:
+        raise SystemExit(f"checkpoint contains unexpected moduli: {unexpected_moduli}")
     x, M = 0, 1
     used = 0
     total_wall = 0.0
@@ -176,12 +95,16 @@ def main() -> int:
             rec = residues[p]
             r = int(rec["residue"])
             wall = float(rec.get("wall_s", 0.0))
+            try:
+                validate_residue(p, r, source=f"cached modulus {p}")
+            except ValueError as exc:
+                raise SystemExit(str(exc)) from exc
             print(f"[{idx:02d}/{len(prefix)}] cached p={p} residue={r}", file=sys.stderr)
         else:
             if args.max_runs and runs_this_invocation >= args.max_runs:
                 break
             log = work / f"p{p}.log"
-            cmd = [str(binary), str(n), str(p), str(args.target_mib), str(args.max_window), str(args.gpus)]
+            cmd = [str(binary), str(n), str(args.target_mib), str(args.max_window), str(args.gpus), str(p)]
             print(f"[{idx:02d}/{len(prefix)}] run p={p}: {' '.join(cmd)}", file=sys.stderr, flush=True)
             proc = subprocess.run(cmd, text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, env=os.environ.copy())
             log.write_text(proc.stderr + proc.stdout)
@@ -189,14 +112,30 @@ def main() -> int:
                 print(proc.stderr, file=sys.stderr)
                 print(proc.stdout, file=sys.stderr)
                 raise SystemExit(f"solver failed for p={p}, rc={proc.returncode}; log={log}")
-            match = RESULT_RE.search(proc.stdout)
-            if not match:
-                raise SystemExit(f"could not parse solver output for p={p}; log={log}")
-            r, got_p, wall = int(match.group(1)), int(match.group(2)), float(match.group(3))
+            parsed = []
+            try:
+                for line in proc.stdout.splitlines():
+                    result = parse_result_line(line)
+                    if result is not None:
+                        parsed.append(result)
+            except (ValueError, OverflowError) as exc:
+                raise SystemExit(f"invalid solver result for p={p}: {exc}; log={log}") from exc
+            if len(parsed) != 1:
+                raise SystemExit(
+                    f"expected exactly one solver result for p={p}, got {len(parsed)}; log={log}"
+                )
+            result = parsed[0]
+            got_n, r, got_p, wall = result.n, result.residue, result.modulus, result.wall_s
+            if got_n != n:
+                raise SystemExit(f"solver returned n={got_n}, expected n={n}")
             if got_p != p:
                 raise SystemExit(f"solver returned modulus {got_p}, expected {p}")
+            try:
+                validate_residue(p, r, source=f"solver modulus {p}")
+            except ValueError as exc:
+                raise SystemExit(str(exc)) from exc
             residues[p] = {"residue": r, "wall_s": wall, "log": str(log)}
-            save_checkpoint(checkpoint, n, residues)
+            save_checkpoint(checkpoint, n=n, identity=identity, residues=residues)
             runs_this_invocation += 1
             print(f"[{idx:02d}/{len(prefix)}] done p={p} residue={r} wall_s={wall:.6f}", file=sys.stderr, flush=True)
 
@@ -205,14 +144,16 @@ def main() -> int:
         total_wall += wall
         print(f"  CRT bits={M.bit_length()} / bound_bits={required_bits}", file=sys.stderr, flush=True)
         if M > path_bound:
-            out = work / "exact.txt"
-            out.write_text(
-                f"n={n}\n"
-                f"exact={x}\n"
-                f"bound_bits={required_bits}\n"
-                f"modulus_bits={M.bit_length()}\n"
-                f"primes_used={used}\n"
-                f"solver_wall_s_sum={total_wall:.9f}\n"
+            used_residues = [(q, int(residues[q]["residue"])) for q in prefix[:used]]
+            try:
+                validate_exact_reconstruction(x, M, path_bound, used_residues)
+            except ValueError as exc:
+                raise SystemExit(str(exc)) from exc
+            out, manifest = write_exact_result(
+                work, n=n, exact=x, path_bound=path_bound, modulus_product=M,
+                used_moduli=prefix[:used], residues=residues, identity=identity,
+                checkpoint_path=checkpoint, total_wall_s=total_wall,
+                strip_partition=strip_partition, binary_path=binary,
             )
             print(f"n={n}")
             print(f"exact={x}")
@@ -221,6 +162,7 @@ def main() -> int:
             print(f"primes_used={used}")
             print(f"solver_wall_s_sum={total_wall:.9f}")
             print(f"result_file={out}")
+            print(f"manifest_file={manifest}")
             return 0
 
     print(f"partial: CRT bits={M.bit_length()} bound_bits={required_bits}; cached_residues={len(residues)}", file=sys.stderr)

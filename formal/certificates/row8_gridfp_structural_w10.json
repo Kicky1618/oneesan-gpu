@@ -1,0 +1,218 @@
+{
+  "bound_bits": {
+    "baseline_abs": 73,
+    "baseline_decision_bits": 7,
+    "difference_abs": 74,
+    "prefix_abs": 35,
+    "processed_edges": 8,
+    "structural_abs": 74,
+    "suffix_abs": 29
+  },
+  "bounds": {
+    "baseline_abs": "4722366482869645213696",
+    "baseline_decision_bits": "72",
+    "difference_abs": "17906665650995840679936",
+    "prefix_abs": "29948379136",
+    "processed_edges": "152",
+    "structural_abs": "13184299168126195466240",
+    "suffix_abs": "268435456"
+  },
+  "comparison_build_provenance": {
+    "auxiliary_dependencies": [
+      {
+        "path": "src/cuda/b300/row8_pivots_w19.bin",
+        "role": "row8-pivots-w19",
+        "sha256": "f4fba26ead8c4d63342a9f058efbda75c5b3451fb12a2c7c3a61fc6db7eb1507",
+        "size": 45536
+      },
+      {
+        "path": "src/cuda/b300/row8_structural_int_v1.bin",
+        "role": "row8-structural-int-v1",
+        "sha256": "4cdadfb43c58d8d56ef0a1066c69996ca62d238cfa2060f430d07092249e2a58",
+        "size": 930824
+      }
+    ],
+    "binary_file": "row8_gridfp_structural_cert_n9",
+    "binary_sha256": "7615f2175a3ff050f3d9470db7264474b5b0b4634145eda85d4ee25eab5438db",
+    "binary_size": 4929272,
+    "compile_args": [
+      "-O3",
+      "-std=c++17",
+      "-lineinfo",
+      "-arch=native",
+      "-DTARGET_W=10",
+      "-DLOW_LUT_K=5",
+      "-DHIGH_LUT_K=4",
+      "/home/kicky/dev/cuda/oneesan/src/cuda/b300/oneesan_cuda_gridfp_b300_hbm32_factorized_reverse2_row8tensor_batch.cu",
+      "-o",
+      "/home/kicky/dev/cuda/oneesan/build/row8_gridfp_structural_cert_n9",
+      "-Xcompiler=-pthread",
+      "-lcublas"
+    ],
+    "compiler_path": "/opt/cuda/bin/nvcc",
+    "compiler_version": "nvcc: NVIDIA (R) Cuda compiler driver\nCopyright (c) 2005-2026 NVIDIA Corporation\nBuilt on Tue_Jun_09_02:43:40_PM_PDT_2026\nCuda compilation tools, release 13.3, V13.3.73\nBuild cuda_13.3.r13.3/compiler.38244171_0",
+    "dependencies": [
+      {
+        "path": "src/common/gridfp_transition.hpp",
+        "sha256": "26917d03d7d9c3da73b5cf71f7d1a479053db90211d823551a5ac913f0af68d9",
+        "size": 2953
+      },
+      {
+        "path": "src/cuda/b300/oneesan_cuda_gridfp_b300_hbm32_factorized_reverse2_row8tensor_batch.cu",
+        "sha256": "71b0e72bcb1a2d4aaf919ebf867cc5c675e0032b38ea712f844e207cbfe06feb",
+        "size": 144005
+      },
+      {
+        "path": "src/cuda/b300/row3_automaton_generated.hpp",
+        "sha256": "b649c6f037e9c455e635c7413fdcdeec8c5b68942cfeeaac196b1a29ca934931",
+        "size": 1639
+      },
+      {
+        "path": "src/cuda/b300/row4_automaton_mod4294967291.hpp",
+        "sha256": "a664131e52fa99689e84be572a61bdd841b99bef626a5fe6ad79db25eb2095c0",
+        "size": 22672
+      },
+      {
+        "path": "src/cuda/b300/row5_automaton_mod4294967291.hpp",
+        "sha256": "0cac1c719243f08b7ce63d26df1875cea58d02a8b57d207bee556d392483dff9",
+        "size": 221338
+      },
+      {
+        "path": "src/cuda/b300/row5_automaton_rational.hpp",
+        "sha256": "5e154b5528c9db274dd6d45b686593280203bcaa84e18a34f7164c764cae92b5",
+        "size": 817169
+      },
+      {
+        "path": "src/cuda/b300/row6_automaton_mod1000000007.hpp",
+        "sha256": "8db10b59a283802e54136fd977732d89af4c7f1cee675cbd89f63770597acf20",
+        "size": 1960313
+      },
+      {
+        "path": "src/cuda/b300/row8_mod_matrix_runtime.cuh",
+        "sha256": "75f9ad539fa68a3738f8e8c96e94d9c1b7eb7492ef7a116e69a8e53f0d2037f0",
+        "size": 7220
+      },
+      {
+        "path": "src/cuda/b300/row8_runtime_bounded.cuh",
+        "sha256": "6522d5f5cc04be4d9b52e79264571e15b2931fa10a62244418b533133983cf9b",
+        "size": 3962
+      },
+      {
+        "path": "src/cuda/b300/row8_runtime_mod_builder.cuh",
+        "sha256": "44d44acbf724740445e1c55c6b723911535fca4d366b4ec41212f8bf5ffbb821",
+        "size": 13110
+      },
+      {
+        "path": "src/cuda/b300/row8_structural_tensor_init.cuh",
+        "sha256": "4e50676b0747f6680bf1a4a6c6498a7e7b645c305333597ad9b9d922dd40c00c",
+        "size": 24836
+      },
+      {
+        "path": "src/cuda/b300/row8_tensor_init.cuh",
+        "sha256": "42534cc289f4f1f11549fc7227bffce2294b9dcc9d4e3f4ef70d1a410061432d",
+        "size": 26969
+      }
+    ],
+    "format": "ONEESAN_BUILD_PROVENANCE_V2",
+    "git_commit": "bb91ae632ff9984b0de6f4d13d8ae8ad65d4d5af",
+    "provenance_sha256": "3fec0486d46da6bec92e263ef87a4195cd3ea8812d58093f37509e32a52ee65d",
+    "source": "src/cuda/b300/oneesan_cuda_gridfp_b300_hbm32_factorized_reverse2_row8tensor_batch.cu"
+  },
+  "comparison_primes": [
+    4294967291,
+    4294967279,
+    4294967231
+  ],
+  "comparison_provenance_file_sha256": "2361a73b90fdbbd51417b4945ff294d2335e600f7cb4046ee881259dfe40a81c",
+  "critical_files": [
+    {
+      "bytes": 2953,
+      "path": "src/common/gridfp_transition.hpp",
+      "sha256": "26917d03d7d9c3da73b5cf71f7d1a479053db90211d823551a5ac913f0af68d9"
+    },
+    {
+      "bytes": 144005,
+      "path": "src/cuda/b300/oneesan_cuda_gridfp_b300_hbm32_factorized_reverse2_row8tensor_batch.cu",
+      "sha256": "71b0e72bcb1a2d4aaf919ebf867cc5c675e0032b38ea712f844e207cbfe06feb"
+    },
+    {
+      "bytes": 26969,
+      "path": "src/cuda/b300/row8_tensor_init.cuh",
+      "sha256": "42534cc289f4f1f11549fc7227bffce2294b9dcc9d4e3f4ef70d1a410061432d"
+    },
+    {
+      "bytes": 24836,
+      "path": "src/cuda/b300/row8_structural_tensor_init.cuh",
+      "sha256": "4e50676b0747f6680bf1a4a6c6498a7e7b645c305333597ad9b9d922dd40c00c"
+    },
+    {
+      "bytes": 930824,
+      "path": "src/cuda/b300/row8_structural_int_v1.bin",
+      "sha256": "4cdadfb43c58d8d56ef0a1066c69996ca62d238cfa2060f430d07092249e2a58"
+    },
+    {
+      "bytes": 12962,
+      "path": "scripts/tools/row8_gridfp_structural_cert.py",
+      "sha256": "622861a352f46b99e11dda7878ff1a1a910bd6ad489b8551de3256e5dcabb223"
+    },
+    {
+      "bytes": 2458,
+      "path": "formal/OneesanFormal/ProductionDecisionBound.lean",
+      "sha256": "d5a7fc2db0381823164085db44e6c7d341b43ed18f76f4d248eaa620e21219fa"
+    }
+  ],
+  "crt_argument": "The production row-8 Grid-FP baseline is a deterministic execution once its r(w-1) horizontal include/exclude bits are fixed; blocked cells only force a decision and cannot add traces. ProductionDecisionBound.fiber_card_le formally bounds every target coefficient by 2^(r(w-1)) without assuming any path semantics. The structural integer automaton is independently bounded from its cache operator infinity norms. Their difference is divisible by the listed prime product and has absolute value strictly below that product, hence is zero over Z.",
+  "evidence_log": {
+    "bytes": 327,
+    "path": "formal/certificates/row8_gridfp_structural_w10.log",
+    "sha256": "7ad23697e65af4ae0f12073a3955c9783b43755f2c3884c1585aa9b0f8bd7381"
+  },
+  "integer_vector_equal": true,
+  "main_states": 3610,
+  "n": 9,
+  "prime_count": 3,
+  "prime_product_bits": 96,
+  "processed_strip_edges": 152,
+  "records": [
+    {
+      "exact": 1,
+      "gpus": 1,
+      "main_states": 3610,
+      "mismatch": 0,
+      "modulus": 4294967291,
+      "n": 9,
+      "wall_s": 0.124141,
+      "width": 10
+    },
+    {
+      "exact": 1,
+      "gpus": 1,
+      "main_states": 3610,
+      "mismatch": 0,
+      "modulus": 4294967279,
+      "n": 9,
+      "wall_s": 0.107812,
+      "width": 10
+    },
+    {
+      "exact": 1,
+      "gpus": 1,
+      "main_states": 3610,
+      "mismatch": 0,
+      "modulus": 4294967231,
+      "n": 9,
+      "wall_s": 0.109392,
+      "width": 10
+    }
+  ],
+  "row": 8,
+  "schema": "oneesan-row8-gridfp-structural-v2",
+  "structural_norms": {
+    "alpha_max": 1,
+    "beta_max": 1,
+    "max_abs_col_sum": 416,
+    "max_abs_row_sum": 128,
+    "nonzeros": 287893
+  },
+  "width": 10
+}

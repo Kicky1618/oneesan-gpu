@@ -429,6 +429,8 @@ int main(int argc, char** argv) {
     }
     std::cout << "n=" << n << " residues=";
     for(int r=0;r<NRES;++r){ if(r) std::cout << ','; std::cout << ans[r]; }
+    std::cout << " moduli=";
+    for(int r=0;r<NRES;++r){ if(r) std::cout << ','; std::cout << H_MODS[r]; }
     std::cout << " peak_states=" << peak << " hash_slots=" << peak_table << " gpu_ms=" << ms << "\n";
 
     cudaFree(table_keys); cudaFree(table_vals); cudaFree(table_state); cudaFree(occupied); cudaFree(occupied_n);

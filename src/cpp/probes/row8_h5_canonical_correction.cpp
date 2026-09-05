@@ -1,0 +1,18 @@
+#include <algorithm>
+#include <array>
+#include <cstdint>
+#include <filesystem>
+#include <fstream>
+#include <iostream>
+#include <map>
+#include <string>
+#include <vector>
+static constexpr uint32_t P=1000000007u; static constexpr int N=152,K=420;
+static std::vector<uint32_t> loadA(int h,int n){std::vector<uint32_t>A((size_t)n*n);std::ifstream in("work/formal-probes/canonical-matrix/A_h"+std::to_string(h)+"_mod1000000007.bin",std::ios::binary);struct H{char m[8];uint32_t v,mod,h,d;uint64_t c,hash;}x{};in.read((char*)&x,sizeof(x));in.read((char*)A.data(),A.size()*4);if(!in)throw std::runtime_error("A");return A;}
+static std::vector<uint32_t> loadM(){std::string p;for(auto const&e:std::filesystem::directory_iterator("work/row8_mod_cache")){auto s=e.path().filename().string();if(s.find("row8_mod_1000000007_")==0&&s.find("_52384d4443414249.bin")!=std::string::npos){p=e.path();break;}}std::ifstream in(p,std::ios::binary);char magic[8];uint32_t ver,pm,ds[9];uint64_t fp,abi,an,bn,cnt[27],hash;in.read(magic,8);in.read((char*)&ver,4);in.read((char*)&pm,4);in.read((char*)&fp,8);in.read((char*)&abi,8);in.read((char*)ds,36);in.read((char*)&an,8);in.read((char*)&bn,8);in.read((char*)cnt,sizeof(cnt));in.read((char*)&hash,8);in.seekg((std::streamoff)(4*(an+bn)),std::ios::cur);int q=0;for(int a=0;a<3;++a)for(int h=0;h<9;++h){size_t n=cnt[q++];if(a==1&&h==5){std::vector<uint32_t>M(n);in.read((char*)M.data(),n*4);return M;}in.seekg((std::streamoff)(n*4),std::ios::cur);}throw std::runtime_error("M");}
+static uint32_t inv(uint32_t a){uint64_t x=a,e=P-2,r=1;while(e){if(e&1)r=(__uint128_t)r*x%P;x=(__uint128_t)x*x%P;e>>=1;}return r;}
+static std::vector<uint32_t> inverse(std::vector<uint32_t>A,int n){std::vector<uint32_t>I((size_t)n*n);for(int i=0;i<n;++i)I[(size_t)i*n+i]=1;for(int c=0;c<n;++c){int r=c;while(r<n&&!A[(size_t)r*n+c])++r;if(r==n)throw std::runtime_error("singular");if(r!=c)for(int j=0;j<n;++j){std::swap(A[(size_t)r*n+j],A[(size_t)c*n+j]);std::swap(I[(size_t)r*n+j],I[(size_t)c*n+j]);}uint32_t iv=inv(A[(size_t)c*n+c]);for(int j=0;j<n;++j){A[(size_t)c*n+j]=(__uint128_t)A[(size_t)c*n+j]*iv%P;I[(size_t)c*n+j]=(__uint128_t)I[(size_t)c*n+j]*iv%P;}for(int r2=0;r2<n;++r2)if(r2!=c&&A[(size_t)r2*n+c]){uint32_t f=A[(size_t)r2*n+c];for(int j=0;j<n;++j){A[(size_t)r2*n+j]=(A[(size_t)r2*n+j]+P-(__uint128_t)f*A[(size_t)c*n+j]%P)%P;I[(size_t)r2*n+j]=(I[(size_t)r2*n+j]+P-(__uint128_t)f*I[(size_t)c*n+j]%P)%P;}}}return I;}
+int main(){auto A5=loadA(5,N),A4=loadA(4,K),M=loadM(),I5=inverse(A5,N);int bad[5]={337,351,371,397,417};std::vector<uint32_t> R((size_t)N*5);for(int i=0;i<N;++i)for(int q=0;q<5;++q){int k=bad[q];__uint128_t s=0;for(int j=0;j<K;++j)s+=(__uint128_t)M[(size_t)i*K+j]*A4[(size_t)j*K+k];R[(size_t)i*5+q]=s%P;}
+ std::vector<uint32_t>D((size_t)N*5);for(int i=0;i<N;++i)for(int q=0;q<5;++q){__uint128_t s=0;for(int j=0;j<N;++j)s+=(__uint128_t)I5[(size_t)i*N+j]*R[(size_t)j*5+q];D[(size_t)i*5+q]=s%P;}
+ size_t nz=0;std::map<int,int> hist;for(auto x:D)if(x){++nz;int64_t y=x<=P/2?x:(int64_t)x-P;if(y>=-20&&y<=20)hist[(int)y]++;else hist[999]++;}std::cout<<"nonzero="<<nz<<"/"<<D.size()<<"\ncoeff_hist";for(auto [x,c]:hist)std::cout<<' '<<x<<':'<<c;std::cout<<'\n';for(int i=0;i<N;++i){bool any=false;for(int q=0;q<5;++q)any|=D[(size_t)i*5+q]!=0;if(any){std::cout<<"src="<<i;for(int q=0;q<5;++q){uint32_t x=D[(size_t)i*5+q];int64_t y=x<=P/2?x:(int64_t)x-P;std::cout<<' '<<y;}std::cout<<'\n';}}
+}
