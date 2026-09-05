@@ -20,6 +20,9 @@ B300のCompute Capability 10.3では、nvccが`sm_103`を持っていればそ�
 CUDA 12.8のように持っていない場合は、`sm_100`へフォールバックする。
 どちらもなければ、CUDA Toolkit 12.9以上が必要だと明示して停止する。
 
+ビルド失敗時は、autotuneのエラー末尾にnvccログの最後20行を表示する。
+ここに`fatal error`、`undefined reference`、`Killed`、`No space left`などの実原因が出る。
+
 ```bash
 # 検出のみ。ソルバーのビルド・ベンチマーク・本実行はしない
 python3 scripts/run/autotune.py --detect-only

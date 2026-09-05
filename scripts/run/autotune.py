@@ -77,7 +77,12 @@ def run(command, env, log=None, timeout=None):
                 child.wait()
                 raise
         if code:
-            raise RuntimeError(f'exit {code}: {command[0]}; log: {log}')
+            detail = ''
+            if log and log.exists():
+                lines = log.read_text(errors='replace').splitlines()
+                if lines:
+                    detail = '\n' + '\n'.join(lines[-20:])
+            raise RuntimeError(f'exit {code}: {command[0]}; log: {log}{detail}')
     finally:
         if handle:
             handle.close()
