@@ -195,22 +195,26 @@ class Tuner:
         key = (n, arch)
         if key not in self.binaries:
             binary = BUILD / f'groupbatch-n{n}-{arch}'
-            expected = [f'-DTARGET_W={n+1}', f'-DLOW_LUT_K={(n+1)//2}',
-                        f'-DHIGH_LUT_K={n-(n+1)//2}', f'-arch={arch}', str(SOURCE)]
+            compile_args = ['-O3', '-std=c++17', '-lineinfo', f'-arch={arch}',
+                            f'-DTARGET_W={n+1}', f'-DLOW_LUT_K={(n+1)//2}',
+                            f'-DHIGH_LUT_K={n-(n+1)//2}', str(SOURCE), '-o', str(binary), '-lcuda']
             verify = [sys.executable, PROVENANCE, 'verify', str(binary)+'.provenance.json',
                       '--binary', binary, '--root', ROOT, '--verify-sources']
-            verify += ['--expect-compile-arg='+x for x in expected]
+            verify += ['--expect-compile-arg='+x for x in compile_args]
             try:
                 if not binary.exists():
                     raise RuntimeError('not built')
                 run(verify, clean_env(), self.logs / f'verify-n{n}-{arch}.log', 60)
             except RuntimeError:
                 env = clean_env()
-                env.update(N=str(n), ARCH=arch, GROUPBATCH='1', SRC=str(SOURCE), OUT=str(binary),
-                           LOW_LUT_K=str((n+1)//2), HIGH_LUT_K=str(n-(n+1)//2))
+                env.update(TMPDIR=str(BUILD / 'tmp'))
                 print(f'Build n={n} {arch}', flush=True)
-                run([ROOT / 'scripts/build/b300-hbm32-batch.sh'], env,
+                run([shutil.which('nvcc'), *compile_args], env,
                     self.logs / f'build-n{n}-{arch}.log', 900)
+                create = [sys.executable, PROVENANCE, 'create', '--root', ROOT,
+                          '--binary', binary, '--source', SOURCE, '--compiler', shutil.which('nvcc')]
+                create += ['--compile-arg='+x for x in compile_args]
+                run(create, clean_env(), self.logs / f'provenance-n{n}-{arch}.log', 60)
                 run(verify, clean_env(), self.logs / f'verify-n{n}-{arch}.log', 60)
             self.binaries[key] = binary
         return self.binaries[key]
@@ -380,6 +384,8 @@ def main(argv=None):
 def execute(args):
     logs = args.output.parent / (args.output.stem + '-' + time.strftime('%Y%m%d-%H%M%S') + f'-{os.getpid()}')
     logs.mkdir(parents=True, exist_ok=False)
+    print('autotune implementation: direct GROUPBATCH nvcc build (no experimental source transforms)',
+          flush=True)
     hardware = detect(logs)
     print(json.dumps(hardware, indent=2), flush=True)
     if args.detect_only:
