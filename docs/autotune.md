@@ -16,6 +16,10 @@ VMM粒度、ドライバ、GPU間の双方向P2P可否。検出プログラム�
 空きメモリ取得のためCUDAコンテキストを作る。MIGは対象外。
 `CUDA_VISIBLE_DEVICES`で使用可能なGPUを限定できる。
 
+B300のCompute Capability 10.3では、nvccが`sm_103`を持っていればそれを使う。
+CUDA 12.8のように持っていない場合は、`sm_100f`が対応していれば10.xファミリー互換
+ターゲットとして使う。どちらもなければ、CUDA Toolkit 12.9以上が必要だと明示して停止する。
+
 ```bash
 # 検出のみ。ソルバーのビルド・ベンチマーク・本実行はしない
 python3 scripts/run/autotune.py --detect-only

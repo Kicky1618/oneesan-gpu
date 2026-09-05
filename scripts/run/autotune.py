@@ -99,6 +99,9 @@ def detect(logs):
                 logs / 'inventory-build.log', 180)
     data = json.loads(run([binary], clean_env(), logs / 'inventory.json', 60))
     data['nvcc'] = version
+    help_text = subprocess.check_output(
+        [nvcc, '--help'], text=True, stderr=subprocess.STDOUT, timeout=30)
+    data['nvcc_targets'] = sorted(set(re.findall(r'\b(?:sm|compute)_[0-9]+[af]?\b', help_text)))
     physical = subprocess.check_output(
         ['nvidia-smi', '--query-gpu=uuid,driver_version,mig.mode.current',
          '--format=csv,noheader'], text=True, timeout=30)
@@ -111,6 +114,19 @@ def detect(logs):
             raise RuntimeError('MIG is not supported; select physical GPUs without MIG')
         g['driver_release'] = physical[g['uuid']][0]
     return data
+
+
+def compile_arch(nvcc_targets, gpu):
+    """Choose native 10.3 when available, otherwise CUDA 12.8's 10.x family target."""
+    targets = set(nvcc_targets)
+    exact = f"sm_{gpu['major']}{gpu['minor']}"
+    if exact in targets:
+        return exact
+    if (gpu['major'], gpu['minor']) == (10, 3) and 'sm_100f' in targets:
+        return 'sm_100f'
+    raise RuntimeError(
+        f"nvcc cannot target {exact}; install CUDA Toolkit >= 12.9 (or use a toolkit "
+        f"with sm_100f family support). Supported targets do not include {exact} or sm_100f")
 
 
 def groups(hardware, maximum):
@@ -191,7 +207,7 @@ class Tuner:
 
     def _binary(self, n, config):
         gpu = self.hardware['gpus'][config.devices[0]]
-        arch = f"sm_{gpu['major']}{gpu['minor']}"
+        arch = compile_arch(self.hardware['nvcc_targets'], gpu)
         key = (n, arch)
         if key not in self.binaries:
             binary = BUILD / f'groupbatch-n{n}-{arch}'
