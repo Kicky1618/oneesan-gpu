@@ -158,12 +158,12 @@ class AutotuneTests(unittest.TestCase):
             return json.dumps(h)
         with patch.object(a, 'BUILD', self.root), patch.object(a.shutil, 'which', return_value='/nvcc'), \
              patch.object(a, 'run', side_effect=mock_run), \
-             patch.object(a.subprocess, 'check_output', side_effect=['version', 'GPU-test-0, 580.1, [N/A]\n']):
+             patch.object(a.subprocess, 'check_output', side_effect=['version', 'sm_100 sm_100f', 'GPU-test-0, 580.1, [N/A]\n']):
             data = a.detect(self.root)
         self.assertEqual(data['gpus'][0]['driver_release'], '580.1')
         with patch.object(a, 'BUILD', self.root), patch.object(a.shutil, 'which', return_value='/nvcc'), \
              patch.object(a, 'run', side_effect=mock_run), \
-             patch.object(a.subprocess, 'check_output', side_effect=['version', 'GPU-test-0, 580.1, Enabled\n']):
+             patch.object(a.subprocess, 'check_output', side_effect=['version', 'sm_100 sm_100f', 'GPU-test-0, 580.1, Enabled\n']):
             with self.assertRaisesRegex(RuntimeError, 'MIG'):
                 a.detect(self.root)
 
