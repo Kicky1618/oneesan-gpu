@@ -171,9 +171,9 @@ class AutotuneTests(unittest.TestCase):
         gpu = hardware(1)['gpus'][0]
         gpu.update(major=10, minor=3)
         self.assertEqual(a.compile_arch(['sm_100', 'sm_100f', 'sm_103'], gpu), 'sm_103')
-        self.assertEqual(a.compile_arch(['sm_100', 'sm_100f'], gpu), 'sm_100f')
+        self.assertEqual(a.compile_arch(['sm_100', 'sm_100a'], gpu), 'sm_100')
         with self.assertRaisesRegex(RuntimeError, 'CUDA Toolkit >= 12.9'):
-            a.compile_arch(['sm_100'], gpu)
+            a.compile_arch(['sm_100a'], gpu)
 
     def test_main_tunes_then_reuses_and_passes_config_to_exact_runner(self):
         output = self.root / 'chosen.json'
