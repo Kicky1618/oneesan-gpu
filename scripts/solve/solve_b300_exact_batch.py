@@ -1,6 +1,8 @@
 #!/usr/bin/env python3
 import argparse
+import hashlib
 import json
+import math
 import os
 import subprocess
 import sys
@@ -101,6 +103,11 @@ def main() -> int:
     if not binary.exists():
         raise SystemExit(f"batch binary not found: {binary}")
     binary = binary.resolve()
+    fingerprint = solver_fingerprint(binary)
+    print(
+        f"solver fingerprint: sha256={fingerprint['binary_sha256']}",
+        file=sys.stderr,
+    )
 
     work = Path(args.work_dir) if args.work_dir else REPO_ROOT / "work" / f"b300_exact_n{n}"
     work.mkdir(parents=True, exist_ok=True)

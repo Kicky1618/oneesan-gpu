@@ -1,0 +1,48 @@
+name: orbit closure graph validation
+
+on:
+  push:
+    paths:
+      - 'src/cuda/gridfp/ramstream32_bucket_orbit_closure_fused.cuh'
+      - 'src/cuda/gridfp/ramstream32_bucket_orbit_closure_stream.cuh'
+      - 'src/cuda/gridfp/ramstream32_bucket_orbit_closure_graph.cuh'
+      - 'src/cuda/gridfp/ramstream32_bucket_orbit_closure_checked.cuh'
+      - 'src/cuda/gridfp/ramstream32_bucket_orbit_closure_preflight.cuh'
+      - 'src/cuda/gridfp/ramstream32_reverse_bucket_derive.hpp'
+      - 'src/cuda/gridfp/probes/ramstream32_bucket_orbit_closure_graph_selftest.cu'
+      - '.github/workflows/orbit-closure-graph-validation.yml'
+  pull_request:
+    paths:
+      - 'src/cuda/gridfp/ramstream32_bucket_orbit_closure_fused.cuh'
+      - 'src/cuda/gridfp/ramstream32_bucket_orbit_closure_stream.cuh'
+      - 'src/cuda/gridfp/ramstream32_bucket_orbit_closure_graph.cuh'
+      - 'src/cuda/gridfp/ramstream32_bucket_orbit_closure_checked.cuh'
+      - 'src/cuda/gridfp/ramstream32_bucket_orbit_closure_preflight.cuh'
+      - 'src/cuda/gridfp/ramstream32_reverse_bucket_derive.hpp'
+      - 'src/cuda/gridfp/probes/ramstream32_bucket_orbit_closure_graph_selftest.cu'
+      - '.github/workflows/orbit-closure-graph-validation.yml'
+  workflow_dispatch:
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    container: nvidia/cuda:12.8.1-devel-ubuntu22.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Compile and run W10 graph selftest
+        shell: bash
+        run: |
+          mkdir -p build
+          nvcc -O3 -std=c++17 -lineinfo -arch=sm_80 \
+            -DTARGET_W=10 -DLOW_LUT_K=5 -DHIGH_LUT_K=4 \
+            src/cuda/gridfp/probes/ramstream32_bucket_orbit_closure_graph_selftest.cu \
+            -o build/orbit_closure_graph_w10
+          build/orbit_closure_graph_w10 | tee /tmp/orbit-closure-graph.txt
+          grep -Eq 'bucket-orbit-closure-graph-selftest (OK W=10|SKIP no CUDA device)' /tmp/orbit-closure-graph.txt
+      - name: Compile W10 PM graph selftest
+        shell: bash
+        run: |
+          nvcc -O3 -std=c++17 -lineinfo -arch=sm_80 \
+            -DTARGET_W=10 -DLOW_LUT_K=5 -DHIGH_LUT_K=4 -DGPU_DIRECT_PM_ACCUM=1 \
+            src/cuda/gridfp/probes/ramstream32_bucket_orbit_closure_graph_selftest.cu \
+            -o build/orbit_closure_graph_pm_w10

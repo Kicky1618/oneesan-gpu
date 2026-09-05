@@ -1,0 +1,42 @@
+name: reverse in-place orbit validation
+
+on:
+  push:
+    paths:
+      - 'src/common/gridfp_transition.hpp'
+      - 'src/common/gridfp_transition_reverse.hpp'
+      - 'src/cuda/gridfp/ramstream32_reverse_desc.hpp'
+      - 'src/cuda/gridfp/ramstream32_reverse_orbit.hpp'
+      - 'src/cuda/gridfp/probes/ramstream32_reverse_orbit_selftest.cu'
+      - '.github/workflows/reverse-orbit-validation.yml'
+  pull_request:
+    paths:
+      - 'src/common/gridfp_transition.hpp'
+      - 'src/common/gridfp_transition_reverse.hpp'
+      - 'src/cuda/gridfp/ramstream32_reverse_desc.hpp'
+      - 'src/cuda/gridfp/ramstream32_reverse_orbit.hpp'
+      - 'src/cuda/gridfp/probes/ramstream32_reverse_orbit_selftest.cu'
+      - '.github/workflows/reverse-orbit-validation.yml'
+  workflow_dispatch:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    container: nvidia/cuda:12.8.1-devel-ubuntu22.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Compile W10 reverse orbit selftest
+        shell: bash
+        run: |
+          mkdir -p build
+          nvcc -O3 -std=c++17 -lineinfo -arch=sm_80 \
+            -DTARGET_W=10 -DLOW_LUT_K=5 -DHIGH_LUT_K=4 \
+            src/cuda/gridfp/probes/ramstream32_reverse_orbit_selftest.cu \
+            -o build/ramstream32_reverse_orbit_selftest_w10
+      - name: Run W10 reverse orbit selftest
+        shell: bash
+        run: |
+          build/ramstream32_reverse_orbit_selftest_w10 2>&1 | tee /tmp/revorbit.txt
+          grep -Fq 'reverse-orbit-selftest OK W=10' /tmp/revorbit.txt
+          grep -Fq 'reverse_orbit side=LOW' /tmp/revorbit.txt
+          grep -Fq 'reverse_orbit side=HIGH' /tmp/revorbit.txt

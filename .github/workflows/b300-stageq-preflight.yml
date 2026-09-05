@@ -1,0 +1,68 @@
+name: B300 Stage Q preflight
+
+on:
+  push:
+    paths:
+      - 'scripts/build/gen-b300-mainrec-ilp8-pair-block-cg-l2-policy.py'
+      - 'scripts/build/b300-forced-nextgen-hybrid8-stageq-ilp8-count-cg-l2-policy.sh'
+      - 'scripts/build/gen-b300-grand-selector-stageq.py'
+      - 'scripts/build/gen-b300-grand-firstpass-stageq.py'
+      - 'scripts/bench/b300-mainrec-ilp8-pair-block-cg-l2-policy-preflight.sh'
+      - 'scripts/bench/b300-nextgen-hybrid8-stageq-ilp8-count-cg-l2-sweep.sh'
+      - 'scripts/bench/b300-nextgen-hybrid8-stageq-ilp8-count-cg-l2-staged-calibrate.sh'
+      - 'scripts/bench/b300-stageq-preflight.sh'
+      - 'scripts/bench/b300-grand-stageq-contract-preflight.sh'
+      - 'scripts/bench/b300-grand-stageq-firstpass-preflight.sh'
+      - 'scripts/bench/b300-grand-stageq-exact-promotion-preflight.sh'
+      - 'scripts/bench/b300-grand-latest-entrypoint-preflight.sh'
+      - 'scripts/run/b300x8-nextgen-hybrid8-stageq-ilp8-count-cg-l2-staged-fullprime-race.sh'
+      - 'scripts/run/b300x8-joint-nextself-hybrid8-select-stageq.sh'
+      - 'scripts/run/b300x8-grand-firstpass-stageq.sh'
+      - 'scripts/run/b300x8-grand-promote-exact-stageq.sh'
+      - 'scripts/run/b300x8-grand-firstpass-latest.sh'
+      - 'scripts/run/b300x8-grand-promote-exact-latest.sh'
+      - '.github/workflows/b300-stageq-preflight.yml'
+  pull_request:
+    paths:
+      - 'scripts/build/gen-b300-mainrec-ilp8-pair-block-cg-l2-policy.py'
+      - 'scripts/build/b300-forced-nextgen-hybrid8-stageq-ilp8-count-cg-l2-policy.sh'
+      - 'scripts/build/gen-b300-grand-selector-stageq.py'
+      - 'scripts/build/gen-b300-grand-firstpass-stageq.py'
+      - 'scripts/bench/b300-mainrec-ilp8-pair-block-cg-l2-policy-preflight.sh'
+      - 'scripts/bench/b300-nextgen-hybrid8-stageq-ilp8-count-cg-l2-sweep.sh'
+      - 'scripts/bench/b300-nextgen-hybrid8-stageq-ilp8-count-cg-l2-staged-calibrate.sh'
+      - 'scripts/bench/b300-stageq-preflight.sh'
+      - 'scripts/bench/b300-grand-stageq-contract-preflight.sh'
+      - 'scripts/bench/b300-grand-stageq-firstpass-preflight.sh'
+      - 'scripts/bench/b300-grand-stageq-exact-promotion-preflight.sh'
+      - 'scripts/bench/b300-grand-latest-entrypoint-preflight.sh'
+      - 'scripts/run/b300x8-nextgen-hybrid8-stageq-ilp8-count-cg-l2-staged-fullprime-race.sh'
+      - 'scripts/run/b300x8-joint-nextself-hybrid8-select-stageq.sh'
+      - 'scripts/run/b300x8-grand-firstpass-stageq.sh'
+      - 'scripts/run/b300x8-grand-promote-exact-stageq.sh'
+      - 'scripts/run/b300x8-grand-firstpass-latest.sh'
+      - 'scripts/run/b300x8-grand-promote-exact-latest.sh'
+      - '.github/workflows/b300-stageq-preflight.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  preflight:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - name: Validate Stage Q ILP8 Count CG L2 transform
+        run: bash scripts/bench/b300-mainrec-ilp8-pair-block-cg-l2-policy-preflight.sh
+      - name: Validate Stage Q staged promotion contract
+        run: bash scripts/bench/b300-stageq-preflight.sh
+      - name: Validate Stage Q grand selector contract
+        run: bash scripts/bench/b300-grand-stageq-contract-preflight.sh
+      - name: Validate Stage Q grand firstpass contract
+        run: bash scripts/bench/b300-grand-stageq-firstpass-preflight.sh
+      - name: Validate Stage Q exact provenance
+        run: bash scripts/bench/b300-grand-stageq-exact-promotion-preflight.sh
+      - name: Validate latest grand entrypoints
+        run: bash scripts/bench/b300-grand-latest-entrypoint-preflight.sh

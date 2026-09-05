@@ -1,0 +1,72 @@
+#!/usr/bin/env bash
+set -euo pipefail
+source "$(dirname -- "${BASH_SOURCE[0]}")/../lib/common.sh"
+
+FILES=(
+  scripts/lib/gridfp-runtime-ab-env.sh
+  scripts/bench/gridfp-runtime-ab-env-proof.sh
+  scripts/bench/gridfp-runtime-experimental-ab-isolation-proof.sh
+  scripts/bench/gridfp-codec-table-proxy-coverage-proof.sh
+  scripts/bench/gridfp-codec-table-layout-selection-gate.sh
+  scripts/bench/gridfp-codec-table-layout-selection-gate-proof.sh
+  scripts/bench/gridfp-codec-table-consensus-gate.sh
+  scripts/bench/gridfp-codec-table-consensus-gate-proof.sh
+  scripts/bench/gridfp-codec-table-w28-rank-microprobe.sh
+  scripts/bench/gridfp-codec-table-decision-suite.sh
+  scripts/bench/gridfp-codec-table-physical-replacement-proof.sh
+  scripts/bench/gridfp-codec-table-physical-compile-matrix.sh
+  scripts/bench/gridfp-codec-table-w28-rank-physical-ab.sh
+  scripts/bench/gridfp-reduced-runtime-codec-tables-physical-ab.sh
+  scripts/bench/gridfp-codec-table-physical-consensus-gate.sh
+  scripts/bench/gridfp-codec-table-physical-consensus-gate-proof.sh
+  scripts/bench/gridfp-codec-table-physical-decision-suite.sh
+  scripts/bench/gridfp-codec-table-physical-exact-resume.sh
+  scripts/bench/gridfp-codec-table-w28-motzkin-reachability-proof.sh
+  scripts/bench/gridfp-runtime-label-hotpath-proof-suite.sh
+  scripts/bench/gridfp-runtime-w28-label-hotpath-suite.sh
+  scripts/bench/gridfp-codec-table-layout-suite.sh
+  scripts/bench/gridfp-codec-table-exact-suite.sh
+  scripts/bench/gridfp-build-nvcc-prepend-smoke.sh
+  scripts/bench/gridfp-reduced-runtime-owner-label-hotpath-ab.sh
+  scripts/bench/gridfp-reduced-runtime-owner-local-sector-compact-table-ab.sh
+  scripts/bench/gridfp-reduced-runtime-label-hotpath-cumulative-ab.sh
+  scripts/bench/gridfp-reduced-runtime-materialize-primitive-last-r-ab.sh
+  scripts/bench/gridfp-reduced-runtime-materialize-primitive-packed-ab.sh
+  scripts/bench/gridfp-reduced-runtime-primitive1-u32-ab.sh
+  scripts/bench/gridfp-reduced-runtime-primitive-sym-u32-ab.sh
+  scripts/bench/gridfp-reduced-runtime-choose-sym-u32-ab.sh
+  scripts/bench/gridfp-reduced-runtime-codec-tables-sym-u32-ab.sh
+  scripts/bench/gridfp-primitive1-u32-table-microprobe.sh
+  scripts/bench/gridfp-runtime-primitive-rank-packed-microprobe.sh
+  scripts/bench/gridfp-primitive-sym-u32-table-microprobe.sh
+  scripts/bench/gridfp-choose-sym-u32-table-microprobe.sh
+  scripts/bench/gridfp-motzkin-tri-u64-table-microprobe.sh
+  scripts/bench/gridfp-primitive1-u32-table-proof.sh
+  scripts/bench/gridfp-runtime-primitive-rank-packed-proof.sh
+  scripts/bench/gridfp-primitive-sym-u32-table-proof.sh
+  scripts/bench/gridfp-choose-sym-u32-table-proof.sh
+  scripts/bench/gridfp-codec-table-budget-proof.sh
+  scripts/build/b300-bucket-snake-pattern10-depthcode-rankformula-nometa4-abstract.sh
+  scripts/bench/pattern10-depthcode-rankformula-nometa4-abstract-block-selftest.sh
+  scripts/bench/rankformula-nometa4-abstract-preflight.sh
+  scripts/bench/rankformula-nometa-group56-proof.sh
+  scripts/bench/rankformula-abstract-select8-proof.sh
+  scripts/bench/rankformula-abstract-depth4-proof.sh
+  scripts/bench/rankformula-abstract-srcpack10-proof.sh
+  scripts/bench/rankformula-abstract-compact-proof.sh
+  scripts/bench/b300-depthcode-rankformula-nometa-coop-unroll-ab.sh
+  scripts/bench/b300-depthcode-rankformula-nometa-group56-ab.sh
+  scripts/bench/b300-depthcode-rankformula-abstract-select8-ab.sh
+  scripts/bench/b300-depthcode-rankformula-abstract-srcpack10-ab.sh
+  scripts/bench/b300-depthcode-rankformula-abstract-depth4-ab.sh
+)
+
+checked=0
+for rel in "${FILES[@]}"; do
+  path="$ONEESAN_ROOT/$rel"
+  [[ -f "$path" ]] || { echo "missing syntax target: $rel" >&2; exit 2; }
+  bash -n "$path"
+  ((checked += 1))
+done
+
+echo "gridfp-experimental-shell-syntax-proof OK files=$checked exact=1"

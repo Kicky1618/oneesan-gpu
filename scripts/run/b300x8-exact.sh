@@ -116,15 +116,39 @@ if (( (ROW6_VMM || ROW6_PRERANK || ROW6_OCCVMM) && N < 27 )); then
   exit 2
 fi
 
-if ! command -v nvidia-smi >/dev/null; then
-  echo "nvidia-smi not found" >&2
-  exit 2
+for name in MAIN_MATE_CACHE MAIN_PULL BLOCK_PULL BLOCK_MATE_CACHE LOW_DROP_CACHE LOW_DROP_CHUNK LOW_BLOCK_CACHE HIGH_DROP_CHUNK LOW_MAIN_RECURRENCE HIGH_MAIN_RECURRENCE MAIN_RECURRENCE REBUILD; do
+  value="${!name}"; [[ "$value" == 0 || "$value" == 1 ]] || { echo "$name must be 0 or 1" >&2; exit 2; }
+done
+if [[ "$BLOCK_PULL" == 1 && "$MAIN_PULL" != 1 ]]; then echo "BLOCK_PULL=1 requires MAIN_PULL=1" >&2; exit 2; fi
+if [[ "$BLOCK_MATE_CACHE" == 1 && "$BLOCK_PULL" != 1 ]]; then echo "BLOCK_MATE_CACHE=1 requires BLOCK_PULL=1" >&2; exit 2; fi
+if [[ "$LOW_DROP_CACHE" == 1 && ( "$MAIN_PULL" != 1 || "$MAIN_MATE_CACHE" != 1 ) ]]; then echo "LOW_DROP_CACHE=1 requires MAIN_PULL=1 MAIN_MATE_CACHE=1" >&2; exit 2; fi
+if [[ "$LOW_DROP_CHUNK" == 1 && "$LOW_DROP_CACHE" != 1 ]]; then echo "LOW_DROP_CHUNK=1 requires LOW_DROP_CACHE=1" >&2; exit 2; fi
+if [[ "$LOW_BLOCK_CACHE" == 1 && ( "$LOW_DROP_CHUNK" != 1 || "$BLOCK_MATE_CACHE" != 1 ) ]]; then echo "LOW_BLOCK_CACHE=1 requires LOW_DROP_CHUNK=1 BLOCK_MATE_CACHE=1" >&2; exit 2; fi
+if [[ "$HIGH_DROP_CHUNK" == 1 && ( "$LOW_DROP_CACHE" != 1 || "$BLOCK_PULL" != 1 ) ]]; then echo "HIGH_DROP_CHUNK=1 requires LOW_DROP_CACHE=1 BLOCK_PULL=1" >&2; exit 2; fi
+if [[ "$LOW_MAIN_RECURRENCE" == 1 && ( "$LOW_DROP_CACHE" != 1 || "$LOW_DROP_CHUNK" != 1 || "$MAIN_MATE_CACHE" != 1 || "$MAIN_PULL" != 1 ) ]]; then echo "LOW_MAIN_RECURRENCE=1 requires low drop cache/chunk plus main pull/cache" >&2; exit 2; fi
+if [[ "$HIGH_MAIN_RECURRENCE" == 1 && ( "$MAIN_PULL_ILP" != 2 || "$MAIN_MATE_CACHE" != 1 || "$MAIN_PULL" != 1 ) ]]; then echo "HIGH_MAIN_RECURRENCE=1 requires MAIN_PULL_ILP=2 MAIN_MATE_CACHE=MAIN_PULL=1" >&2; exit 2; fi
+if [[ "$MAIN_RECURRENCE" == 1 && ( "$MAIN_PULL_ILP" != 2 || "$LOW_DROP_CACHE" != 1 || "$LOW_DROP_CHUNK" != 1 || "$MAIN_MATE_CACHE" != 1 || "$MAIN_PULL" != 1 ) ]]; then echo "MAIN_RECURRENCE=1 requires MAIN_PULL_ILP=2 low drop cache/chunk plus main pull/cache" >&2; exit 2; fi
+if (( LOW_MAIN_RECURRENCE + HIGH_MAIN_RECURRENCE + MAIN_RECURRENCE > 1 )); then echo "LOW_MAIN_RECURRENCE, HIGH_MAIN_RECURRENCE and MAIN_RECURRENCE are mutually exclusive" >&2; exit 2; fi
+if [[ "$MAIN_PULL_ILP" != 1 && "$MAIN_PULL" != 1 ]]; then echo "MAIN_PULL_ILP=$MAIN_PULL_ILP requires MAIN_PULL=1" >&2; exit 2; fi
+
+# Keep the established production binary/checkpoint path untouched. Every
+# experimental recurrence/ILP/high-drop combination gets a distinct binary and
+# work directory so REBUILD=0 and CRT checkpoint fingerprints cannot mix builds.
+if [[ "$MAIN_PULL_ILP" == 2 && "$HIGH_DROP_CHUNK" == 0 && "$LOW_MAIN_RECURRENCE" == 0 && "$HIGH_MAIN_RECURRENCE" == 0 && "$MAIN_RECURRENCE" == 0 ]]; then
+  CONFIG_TAG="production"
+  DEFAULT_BIN="$ONEESAN_BUILD_DIR/oneesan_cuda_gridfp_b300_hbm32_batch_n${N}"
+  DEFAULT_WORK="$ONEESAN_ROOT/work/b300_exact_n${N}"
+else
+  CONFIG_TAG="ilp${MAIN_PULL_ILP}_high${HIGH_DROP_CHUNK}_lowrec${LOW_MAIN_RECURRENCE}_highrec${HIGH_MAIN_RECURRENCE}_mainrec${MAIN_RECURRENCE}"
+  DEFAULT_BIN="$ONEESAN_BUILD_DIR/oneesan_cuda_gridfp_b300_hbm32_batch_n${N}_${CONFIG_TAG}"
+  DEFAULT_WORK="$ONEESAN_ROOT/work/b300_exact_n${N}_${CONFIG_TAG}"
 fi
+BIN="${BIN:-$DEFAULT_BIN}"
+WORK_DIR="${WORK_DIR:-$DEFAULT_WORK}"
+
+if ! command -v nvidia-smi >/dev/null; then echo "nvidia-smi not found" >&2; exit 2; fi
 visible="$(nvidia-smi --query-gpu=index --format=csv,noheader | wc -l)"
-if (( visible < NGPU )); then
-  echo "requested $NGPU GPUs, but only $visible are visible" >&2
-  exit 2
-fi
+if (( visible < NGPU )); then echo "requested $NGPU GPUs, but only $visible are visible" >&2; exit 2; fi
 
 PROVENANCE="${BIN}.provenance.json"
 needs_build=0

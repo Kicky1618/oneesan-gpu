@@ -1,0 +1,25 @@
+#!/usr/bin/env bash
+set -euo pipefail
+source "$(dirname -- "${BASH_SOURCE[0]}")/../lib/common.sh"
+CXX="${CXX:-g++}"
+if ! command -v "$CXX" >/dev/null; then echo "$CXX not found" >&2; exit 2; fi
+SRC="$ONEESAN_ROOT/src/cpp/probes/gridfp_rankchunk32_warpbase.cpp"
+BIN="${BIN:-$ONEESAN_BUILD_DIR/gridfp_rankchunk32_warpbase}"
+mkdir -p "$(dirname "$BIN")"
+"$CXX" -O3 -std=c++17 "$SRC" -o "$BIN"
+out="$($BIN)"
+printf '%s\n' "$out"
+grep -Fq 'gridfp-rankchunk32-warpbase OK' <<<"$out"
+grep -Fq 'pack_cases=4782969' <<<"$out"
+grep -Fq 'prefix_isolation_cases=23914845' <<<"$out"
+grep -Fq 'stripe_cases=1024' <<<"$out"
+grep -Fq 'chunk_bits=23 prefix_bits=9 block=32' <<<"$out"
+grep -Fq 'tail_max=80' <<<"$out"
+grep -Fq 'max_prefix=434' <<<"$out"
+grep -Fq 'height_padding_entries=0' <<<"$out"
+grep -Fq 'max_block_base_loads_per_warp=2' <<<"$out"
+grep -Fq 'lane0_source_always_active=1' <<<"$out"
+grep -Fq 'split_source_active_if_needed=1' <<<"$out"
+grep -Fq 'pack_exact=1 unpack_exact=1 prefix_isolation_exact=1' <<<"$out"
+grep -Fq 'direct_block_exact=1 one_shuffle_source_exact=1' <<<"$out"
+echo 'rankchunk32-warpbase-proof OK pack_cases=4782969 prefix_isolation_cases=23914845 block=32 height_padding_entries=0 max_block_base_loads_per_warp=2' >&2

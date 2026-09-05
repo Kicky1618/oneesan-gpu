@@ -1,0 +1,66 @@
+name: B300 Stage N preflight
+
+on:
+  push:
+    paths:
+      - 'scripts/build/gen-b300-mainrec-pair-block-load-policy.py'
+      - 'scripts/build/b300-forced-nextgen-hybrid8-pair-block-load-policy.sh'
+      - 'scripts/build/gen-b300-grand-selector-stagen.py'
+      - 'scripts/build/gen-b300-grand-firstpass-stagen.py'
+      - 'scripts/bench/b300-mainrec-pair-block-load-policy-preflight.sh'
+      - 'scripts/bench/b300-nextgen-hybrid8-pair-block-load-policy-sweep.sh'
+      - 'scripts/bench/b300-nextgen-hybrid8-pair-block-load-policy-staged-calibrate.sh'
+      - 'scripts/bench/b300-stagen-preflight.sh'
+      - 'scripts/bench/b300-grand-stagen-contract-preflight.sh'
+      - 'scripts/bench/b300-grand-stagen-firstpass-preflight.sh'
+      - 'scripts/bench/b300-grand-stagen-exact-promotion-preflight.sh'
+      - 'scripts/run/b300x8-nextgen-hybrid8-pair-block-load-stagen-staged-fullprime-race.sh'
+      - 'scripts/run/b300x8-joint-nextself-hybrid8-select-stagen.sh'
+      - 'scripts/run/b300x8-grand-firstpass-stagen.sh'
+      - 'scripts/run/b300x8-grand-promote-exact-stagen.sh'
+      - 'scripts/run/b300x8-grand-promote-exact-stagem.sh'
+      - 'scripts/run/b300x8-grand-promote-exact.sh'
+      - 'scripts/run/b300x8-joint-nextself-hybrid8-select.sh'
+      - 'scripts/run/b300x8-grand-firstpass.sh'
+      - '.github/workflows/b300-stagen-preflight.yml'
+  pull_request:
+    paths:
+      - 'scripts/build/gen-b300-mainrec-pair-block-load-policy.py'
+      - 'scripts/build/b300-forced-nextgen-hybrid8-pair-block-load-policy.sh'
+      - 'scripts/build/gen-b300-grand-selector-stagen.py'
+      - 'scripts/build/gen-b300-grand-firstpass-stagen.py'
+      - 'scripts/bench/b300-mainrec-pair-block-load-policy-preflight.sh'
+      - 'scripts/bench/b300-nextgen-hybrid8-pair-block-load-policy-sweep.sh'
+      - 'scripts/bench/b300-nextgen-hybrid8-pair-block-load-policy-staged-calibrate.sh'
+      - 'scripts/bench/b300-stagen-preflight.sh'
+      - 'scripts/bench/b300-grand-stagen-contract-preflight.sh'
+      - 'scripts/bench/b300-grand-stagen-firstpass-preflight.sh'
+      - 'scripts/bench/b300-grand-stagen-exact-promotion-preflight.sh'
+      - 'scripts/run/b300x8-nextgen-hybrid8-pair-block-load-stagen-staged-fullprime-race.sh'
+      - 'scripts/run/b300x8-joint-nextself-hybrid8-select-stagen.sh'
+      - 'scripts/run/b300x8-grand-firstpass-stagen.sh'
+      - 'scripts/run/b300x8-grand-promote-exact-stagen.sh'
+      - 'scripts/run/b300x8-grand-promote-exact-stagem.sh'
+      - 'scripts/run/b300x8-grand-promote-exact.sh'
+      - 'scripts/run/b300x8-joint-nextself-hybrid8-select.sh'
+      - 'scripts/run/b300x8-grand-firstpass.sh'
+      - '.github/workflows/b300-stagen-preflight.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  preflight:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - name: Validate Stage N pair/block load transform and staged promotion
+        run: bash scripts/bench/b300-stagen-preflight.sh
+      - name: Validate Stage N grand selector overlay
+        run: bash scripts/bench/b300-grand-stagen-contract-preflight.sh
+      - name: Validate Stage N grand first-pass overlay
+        run: bash scripts/bench/b300-grand-stagen-firstpass-preflight.sh
+      - name: Validate Stage N exact provenance continuation
+        run: bash scripts/bench/b300-grand-stagen-exact-promotion-preflight.sh

@@ -1,0 +1,196 @@
+name: B300 nextgen preflight
+
+on:
+  push:
+    paths:
+      - 'scripts/build/b300-forced-nextgen.sh'
+      - 'scripts/build/b300-forced-nextgen-hybrid8-self-mate-geometry.sh'
+      - 'scripts/build/gen-b300-low-drop-chunk.py'
+      - 'scripts/build/gen-b300-low-window-drop-cache.py'
+      - 'scripts/build/gen-b300-main-recurrence-ilp.py'
+      - 'scripts/build/gen-b300-main-recurrence-hybrid-ilp8.py'
+      - 'scripts/build/gen-b300-mainrec-hybrid8-next-self-prefetch.py'
+      - 'scripts/build/gen-b300-mainrec-hybrid8-next-mate-prefetch.py'
+      - 'scripts/build/gen-b300-mainrec-random-cg.py'
+      - 'scripts/build/gen-b300-mainrec-prefetch-l2.py'
+      - 'scripts/bench/b300-nextgen-*.sh'
+      - 'scripts/bench/b300-local-sm86-hybrid8-smoke.sh'
+      - 'scripts/bench/b300-local-sm86-hybrid8-nextself-width-smoke.sh'
+      - 'scripts/bench/b300-local-sm86-hybrid8-sweep.sh'
+      - 'scripts/bench/b300-hybrid8-ngpu-preflight.sh'
+      - 'scripts/bench/b300-low-window-drop-cache-proof.sh'
+      - 'scripts/bench/b300-main-recurrence-production-generate-proof.sh'
+      - 'scripts/bench/b300-mainrec-hybrid8-next-mate-preflight.sh'
+      - 'scripts/bench/b300-mainrec-self-mate-independent-geometry-preflight.sh'
+      - 'scripts/bench/b300-mainrec-predicated-prefetch-source-preflight.sh'
+      - 'scripts/bench/b300-stagei-namespace-contract-preflight.sh'
+      - 'scripts/bench/b300-stagel-preflight.sh'
+      - 'scripts/bench/b300-stagem-preflight.sh'
+      - 'scripts/bench/b300-grand-selector-contract-preflight.sh'
+      - 'scripts/bench/b300-grand-stageg-contract-preflight.sh'
+      - 'scripts/bench/b300-grand-stageh-contract-preflight.sh'
+      - 'scripts/bench/b300-grand-stagej-v2-contract-preflight.sh'
+      - 'scripts/bench/b300-grand-stagek-contract-preflight.sh'
+      - 'scripts/bench/b300-grand-exact-promotion-preflight.sh'
+      - 'scripts/bench/b300-exact-checkpoint-compat-preflight.py'
+      - 'scripts/bench/b300-exact-result-verifier-preflight.py'
+      - 'scripts/bench/b300-main-recurrence-ilp-partition-proof.py'
+      - 'scripts/bench/b300-mainrec-hybrid-ilp8-partition-proof.py'
+      - 'scripts/bench/b300-mainrec-hybrid-ilp8-transform-preflight.sh'
+      - 'scripts/bench/b300-mainrec-hybrid8-nextself-transform-preflight.sh'
+      - 'scripts/bench/b300-joint-nextgen-hybrid8-preflight.sh'
+      - 'scripts/bench/b300x8-ilp8-nextself-staged-ab.sh'
+      - 'scripts/solve/solve_b300_exact_batch.py'
+      - 'scripts/solve/verify_b300_exact_result.py'
+      - 'scripts/run/b300x8-nextgen-select.sh'
+      - 'scripts/run/b300x8-nextgen-hybrid8-staged-fullprime-race.sh'
+      - 'scripts/run/b300x8-nextgen-hybrid8-nextself-staged-fullprime-race.sh'
+      - 'scripts/run/b300x8-nextgen-hybrid8-nextmate-staged-fullprime-race.sh'
+      - 'scripts/run/b300x8-nextgen-hybrid8-nextmate-geometry-stagej-staged-fullprime-race.sh'
+      - 'scripts/run/b300x8-nextgen-hybrid8-selfevict-prepare.sh'
+      - 'scripts/run/b300x8-nextgen-hybrid8-mategeo-prepare.sh'
+      - 'scripts/run/b300x8-nextgen-hybrid8-mate-evict-stagek-staged-fullprime-race.sh'
+      - 'scripts/run/b300x8-nextgen-hybrid8-prefetch-guard-stagel-staged-fullprime-race.sh'
+      - 'scripts/run/b300x8-nextgen-hybrid8-mate-load-stagem-staged-fullprime-race.sh'
+      - 'scripts/run/b300x8-joint-nextgen-hybrid8-select.sh'
+      - 'scripts/run/b300x8-joint-nextself-hybrid8-select.sh'
+      - 'scripts/run/b300x8-joint-calibrated-select.sh'
+      - 'scripts/run/b300x8-ilp8-nextself-staged-fullprime-race.sh'
+      - 'scripts/run/b300x8-race-forced-profiled-once.sh'
+      - 'scripts/run/b300x8-race-external-forced-profiled-once.sh'
+      - 'scripts/run/b300x8-grand-firstpass.sh'
+      - 'scripts/run/b300x8-grand-stageg-firstpass.sh'
+      - 'scripts/run/b300x8-grand-stageg-continue.sh'
+      - 'scripts/run/b300x8-grand-stageh-firstpass.sh'
+      - 'scripts/run/b300x8-grand-stagej-firstpass-v2.sh'
+      - 'scripts/run/b300x8-grand-stagek-firstpass.sh'
+      - 'scripts/run/b300x8-grand-stagek-continue.sh'
+      - 'scripts/run/b300x8-grand-promote-exact.sh'
+      - 'scripts/run/b300x8-grand-verify-exact.sh'
+      - 'src/cpp/probes/b300_low_window_drop_cache_proof.cpp'
+      - '.github/workflows/b300-nextgen-preflight.yml'
+  pull_request:
+    paths:
+      - 'scripts/build/b300-forced-nextgen.sh'
+      - 'scripts/build/b300-forced-nextgen-hybrid8-self-mate-geometry.sh'
+      - 'scripts/build/gen-b300-low-drop-chunk.py'
+      - 'scripts/build/gen-b300-low-window-drop-cache.py'
+      - 'scripts/build/gen-b300-main-recurrence-ilp.py'
+      - 'scripts/build/gen-b300-main-recurrence-hybrid-ilp8.py'
+      - 'scripts/build/gen-b300-mainrec-hybrid8-next-self-prefetch.py'
+      - 'scripts/build/gen-b300-mainrec-hybrid8-next-mate-prefetch.py'
+      - 'scripts/build/gen-b300-mainrec-random-cg.py'
+      - 'scripts/build/gen-b300-mainrec-prefetch-l2.py'
+      - 'scripts/bench/b300-nextgen-*.sh'
+      - 'scripts/bench/b300-local-sm86-hybrid8-smoke.sh'
+      - 'scripts/bench/b300-local-sm86-hybrid8-nextself-width-smoke.sh'
+      - 'scripts/bench/b300-local-sm86-hybrid8-sweep.sh'
+      - 'scripts/bench/b300-hybrid8-ngpu-preflight.sh'
+      - 'scripts/bench/b300-low-window-drop-cache-proof.sh'
+      - 'scripts/bench/b300-main-recurrence-production-generate-proof.sh'
+      - 'scripts/bench/b300-mainrec-hybrid8-next-mate-preflight.sh'
+      - 'scripts/bench/b300-mainrec-self-mate-independent-geometry-preflight.sh'
+      - 'scripts/bench/b300-mainrec-predicated-prefetch-source-preflight.sh'
+      - 'scripts/bench/b300-stagei-namespace-contract-preflight.sh'
+      - 'scripts/bench/b300-stagel-preflight.sh'
+      - 'scripts/bench/b300-stagem-preflight.sh'
+      - 'scripts/bench/b300-grand-selector-contract-preflight.sh'
+      - 'scripts/bench/b300-grand-stageg-contract-preflight.sh'
+      - 'scripts/bench/b300-grand-stageh-contract-preflight.sh'
+      - 'scripts/bench/b300-grand-stagej-v2-contract-preflight.sh'
+      - 'scripts/bench/b300-grand-stagek-contract-preflight.sh'
+      - 'scripts/bench/b300-grand-exact-promotion-preflight.sh'
+      - 'scripts/bench/b300-exact-checkpoint-compat-preflight.py'
+      - 'scripts/bench/b300-exact-result-verifier-preflight.py'
+      - 'scripts/bench/b300-main-recurrence-ilp-partition-proof.py'
+      - 'scripts/bench/b300-mainrec-hybrid-ilp8-partition-proof.py'
+      - 'scripts/bench/b300-mainrec-hybrid-ilp8-transform-preflight.sh'
+      - 'scripts/bench/b300-mainrec-hybrid8-nextself-transform-preflight.sh'
+      - 'scripts/bench/b300-joint-nextgen-hybrid8-preflight.sh'
+      - 'scripts/bench/b300x8-ilp8-nextself-staged-ab.sh'
+      - 'scripts/solve/solve_b300_exact_batch.py'
+      - 'scripts/solve/verify_b300_exact_result.py'
+      - 'scripts/run/b300x8-nextgen-select.sh'
+      - 'scripts/run/b300x8-nextgen-hybrid8-staged-fullprime-race.sh'
+      - 'scripts/run/b300x8-nextgen-hybrid8-nextself-staged-fullprime-race.sh'
+      - 'scripts/run/b300x8-nextgen-hybrid8-nextmate-staged-fullprime-race.sh'
+      - 'scripts/run/b300x8-nextgen-hybrid8-nextmate-geometry-stagej-staged-fullprime-race.sh'
+      - 'scripts/run/b300x8-nextgen-hybrid8-selfevict-prepare.sh'
+      - 'scripts/run/b300x8-nextgen-hybrid8-mategeo-prepare.sh'
+      - 'scripts/run/b300x8-nextgen-hybrid8-mate-evict-stagek-staged-fullprime-race.sh'
+      - 'scripts/run/b300x8-nextgen-hybrid8-prefetch-guard-stagel-staged-fullprime-race.sh'
+      - 'scripts/run/b300x8-nextgen-hybrid8-mate-load-stagem-staged-fullprime-race.sh'
+      - 'scripts/run/b300x8-joint-nextgen-hybrid8-select.sh'
+      - 'scripts/run/b300x8-joint-nextself-hybrid8-select.sh'
+      - 'scripts/run/b300x8-joint-calibrated-select.sh'
+      - 'scripts/run/b300x8-ilp8-nextself-staged-fullprime-race.sh'
+      - 'scripts/run/b300x8-race-forced-profiled-once.sh'
+      - 'scripts/run/b300x8-race-external-forced-profiled-once.sh'
+      - 'scripts/run/b300x8-grand-firstpass.sh'
+      - 'scripts/run/b300x8-grand-stageg-firstpass.sh'
+      - 'scripts/run/b300x8-grand-stageg-continue.sh'
+      - 'scripts/run/b300x8-grand-stageh-firstpass.sh'
+      - 'scripts/run/b300x8-grand-stagej-firstpass-v2.sh'
+      - 'scripts/run/b300x8-grand-stagek-firstpass.sh'
+      - 'scripts/run/b300x8-grand-stagek-continue.sh'
+      - 'scripts/run/b300x8-grand-promote-exact.sh'
+      - 'scripts/run/b300x8-grand-verify-exact.sh'
+      - 'src/cpp/probes/b300_low_window_drop_cache_proof.cpp'
+      - '.github/workflows/b300-nextgen-preflight.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  preflight:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - name: Syntax-check local sm86 hybrid smoke
+        run: bash -n scripts/bench/b300-local-sm86-hybrid8-smoke.sh
+      - name: Syntax-check local sm86 hybrid next-self width smoke
+        run: bash -n scripts/bench/b300-local-sm86-hybrid8-nextself-width-smoke.sh
+      - name: Syntax-check local sm86 canonical hybrid sweep
+        run: bash -n scripts/bench/b300-local-sm86-hybrid8-sweep.sh
+      - name: Validate portable hybrid8 GPU count
+        run: bash scripts/bench/b300-hybrid8-ngpu-preflight.sh
+      - name: Validate low-window drop-cache rank decomposition
+        run: bash scripts/bench/b300-low-window-drop-cache-proof.sh
+      - name: Validate production recurrence transform composition
+        run: bash scripts/bench/b300-main-recurrence-production-generate-proof.sh
+      - name: Validate nextgen transform chain
+        run: bash scripts/bench/b300-nextgen-preflight.sh
+      - name: Validate hybrid8 next-self transform composition
+        run: bash scripts/bench/b300-mainrec-hybrid8-nextself-transform-preflight.sh
+      - name: Validate hybrid8 next-mate transform composition
+        run: bash scripts/bench/b300-mainrec-hybrid8-next-mate-preflight.sh
+      - name: Validate independent self and mate prefetch geometry
+        run: bash scripts/bench/b300-mainrec-self-mate-independent-geometry-preflight.sh
+      - name: Validate joint hybrid8 and next-self promotion chain
+        run: bash scripts/bench/b300-joint-nextgen-hybrid8-preflight.sh
+      - name: Validate Stage I namespace isolation
+        run: bash scripts/bench/b300-stagei-namespace-contract-preflight.sh
+      - name: Validate grand next-self + hybrid8 selector
+        run: bash scripts/bench/b300-nextgen-grand-selector-preflight.sh
+      - name: Execute grand selector contract without GPUs
+        run: bash scripts/bench/b300-grand-selector-contract-preflight.sh
+      - name: Validate normalized Stage G contract
+        run: bash scripts/bench/b300-grand-stageg-contract-preflight.sh
+      - name: Validate normalized Stage H next-mate contract
+        run: bash scripts/bench/b300-grand-stageh-contract-preflight.sh
+      - name: Validate isolated Stage J independent mate geometry contract
+        run: bash scripts/bench/b300-grand-stagej-v2-contract-preflight.sh
+      - name: Validate Stage K mate eviction refinement contract
+        run: bash scripts/bench/b300-grand-stagek-contract-preflight.sh
+      - name: Validate Stage L joint prefetch guard contract
+        run: bash scripts/bench/b300-stagel-preflight.sh
+      - name: Validate Stage M mate-load isolation
+        run: bash scripts/bench/b300-stagem-preflight.sh
+      - name: Validate grand exact promotion and checkpoint compatibility
+        run: bash scripts/bench/b300-grand-exact-promotion-preflight.sh
+      - name: Validate independent exact CRT verifier
+        run: |
+          bash -n scripts/run/b300x8-grand-verify-exact.sh
+          python3 scripts/bench/b300-exact-result-verifier-preflight.py

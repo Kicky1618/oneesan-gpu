@@ -1,0 +1,124 @@
+#!/usr/bin/env bash
+set -euo pipefail
+source "$(dirname -- "${BASH_SOURCE[0]}")/../lib/common.sh"
+
+GRAND="$ONEESAN_ROOT/scripts/run/b300x8-joint-nextself-hybrid8-select.sh"
+FIRST="$ONEESAN_ROOT/scripts/run/b300x8-grand-stageh-firstpass.sh"
+LEGACY_STAGED="$ONEESAN_ROOT/scripts/run/b300x8-nextgen-hybrid8-nextmate-staged-fullprime-race.sh"
+STAGEJ="$ONEESAN_ROOT/scripts/run/b300x8-nextgen-hybrid8-nextmate-geometry-stagej-staged-fullprime-race.sh"
+STAGEK="$ONEESAN_ROOT/scripts/run/b300x8-nextgen-hybrid8-mate-evict-stagek-staged-fullprime-race.sh"
+PROMOTE="$ONEESAN_ROOT/scripts/run/b300x8-grand-promote-exact.sh"
+VERIFY="$ONEESAN_ROOT/scripts/run/b300x8-grand-verify-exact.sh"
+for f in "$GRAND" "$FIRST" "$LEGACY_STAGED" "$STAGEJ" "$STAGEK" "$PROMOTE" "$VERIFY"; do
+  [[ -f "$f" ]] || { echo "missing Stage-H compatibility dependency=$f" >&2; exit 2; }
+  bash -n "$f"
+done
+
+# The old Stage-H runner remains the legacy fallback for artifacts produced
+# before mate geometry was integrated into the grand selector.
+for s in \
+  'B300_STAGEH_STAGED_VALIDATED' \
+  'B300_STAGEH_FINAL_ENABLED' \
+  'B300_STAGEH_FINAL_SPILL_FREE' \
+  'B300_STAGEH_INPUT_STAGE_F_ENV' \
+  'sha256sum -c "$MANIFEST"' \
+  'B300_STAGEH_PROMOTION_BIN_SHA256' \
+  'B300_STAGEH_PREPARED_BIN' \
+  'B300_STAGEH_PREPARED_CONTROL_BIN'; do
+  grep -Fq "$s" "$LEGACY_STAGED" || { echo "legacy Stage-H staged marker missing: $s" >&2; exit 3; }
+done
+
+# Current integrated path is Stage J, optionally refined by Stage K. Historical
+# B300_GRAND_STAGEH_* fields remain aliases of the Stage-J mate geometry even
+# when the selected binary is the stronger Stage-K mate-eviction candidate.
+for s in \
+  'RUN_STAGEJ="${RUN_STAGEJ:-${RUN_STAGEH:-1}}"' \
+  'RUN_STAGEK="${RUN_STAGEK:-1}"' \
+  'STAGEJ_MIN_SPEEDUP="${STAGEJ_MIN_SPEEDUP:-${STAGEH_MIN_SPEEDUP:-1.002}}"' \
+  'STAGEK_MIN_SPEEDUP="${STAGEK_MIN_SPEEDUP:-1.002}"' \
+  'INPUT_ENV="$HYBRID_NS_WINNER_ENV"' \
+  'B300_STAGEJ_PREPARED_BIN' \
+  'B300_STAGEK_PREPARED_BIN' \
+  'MODE=stagej_mategeo_grand' \
+  'MODE=stagek_mateevict_grand' \
+  'B300_GRAND_STAGEJ_OK' \
+  'B300_GRAND_STAGEK_OK' \
+  'B300_GRAND_STAGEH_OK' \
+  'B300_GRAND_STAGEH_WIDTH' \
+  'B300_GRAND_STAGEH_DISTANCE'; do
+  grep -Fq "$s" "$GRAND" || { echo "integrated Stage-J/K/Stage-H alias marker missing: $s" >&2; exit 3; }
+done
+
+# Stage J deliberately keeps the historical raw implementation in a child
+# process. The winner env is translated from B300_STAGEI_* to B300_STAGEJ_*,
+# while the public prepare/promotion contract is explicit in this wrapper.
+for s in \
+  "s/B300_STAGEI_/B300_STAGEJ_/g" \
+  'B300_STAGEJ_PROMOTION_VALIDATED=1' \
+  'B300_STAGEJ_PREPARED=1' \
+  'B300_STAGEJ_PREPARED_MOD=' \
+  'B300_STAGEJ_PREPARED_SELF_WIDTH=' \
+  'B300_STAGEJ_PREPARED_MATE_WIDTH=' \
+  'B300_STAGEJ_PREPARED_BIN=' \
+  'B300_STAGEJ_PREPARED_CONTROL_BIN=' \
+  'B300_STAGEJ_PREPARED_MANIFEST=' \
+  'ONEESAN_BUILD_DIR="$STAGEJ_BUILD_DIR"' \
+  'sha256sum -c "$MANIFEST"'; do
+  grep -Fq "$s" "$STAGEJ" || { echo "Stage-J translated/public contract marker missing: $s" >&2; exit 3; }
+done
+
+# Stage K must remain bound to the exact Stage-J artifact and preserve all
+# geometry while changing only the mate eviction policy.
+for s in \
+  'B300_STAGEK_PREPARED=1' \
+  'B300_STAGEK_PREPARED_SELF_WIDTH=' \
+  'B300_STAGEK_PREPARED_SELF_DISTANCE=' \
+  'B300_STAGEK_PREPARED_MATE_WIDTH=' \
+  'B300_STAGEK_PREPARED_MATE_DISTANCE=' \
+  'B300_STAGEK_PREPARED_BASE_MATE_EVICT=' \
+  'B300_STAGEK_PREPARED_MATE_EVICT=' \
+  'Stage-J promotion manifest mismatch before Stage K' \
+  'sha256sum -c "$B300_STAGEJ_PREPARED_MANIFEST"'; do
+  grep -Fq "$s" "$STAGEK" || { echo "Stage-K compatibility marker missing: $s" >&2; exit 3; }
+done
+
+# Stage-H first-pass is now a compatibility normalizer. It must recognize both
+# Stage-J and Stage-K winners as integrated promotion, prefer Stage-K prepare
+# provenance when present, and retain the legacy staged fallback.
+for s in \
+  'WORK_ROOT="${WORK_ROOT:-$ONEESAN_ROOT/work}"' \
+  'WORK_ROOT="$WORK_ROOT" PREFIX="$BASE_PREFIX"' \
+  'BASE_GRAND_ENV="${BASE_GRAND_ENV:-${BASE_PREFIX}.race_grand.env}"' \
+  'INTEGRATED_STAGEK_PREPARE="${INTEGRATED_STAGEK_PREPARE:-${BASE_PREFIX}.stagek-mateevict.prepared.env}"' \
+  'INTEGRATED_STAGEJ_PREPARE="${INTEGRATED_STAGEJ_PREPARE:-${BASE_PREFIX}.stagej-mategeo.prepared.env}"' \
+  'stagek_mateevict_*|stagej_mategeo_*|stageh_nextmate_*) PROMOTED=1' \
+  'B300_STAGEK_PREPARED_STAGED_SPEEDUP' \
+  "grep -q '^B300_GRAND_STAGEH_OK=' \"\$BASE_GRAND_ENV\"" \
+  'B300_GRAND_STAGEH_REASON=integrated_in_grand' \
+  'B300_GRAND_STAGEH_SELECTED_SCHEMA=1' \
+  'B300_GRAND_STAGEH_SELECTED_VALIDATED=1' \
+  'B300_GRAND_STAGEH_SELECTED_RACE_RESULT_SHA256=' \
+  'B300_GRAND_SELECTED_SCHEMA=1' \
+  'B300_GRAND_SELECTED_VALIDATED=1' \
+  'B300_GRAND_SELECTED_PROFILE_SHA256=' \
+  'B300_GRAND_SELECTED_BINARY_SHA256=' \
+  'B300_GRAND_SELECTED_SMOKE_PRIME=' \
+  'B300_GRAND_SELECTED_RACE_RESULT_SHA256=' \
+  'B300_GRAND_SELECTED_FIRSTPASS_META=' \
+  'normalized_contract=1' \
+  'b300x8-nextgen-hybrid8-nextmate-staged-fullprime-race.sh'; do
+  grep -Fq "$s" "$FIRST" || { echo "Stage-H compatibility first-pass marker missing: $s" >&2; exit 3; }
+done
+
+for s in \
+  'selected binary fingerprint mismatch' \
+  'selected profile fingerprint mismatch' \
+  'single-pass TSV fingerprint mismatch' \
+  'checkpoint fingerprint mismatch'; do
+  grep -Fq "$s" "$PROMOTE" || { echo "hardened promotion marker missing for Stage-H compatibility: $s" >&2; exit 3; }
+done
+for s in 'verify_b300_exact_result.py' 'B300 GRAND VERIFY COMPLETE'; do
+  grep -Fq "$s" "$VERIFY" || { echo "exact verifier wrapper marker missing: $s" >&2; exit 3; }
+done
+
+echo 'b300-grand-stageh-contract-preflight OK legacy_staged=1 integrated_stagej=1 integrated_stagek=1 translated_winner=1 stageh_aliases=1 strongest_prepare_provenance=1 no_duplicate_fullprime=1 normalized_selection=1 checkpoint_schema3=1 race_fingerprint=1 work_root=1 hardened_promotion=1 independent_verifier=1 gpu_work=0'

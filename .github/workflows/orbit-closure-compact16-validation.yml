@@ -1,0 +1,62 @@
+name: orbit closure compact16 validation
+
+on:
+  push:
+    paths:
+      - 'src/cuda/gridfp/ramstream32_bucket_orbit_closure_fused.cuh'
+      - 'src/cuda/gridfp/ramstream32_bucket_orbit_closure_compact16.cuh'
+      - 'src/cuda/gridfp/ramstream32_reverse_bucket_derive.hpp'
+      - 'src/cuda/gridfp/probes/ramstream32_orbit_closure_compact16_plan.cu'
+      - 'src/cuda/gridfp/probes/ramstream32_bucket_orbit_closure_compact16_selftest.cu'
+      - '.github/workflows/orbit-closure-compact16-validation.yml'
+  pull_request:
+    paths:
+      - 'src/cuda/gridfp/ramstream32_bucket_orbit_closure_fused.cuh'
+      - 'src/cuda/gridfp/ramstream32_bucket_orbit_closure_compact16.cuh'
+      - 'src/cuda/gridfp/ramstream32_reverse_bucket_derive.hpp'
+      - 'src/cuda/gridfp/probes/ramstream32_orbit_closure_compact16_plan.cu'
+      - 'src/cuda/gridfp/probes/ramstream32_bucket_orbit_closure_compact16_selftest.cu'
+      - '.github/workflows/orbit-closure-compact16-validation.yml'
+  workflow_dispatch:
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    container: nvidia/cuda:12.8.1-devel-ubuntu22.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Compile and run W10 compact16 reconstruction plan
+        shell: bash
+        run: |
+          mkdir -p build
+          nvcc -O3 -std=c++17 -lineinfo -arch=sm_80 \
+            -DTARGET_W=10 -DLOW_LUT_K=5 -DHIGH_LUT_K=4 \
+            src/cuda/gridfp/probes/ramstream32_orbit_closure_compact16_plan.cu \
+            -o build/orbit_closure_compact16_plan_w10
+          build/orbit_closure_compact16_plan_w10 | tee /tmp/compact16-plan.txt
+          grep -Fq 'orbit-closure-compact16-plan OK W=10' /tmp/compact16-plan.txt
+          grep -Fq 'ratio=0.5' /tmp/compact16-plan.txt
+          grep -Fq 'jblock_runtime_reads=0' /tmp/compact16-plan.txt
+      - name: Compile W10 compact16 CUDA selftest
+        shell: bash
+        run: |
+          nvcc -O3 -std=c++17 -lineinfo -arch=sm_80 \
+            -DTARGET_W=10 -DLOW_LUT_K=5 -DHIGH_LUT_K=4 \
+            src/cuda/gridfp/probes/ramstream32_bucket_orbit_closure_compact16_selftest.cu \
+            -o build/orbit_closure_compact16_w10
+          build/orbit_closure_compact16_w10 | tee /tmp/compact16-selftest.txt
+          grep -Eq 'bucket-orbit-closure-compact16-selftest (OK W=10|SKIP no CUDA device)' /tmp/compact16-selftest.txt
+      - name: Compile W10 PM compact16 CUDA selftest
+        shell: bash
+        run: |
+          nvcc -O3 -std=c++17 -lineinfo -arch=sm_80 \
+            -DTARGET_W=10 -DLOW_LUT_K=5 -DHIGH_LUT_K=4 -DGPU_DIRECT_PM_ACCUM=1 \
+            src/cuda/gridfp/probes/ramstream32_bucket_orbit_closure_compact16_selftest.cu \
+            -o build/orbit_closure_compact16_pm_w10
+      - name: Compile W28 compact16 plan
+        shell: bash
+        run: |
+          nvcc -O3 -std=c++17 -lineinfo -arch=sm_80 \
+            -DTARGET_W=28 -DLOW_LUT_K=14 -DHIGH_LUT_K=13 \
+            src/cuda/gridfp/probes/ramstream32_orbit_closure_compact16_plan.cu \
+            -o build/orbit_closure_compact16_plan_w28

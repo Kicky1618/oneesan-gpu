@@ -1,0 +1,177 @@
+name: ramstream32 CUDA compile
+
+on:
+  push:
+    paths:
+      - 'src/cuda/gridfp/oneesan_cuda_gridfp_ramstream32_factorized_forced2.cu'
+      - 'src/cuda/gridfp/oneesan_cuda_gridfp_ramstream32_factorized_direct2d.cu'
+      - 'src/cuda/gridfp/oneesan_cuda_gridfp_ramstream32_factorized_lowdesc.cu'
+      - 'src/cuda/gridfp/oneesan_cuda_gridfp_ramstream32_factorized_bidesc.cu'
+      - 'src/cuda/gridfp/oneesan_cuda_gridfp_ramstream32_factorized_bidesc_compact.cu'
+      - 'src/cuda/gridfp/oneesan_cuda_gridfp_ramstream32_factorized_hybrid.cu'
+      - 'src/cuda/gridfp/oneesan_cuda_gridfp_ramstream32_factorized_hybrid_inplace.cu'
+      - 'src/cuda/gridfp/oneesan_cuda_gridfp_ramstream32_factorized_hybrid_direct.cu'
+      - 'src/cuda/gridfp/ramstream32_factorized_storage.hpp'
+      - 'src/cuda/gridfp/ramstream32_lowdesc.cuh'
+      - 'src/cuda/gridfp/ramstream32_highdesc.cuh'
+      - 'src/cuda/gridfp/ramstream32_bidesc_compact.cuh'
+      - 'src/cuda/gridfp/ramstream32_cpu_low.hpp'
+      - 'src/cuda/gridfp/ramstream32_cpu_low_inplace.hpp'
+      - 'src/cuda/gridfp/ramstream32_cpu_low_direct.hpp'
+      - 'src/cuda/b300/oneesan_cuda_gridfp_b300_hbm32_factorized_batch.cu'
+      - 'src/cpp/probes/factor_window_mask_components.cpp'
+      - 'src/cuda/common/**'
+      - '.github/workflows/ramstream32-compile.yml'
+  pull_request:
+    paths:
+      - 'src/cuda/gridfp/oneesan_cuda_gridfp_ramstream32_factorized_forced2.cu'
+      - 'src/cuda/gridfp/oneesan_cuda_gridfp_ramstream32_factorized_direct2d.cu'
+      - 'src/cuda/gridfp/oneesan_cuda_gridfp_ramstream32_factorized_lowdesc.cu'
+      - 'src/cuda/gridfp/oneesan_cuda_gridfp_ramstream32_factorized_bidesc.cu'
+      - 'src/cuda/gridfp/oneesan_cuda_gridfp_ramstream32_factorized_bidesc_compact.cu'
+      - 'src/cuda/gridfp/oneesan_cuda_gridfp_ramstream32_factorized_hybrid.cu'
+      - 'src/cuda/gridfp/oneesan_cuda_gridfp_ramstream32_factorized_hybrid_inplace.cu'
+      - 'src/cuda/gridfp/oneesan_cuda_gridfp_ramstream32_factorized_hybrid_direct.cu'
+      - 'src/cuda/gridfp/ramstream32_factorized_storage.hpp'
+      - 'src/cuda/gridfp/ramstream32_lowdesc.cuh'
+      - 'src/cuda/gridfp/ramstream32_highdesc.cuh'
+      - 'src/cuda/gridfp/ramstream32_bidesc_compact.cuh'
+      - 'src/cuda/gridfp/ramstream32_cpu_low.hpp'
+      - 'src/cuda/gridfp/ramstream32_cpu_low_inplace.hpp'
+      - 'src/cuda/gridfp/ramstream32_cpu_low_direct.hpp'
+      - 'src/cuda/b300/oneesan_cuda_gridfp_b300_hbm32_factorized_batch.cu'
+      - 'src/cpp/probes/factor_window_mask_components.cpp'
+      - 'src/cuda/common/**'
+      - '.github/workflows/ramstream32-compile.yml'
+  workflow_dispatch:
+
+concurrency:
+  group: ramstream32-compile-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  compile:
+    runs-on: ubuntu-latest
+    container: nvidia/cuda:12.8.1-devel-ubuntu22.04
+    strategy:
+      matrix:
+        include:
+          - width: 22
+            n: 21
+            low: 11
+            high: 10
+          - width: 28
+            n: 27
+            low: 14
+            high: 13
+    steps:
+      - uses: actions/checkout@v4
+      - name: Compile forced2 factorized RAM backend
+        shell: bash
+        run: |
+          mkdir -p build
+          nvcc -O3 -std=c++17 -lineinfo -arch=sm_80 \
+            -DTARGET_W=${{ matrix.width }} \
+            -DLOW_LUT_K=${{ matrix.low }} \
+            -DHIGH_LUT_K=${{ matrix.high }} \
+            src/cuda/gridfp/oneesan_cuda_gridfp_ramstream32_factorized_forced2.cu \
+            -o build/ramstream32_forced2_w${{ matrix.width }}
+      - name: Compile direct2d factorized RAM backend
+        shell: bash
+        run: |
+          nvcc -O3 -std=c++17 -lineinfo -arch=sm_80 \
+            -DTARGET_W=${{ matrix.width }} \
+            -DLOW_LUT_K=${{ matrix.low }} \
+            -DHIGH_LUT_K=${{ matrix.high }} \
+            src/cuda/gridfp/oneesan_cuda_gridfp_ramstream32_factorized_direct2d.cu \
+            -o build/ramstream32_direct2d_w${{ matrix.width }}
+      - name: Compile lowdesc factorized RAM backend
+        shell: bash
+        run: |
+          nvcc -O3 -std=c++17 -lineinfo -arch=sm_80 \
+            -DTARGET_W=${{ matrix.width }} \
+            -DLOW_LUT_K=${{ matrix.low }} \
+            -DHIGH_LUT_K=${{ matrix.high }} \
+            src/cuda/gridfp/oneesan_cuda_gridfp_ramstream32_factorized_lowdesc.cu \
+            -o build/ramstream32_lowdesc_w${{ matrix.width }}
+      - name: Compile dense bidesc backend
+        shell: bash
+        run: |
+          nvcc -O3 -std=c++17 -lineinfo -arch=sm_80 \
+            -DTARGET_W=${{ matrix.width }} \
+            -DLOW_LUT_K=${{ matrix.low }} \
+            -DHIGH_LUT_K=${{ matrix.high }} \
+            src/cuda/gridfp/oneesan_cuda_gridfp_ramstream32_factorized_bidesc.cu \
+            -o build/ramstream32_bidesc_w${{ matrix.width }}
+      - name: Compile compact bidesc backend
+        shell: bash
+        run: |
+          nvcc -O3 -std=c++17 -lineinfo -arch=sm_80 \
+            -DTARGET_W=${{ matrix.width }} \
+            -DLOW_LUT_K=${{ matrix.low }} \
+            -DHIGH_LUT_K=${{ matrix.high }} \
+            src/cuda/gridfp/oneesan_cuda_gridfp_ramstream32_factorized_bidesc_compact.cu \
+            -o build/ramstream32_bidesc_compact_w${{ matrix.width }}
+      - name: Validate compact host plan
+        shell: bash
+        run: |
+          build/ramstream32_bidesc_compact_w${{ matrix.width }} \
+            ${{ matrix.n }} 4294967291 16384 --plan-only
+      - name: Compile hybrid GPU-high CPU-low backend
+        shell: bash
+        run: |
+          nvcc -O3 -std=c++17 -lineinfo -arch=sm_80 \
+            -DTARGET_W=${{ matrix.width }} \
+            -DLOW_LUT_K=${{ matrix.low }} \
+            -DHIGH_LUT_K=${{ matrix.high }} \
+            src/cuda/gridfp/oneesan_cuda_gridfp_ramstream32_factorized_hybrid.cu \
+            -o build/ramstream32_hybrid_w${{ matrix.width }}
+      - name: Validate hybrid plan
+        shell: bash
+        run: |
+          build/ramstream32_hybrid_w${{ matrix.width }} \
+            ${{ matrix.n }} 4294967291 12288 4 --plan-only
+      - name: Compile hybrid in-place backend
+        shell: bash
+        run: |
+          nvcc -O3 -std=c++17 -lineinfo -arch=sm_80 \
+            -DTARGET_W=${{ matrix.width }} \
+            -DLOW_LUT_K=${{ matrix.low }} \
+            -DHIGH_LUT_K=${{ matrix.high }} \
+            src/cuda/gridfp/oneesan_cuda_gridfp_ramstream32_factorized_hybrid_inplace.cu \
+            -o build/ramstream32_hybrid_inplace_w${{ matrix.width }}
+      - name: Validate hybrid in-place plan
+        shell: bash
+        run: |
+          build/ramstream32_hybrid_inplace_w${{ matrix.width }} \
+            ${{ matrix.n }} 4294967291 12288 4 --plan-only
+      - name: Compile zero-scratch hybrid-direct backend
+        shell: bash
+        run: |
+          nvcc -O3 -std=c++17 -lineinfo -arch=sm_80 \
+            -DTARGET_W=${{ matrix.width }} \
+            -DLOW_LUT_K=${{ matrix.low }} \
+            -DHIGH_LUT_K=${{ matrix.high }} \
+            src/cuda/gridfp/oneesan_cuda_gridfp_ramstream32_factorized_hybrid_direct.cu \
+            -o build/ramstream32_hybrid_direct_w${{ matrix.width }}
+      - name: Validate hybrid-direct plan
+        shell: bash
+        run: |
+          build/ramstream32_hybrid_direct_w${{ matrix.width }} \
+            ${{ matrix.n }} 4294967291 12288 4 --plan-only
+      - name: Validate CPU low-window executors
+        if: matrix.width == 22
+        shell: bash
+        run: |
+          nvcc -O3 -std=c++17 -arch=sm_80 \
+            -DTARGET_W=10 -DLOW_LUT_K=5 -DHIGH_LUT_K=4 \
+            src/cuda/gridfp/probes/ramstream32_cpu_low_selftest.cu \
+            -o build/ramstream32_cpu_low_selftest
+          build/ramstream32_cpu_low_selftest
+      - name: Probe occupancy closure components
+        shell: bash
+        run: |
+          g++ -O3 -std=c++17 -include cstdlib \
+            src/cpp/probes/factor_window_mask_components.cpp \
+            -o build/factor_window_mask_components
+          build/factor_window_mask_components ${{ matrix.width }} ${{ matrix.low }}

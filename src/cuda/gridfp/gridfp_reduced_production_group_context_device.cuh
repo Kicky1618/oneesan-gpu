@@ -1,0 +1,589 @@
+#pragma once
+
+#include "gridfp_reduced_production_grouped_device.cuh"
+
+namespace oneesan::gridfp::reducedprod {
+
+#ifndef RP_RUNTIME_PRIMITIVE_RANK_SETBITS
+#define RP_RUNTIME_PRIMITIVE_RANK_SETBITS 1
+#endif
+#ifndef RP_RUNTIME_BROADWORD_SUPPORT
+#define RP_RUNTIME_BROADWORD_SUPPORT 1
+#endif
+#ifndef RP_RUNTIME_OWNER_FROM_BOUNDARIES
+#define RP_RUNTIME_OWNER_FROM_BOUNDARIES 1
+#endif
+#ifndef RP_RUNTIME_OWNER_RECIPROCAL
+#define RP_RUNTIME_OWNER_RECIPROCAL 1
+#endif
+#ifndef RP_RUNTIME_OWNER_FIXED54
+#define RP_RUNTIME_OWNER_FIXED54 RP_RUNTIME_OWNER_RECIPROCAL
+#endif
+#ifndef RP_RUNTIME_OWNER_FIXED52
+#define RP_RUNTIME_OWNER_FIXED52 0
+#endif
+#ifndef RP_RUNTIME_OWNER_U32LIMB
+#define RP_RUNTIME_OWNER_U32LIMB 0
+#endif
+#ifndef RP_RUNTIME_OWNER_W28_NGPU8_DIRECT
+#define RP_RUNTIME_OWNER_W28_NGPU8_DIRECT 0
+#endif
+#ifndef RP_RUNTIME_SUPPORT_RANK_SETBITS
+#define RP_RUNTIME_SUPPORT_RANK_SETBITS 1
+#endif
+#ifndef RP_RUNTIME_FUSE_PRIMITIVE_SUPPORT_RANK
+#define RP_RUNTIME_FUSE_PRIMITIVE_SUPPORT_RANK 1
+#endif
+#ifndef RP_RUNTIME_DIRECT_BLOCKED_RANK
+#define RP_RUNTIME_DIRECT_BLOCKED_RANK 1
+#endif
+#ifndef RP_RUNTIME_SECTOR_OFFSET_TABLE
+#define RP_RUNTIME_SECTOR_OFFSET_TABLE 1
+#endif
+#ifndef RP_RUNTIME_CACHE_SECTOR_ROW_BASE
+#define RP_RUNTIME_CACHE_SECTOR_ROW_BASE 1
+#endif
+#ifndef RP_RUNTIME_OUTER_GROUP_TABLE
+#define RP_RUNTIME_OUTER_GROUP_TABLE 1
+#endif
+static_assert(RP_RUNTIME_PRIMITIVE_RANK_SETBITS == 0 || RP_RUNTIME_PRIMITIVE_RANK_SETBITS == 1,
+              "RP_RUNTIME_PRIMITIVE_RANK_SETBITS must be 0 or 1");
+static_assert(RP_RUNTIME_BROADWORD_SUPPORT == 0 || RP_RUNTIME_BROADWORD_SUPPORT == 1,
+              "RP_RUNTIME_BROADWORD_SUPPORT must be 0 or 1");
+static_assert(RP_RUNTIME_OWNER_FROM_BOUNDARIES == 0 || RP_RUNTIME_OWNER_FROM_BOUNDARIES == 1,
+              "RP_RUNTIME_OWNER_FROM_BOUNDARIES must be 0 or 1");
+static_assert(RP_RUNTIME_OWNER_RECIPROCAL == 0 || RP_RUNTIME_OWNER_RECIPROCAL == 1,
+              "RP_RUNTIME_OWNER_RECIPROCAL must be 0 or 1");
+static_assert(RP_RUNTIME_OWNER_FIXED54 == 0 || RP_RUNTIME_OWNER_FIXED54 == 1,
+              "RP_RUNTIME_OWNER_FIXED54 must be 0 or 1");
+static_assert(RP_RUNTIME_OWNER_FIXED52 == 0 || RP_RUNTIME_OWNER_FIXED52 == 1,
+              "RP_RUNTIME_OWNER_FIXED52 must be 0 or 1");
+static_assert(RP_RUNTIME_OWNER_U32LIMB == 0 || RP_RUNTIME_OWNER_U32LIMB == 1,
+              "RP_RUNTIME_OWNER_U32LIMB must be 0 or 1");
+static_assert(RP_RUNTIME_OWNER_W28_NGPU8_DIRECT == 0 ||
+              RP_RUNTIME_OWNER_W28_NGPU8_DIRECT == 1,
+              "RP_RUNTIME_OWNER_W28_NGPU8_DIRECT must be 0 or 1");
+static_assert(!RP_RUNTIME_OWNER_W28_NGPU8_DIRECT || RP_RUNTIME_OWNER_U32LIMB,
+              "RP_RUNTIME_OWNER_W28_NGPU8_DIRECT requires RP_RUNTIME_OWNER_U32LIMB");
+static_assert(RP_RUNTIME_SUPPORT_RANK_SETBITS == 0 || RP_RUNTIME_SUPPORT_RANK_SETBITS == 1,
+              "RP_RUNTIME_SUPPORT_RANK_SETBITS must be 0 or 1");
+static_assert(RP_RUNTIME_FUSE_PRIMITIVE_SUPPORT_RANK == 0 ||
+              RP_RUNTIME_FUSE_PRIMITIVE_SUPPORT_RANK == 1,
+              "RP_RUNTIME_FUSE_PRIMITIVE_SUPPORT_RANK must be 0 or 1");
+static_assert(RP_RUNTIME_DIRECT_BLOCKED_RANK == 0 || RP_RUNTIME_DIRECT_BLOCKED_RANK == 1,
+              "RP_RUNTIME_DIRECT_BLOCKED_RANK must be 0 or 1");
+static_assert(RP_RUNTIME_SECTOR_OFFSET_TABLE == 0 || RP_RUNTIME_SECTOR_OFFSET_TABLE == 1,
+              "RP_RUNTIME_SECTOR_OFFSET_TABLE must be 0 or 1");
+static_assert(RP_RUNTIME_CACHE_SECTOR_ROW_BASE == 0 || RP_RUNTIME_CACHE_SECTOR_ROW_BASE == 1,
+              "RP_RUNTIME_CACHE_SECTOR_ROW_BASE must be 0 or 1");
+static_assert(RP_RUNTIME_OUTER_GROUP_TABLE == 0 || RP_RUNTIME_OUTER_GROUP_TABLE == 1,
+              "RP_RUNTIME_OUTER_GROUP_TABLE must be 0 or 1");
+
+static constexpr int RP_RUNTIME_SECTOR_TABLE_ENTRIES = 1199;
+__device__ __constant__ std::uint32_t
+RP_RUNTIME_LOCAL_SECTOR_OFFSET[RP_RUNTIME_SECTOR_TABLE_ENTRIES] = {
+#include "gridfp_reduced_production_runtime_sector_offset_values.inc"
+};
+static_assert(sizeof(RP_RUNTIME_LOCAL_SECTOR_OFFSET) == 4796);
+
+static constexpr int RP_RUNTIME_OUTER_GROUP_ENTRIES = 99;
+__device__ __constant__ std::uint32_t
+RP_RUNTIME_OUTER_GROUP_SIZE[RP_RUNTIME_OUTER_GROUP_ENTRIES] = {
+#include "gridfp_reduced_production_runtime_outer_group_values.inc"
+};
+__device__ __constant__ Rank64
+RP_RUNTIME_OUTER_GROUP_PREFIX[RP_RUNTIME_OUTER_GROUP_ENTRIES] = {
+#include "gridfp_reduced_production_runtime_outer_prefix_values.inc"
+};
+static_assert(sizeof(RP_RUNTIME_OUTER_GROUP_SIZE) == 396);
+static_assert(sizeof(RP_RUNTIME_OUTER_GROUP_PREFIX) == 792);
+
+#if RP_RUNTIME_OWNER_U32LIMB
+__device__ __constant__ std::uint32_t RP_RUNTIME_OWNER_U32_META[11] = {
+    1246013u,1245301u,1573381u,1970509u,2032777u,2163287u,
+    2631197u,2757423u,2954017u,3150571u,3417385u
+};
+static_assert(sizeof(RP_RUNTIME_OWNER_U32_META) == 44);
+#elif RP_RUNTIME_OWNER_FIXED52
+__device__ __constant__ Rank64 RP_RUNTIME_OWNER_MAGIC52[11] = {
+    7125948777484ULL,1011817485367ULL,138884251622ULL,
+    18578210027ULL,2435340465ULL,314076226ULL,
+    39966142ULL,5029048ULL,626836ULL,77496ULL,9513ULL
+};
+static_assert(sizeof(RP_RUNTIME_OWNER_MAGIC52) == 88);
+#elif RP_RUNTIME_OWNER_FIXED54
+__device__ __constant__ Rank64 RP_RUNTIME_OWNER_MAGIC54[11] = {
+    28503795109939ULL,4047269941469ULL,555537006490ULL,
+    74312840109ULL,9741361862ULL,1256304905ULL,
+    159864568ULL,20116192ULL,2507347ULL,309985ULL,38053ULL
+};
+static_assert(sizeof(RP_RUNTIME_OWNER_MAGIC54) == 88);
+#elif RP_RUNTIME_OWNER_RECIPROCAL
+__device__ __constant__ Rank64 RP_RUNTIME_OWNER_TOTAL[11] = {
+    632ULL,4451ULL,32427ULL,242413ULL,1849269ULL,14339193ULL,
+    112685373ULL,895517316ULL,7184644894ULL,58113695597ULL,
+    473397057701ULL
+};
+__device__ __constant__ Rank64 RP_RUNTIME_OWNER_TOTAL_MAGIC[11] = {
+    29187886192578405ULL,4144404420065054ULL,568869894646732ULL,
+    76096348272204ULL,9975154546856ULL,1286456223423ULL,
+    163701317950ULL,20598980885ULL,2567523427ULL,317425074ULL,
+    38966749ULL
+};
+static_assert(sizeof(RP_RUNTIME_OWNER_TOTAL) == 88);
+static_assert(sizeof(RP_RUNTIME_OWNER_TOTAL_MAGIC) == 88);
+#endif
+
+static constexpr std::uint16_t RP_RUNTIME_INVALID_SECTOR_ROW = 0xffffu;
+struct GroupedComponentContextDevice {
+    int owner = -1;
+    int lo = 0;
+    int L = 0;
+    std::uint16_t outer_ones = 0;
+    std::uint16_t sector_row_base = RP_RUNTIME_INVALID_SECTOR_ROW;
+    Rank64 local_group_base = 0;
+};
+static_assert(sizeof(GroupedComponentContextDevice) == 24,
+              "runtime context row-base cache must not increase shared footprint");
+
+__device__ __forceinline__ std::uint32_t runtime_support_from_mate_device(
+    MateID mate, int len
+) {
+#if RP_RUNTIME_BROADWORD_SUPPORT
+    std::uint64_t x = (std::uint64_t(mate) | (std::uint64_t(mate) >> 1)) &
+                      0x5555555555555555ULL;
+    x = (x | (x >> 1)) & 0x3333333333333333ULL;
+    x = (x | (x >> 2)) & 0x0f0f0f0f0f0f0f0fULL;
+    x = (x | (x >> 4)) & 0x00ff00ff00ff00ffULL;
+    x = (x | (x >> 8)) & 0x0000ffff0000ffffULL;
+    x = (x | (x >> 16)) & 0x00000000ffffffffULL;
+    std::uint32_t out = static_cast<std::uint32_t>(x);
+    if (len < 32) out &= (std::uint32_t(1) << len) - 1u;
+    return out;
+#else
+    std::uint32_t out = 0;
+    for (int bit = 0; bit < len; ++bit)
+        if (mget(mate, bit) != N) out |= std::uint32_t(1) << bit;
+    return out;
+#endif
+}
+
+__device__ __forceinline__ std::uint32_t runtime_insert_zero_support_device(
+    std::uint32_t compressed, int compressed_len, int pos
+) {
+    if (compressed_len < 32)
+        compressed &= (std::uint32_t(1) << compressed_len) - 1u;
+    const std::uint32_t low_mask = pos
+        ? ((std::uint32_t(1) << pos) - 1u)
+        : 0u;
+    const std::uint32_t low = compressed & low_mask;
+    const std::uint32_t high = compressed & ~low_mask;
+    return low | (high << 1);
+}
+
+__device__ __forceinline__ std::uint32_t runtime_full_support_device(
+    DeviceKey k, int W, int q, bool reverse
+) {
+    const MateID full = !k.blocked ? k.mate
+        : (reverse ? blocked_exclude_reverse(k.mate, W, q)
+                   : blocked_exclude(k.mate, q));
+    return runtime_support_from_mate_device(full, W);
+}
+
+__device__ __forceinline__ Rank64 runtime_compact_support_rank_device(
+    std::uint32_t mask, int len, int ones
+) {
+#if RP_RUNTIME_SUPPORT_RANK_SETBITS
+    if (len < 32) mask &= (std::uint32_t(1) << len) - 1u;
+    Rank64 rank = 0;
+    int left = ones;
+    while (mask) {
+        const int pos = __ffs(mask) - 1;
+        rank += choose_device(len - pos - 1, left);
+        --left;
+        mask &= mask - 1u;
+    }
+    return rank;
+#else
+    return compact_support_rank_device(mask, len, ones);
+#endif
+}
+
+__device__ __forceinline__ Rank64 runtime_primitive_rank_support_device(
+    MateID m, int len, int occupied, std::uint32_t support
+) {
+#if RP_RUNTIME_PRIMITIVE_RANK_SETBITS
+    int h = 1;
+    int seen = 0;
+    Rank64 rank = 0;
+    std::uint32_t mask = support;
+    if (len < 32) mask &= (std::uint32_t(1) << len) - 1u;
+    while (mask) {
+        const int bit = 31 - __clz(mask);
+        const MateValue c = mget(m, bit);
+        const int rem = occupied - (++seen);
+        if (c == L) {
+            if (h > 0) rank += RP_PRIMITIVE[rem][h - 1];
+            ++h;
+        } else {
+            --h;
+        }
+        mask ^= std::uint32_t(1) << bit;
+    }
+    return rank;
+#else
+    return primitive_rank_device(m, len, occupied);
+#endif
+}
+
+struct RuntimePrimitiveSupportRanks {
+    Rank64 primitive = 0;
+    Rank64 support = 0;
+};
+
+__device__ __forceinline__ RuntimePrimitiveSupportRanks
+runtime_primitive_local_ranks_fused_device(
+    MateID m,
+    int len,
+    int occupied,
+    std::uint32_t support,
+    int local_lo,
+    int local_L,
+    bool blocked,
+    int erase_a,
+    int erase_b
+) {
+    RuntimePrimitiveSupportRanks out{};
+    int h = 1;
+    int seen = 0;
+    int seen_local = 0;
+    std::uint32_t mask = support;
+    if (len < 32) mask &= (std::uint32_t(1) << len) - 1u;
+    const int local_hi = local_lo + local_L;
+    while (mask) {
+        const int bit = 31 - __clz(mask);
+        const MateValue c = mget(m, bit);
+        const int rem = occupied - (++seen);
+        if (c == L) {
+            if (h > 0) out.primitive += RP_PRIMITIVE[rem][h - 1];
+            ++h;
+        } else {
+            --h;
+        }
+
+        if (bit >= local_lo && bit < local_hi) {
+            const int pos = bit - local_lo;
+            if (!blocked || (pos != erase_a && pos != erase_b)) {
+                ++seen_local;
+                if (!blocked) {
+                    out.support += choose_device(local_L - pos - 1, seen_local);
+                } else {
+                    const int compact_pos =
+                        pos - int(erase_a < pos) - int(erase_b < pos);
+                    out.support += choose_device(
+                        (local_L - 2) - compact_pos - 1, seen_local);
+                }
+            }
+        }
+        mask ^= std::uint32_t(1) << bit;
+    }
+    return out;
+}
+
+__device__ __forceinline__ RuntimePrimitiveSupportRanks
+runtime_primitive_local_ranks_blocked_compressed_device(
+    MateID compressed_mate,
+    int full_len,
+    int occupied,
+    std::uint32_t compressed_support,
+    int missing_bit,
+    int local_lo,
+    int local_L,
+    int erase_a,
+    int erase_b
+) {
+    RuntimePrimitiveSupportRanks out{};
+    int h = 1;
+    int seen = 0;
+    int seen_local = 0;
+    std::uint32_t mask = compressed_support;
+    if (full_len - 1 < 32)
+        mask &= (std::uint32_t(1) << (full_len - 1)) - 1u;
+    const int local_hi = local_lo + local_L;
+    while (mask) {
+        const int compressed_bit = 31 - __clz(mask);
+        const MateValue c = mget(compressed_mate, compressed_bit);
+        const int rem = occupied - (++seen);
+        if (c == L) {
+            if (h > 0) out.primitive += RP_PRIMITIVE[rem][h - 1];
+            ++h;
+        } else {
+            --h;
+        }
+
+        const int full_bit = compressed_bit + int(compressed_bit >= missing_bit);
+        if (full_bit >= local_lo && full_bit < local_hi) {
+            const int pos = full_bit - local_lo;
+            if (pos != erase_a && pos != erase_b) {
+                ++seen_local;
+                const int compact_pos =
+                    pos - int(erase_a < pos) - int(erase_b < pos);
+                out.support += choose_device(
+                    (local_L - 2) - compact_pos - 1, seen_local);
+            }
+        }
+        mask ^= std::uint32_t(1) << compressed_bit;
+    }
+    return out;
+}
+
+__device__ __forceinline__ int runtime_sector_offset_row_base_device(int W) {
+    switch (W) {
+    case 8: return 0; case 10: return 24; case 12: return 59;
+    case 14: return 107; case 16: return 170; case 18: return 250;
+    case 20: return 349; case 22: return 469; case 24: return 612;
+    case 26: return 780; case 28: return 975; default: return -1;
+    }
+}
+
+__device__ __forceinline__ int runtime_outer_group_row_base_device(int W) {
+    switch (W) {
+    case 8: return 0; case 10: return 4; case 12: return 9;
+    case 14: return 15; case 16: return 22; case 18: return 30;
+    case 20: return 39; case 22: return 49; case 24: return 60;
+    case 26: return 72; case 28: return 85; default: return -1;
+    }
+}
+
+__device__ __forceinline__ Rank64 runtime_group_local_sector_offset_device(
+    int W, std::uint16_t sector_row_base, int L, int outer_ones, int local_ones
+) {
+#if RP_RUNTIME_SECTOR_OFFSET_TABLE
+#if RP_RUNTIME_CACHE_SECTOR_ROW_BASE
+    const int base = sector_row_base == RP_RUNTIME_INVALID_SECTOR_ROW
+        ? -1 : int(sector_row_base);
+#else
+    const int base = runtime_sector_offset_row_base_device(W);
+#endif
+    if (base >= 0 && L == W / 2 + 1) {
+        const int index = base + outer_ones * (L + 1) + local_ones;
+        return RP_RUNTIME_LOCAL_SECTOR_OFFSET[index];
+    }
+#endif
+    return group_local_sector_offset_device(L, outer_ones, local_ones);
+}
+
+__device__ __forceinline__ bool runtime_outer_group_context_device(
+    int W, int L, int O, int outer_ones, Rank64& group, Rank64& prefix
+) {
+#if RP_RUNTIME_OUTER_GROUP_TABLE
+    const int base = runtime_outer_group_row_base_device(W);
+    if (base >= 0 && L == W / 2 + 1 && O == W - L) {
+        const int index = base + outer_ones;
+        group = RP_RUNTIME_OUTER_GROUP_SIZE[index];
+        prefix = RP_RUNTIME_OUTER_GROUP_PREFIX[index];
+        return true;
+    }
+#endif
+    group = outer_group_size_device(L, outer_ones);
+    prefix = 0;
+    for (int t = 0; t < outer_ones; ++t)
+        prefix += choose_device(O, t) * outer_group_size_device(L, t);
+    return false;
+}
+
+__device__ __forceinline__ int runtime_owner_from_group_base_device(
+    Rank64 group_base, Rank64 group, int W, int K, int ngpu,
+    const Rank64* owner_begin
+) {
+#if RP_RUNTIME_OWNER_U32LIMB
+    if (W >= 8 && W <= RP_MAX_W && !(W & 1) && K == (W - 2) / 2) {
+        const Rank64 midpoint = group_base + group / 2;
+#if RP_RUNTIME_OWNER_W28_NGPU8_DIRECT
+        if (W == 28 && ngpu == 8) {
+            const std::uint32_t lo = static_cast<std::uint32_t>(midpoint);
+            const std::uint32_t hi = static_cast<std::uint32_t>(midpoint >> 32);
+            const std::uint32_t upper = hi * 9513u + __umulhi(lo, 9513u);
+            return static_cast<int>(upper >> 17);
+        }
+#endif
+        const int wi = (W - 8) >> 1;
+        const std::uint32_t meta = RP_RUNTIME_OWNER_U32_META[wi];
+        const unsigned shift = meta >> 16;
+        const std::uint32_t magic = meta & 0xffffu;
+        const std::uint32_t scale =
+            magic * static_cast<std::uint32_t>(ngpu);
+        const std::uint32_t lo = static_cast<std::uint32_t>(midpoint);
+        const std::uint32_t product_hi = __umulhi(lo, scale);
+        if (shift < 32) {
+            const std::uint32_t product_lo = lo * scale;
+            const std::uint32_t q =
+                (product_lo >> shift) | (product_hi << (32 - shift));
+            return static_cast<int>(q);
+        }
+        const std::uint32_t hi = static_cast<std::uint32_t>(midpoint >> 32);
+        const std::uint32_t upper = hi * scale + product_hi;
+        return static_cast<int>(upper >> (shift - 32));
+    }
+#elif RP_RUNTIME_OWNER_FIXED52
+    if (W >= 8 && W <= RP_MAX_W && !(W & 1) && K == (W - 2) / 2) {
+        const int wi = (W - 8) >> 1;
+        const Rank64 numerator =
+            (group_base + group / 2) * static_cast<Rank64>(ngpu);
+        const Rank64 q = (numerator * RP_RUNTIME_OWNER_MAGIC52[wi]) >> 52;
+        return static_cast<int>(q);
+    }
+#elif RP_RUNTIME_OWNER_FIXED54
+    if (W >= 8 && W <= RP_MAX_W && !(W & 1) && K == (W - 2) / 2) {
+        const int wi = (W - 8) >> 1;
+        const Rank64 numerator =
+            (group_base + group / 2) * static_cast<Rank64>(ngpu);
+        Rank64 q = (numerator * RP_RUNTIME_OWNER_MAGIC54[wi]) >> 54;
+        if (q >= static_cast<Rank64>(ngpu)) q = static_cast<Rank64>(ngpu - 1);
+        return static_cast<int>(q);
+    }
+#elif RP_RUNTIME_OWNER_RECIPROCAL
+    if (W >= 8 && W <= RP_MAX_W && !(W & 1) && K == (W - 2) / 2) {
+        const int wi = (W - 8) >> 1;
+        const Rank64 total = RP_RUNTIME_OWNER_TOTAL[wi];
+        const Rank64 numerator =
+            (group_base + group / 2) * static_cast<Rank64>(ngpu);
+        Rank64 q = __umul64hi(numerator, RP_RUNTIME_OWNER_TOTAL_MAGIC[wi]);
+        const Rank64 product_lo = q * total;
+        const Rank64 product_hi = __umul64hi(q, total);
+        if (product_hi || product_lo > numerator) --q;
+        if (q >= static_cast<Rank64>(ngpu)) q = static_cast<Rank64>(ngpu - 1);
+        return static_cast<int>(q);
+    }
+#endif
+#if RP_RUNTIME_OWNER_FROM_BOUNDARIES
+    if (W >= 8 && W <= RP_MAX_W && !(W & 1) && K == (W - 2) / 2) {
+        int owner = 0;
+        for (int g = 1; g < ngpu; ++g) {
+            const Rank64 begin = owner_begin[g];
+            if (!begin) continue;
+            if (begin > group_base) break;
+            owner = g;
+        }
+        return owner;
+    }
+#endif
+    return -1;
+}
+
+__device__ __forceinline__ GroupedComponentContextDevice grouped_component_context_device(
+    DeviceKey seed, int W, int q, bool reverse, int tile_start, int K,
+    int ngpu, const Rank64* owner_begin
+) {
+    const int L = K + 2;
+    const int O = W - L;
+    const int lo = reverse ? tile_start - 1 : tile_start - K - 1;
+    const int hi = lo + L - 1;
+    const std::uint32_t full = runtime_full_support_device(seed, W, q, reverse);
+    const std::uint32_t outer = compact_outside_window_device(full, W, lo, hi);
+    const int outer_ones = __popc(outer);
+    Rank64 group = 0, prefix = 0;
+    runtime_outer_group_context_device(W, L, O, outer_ones, group, prefix);
+    const Rank64 sr_outer = runtime_compact_support_rank_device(outer, O, outer_ones);
+    const Rank64 group_base = prefix + sr_outer * group;
+
+    int owner = runtime_owner_from_group_base_device(
+        group_base, group, W, K, ngpu, owner_begin);
+    if (owner < 0) owner = weighted_outer_owner_device(outer, L, O, ngpu);
+#if RP_RUNTIME_CACHE_SECTOR_ROW_BASE
+    const int row = L == W / 2 + 1 ? runtime_sector_offset_row_base_device(W) : -1;
+#else
+    const int row = -1;
+#endif
+    return GroupedComponentContextDevice{
+        owner,
+        lo,
+        L,
+        static_cast<std::uint16_t>(outer_ones),
+        row >= 0 ? static_cast<std::uint16_t>(row) : RP_RUNTIME_INVALID_SECTOR_ROW,
+        group_base - owner_begin[owner]};
+}
+
+__device__ __forceinline__ GroupedDeviceRank grouped_rank_in_component_device(
+    DeviceKey k, int W, int q, bool reverse,
+    const GroupedComponentContextDevice& ctx
+) {
+    const int missing_bit = k.blocked ? (reverse ? q - 1 : q) : -1;
+    const int fixed_bit = k.blocked ? (reverse ? q : q - 1) : -1;
+    const int missing_pos = k.blocked ? missing_bit - ctx.lo : -1;
+    const int fixed_pos = k.blocked ? fixed_bit - ctx.lo : -1;
+
+    MateID full_mate = k.mate;
+    std::uint32_t compressed_support = 0;
+    std::uint32_t full = 0;
+#if RP_RUNTIME_DIRECT_BLOCKED_RANK && RP_RUNTIME_FUSE_PRIMITIVE_SUPPORT_RANK && \
+    RP_RUNTIME_PRIMITIVE_RANK_SETBITS && RP_RUNTIME_SUPPORT_RANK_SETBITS
+    if (k.blocked) {
+        compressed_support = runtime_support_from_mate_device(k.mate, W - 1);
+        full = runtime_insert_zero_support_device(compressed_support, W - 1, missing_bit);
+    } else {
+        full = runtime_support_from_mate_device(k.mate, W);
+    }
+#else
+    if (k.blocked) {
+        full_mate = reverse ? blocked_exclude_reverse(k.mate, W, q)
+                            : blocked_exclude(k.mate, q);
+    }
+    full = runtime_support_from_mate_device(full_mate, W);
+#endif
+
+    const std::uint32_t local_mask = local_window_support_device(full, ctx.lo, ctx.L);
+    const int local_ones = __popc(local_mask);
+    const int occupied = int(ctx.outer_ones) + local_ones;
+    const Rank64 pc = RP_PRIMITIVE[occupied][1];
+
+#if RP_RUNTIME_FUSE_PRIMITIVE_SUPPORT_RANK && \
+    RP_RUNTIME_PRIMITIVE_RANK_SETBITS && RP_RUNTIME_SUPPORT_RANK_SETBITS
+    RuntimePrimitiveSupportRanks ranks{};
+#if RP_RUNTIME_DIRECT_BLOCKED_RANK
+    if (k.blocked) {
+        ranks = runtime_primitive_local_ranks_blocked_compressed_device(
+            k.mate, W, occupied, compressed_support, missing_bit,
+            ctx.lo, ctx.L, missing_pos, fixed_pos);
+    } else {
+        ranks = runtime_primitive_local_ranks_fused_device(
+            k.mate, W, occupied, full, ctx.lo, ctx.L,
+            false, -1, -1);
+    }
+#else
+    ranks = runtime_primitive_local_ranks_fused_device(
+        full_mate, W, occupied, full, ctx.lo, ctx.L,
+        k.blocked != 0, missing_pos, fixed_pos);
+#endif
+    const Rank64 pr = ranks.primitive;
+    const Rank64 sr = ranks.support;
+#else
+    const Rank64 pr = runtime_primitive_rank_support_device(full_mate, W, occupied, full);
+#endif
+    Rank64 within = runtime_group_local_sector_offset_device(
+        W, ctx.sector_row_base, ctx.L, int(ctx.outer_ones), local_ones);
+
+    if (!k.blocked) {
+#if RP_RUNTIME_FUSE_PRIMITIVE_SUPPORT_RANK && \
+    RP_RUNTIME_PRIMITIVE_RANK_SETBITS && RP_RUNTIME_SUPPORT_RANK_SETBITS
+        within += sr * pc + pr;
+#else
+        const Rank64 sr = runtime_compact_support_rank_device(local_mask, ctx.L, local_ones);
+        within += sr * pc + pr;
+#endif
+    } else {
+#if RP_RUNTIME_FUSE_PRIMITIVE_SUPPORT_RANK && \
+    RP_RUNTIME_PRIMITIVE_RANK_SETBITS && RP_RUNTIME_SUPPORT_RANK_SETBITS
+        within += choose_device(ctx.L, local_ones) * pc + sr * pc + pr;
+#else
+        const std::uint32_t compact = erase_two_local_bits_device(
+            local_mask, ctx.L, missing_pos, fixed_pos);
+        const Rank64 sr = runtime_compact_support_rank_device(
+            compact, ctx.L - 2, local_ones - 1);
+        within += choose_device(ctx.L, local_ones) * pc + sr * pc + pr;
+#endif
+    }
+    return GroupedDeviceRank{ctx.owner, ctx.local_group_base + within};
+}
+
+} // namespace oneesan::gridfp::reducedprod

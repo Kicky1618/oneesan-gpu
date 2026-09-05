@@ -1,0 +1,8 @@
+#pragma once
+
+#include "ramstream32_bucket_low_rankformula_nometa_direct64.cuh"
+
+#define p10dc_low_rankformula_nometa_resolve_active \
+    p10dc_low_rankformula_nometa_resolve_direct64
+#include "ramstream32_bucket_closure_cross5_rankformula_nometa4_abstract.cuh"
+#undef p10dc_low_rankformula_nometa_resolve_active

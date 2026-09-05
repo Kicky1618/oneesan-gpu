@@ -1,0 +1,15 @@
+#pragma once
+
+#include "ramstream32_bucket_closure_pattern10_depthcode_delta_plan.cuh"
+
+#define p10dc_forward_high p10dc_forward_high_delta
+#define p10dc_reverse_high p10dc_reverse_high_delta
+#define bucket_high_orbit_closure_pattern10_depthcode_resolved_kernel \
+    bucket_high_orbit_closure_pattern10_depthcode_resolved_delta_kernel
+#define bucket_reverse_high_pattern10_depthcode_resolved_kernel \
+    bucket_reverse_high_pattern10_depthcode_resolved_delta_kernel
+#include "ramstream32_bucket_orbit_closure_pattern10_depthcode_resolved.cuh"
+#undef bucket_reverse_high_pattern10_depthcode_resolved_kernel
+#undef bucket_high_orbit_closure_pattern10_depthcode_resolved_kernel
+#undef p10dc_reverse_high
+#undef p10dc_forward_high

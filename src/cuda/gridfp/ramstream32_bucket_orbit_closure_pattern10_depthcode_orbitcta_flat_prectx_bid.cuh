@@ -1,0 +1,152 @@
+#pragma once
+
+#ifndef P10DC_ORBITCTA_CTX
+#error "flat prectx-bid scheduler requires P10DC_ORBITCTA_CTX"
+#endif
+#if !P10DC_RANKFORMULA_PRECTX_COMPACT || !P10DC_RANKFORMULA_PRECTX_FORWARD || !P10DC_RANKFORMULA_PRECTX_REVERSE
+#error "flat prectx-bid scheduler requires compact forward+reverse prectx"
+#endif
+
+// Exact flat scheduler with no q->bucket offset search. The compact prectx
+// padding byte carries the source main bid. FUSED=0 reads the pad first and
+// reloads the context only after xb/jb/db are resolved, minimizing live
+// registers. FUSED=1 loads the complete compact context once and reuses it for
+// both bid and closure rows. Both paths skip runtime depthcode decoding.
+__global__ void bucket_high_orbit_closure_pattern10_depthcode_orbitcta_flat_prectx_bid_kernel(int p) {
+    const uint32_t nblocks = D_BKF_MAIN_NBLOCKS;
+    if (!nblocks) return;
+    const uint32_t pi = uint32_t((TARGET_W - 1) - p);
+    const uint32_t base_off = pi * D_BKF_HIGH_PITCH;
+    extern __shared__ unsigned long long storage[];
+    P10DC_ORBITCTA_CTX& c = *reinterpret_cast<P10DC_ORBITCTA_CTX*>(storage);
+
+    if (threadIdx.x == 0) {
+        const uint32_t nn0 = D_BKF_HIGH_NN_OFF[base_off];
+        const uint32_t nn1 = D_BKF_HIGH_NN_OFF[base_off + nblocks];
+        const uint32_t nr0 = D_BKF_HIGH_NRNL_OFF[base_off];
+        const uint32_t nr1 = D_BKF_HIGH_NRNL_OFF[base_off + nblocks];
+        c.n0 = nn1 - nn0;
+        c.n1 = nr0;
+        c.total = c.n0 + (nr1 - nr0);
+    }
+    __syncthreads();
+
+    for (uint32_t k = uint32_t(blockIdx.x); k < c.total; k += uint32_t(gridDim.x)) {
+        if (threadIdx.x == 0) {
+            c.valid = 0;
+            const bool nn = k < c.n0;
+            const uint32_t q = nn
+                ? D_BKF_HIGH_NN_OFF[base_off] + k
+                : c.n1 + k - c.n0;
+#if P10DC_RANKFORMULA_PRECTX_FLAT_BID_FUSED
+            const P10DCHighClosureCompactPreCtx z =
+                p10dc_load_forward_compact_prectx_flat(q, nn);
+            const uint32_t bid = uint32_t(z.pad);
+#else
+            const uint32_t bid = p10dc_forward_compact_prectx_flat_bid(q, nn);
+#endif
+            if (bid < nblocks) {
+                const BucketOrbitOp op = nn ? D_BKF_HIGH_NN[q] : D_BKF_HIGH_NRNL[q];
+                const uint32_t sl = bkf_orbit_src(op), jl = bkf_orbit_partner(op), dl = bkf_orbit_drop(op);
+                const uint32_t ss = bkf_loc_owner(sl), js = bkf_loc_owner(jl), ds = bkf_loc_owner(dl);
+                c.xb = bkf_high_main(ss, bid);
+                if (c.xb.valid && c.xb.rows && c.xb.cols) {
+                    uint32_t jbid = bid;
+                    if (p == LOW_LUT_K + 1) {
+                        const uint32_t center = nn ? uint32_t(R) : uint32_t(N);
+                        const int he = int(c.xb.hs) + (center == uint32_t(R) ? 1 : 0);
+                        jbid = uint32_t(3 * he + int(center));
+                    }
+                    c.jb = bkf_high_main(js, jbid);
+                    c.db = bkf_high_block(ds, uint32_t(c.xb.hs));
+                    p10dc_direct_resolve_high_io(
+                        c, ss, js, ds,
+                        bkf_loc_rank(sl), bkf_loc_rank(jl), bkf_loc_rank(dl));
+#if P10DC_RANKFORMULA_PRECTX_FLAT_BID_FUSED
+                    p10dc_apply_loaded_compact_prectx(c, z);
+#else
+                    p10dc_apply_forward_prectx(c, q, nn);
+#endif
+                    c.kind = uint8_t(nn ? CPU_ORBIT_NN : CPU_ORBIT_NR);
+                    c.valid = 1;
+                }
+            }
+        }
+        __syncthreads();
+        if (c.valid) p10dc_orbitcta_flat_forward_columns(c);
+        __syncthreads();
+    }
+}
+
+__global__ void bucket_reverse_high_pattern10_depthcode_orbitcta_flat_prectx_bid_kernel(int p) {
+    const uint32_t nblocks = D_BKF_MAIN_NBLOCKS;
+    if (!nblocks) return;
+    const uint32_t pi = uint32_t(p - (LOW_LUT_K + 1));
+    const uint32_t base_off = pi * D_RS54_PITCH;
+    const bool edge = p == TARGET_W - 1;
+    extern __shared__ unsigned long long storage[];
+    P10DC_ORBITCTA_CTX& c = *reinterpret_cast<P10DC_ORBITCTA_CTX*>(storage);
+
+    if (threadIdx.x == 0) {
+        const uint32_t nn0 = D_RS54_HIGH_NN_OFF[base_off];
+        const uint32_t nn1 = D_RS54_HIGH_NN_OFF[base_off + nblocks];
+        const uint32_t nr0 = D_RS54_HIGH_NR_OFF[base_off];
+        const uint32_t nr1 = D_RS54_HIGH_NR_OFF[base_off + nblocks];
+        const uint32_t nl0 = D_RS54_HIGH_NL_OFF[base_off];
+        const uint32_t nl1 = D_RS54_HIGH_NL_OFF[base_off + nblocks];
+        c.n0 = nn1 - nn0;
+        c.n1 = nr1 - nr0;
+        c.total = c.n0 + c.n1 + (nl1 - nl0);
+    }
+    __syncthreads();
+
+    for (uint32_t k = uint32_t(blockIdx.x); k < c.total; k += uint32_t(gridDim.x)) {
+        if (threadIdx.x == 0) {
+            c.valid = 0;
+            uint32_t q = 0, kind = 0;
+            BucketOrbitOp op;
+            if (k < c.n0) {
+                kind = CPU_ORBIT_NN;
+                q = D_RS54_HIGH_NN_OFF[base_off] + k;
+                op = D_RS54_HIGH_NN[q];
+            } else if (k < c.n0 + c.n1) {
+                kind = CPU_ORBIT_NR;
+                q = D_RS54_HIGH_NR_OFF[base_off] + k - c.n0;
+                op = D_RS54_HIGH_NR[q];
+            } else {
+                kind = CPU_ORBIT_NL;
+                q = D_RS54_HIGH_NL_OFF[base_off] + k - c.n0 - c.n1;
+                op = D_RS54_HIGH_NL[q];
+            }
+#if P10DC_RANKFORMULA_PRECTX_FLAT_BID_FUSED
+            const P10DCHighClosureCompactPreCtx z =
+                p10dc_load_reverse_compact_prectx_flat(q, kind);
+            const uint32_t bid = uint32_t(z.pad);
+#else
+            const uint32_t bid = p10dc_reverse_compact_prectx_flat_bid(q, kind);
+#endif
+            if (bid < nblocks) {
+                const uint32_t sl = bkf_orbit_src(op), jl = bkf_orbit_partner(op), dl = bkf_orbit_drop(op);
+                const uint32_t ss = bkf_loc_owner(sl), js = bkf_loc_owner(jl), ds = bkf_loc_owner(dl);
+                c.xb = bkf_high_main(ss, bid);
+                if (c.xb.valid && c.xb.rows && c.xb.cols) {
+                    c.jb = bkf_high_main(js, bkcp10_reverse_high_jblock(bid, c.xb, p, kind));
+                    c.db = bkf_high_block(ds, uint32_t(c.xb.hs));
+                    p10dc_direct_resolve_high_io(
+                        c, ss, js, ds,
+                        bkf_loc_rank(sl), bkf_loc_rank(jl), bkf_loc_rank(dl));
+#if P10DC_RANKFORMULA_PRECTX_FLAT_BID_FUSED
+                    p10dc_apply_loaded_compact_prectx(c, z);
+#else
+                    p10dc_apply_reverse_prectx(c, q, kind);
+#endif
+                    c.kind = uint8_t(kind);
+                    c.valid = 1;
+                }
+            }
+        }
+        __syncthreads();
+        if (c.valid) p10dc_orbitcta_flat_reverse_columns(c, edge);
+        __syncthreads();
+    }
+}

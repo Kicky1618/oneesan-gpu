@@ -1,0 +1,71 @@
+name: gpu direct gather compile validation
+
+on:
+  push:
+    paths:
+      - 'src/cuda/gridfp/ramstream32_gpu_direct.cuh'
+      - 'src/cuda/gridfp/ramstream32_gpu_direct_gather.cuh'
+      - 'src/cuda/gridfp/oneesan_cuda_gridfp_gpu_direct_gather.cu'
+      - 'src/cuda/gridfp/probes/ramstream32_gpu_direct_gather_selftest.cu'
+      - 'src/cuda/gridfp/ramstream32_cpu_low_sparse.hpp'
+      - 'src/cuda/gridfp/ramstream32_cpu_high.hpp'
+      - 'src/cuda/gridfp/ramstream32_cpu_high_direct.hpp'
+      - 'scripts/build/gridfp-gpu-direct-gather.sh'
+      - '.github/workflows/gpu-direct-gather-compile.yml'
+  pull_request:
+    paths:
+      - 'src/cuda/gridfp/ramstream32_gpu_direct.cuh'
+      - 'src/cuda/gridfp/ramstream32_gpu_direct_gather.cuh'
+      - 'src/cuda/gridfp/oneesan_cuda_gridfp_gpu_direct_gather.cu'
+      - 'src/cuda/gridfp/probes/ramstream32_gpu_direct_gather_selftest.cu'
+      - 'src/cuda/gridfp/ramstream32_cpu_low_sparse.hpp'
+      - 'src/cuda/gridfp/ramstream32_cpu_high.hpp'
+      - 'src/cuda/gridfp/ramstream32_cpu_high_direct.hpp'
+      - 'scripts/build/gridfp-gpu-direct-gather.sh'
+      - '.github/workflows/gpu-direct-gather-compile.yml'
+  workflow_dispatch:
+
+jobs:
+  compile:
+    runs-on: ubuntu-latest
+    container: nvidia/cuda:12.8.1-devel-ubuntu22.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Compile W10 gather exhaustive probe
+        shell: bash
+        run: |
+          mkdir -p build
+          nvcc -O3 -std=c++17 -lineinfo -arch=sm_80 \
+            -DTARGET_W=10 -DLOW_LUT_K=5 -DHIGH_LUT_K=4 \
+            src/cuda/gridfp/probes/ramstream32_gpu_direct_gather_selftest.cu \
+            -o build/ramstream32_gpu_direct_gather_selftest_w10
+      - name: Compile W22 gather backend
+        shell: bash
+        run: |
+          nvcc -O3 -std=c++17 -lineinfo -arch=sm_80 \
+            -DTARGET_W=22 -DLOW_LUT_K=11 -DHIGH_LUT_K=10 \
+            src/cuda/gridfp/oneesan_cuda_gridfp_gpu_direct_gather.cu \
+            -o build/oneesan_cuda_gridfp_gpu_direct_gather_n21
+      - name: Validate W22 gather plan
+        shell: bash
+        run: |
+          build/oneesan_cuda_gridfp_gpu_direct_gather_n21 \
+            21 4294967291 256 16 8 --plan-only 2>&1 | tee /tmp/gdg-plan.txt
+          grep -Fq 'backend=gridfp-gpu-direct-gather-v0.1-plan' /tmp/gdg-plan.txt
+          grep -Fq 'ordinary_closure_atomic=0' /tmp/gdg-plan.txt
+          grep -Fq 'cross_closure_atomic=1' /tmp/gdg-plan.txt
+          grep -Fq 'scratch_bytes=0' /tmp/gdg-plan.txt
+      - name: Compile W28 gather backend
+        shell: bash
+        run: |
+          nvcc -O3 -std=c++17 -lineinfo -arch=sm_80 \
+            -DTARGET_W=28 -DLOW_LUT_K=14 -DHIGH_LUT_K=13 \
+            src/cuda/gridfp/oneesan_cuda_gridfp_gpu_direct_gather.cu \
+            -o build/oneesan_cuda_gridfp_gpu_direct_gather_n27
+      - name: Validate W28 gather plan
+        shell: bash
+        run: |
+          build/oneesan_cuda_gridfp_gpu_direct_gather_n27 \
+            27 4294967291 256 16 8 --plan-only 2>&1 | tee /tmp/gdg-plan-n27.txt
+          grep -Fq 'low_max_indegree=7' /tmp/gdg-plan-n27.txt
+          grep -Fq 'high_max_indegree=7' /tmp/gdg-plan-n27.txt

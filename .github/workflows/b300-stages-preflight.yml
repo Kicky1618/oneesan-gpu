@@ -1,0 +1,76 @@
+name: B300 Stage S preflight
+
+on:
+  push:
+    paths:
+      - 'scripts/build/gen-b300-mainrec-ilp2-pair-block-cg-l2-policy.py'
+      - 'scripts/build/b300-forced-nextgen-hybrid8-stages-ilp2-cg-l2-policy.sh'
+      - 'scripts/build/gen-b300-grand-selector-stages.py'
+      - 'scripts/build/gen-b300-grand-firstpass-stages.py'
+      - 'scripts/bench/b300-mainrec-ilp2-pair-block-cg-l2-policy-preflight.sh'
+      - 'scripts/bench/b300-nextgen-hybrid8-stages-ilp2-cg-l2-sweep.sh'
+      - 'scripts/bench/b300-nextgen-hybrid8-stages-ilp2-cg-l2-staged-calibrate.sh'
+      - 'scripts/bench/b300-stages-preflight.sh'
+      - 'scripts/bench/b300-grand-stages-contract-preflight.sh'
+      - 'scripts/bench/b300-grand-stages-firstpass-preflight.sh'
+      - 'scripts/bench/b300-grand-stages-exact-promotion-preflight.sh'
+      - 'scripts/bench/b300-grand-stages-exact-controlpath-preflight.sh'
+      - 'scripts/bench/b300-grand-latest-entrypoint-preflight.sh'
+      - 'scripts/bench/b300-latest-environment-preflight-test.sh'
+      - 'scripts/run/b300x8-nextgen-hybrid8-stages-ilp2-cg-l2-staged-fullprime-race.sh'
+      - 'scripts/run/b300x8-joint-nextself-hybrid8-select-stages.sh'
+      - 'scripts/run/b300x8-grand-firstpass-stages.sh'
+      - 'scripts/run/b300x8-grand-promote-exact-stages.sh'
+      - 'scripts/run/b300x8-grand-firstpass-latest.sh'
+      - 'scripts/run/b300x8-grand-promote-exact-latest.sh'
+      - 'scripts/run/b300x8-grand-latest-preflight.sh'
+      - '.github/workflows/b300-stages-preflight.yml'
+  pull_request:
+    paths:
+      - 'scripts/build/gen-b300-mainrec-ilp2-pair-block-cg-l2-policy.py'
+      - 'scripts/build/b300-forced-nextgen-hybrid8-stages-ilp2-cg-l2-policy.sh'
+      - 'scripts/build/gen-b300-grand-selector-stages.py'
+      - 'scripts/build/gen-b300-grand-firstpass-stages.py'
+      - 'scripts/bench/b300-mainrec-ilp2-pair-block-cg-l2-policy-preflight.sh'
+      - 'scripts/bench/b300-nextgen-hybrid8-stages-ilp2-cg-l2-sweep.sh'
+      - 'scripts/bench/b300-nextgen-hybrid8-stages-ilp2-cg-l2-staged-calibrate.sh'
+      - 'scripts/bench/b300-stages-preflight.sh'
+      - 'scripts/bench/b300-grand-stages-contract-preflight.sh'
+      - 'scripts/bench/b300-grand-stages-firstpass-preflight.sh'
+      - 'scripts/bench/b300-grand-stages-exact-promotion-preflight.sh'
+      - 'scripts/bench/b300-grand-stages-exact-controlpath-preflight.sh'
+      - 'scripts/bench/b300-grand-latest-entrypoint-preflight.sh'
+      - 'scripts/bench/b300-latest-environment-preflight-test.sh'
+      - 'scripts/run/b300x8-nextgen-hybrid8-stages-ilp2-cg-l2-staged-fullprime-race.sh'
+      - 'scripts/run/b300x8-joint-nextself-hybrid8-select-stages.sh'
+      - 'scripts/run/b300x8-grand-firstpass-stages.sh'
+      - 'scripts/run/b300x8-grand-promote-exact-stages.sh'
+      - 'scripts/run/b300x8-grand-firstpass-latest.sh'
+      - 'scripts/run/b300x8-grand-promote-exact-latest.sh'
+      - 'scripts/run/b300x8-grand-latest-preflight.sh'
+      - '.github/workflows/b300-stages-preflight.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  preflight:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - name: Validate Stage S transform, sweep, staged, and promotion contracts
+        run: bash scripts/bench/b300-stages-preflight.sh
+      - name: Validate Stage S grand selector contract
+        run: bash scripts/bench/b300-grand-stages-contract-preflight.sh
+      - name: Validate Stage S grand firstpass contract
+        run: bash scripts/bench/b300-grand-stages-firstpass-preflight.sh
+      - name: Validate Stage S exact provenance
+        run: bash scripts/bench/b300-grand-stages-exact-promotion-preflight.sh
+      - name: Validate Stage S exact control-path pinning
+        run: bash scripts/bench/b300-grand-stages-exact-controlpath-preflight.sh
+      - name: Validate latest Stage T entrypoints
+        run: bash scripts/bench/b300-grand-latest-entrypoint-preflight.sh
+      - name: Validate latest Stage T environment preflight
+        run: bash scripts/bench/b300-latest-environment-preflight-test.sh

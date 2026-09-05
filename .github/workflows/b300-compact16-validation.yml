@@ -1,0 +1,49 @@
+name: B300 compact16 validation
+
+on:
+  push:
+    paths:
+      - 'src/cuda/gridfp/ramstream32_bucket_orbit_closure_compact16.cuh'
+      - 'src/cuda/gridfp/ramstream32_bucket_orbit_closure_compact16_alias.cuh'
+      - 'src/cuda/b300/oneesan_cuda_gridfp_b300_bucket_snake_onepass_compact16.cu'
+      - 'src/cuda/b300/oneesan_cuda_gridfp_b300_bucket_snake_onepass_compact16_events.cu'
+      - 'src/cuda/b300/oneesan_cuda_gridfp_b300_bucket_snake_onepass_compact16_pipeline.cu'
+      - 'src/cuda/b300/oneesan_cuda_gridfp_b300_bucket_snake_onepass_compact16_batch.cu'
+      - 'src/cuda/b300/oneesan_cuda_gridfp_b300_bucket_snake_onepass_compact16_batch_events.cu'
+      - 'src/cuda/b300/oneesan_cuda_gridfp_b300_bucket_snake_onepass_compact16_batch_pipeline.cu'
+      - 'scripts/build/b300-bucket-snake-compact16-batch.sh'
+      - 'scripts/run/b300x8-bucket-snake-compact16-exact.sh'
+      - '.github/workflows/b300-compact16-validation.yml'
+  workflow_dispatch:
+
+jobs:
+  compile:
+    runs-on: ubuntu-latest
+    container: nvidia/cuda:12.8.1-devel-ubuntu22.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Compile and plan W10 event compact16 single driver
+        shell: bash
+        run: |
+          mkdir -p build
+          nvcc -O3 -std=c++17 -lineinfo -arch=sm_80 \
+            -DTARGET_W=10 -DLOW_LUT_K=5 -DHIGH_LUT_K=4 \
+            src/cuda/b300/oneesan_cuda_gridfp_b300_bucket_snake_onepass_compact16_events.cu \
+            -o build/compact16_event_w10
+          build/compact16_event_w10 9 4294967291 256 4 4 64 --plan-only 2>&1 | tee /tmp/compact16-plan.txt
+          grep -Fq 'kernels_per_position=1' /tmp/compact16-plan.txt
+          grep -Fq 'transposes_per_residue=10' /tmp/compact16-plan.txt
+      - name: Compile W28 event compact16 batch
+        shell: bash
+        run: |
+          nvcc -O3 -std=c++17 -lineinfo -arch=sm_80 \
+            -DTARGET_W=28 -DLOW_LUT_K=14 -DHIGH_LUT_K=13 \
+            src/cuda/b300/oneesan_cuda_gridfp_b300_bucket_snake_onepass_compact16_batch_events.cu \
+            -o build/compact16_batch_event_w28
+      - name: Compile W28 PM pipeline compact16 batch
+        shell: bash
+        run: |
+          nvcc -O3 -std=c++17 -lineinfo -arch=sm_80 \
+            -DTARGET_W=28 -DLOW_LUT_K=14 -DHIGH_LUT_K=13 -DGPU_DIRECT_PM_ACCUM=1 \
+            src/cuda/b300/oneesan_cuda_gridfp_b300_bucket_snake_onepass_compact16_batch_pipeline.cu \
+            -o build/compact16_batch_pipeline_pm_w28

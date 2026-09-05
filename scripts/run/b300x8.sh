@@ -6,8 +6,28 @@ N="${1:-27}"
 MOD="${2:-4294967291}"
 TARGET_MIB_WAS_SET="${TARGET_MIB+x}"
 TARGET_MIB="${TARGET_MIB:-16384}"
+GRIDFP_PLAN_TARGET_MIB="${GRIDFP_PLAN_TARGET_MIB:-16384}"
 MAX_WINDOW="${MAX_WINDOW:-14}"
 NGPU="${NGPU:-8}"
+ROWS="${ROWS:-$((N+1))}"
+FAST_SHARD_ADDRESS8="${FAST_SHARD_ADDRESS8:-1}"
+MAIN_MATE_CACHE="${MAIN_MATE_CACHE:-1}"
+MAIN_PULL="${MAIN_PULL:-1}"
+BLOCK_PULL="${BLOCK_PULL:-1}"
+BLOCK_MATE_CACHE="${BLOCK_MATE_CACHE:-$BLOCK_PULL}"
+MAIN_PULL_ILP2="${MAIN_PULL_ILP2:-0}"
+HEIGHT_CACHE="${HEIGHT_CACHE:-0}"
+RANK_DELTA_CACHE="${RANK_DELTA_CACHE:-1}"
+RANK_STATE_PACKED="${RANK_STATE_PACKED:-$RANK_DELTA_CACHE}"
+RANK_STATE_ILP2="${RANK_STATE_ILP2:-$RANK_STATE_PACKED}"
+RANK_STATE_ILP3="${RANK_STATE_ILP3:-0}"
+RANK_STATE_ILP4="${RANK_STATE_ILP4:-0}"
+BLOCK_CLOSURE_QUAD="${BLOCK_CLOSURE_QUAD:-0}"
+BLOCK_CLOSURE_WARP="${BLOCK_CLOSURE_WARP:-0}"
+HOT_DELTA_TABLE="${HOT_DELTA_TABLE:-0}"
+CONCURRENT_GROUP_IO="${CONCURRENT_GROUP_IO:-1}"
+MAXRREGCOUNT="${MAXRREGCOUNT:-0}"
+GRIDFP_PLAN_TARGET_DIVISOR="${GRIDFP_PLAN_TARGET_DIVISOR:-1}"
 GRIDFP_VRAM_RESERVE_MIB="${GRIDFP_VRAM_RESERVE_MIB:-8192}"
 ROW7_TENSOR="${ROW7_TENSOR:-0}"
 ROW8_TENSOR="${ROW8_TENSOR:-0}"
@@ -68,20 +88,58 @@ BIN="${BIN:-$DEFAULT_BIN}"
 for spec in "N:$N" "MOD:$MOD" "TARGET_MIB:$TARGET_MIB" "MAX_WINDOW:$MAX_WINDOW" "NGPU:$NGPU" "GRIDFP_VRAM_RESERVE_MIB:$GRIDFP_VRAM_RESERVE_MIB"; do
   require_uint "${spec%%:*}" "${spec#*:}" || exit 2
 done
+REBUILD="${REBUILD:-0}"
 
-if (( MOD < 2 || MOD > 4294967295 )); then
-  echo "HBM32 requires 2 <= modulus <= 4294967295; got $MOD" >&2
-  exit 2
-fi
-if ! command -v nvidia-smi >/dev/null; then
-  echo "nvidia-smi not found" >&2
-  exit 2
-fi
+for name in FAST_SHARD_ADDRESS8 MAIN_MATE_CACHE MAIN_PULL BLOCK_PULL BLOCK_MATE_CACHE MAIN_PULL_ILP2 HEIGHT_CACHE RANK_DELTA_CACHE RANK_STATE_PACKED RANK_STATE_ILP2 RANK_STATE_ILP3 RANK_STATE_ILP4 BLOCK_CLOSURE_QUAD BLOCK_CLOSURE_WARP HOT_DELTA_TABLE CONCURRENT_GROUP_IO REBUILD; do
+  value="${!name}"
+  if [[ "$value" != 0 && "$value" != 1 ]]; then echo "$name must be 0 or 1" >&2; exit 2; fi
+done
+[[ "$MAXRREGCOUNT" =~ ^[0-9]+$ ]] && (( MAXRREGCOUNT == 0 || (MAXRREGCOUNT >= 32 && MAXRREGCOUNT <= 255) )) || { echo "MAXRREGCOUNT must be 0 or 32..255" >&2; exit 2; }
+[[ "$ROWS" =~ ^[0-9]+$ ]] && (( ROWS >= 1 && ROWS <= N + 1 )) || { echo "ROWS must be 1..$((N+1))" >&2; exit 2; }
+[[ "$GRIDFP_PLAN_TARGET_MIB" =~ ^[0-9]+$ ]] && (( GRIDFP_PLAN_TARGET_MIB >= 1 && GRIDFP_PLAN_TARGET_MIB <= TARGET_MIB )) || { echo "GRIDFP_PLAN_TARGET_MIB must be 1..TARGET_MIB" >&2; exit 2; }
+[[ "$GRIDFP_PLAN_TARGET_DIVISOR" =~ ^[0-9]+$ ]] && (( GRIDFP_PLAN_TARGET_DIVISOR >= 1 && GRIDFP_PLAN_TARGET_DIVISOR <= 16 )) || { echo "GRIDFP_PLAN_TARGET_DIVISOR must be 1..16" >&2; exit 2; }
+if [[ "$MAIN_PULL" == 1 && "$MAIN_MATE_CACHE" != 1 ]]; then echo "MAIN_PULL=1 requires MAIN_MATE_CACHE=1" >&2; exit 2; fi
+if [[ "$BLOCK_PULL" == 1 && "$MAIN_PULL" != 1 ]]; then echo "BLOCK_PULL=1 requires MAIN_PULL=1" >&2; exit 2; fi
+if [[ "$BLOCK_MATE_CACHE" == 1 && "$BLOCK_PULL" != 1 ]]; then echo "BLOCK_MATE_CACHE=1 requires BLOCK_PULL=1" >&2; exit 2; fi
+if (( MAIN_PULL_ILP2 + HEIGHT_CACHE + RANK_DELTA_CACHE > 1 )); then echo "MAIN_PULL_ILP2, HEIGHT_CACHE and RANK_DELTA_CACHE are separate base experiments; use packed rank-state ILP2/3/4 to combine ILP with rank recurrence" >&2; exit 2; fi
+for name in MAIN_PULL_ILP2 HEIGHT_CACHE RANK_DELTA_CACHE; do
+  if [[ "${!name}" == 1 && ( "$MAIN_PULL" != 1 || "$BLOCK_PULL" != 1 || "$MAIN_MATE_CACHE" != 1 || "$BLOCK_MATE_CACHE" != 1 ) ]]; then echo "$name=1 requires full-pull plus both MateID caches" >&2; exit 2; fi
+done
+if [[ "$RANK_STATE_PACKED" == 1 && "$RANK_DELTA_CACHE" != 1 ]]; then echo "RANK_STATE_PACKED=1 requires RANK_DELTA_CACHE=1" >&2; exit 2; fi
+for name in RANK_STATE_ILP2 RANK_STATE_ILP3 RANK_STATE_ILP4; do
+  if [[ "${!name}" == 1 && "$RANK_STATE_PACKED" != 1 ]]; then echo "$name=1 requires RANK_STATE_PACKED=1" >&2; exit 2; fi
+done
+if (( RANK_STATE_ILP2 + RANK_STATE_ILP3 + RANK_STATE_ILP4 > 1 )); then echo "RANK_STATE_ILP2/3/4 are mutually exclusive" >&2; exit 2; fi
+if [[ "$BLOCK_CLOSURE_QUAD" == 1 && "$RANK_STATE_ILP4" != 1 ]]; then echo "BLOCK_CLOSURE_QUAD=1 requires RANK_STATE_ILP4=1" >&2; exit 2; fi
+if [[ "$BLOCK_CLOSURE_WARP" == 1 && "$RANK_STATE_ILP4" != 1 ]]; then echo "BLOCK_CLOSURE_WARP=1 requires RANK_STATE_ILP4=1" >&2; exit 2; fi
+if (( BLOCK_CLOSURE_QUAD + BLOCK_CLOSURE_WARP > 1 )); then echo "BLOCK_CLOSURE_QUAD and BLOCK_CLOSURE_WARP are separate experiments" >&2; exit 2; fi
+if [[ "$HOT_DELTA_TABLE" == 1 && "$RANK_DELTA_CACHE" != 1 ]]; then echo "HOT_DELTA_TABLE=1 requires RANK_DELTA_CACHE=1" >&2; exit 2; fi
+
+BIN_SUFFIX=""
+[[ "$FAST_SHARD_ADDRESS8" == 1 ]] && BIN_SUFFIX="${BIN_SUFFIX}_shardaddr8"
+[[ "$MAIN_MATE_CACHE" == 1 ]] && BIN_SUFFIX="${BIN_SUFFIX}_matecache"
+[[ "$MAIN_PULL" == 1 ]] && BIN_SUFFIX="${BIN_SUFFIX}_mainpull"
+[[ "$BLOCK_PULL" == 1 ]] && BIN_SUFFIX="${BIN_SUFFIX}_blockpull"
+[[ "$BLOCK_MATE_CACHE" == 1 ]] && BIN_SUFFIX="${BIN_SUFFIX}_blockmate"
+[[ "$MAIN_PULL_ILP2" == 1 ]] && BIN_SUFFIX="${BIN_SUFFIX}_ilp2"
+[[ "$HEIGHT_CACHE" == 1 ]] && BIN_SUFFIX="${BIN_SUFFIX}_height"
+[[ "$RANK_DELTA_CACHE" == 1 ]] && BIN_SUFFIX="${BIN_SUFFIX}_rankdelta"
+[[ "$RANK_STATE_PACKED" == 1 ]] && BIN_SUFFIX="${BIN_SUFFIX}_packed56h"
+[[ "$RANK_STATE_ILP2" == 1 ]] && BIN_SUFFIX="${BIN_SUFFIX}_rsilp2"
+[[ "$RANK_STATE_ILP3" == 1 ]] && BIN_SUFFIX="${BIN_SUFFIX}_rsilp3"
+[[ "$RANK_STATE_ILP4" == 1 ]] && BIN_SUFFIX="${BIN_SUFFIX}_rsilp4"
+[[ "$BLOCK_CLOSURE_QUAD" == 1 ]] && BIN_SUFFIX="${BIN_SUFFIX}_closureq"
+[[ "$BLOCK_CLOSURE_WARP" == 1 ]] && BIN_SUFFIX="${BIN_SUFFIX}_closurewarp"
+[[ "$HOT_DELTA_TABLE" == 1 ]] && BIN_SUFFIX="${BIN_SUFFIX}_hotd32"
+[[ "$CONCURRENT_GROUP_IO" == 1 ]] && BIN_SUFFIX="${BIN_SUFFIX}_cio"
+(( MAXRREGCOUNT > 0 )) && BIN_SUFFIX="${BIN_SUFFIX}_r${MAXRREGCOUNT}"
+BIN="${BIN:-$ONEESAN_BUILD_DIR/oneesan_cuda_gridfp_b300_hbm32_n${N}${BIN_SUFFIX}}"
+
+if (( MOD < 2 || MOD > 4294967295 )); then echo "HBM32 requires 2 <= modulus <= 4294967295; got $MOD" >&2; exit 2; fi
+command -v nvidia-smi >/dev/null || { echo "nvidia-smi not found" >&2; exit 2; }
 visible="$(nvidia-smi --query-gpu=index --format=csv,noheader | wc -l)"
-if (( visible < NGPU )); then
-  echo "requested $NGPU GPUs, but only $visible are visible" >&2
-  exit 2
-fi
+if (( visible < NGPU )); then echo "requested $NGPU GPUs, but only $visible are visible" >&2; exit 2; fi
+if [[ "$FAST_SHARD_ADDRESS8" == 1 && "$NGPU" != 8 ]]; then echo "FAST_SHARD_ADDRESS8=1 is specialized for NGPU=8" >&2; exit 2; fi
 
 PROVENANCE="${BIN}.provenance.json"
 needs_build=0
@@ -103,7 +161,7 @@ nvidia-smi -L
 nvidia-smi topo -m || true
 nvidia-smi --query-gpu=index,name,memory.total,memory.free --format=csv,noheader || true
 
-echo "N=$N MOD=$MOD GPUs=$NGPU requested_scratch=${TARGET_MIB}MiB reserve=${GRIDFP_VRAM_RESERVE_MIB}MiB max_window=$MAX_WINDOW"
+echo "N=$N MOD=$MOD GPUs=$NGPU rows=$ROWS requested_scratch=${TARGET_MIB}MiB planner_target_cap=${GRIDFP_PLAN_TARGET_MIB}MiB planner_divisor=$GRIDFP_PLAN_TARGET_DIVISOR reserve=${GRIDFP_VRAM_RESERVE_MIB}MiB max_window=$MAX_WINDOW fast_shard_address8=$FAST_SHARD_ADDRESS8 main_mate_cache=$MAIN_MATE_CACHE main_pull=$MAIN_PULL block_pull=$BLOCK_PULL block_mate_cache=$BLOCK_MATE_CACHE main_pull_ilp2=$MAIN_PULL_ILP2 height_cache=$HEIGHT_CACHE rank_delta_cache=$RANK_DELTA_CACHE rank_state_packed=$RANK_STATE_PACKED rank_state_ilp2=$RANK_STATE_ILP2 rank_state_ilp3=$RANK_STATE_ILP3 rank_state_ilp4=$RANK_STATE_ILP4 block_closure_quad=$BLOCK_CLOSURE_QUAD block_closure_warp=$BLOCK_CLOSURE_WARP hot_delta_table=$HOT_DELTA_TABLE concurrent_group_io=$CONCURRENT_GROUP_IO maxrregcount=$MAXRREGCOUNT GRIDFP_THREADS=${GRIDFP_THREADS:-256}"
 echo "BIN=$BIN"
 export GRIDFP_VRAM_RESERVE_MIB
 if (( GROUPBATCH )); then

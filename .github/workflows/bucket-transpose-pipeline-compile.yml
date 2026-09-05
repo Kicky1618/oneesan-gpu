@@ -1,0 +1,32 @@
+name: bucket transpose pipeline compile
+
+on:
+  push:
+    paths:
+      - 'src/cuda/b300/gridfp_bucket_transpose.cuh'
+      - 'src/cuda/b300/gridfp_bucket_transpose_events.cuh'
+      - 'src/cuda/b300/gridfp_bucket_transpose_pipeline.cuh'
+      - 'src/cuda/b300/probes/bucket_transpose_ab.cu'
+      - '.github/workflows/bucket-transpose-pipeline-compile.yml'
+  pull_request:
+    paths:
+      - 'src/cuda/b300/gridfp_bucket_transpose.cuh'
+      - 'src/cuda/b300/gridfp_bucket_transpose_events.cuh'
+      - 'src/cuda/b300/gridfp_bucket_transpose_pipeline.cuh'
+      - 'src/cuda/b300/probes/bucket_transpose_ab.cu'
+      - '.github/workflows/bucket-transpose-pipeline-compile.yml'
+  workflow_dispatch:
+
+jobs:
+  compile:
+    runs-on: ubuntu-latest
+    container: nvidia/cuda:12.8.1-devel-ubuntu22.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Compile transpose A/B/pipeline probe
+        run: |
+          mkdir -p build
+          nvcc -O3 -std=c++17 -lineinfo -arch=sm_80 \
+            -DTARGET_W=10 -DLOW_LUT_K=5 -DHIGH_LUT_K=4 \
+            src/cuda/b300/probes/bucket_transpose_ab.cu \
+            -o build/bucket_transpose_ab

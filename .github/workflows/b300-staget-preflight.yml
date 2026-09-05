@@ -1,0 +1,66 @@
+name: B300 Stage T preflight
+
+on:
+  push:
+    paths:
+      - 'scripts/build/gen-b300-mainrec-ilp2-mate-load-policy.py'
+      - 'scripts/build/b300-forced-nextgen-hybrid8-staget-ilp2-mate-load-policy.sh'
+      - 'scripts/build/gen-b300-grand-selector-staget.py'
+      - 'scripts/build/gen-b300-grand-selector-staget-compat.py'
+      - 'scripts/build/gen-b300-grand-firstpass-staget.py'
+      - 'scripts/build/gen-b300-grand-firstpass-staget-compat.py'
+      - 'scripts/bench/b300-mainrec-ilp2-mate-load-policy-staget-preflight.sh'
+      - 'scripts/bench/b300-nextgen-hybrid8-staget-ilp2-mate-load-policy-sweep.sh'
+      - 'scripts/bench/b300-nextgen-hybrid8-staget-ilp2-mate-load-policy-staged-calibrate.sh'
+      - 'scripts/bench/b300-staget-preflight.sh'
+      - 'scripts/bench/b300-staget-promotion-preflight.sh'
+      - 'scripts/bench/b300-grand-staget-contract-preflight.sh'
+      - 'scripts/bench/b300-grand-staget-firstpass-preflight.sh'
+      - 'scripts/bench/b300-grand-staget-exact-promotion-preflight.sh'
+      - 'scripts/run/b300x8-nextgen-hybrid8-staget-ilp2-mate-load-policy-staged-fullprime-race.sh'
+      - 'scripts/run/b300x8-joint-nextself-hybrid8-select-staget.sh'
+      - 'scripts/run/b300x8-grand-firstpass-staget.sh'
+      - 'scripts/run/b300x8-grand-promote-exact-staget.sh'
+      - '.github/workflows/b300-staget-preflight.yml'
+  pull_request:
+    paths:
+      - 'scripts/build/gen-b300-mainrec-ilp2-mate-load-policy.py'
+      - 'scripts/build/b300-forced-nextgen-hybrid8-staget-ilp2-mate-load-policy.sh'
+      - 'scripts/build/gen-b300-grand-selector-staget.py'
+      - 'scripts/build/gen-b300-grand-selector-staget-compat.py'
+      - 'scripts/build/gen-b300-grand-firstpass-staget.py'
+      - 'scripts/build/gen-b300-grand-firstpass-staget-compat.py'
+      - 'scripts/bench/b300-mainrec-ilp2-mate-load-policy-staget-preflight.sh'
+      - 'scripts/bench/b300-nextgen-hybrid8-staget-ilp2-mate-load-policy-sweep.sh'
+      - 'scripts/bench/b300-nextgen-hybrid8-staget-ilp2-mate-load-policy-staged-calibrate.sh'
+      - 'scripts/bench/b300-staget-preflight.sh'
+      - 'scripts/bench/b300-staget-promotion-preflight.sh'
+      - 'scripts/bench/b300-grand-staget-contract-preflight.sh'
+      - 'scripts/bench/b300-grand-staget-firstpass-preflight.sh'
+      - 'scripts/bench/b300-grand-staget-exact-promotion-preflight.sh'
+      - 'scripts/run/b300x8-nextgen-hybrid8-staget-ilp2-mate-load-policy-staged-fullprime-race.sh'
+      - 'scripts/run/b300x8-joint-nextself-hybrid8-select-staget.sh'
+      - 'scripts/run/b300x8-grand-firstpass-staget.sh'
+      - 'scripts/run/b300x8-grand-promote-exact-staget.sh'
+      - '.github/workflows/b300-staget-preflight.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  preflight:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - name: Validate Stage T transform, composition, sweep, and staged contracts
+        run: bash scripts/bench/b300-staget-preflight.sh
+      - name: Validate Stage T promotion contract
+        run: bash scripts/bench/b300-staget-promotion-preflight.sh
+      - name: Validate Stage T grand selector contract
+        run: bash scripts/bench/b300-grand-staget-contract-preflight.sh
+      - name: Validate Stage T grand firstpass contract
+        run: bash scripts/bench/b300-grand-staget-firstpass-preflight.sh
+      - name: Validate Stage T exact provenance
+        run: bash scripts/bench/b300-grand-staget-exact-promotion-preflight.sh

@@ -1,0 +1,21 @@
+#!/usr/bin/env bash
+set -euo pipefail
+source "$(dirname -- "${BASH_SOURCE[0]}")/../lib/common.sh"
+N="${N:-27}";[[ "$N" == 27 ]]||{ echo "static LPT staged interval build requires n=27" >&2;exit 2; }
+W=$((N+1));NVCC="${NVCC:-nvcc}";ARCH="${ARCH:-native}";LOW_LUT_K="${LOW_LUT_K:-13}";HIGH_LUT_K="${HIGH_LUT_K:-13}"
+SRC="$ONEESAN_ROOT/src/cuda/b300/oneesan_cuda_gridfp_b300_hbm32_fullmate_dropN.cu"
+GEN="$ONEESAN_ROOT/scripts/build/gen-b300-vmm-production.py";PRUNE="$ONEESAN_ROOT/scripts/build/prune-b300-vmm-stale-shard-symbols.py";BASEARG="$ONEESAN_ROOT/scripts/build/lower-b300-vmm-basearg.py";PACK="$ONEESAN_ROOT/scripts/build/lower-b300-packed-group-meta.py";STAGE="$ONEESAN_ROOT/scripts/build/lower-b300-staged-group-meta.py";STATIC="$ONEESAN_ROOT/scripts/build/lower-b300-static-lpt-staged-meta.py";INTERVALS="$ONEESAN_ROOT/scripts/build/lower-b300-static-lpt-staged-intervals.py";ROWLIMIT="$ONEESAN_ROOT/scripts/build/lower-b300-row-limit.py"
+GENSRC="${GENSRC:-$ONEESAN_BUILD_DIR/generated_b300_static_lpt_staged_intervals_n27.cu}";OUT="$(build_path "${OUT:-oneesan_cuda_gridfp_b300_hbm32_vmm_static_lpt_staged_intervals_n27}")"
+require_nvcc_version_at_least "$NVCC" 13 0 "B300 static LPT staged interval build"
+bash "$ONEESAN_ROOT/scripts/bench/b300-vmm-static-lpt-staged-intervals-production-generate-proof.sh"
+python3 "$GEN" "$SRC" "$GENSRC";python3 "$PRUNE" "$GENSRC" "$GENSRC";python3 "$BASEARG" "$GENSRC" "$GENSRC";python3 "$PACK" "$GENSRC" "$GENSRC";python3 "$STAGE" "$GENSRC" "$GENSRC";python3 "$STATIC" "$GENSRC" "$GENSRC";python3 "$INTERVALS" "$GENSRC" "$GENSRC";python3 "$ROWLIMIT" "$GENSRC" "$GENSRC"
+TMPDIR="$ONEESAN_TMP_DIR" "$NVCC" -O3 -std=c++17 -lineinfo -arch="$ARCH" -I"$ONEESAN_ROOT/src/cuda/b300" -DTARGET_W="$W" -DLOW_LUT_K="$LOW_LUT_K" -DHIGH_LUT_K="$HIGH_LUT_K" "$GENSRC" -lcuda -o "$OUT"
+echo "built $OUT"
+echo "  scheduler=static_lpt metadata_replication=0"
+echo "  staged_intervals=1 per_group_interval_h2d=0"
+echo "  interval_descriptor_bytes=24 expected_default_descriptors=8453518"
+echo "  expected_default_interval_h2d_gib=0.188950851560"
+echo "  expected_old_repeated_interval_h2d_gib=5.290623843670"
+echo "  expected_combined_stage_max_mib_per_gpu=51.461677551"
+echo "  staged_interval_cap_env=B300_STAGED_INTERVAL_MAX_MIB default=256"
+echo "  row_limit_env=B300_ROW_LIMIT default_rows=28"

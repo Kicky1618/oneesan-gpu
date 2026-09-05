@@ -1,0 +1,539 @@
+# RAMstream32 CPU HIGH offload
+
+This note isolates the CPU/GPU partition experiment introduced after the hybrid-sparse LOW backend.
+
+## Motivation
+
+For `n=27` (`W=28`, `LOW=14`, `HIGH=13`), sending every fixed-LOW-occupancy HIGH group to the GPU costs exactly
+
+```text
+106.087684520 TiB / CRT residue
+```
+
+of H2D+D2H traffic. The group-size distribution is highly skewed, so assigning many small groups to CPU can remove substantial PCIe traffic while leaving the GPU with the large groups.
+
+Use
+
+```bash
+python3 scripts/tools/profile_high_group_transfer.py 27
+```
+
+to reproduce the distribution without allocating the state arrays.
+
+## Why the partition is exact
+
+A HIGH-window group fixes the occupancy mask of LOW positions `[0, LOW_LUT_K)`.
+
+Every HIGH transition preserves that mask:
+
+- normal transitions leave the exact LOW code unchanged;
+- the only boundary CROSS transition flips one occupied LOW symbol `R -> L`;
+- therefore occupancy does not change.
+
+The groups are transition-closed. CPU and GPU subsets can be evaluated independently and then the ordinary LOW window can run after both subsets finish.
+
+The W=10 full-state regression checks this implementation against the reference Grid-FP recurrence. It also partitions HIGH groups into two disjoint sets and runs the two sets concurrently to catch accidental cross-group writes.
+
+## v4.8 scratch executor
+
+`ramstream32_cpu_high.hpp` uses the same packed factorized group layout as the GPU backend. A selected group is copied from authoritative System RAM into four mmap scratch arrays:
+
+```text
+main A / main B / blocked A / blocked B
+```
+
+The complete HIGH window is evaluated out-of-place and copied back.
+
+This is the simplest correctness baseline, but it adds substantial DRAM traffic from identity copies and blocked-array clears.
+
+Enable it with:
+
+```bash
+CPU_HIGH_MAX_MIB=256 \
+CPU_HIGH_MODE=scratch \
+CPU_HIGH_WORKERS=32 \
+./build/oneesan_cuda_gridfp_ramstream32_factorized_hybrid_sparse_n27 \
+  27 4294967291 12288 32
+```
+
+## v4.9 zero-scratch direct executor
+
+`ramstream32_cpu_high_direct.hpp` removes the temporary count arrays entirely.
+
+At each active HIGH position, states with local pair `NN`, `NR`, or `NL` are unique representatives of three-state in-place orbits. Since every HIGH position satisfies `p > 1`, there is no bottom-edge special case:
+
+```text
+NN orbit:
+  main[partner] += main[source]
+  main[source]   = old_main[source] + old_blocked[drop]
+  blocked[drop]  = 0
+
+NR/NL orbit:
+  main[source]   = old_main[source] + old_main[partner] + old_blocked[drop]
+  blocked[drop]  = old_main[source]
+  main[partner]  keeps its identity value
+```
+
+Closure states (`LL`, `RR`, `RL`) are processed after the complete orbit pass for that position. Their HIGH-side destination is always blocked because all HIGH positions have `p > 1`.
+
+The only transition that changes the exact LOW code is CROSS. Before authoritative dense rank tables are released, the backend builds
+
+```text
+(source LOW mask-code index, matching depth)
+    -> destination mask-local LOW rank
+```
+
+as a `uint16_t` table. At `LOW_LUT_K=14`, the table is about 32.1 MiB.
+
+Enable direct mode with:
+
+```bash
+CPU_HIGH_MAX_MIB=256 \
+CPU_HIGH_MODE=direct \
+CPU_HIGH_WORKERS=32 \
+./build/oneesan_cuda_gridfp_ramstream32_factorized_hybrid_sparse_n27 \
+  27 4294967291 12288 32
+```
+
+`CPU_HIGH_MAX_MIB=0` disables threshold-based CPU HIGH offload.
+
+## v5.0 CPU/GPU HIGH overlap
+
+CPU and GPU HIGH subsets touch disjoint LOW-occupancy groups, so they can execute concurrently. `CPU_HIGH_OVERLAP=1` runs CPU HIGH while the main thread drives the GPU HIGH groups. The LOW pass begins only after both subsets have completed.
+
+```bash
+CPU_HIGH_MAX_MIB=256 \
+CPU_HIGH_MODE=direct \
+CPU_HIGH_OVERLAP=1 \
+CPU_HIGH_WORKERS=32 \
+./build/oneesan_cuda_gridfp_ramstream32_factorized_hybrid_sparse_n27 \
+  27 4294967291 12288 32
+```
+
+Overlap is not assumed to be faster. PCIe DMA and CPU direct execution both consume System-RAM bandwidth, so the sweep must compare `CPU_HIGH_OVERLAP=0` and `1` on the target machine.
+
+## v5.1 64-bit HIGH orbit metadata
+
+The first direct executor stored each orbit operation in 16 bytes. v5.1 removes redundant block IDs and stores only three 20-bit HIGH ranks in one `uint64_t`. Four high bits remain unused, so the orbit portion of direct metadata is halved from 16 bytes/op to 8 bytes/op.
+
+For a source main factor block and active HIGH position `p`:
+
+1. if `p != LOW_LUT_K+1`, the partner transformation is entirely inside HIGH and remains in the source main block;
+2. at `p = LOW_LUT_K+1`, `NN -> LR` leaves center `R`, while `NR -> RN` and `NL -> LN` leave center `N`, so `source.hs` and the orbit class determine the partner block;
+3. dropping the leading `N` always lands in blocked block `source.hs`.
+
+The builder still computes the full partner/drop states and explicit block IDs first, then asserts that the derived IDs match before accepting the compact stream. Rank overflow beyond 20 bits also aborts.
+
+## v5.2 split NN and NR/NL orbit streams
+
+NR and NL have identical count updates. v5.2 therefore uses two streams per `(p, source factor block)`:
+
+- `NN`;
+- `NR/NL`.
+
+Stream identity supplies the algebra, so runtime no longer decodes or branches on orbit kind. Partner/drop block reconstruction is also hoisted outside the per-operation loop because it depends only on `(p, source block, stream)`.
+
+The reordering is exact. Every blocked drop state uniquely reconstructs its source by inserting the dropped `N`; the lower symbol determines NN, NR, or NL. Partner states (`LR`, `RN`, `LN`) are never N* representatives at the same position.
+
+## v5.3 split BLOCK and CROSS closure streams
+
+Closure operations read main source values and only add into blocked destinations, so ordinary blocked closures and boundary CROSS closures can be reordered safely. v5.3 builds independent `BLOCK` and `CROSS` streams and removes the last descriptor-kind branch from the CPU HIGH direct hot loops.
+
+The n=27 direct plan log reports all four stream populations:
+
+```text
+nn_orbit_ops=...
+nrnl_orbit_ops=...
+block_closure_ops=...
+cross_closure_ops=...
+```
+
+CI requires these fields to be present, while the W=10 exhaustive reference comparison validates the complete result.
+
+## v5.4 exact group cost model and file policy
+
+A pure size threshold is only a proxy for CPU cost. Two occupancy groups with similar transfer size can have different NN/NRNL/closure/CROSS densities.
+
+The cost-plan probe computes exact per-group work:
+
+```bash
+N=27 bash scripts/build/gridfp-ramstream32-cpu-high-cost-plan.sh
+./build/ramstream32_cpu_high_cost_plan_n27 27 > high-cost.tsv
+```
+
+For each group it reports:
+
+- round-trip bytes removed from PCIe if that group moves to CPU;
+- exact H2D+D2H factor-slice copy-call count (`pcie_copy_calls`);
+- main and blocked state counts;
+- authoritative bytes in the factorized state arrays;
+- NN cell iterations;
+- NR/NL cell iterations;
+- ordinary blocked-closure cell iterations;
+- CROSS cell iterations;
+- GPU HIGH `gpu_state_steps`;
+- 4 KiB and 2 MiB boundary-page exposure upper bounds for NUMA analysis.
+
+The probe also verifies that all LOW-occupancy groups partition the authoritative main and blocked state spaces exactly once.
+
+Run an exact group policy with:
+
+```bash
+CPU_HIGH_MODE=direct \
+CPU_HIGH_GROUPS_FILE=cpu-high.groups \
+CPU_HIGH_WORKERS=32 \
+./build/oneesan_cuda_gridfp_ramstream32_factorized_hybrid_sparse_n27 \
+  27 4294967291 12288 32
+```
+
+`CPU_HIGH_GROUPS_FILE` overrides `CPU_HIGH_MAX_MIB`. The backend reports `cpu_high_policy=file` plus an FNV hash of the selected-group bitset.
+
+## v5.5 explicit CPU HIGH affinity
+
+On a large multi-socket System-RAM machine, direct-worker migration makes both timing and page locality unstable. Direct mode accepts an explicit Linux CPU list:
+
+```bash
+CPU_HIGH_CPU_LIST='0-31,64-95' \
+CPU_HIGH_MODE=direct \
+CPU_HIGH_GROUPS_FILE=cpu-high.groups \
+CPU_HIGH_WORKERS=32 \
+./build/oneesan_cuda_gridfp_ramstream32_factorized_hybrid_sparse_n27 \
+  27 4294967291 12288 32
+```
+
+Each direct worker is pinned round-robin to one CPU from the list with `pthread_setaffinity_np`. If the variable is unset, affinity behavior is unchanged. Invalid lists or binding failures abort instead of silently falling back.
+
+## v5.6 exact-work HIGH scheduling
+
+Direct mode computes, once on the first row, exact work for every selected group:
+
+```text
+sum over (HIGH position, source factor block):
+  LOW mask-local width *
+  (NN ops + NR/NL ops + BLOCK closure ops + CROSS closure ops)
+```
+
+The selected groups are sorted in descending exact cell work and cached for all later rows. Workers still consume an atomic dynamic queue, so this is largest-work-first dynamic scheduling. It reduces the risk that one topology-heavy group becomes the final row tail.
+
+The executor logs `cpu_high_direct_schedule` with group count, total/min/max cells, and one-time schedule-build time.
+
+## v5.7 overlap-critical-path group planning
+
+For sequential execution, group selection compares removable GPU-side work with CPU direct cost. Under `CPU_HIGH_OVERLAP=1`, independent per-group margin is not the correct objective: CPU and GPU branches run concurrently.
+
+The overlap planner therefore minimizes the modeled HIGH critical path:
+
+```text
+max(
+  sum CPU-direct time of selected groups,
+  sum DMA time of unselected groups
+    + sum GPU-HIGH work time of unselected groups
+)
+```
+
+A group may have a negative sequential margin and still be useful if moving it to CPU balances the two branches.
+
+`plan_cpu_high_groups.py --overlap` ranks optional groups by removable GPU-side time per CPU second, evaluates every prefix, and chooses the prefix with the smallest modeled critical path. It is a deterministic `O(G log G)` approximation to the discrete partition problem.
+
+## v5.8 three-rate measured cost model
+
+Threshold sweeps calibrate three aggregate machine-specific rates under the same execution mode:
+
+```text
+pcie_gib_s   aggregate H2D+D2H throughput
+gpu_gstate_s GPU HIGH state-step throughput
+cpu_gcell_s  CPU HIGH direct weighted-cell throughput
+```
+
+The cost-plan field
+
+```text
+gpu_state_steps = HIGH_LUT_K * (main_states + blocked_states)
+```
+
+is a proxy for HIGH GPU work removed by offloading a group.
+
+The planner accepts the measured GPU term with:
+
+```bash
+python3 scripts/tools/plan_cpu_high_groups.py high-cost.tsv \
+  --pcie-gib-s 38 \
+  --gpu-gstate-s 7.5 \
+  --cpu-gcell-s 2.7 \
+  --gpu-target-mib 12288 \
+  --overlap \
+  > cpu-high-overlap.groups
+```
+
+If `--gpu-gstate-s` is omitted, the planner falls back to the DMA-only GPU-side model.
+
+## v5.9 affine CPU/GPU group-cost model
+
+A pure throughput model assumes zero fixed cost. That is weak for the many-small-group regime because both CPU direct execution and GPU HIGH processing pay per-group costs such as queue/scheduling work, descriptor setup, CUDA launches, and synchronization.
+
+`analyze_cpu_high_sweep.py` therefore also fits non-negative two-predictor models across threshold points:
+
+```text
+CPU HIGH wall seconds ~= a_cpu * weighted_cells
+                       + b_cpu * group_executions
+
+GPU HIGH kernel seconds ~= a_gpu * gpu_state_steps
+                         + b_gpu * group_executions
+```
+
+The fit uses non-negative least squares over the two predictors. It reports:
+
+```text
+affine_calibration ... cpu_gcell_s=... cpu_group_overhead_us=...
+affine_calibration ... gpu_gstate_s=... gpu_group_overhead_us=...
+```
+
+If the fit is underdetermined or collapses to a zero throughput coefficient, the harness falls back to the v5.8 median-rate calibration.
+
+## v5.10 affine PCIe copy-call model
+
+Payload throughput alone also misses fixed transfer-call cost. HIGH groups use `fix_low=true`; for each nonempty main or blocked factor slice the production path issues exactly one H2D and one D2H `cudaMemcpy2D`. The cost-plan probe therefore records
+
+```text
+pcie_copy_calls = 2 * number_of_nonempty_factor_slices
+```
+
+per HIGH group and row.
+
+Across threshold points the analyzer fits
+
+```text
+H2D+D2H seconds ~= a_pcie * payload_bytes
+                  + b_pcie * copy_calls
+```
+
+with the same non-negative two-predictor fit used for CPU/GPU costs. It reports
+
+```text
+affine_calibration ... pcie_gib_s=... pcie_copy_overhead_us=...
+```
+
+and the planner evaluates a group's removable DMA time as
+
+```text
+roundtrip_bytes / pcie_rate
++ pcie_copy_calls * pcie_copy_overhead
+```
+
+A fully specified manual affine policy is therefore:
+
+```bash
+python3 scripts/tools/plan_cpu_high_groups.py high-cost.tsv \
+  --pcie-gib-s 38 \
+  --pcie-copy-overhead-us 5 \
+  --cpu-gcell-s 2.7 \
+  --group-overhead-us 15 \
+  --gpu-gstate-s 7.5 \
+  --gpu-group-overhead-us 8 \
+  --gpu-target-mib 12288 \
+  --overlap \
+  > cpu-high-overlap.groups
+```
+
+`ramstream32-cpu-high-sweep.sh` prefers the affine PCIe/CPU/GPU coefficients when they are identifiable and passes `--pcie-copy-overhead-us`, `--group-overhead-us`, and `--gpu-group-overhead-us` automatically. Each component independently falls back to the older rate-only estimate if its affine fit is unavailable.
+
+Empty zero-byte occupancy groups are excluded from affine fitting and planning because the production backend never executes them.
+
+## v5.11 persistent CPU HIGH workers
+
+The direct HIGH executor originally created and joined `CPU_HIGH_WORKERS` host threads once per grid row. v5.11 moves the unchanged direct recurrence behind `CpuHighDirectPersistentPool`: workers are created lazily on the first direct HIGH run, optionally bind `CPU_HIGH_CPU_LIST` once, then sleep on a generation condition variable between rows.
+
+The backend reports `cpu_high_persistent_workers=1` and `cpu_high_worker_start_s`. Worker startup is intentionally separate from `cpu_high_wall_s`; the latter measures dispatched HIGH generations rather than repeated thread lifecycle cost.
+
+The W=10 selftest runs the same persistent pool for two consecutive HIGH generations and compares the second result against the exact reference recurrence with the HIGH window applied twice.
+
+## v5.12 direct asynchronous HIGH dispatch
+
+The first overlap implementation still created one coordinator `std::thread` per row to call the CPU HIGH pool while the main thread drove CUDA. The persistent pool now exposes `start_run()` and `wait_run()` directly:
+
+```text
+start persistent CPU HIGH workers
+run GPU HIGH on the main thread
+wait for CPU HIGH generation
+run LOW window
+```
+
+This removes the last per-row coordinator thread from direct overlap. The final worker records CPU HIGH completion time before notifying the main thread, so `cpu_high_wall_s` does not accidentally include time spent waiting for a slower GPU branch. The backend reports `cpu_high_async_overlap=1`.
+
+Scratch HIGH mode retains its older coordinator-thread overlap path because it is a correctness baseline rather than the intended high-performance CPU route.
+
+## v5.13 persistent sparse LOW workers
+
+The sparse LOW executor had the same per-row host-thread lifecycle as the old HIGH executor. `CpuLowSparsePersistentPool` now reuses `CPU_WORKERS` across all rows while leaving `process_cpu_low_group_sparse()` unchanged. Jobs still use the same atomic dynamic queue; only thread construction/destruction is removed.
+
+The backend reports
+
+```text
+cpu_low_persistent_workers=1
+cpu_low_worker_start_s=...
+```
+
+and the W=10 selftest runs the same LOW pool for two consecutive generations, comparing against the exact LOW recurrence applied twice. This separately validates generation wake/sleep reuse instead of relying only on a one-shot result.
+
+After v5.11/v5.13, fitted `cpu_group_overhead_us` should be interpreted as residual per-group scheduling/pointer-setup/topology cost, not repeated host-thread creation. Hardware calibration should therefore be regenerated after these versions rather than reusing coefficients measured on v5.10 or earlier.
+
+## v5.14 allocation-free sparse LOW pointer workspace
+
+At n=27 the factor layout has exactly 45 main blocks and 15 blocked blocks. The sparse LOW job body previously constructed two small `std::vector<Count*>` pointer tables for every occupancy group. With up to 8192 fixed-HIGH occupancy groups and 28 rows, this could create hundreds of thousands of tiny heap allocations even though the table dimensions are compile-time constants.
+
+The job body now uses stack arrays sized directly from the factorization:
+
+```text
+main pointers    3 * (HIGH_LUT_K + 2)
+blocked pointers     (HIGH_LUT_K + 2)
+```
+
+with a runtime guard against layout mismatch. The recurrence, operation ordering, and authoritative addresses are unchanged. The backend reports `cpu_low_pointer_workspace=stack`.
+
+## v5.15 explicit sparse LOW affinity and provenance
+
+Persistent LOW workers accept a separate Linux CPU list:
+
+```bash
+CPU_HIGH_CPU_LIST='0-31' \
+CPU_LOW_CPU_LIST='32-63' \
+CPU_HIGH_MODE=direct \
+CPU_HIGH_OVERLAP=1 \
+./build/oneesan_cuda_gridfp_ramstream32_factorized_hybrid_sparse_n27 \
+  27 4294967291 12288 32
+```
+
+`CPU_LOW_CPU_LIST` is parsed by the same strict CPU-list parser as `CPU_HIGH_CPU_LIST`; malformed lists or affinity failures abort rather than silently changing benchmark conditions. LOW workers bind once at persistent-thread startup.
+
+The backend reports
+
+```text
+cpu_high_affinity=explicit|default
+cpu_low_affinity=explicit|default
+```
+
+and the threshold sweep, policy A/B harness, and stream-calibration harness record and explicitly propagate both lists. This also fixes the older harness behavior where `CPU_HIGH_CPU_LIST` could appear in metadata without being exported to the benchmark child process.
+
+Separate HIGH/LOW CPU lists are useful experimental controls, not a NUMA-memory-placement policy. LOW processing touches all fixed-HIGH occupancy groups, and the authoritative anonymous mappings still use ordinary Linux first-touch semantics with `MADV_HUGEPAGE` advice. No `mbind` policy is imposed yet.
+
+## v5.20 LOW scheduling as a HIGH calibration condition
+
+HIGH throughput is not independent of the LOW executor. LOW consumes the same authoritative System RAM, affects NUMA placement/cache state, and under repeated or overlapping experiments changes the machine state seen by CPU HIGH and PCIe DMA. Therefore the selected LOW schedule is part of the calibration condition.
+
+The production LOW modes are:
+
+```text
+CPU_LOW_SCHEDULE=dynamic
+CPU_LOW_SCHEDULE=sticky
+CPU_LOW_SCHEDULE=contiguous
+CPU_LOW_SCHEDULE=domain
+```
+
+`domain` additionally requires:
+
+```text
+CPU_LOW_DOMAIN_SIZE=<workers per modeled NUMA domain>
+```
+
+v5.20 refines the initial ordered domain boundaries by bounded local search using the actual exact-cell LPT makespan inside adjacent domains. The backend reports `cpu_low_domain_outer_normalized_cap`, `cpu_low_domain_refined_boundaries`, and `cpu_low_domain_refined_job_moves`. See `docs/ramstream32-cpu-low-scheduling.md` for the algorithm and static page-cut/Pareto analysis.
+
+The HIGH threshold sweep, policy A/B harness, and stream-weight calibration now propagate and record `CPU_LOW_SCHEDULE` and `CPU_LOW_DOMAIN_SIZE`, and verify the final solver provenance. Coefficients measured under one LOW schedule/domain configuration should not be silently reused under another.
+
+## Policy A/B and stream-weight calibration
+
+The generated non-monotone group policy can be compared directly with the best size threshold using alternating order. Example with a two-domain LOW layout:
+
+```bash
+GROUPS_FILE=/path/to/cpu-high.groups \
+THRESHOLD_MIB=256 \
+CPU_HIGH_OVERLAP=1 \
+CPU_HIGH_CPU_LIST='0-31' \
+CPU_LOW_CPU_LIST='32-95' \
+CPU_LOW_SCHEDULE=domain \
+CPU_LOW_DOMAIN_SIZE=32 \
+CPU_WORKERS=64 \
+CPU_HIGH_WORKERS=32 \
+REPEATS=4 \
+bash scripts/bench/ramstream32-cpu-high-policy-ab.sh
+```
+
+For separate NN/NRNL/BLOCK/CROSS CPU weights, the repository also contains:
+
+```text
+scripts/tools/design_cpu_high_stream_calibration.py
+scripts/bench/ramstream32-cpu-high-stream-calibration.sh
+scripts/tools/fit_cpu_high_stream_weights.py
+```
+
+The design tool chooses topology-diverse groups by greedily maximizing the log determinant of the normalized five-feature Gram matrix (four stream counts plus fixed overhead). The implementation uses a Cholesky log-determinant because the ridge-regularized Gram matrix is symmetric positive definite. The fit tool then performs a non-negative stream-cost fit and emits planner-compatible relative weights plus a holdout prediction error.
+
+## NUMA page-boundary analysis
+
+The authoritative arrays are anonymous `mmap` allocations with `MADV_HUGEPAGE`. A fixed LOW-occupancy group is contiguous only within each HIGH row, so neighboring occupancy groups can share the first/last VM page of those row slices.
+
+The exact cost plan carries safe upper bounds for authoritative bytes that can lie on group-boundary pages for both 4 KiB and 2 MiB page sizes. Summarize them with:
+
+```bash
+python3 scripts/tools/analyze_cpu_high_numa.py high-cost.tsv \
+  --groups-file cpu-high.groups
+```
+
+or
+
+```bash
+python3 scripts/tools/analyze_cpu_high_numa.py high-cost.tsv \
+  --threshold-mib 128 --threshold-mib 256 --threshold-mib 512
+```
+
+The reported page-boundary fractions are conservative upper bounds, not measured remote-NUMA traffic. A high 2 MiB exposure with low 4 KiB exposure argues against naive per-group `mbind` while transparent huge pages remain enabled.
+
+## n=27 size-threshold reference points
+
+| threshold | CPU groups | PCIe removed | PCIe remaining |
+|---:|---:|---:|---:|
+| 64 MiB | 3,473 | 2.6766 TiB | 103.4111 TiB |
+| 128 MiB | 9,908 | 19.6619 TiB | 86.4258 TiB |
+| 256 MiB | 12,911 | 38.2452 TiB | 67.8425 TiB |
+| 512 MiB | 14,913 | 61.2090 TiB | 44.8787 TiB |
+| 1024 MiB | 15,914 | 82.5714 TiB | 23.5163 TiB |
+
+These are transfer-volume reference points, not predicted wall-time improvements.
+
+## One-command calibration
+
+For direct mode, the sweep builds the exact cost plan automatically, calibrates the machine model, and emits a candidate group policy. Keep the LOW schedule/domain fixed for the entire sweep:
+
+```bash
+N=27 \
+CPU_HIGH_MODE=direct \
+CPU_HIGH_OVERLAP=1 \
+CPU_HIGH_CPU_LIST='0-31' \
+CPU_LOW_CPU_LIST='32-95' \
+CPU_LOW_SCHEDULE=domain \
+CPU_LOW_DOMAIN_SIZE=32 \
+CPU_WORKERS=64 \
+CPU_HIGH_WORKERS=32 \
+THRESHOLDS='0 64 128 256 512 1024' \
+REPEATS=2 \
+bash scripts/bench/ramstream32-cpu-high-sweep.sh
+```
+
+Generated artifacts include the raw sweep TSV, metadata, exact group-cost TSV, analysis output, a candidate `.groups` policy file, and the NUMA page-exposure summary. Compare overlap 0 and 1 on the target host because the calibrated rates are contention-regime specific.
+
+Set `COST_PLAN=none` to disable automatic cost-plan generation or provide `COST_PLAN=/path/to/existing.tsv` to reuse one.
+
+## Validation
+
+`.github/workflows/ramstream32-sparse-ci.yml` covers W=22/W=28 compilation and v5.20 plan provenance, default/explicit affinity, all four LOW scheduling modes, strict domain-size validation, domain boundary-refinement metrics, scratch/direct CPU HIGH plans, all four direct stream classes, explicit group-file selection, HIGH/LOW affinity parser behavior, the W=10 exhaustive reference comparison, two-generation persistent LOW and HIGH checks, the deterministic LOW domain-refiner case, concurrent disjoint HIGH execution, and the exact group-cost probe including `gpu_state_steps` and `pcie_copy_calls`.
+
+`.github/workflows/ramstream32-bench-script-ci.yml` syntax-checks the sweep/build scripts, verifies LOW schedule/domain propagation in the HIGH calibration harness, compiles the Python tools, validates affine PCIe/CPU/GPU calibration on synthetic data with known throughput/overhead coefficients, checks sequential and overlap-critical-path group planning, and validates the 4 KiB/2 MiB NUMA page-exposure analyzer.
+
+## Next experiments
+
+The remaining large opportunities are increasingly memory-topology and model-fitting problems:
+
+1. run the n=27 LOW topology preflight and four-way timing under the actual socket-local CPU lists; compare v5.20 domain imbalance/page cuts with sticky and contiguous before adding a memory-placement policy;
+2. measure actual NUMA placement of sampled authoritative pages and compare the observed node distribution against LOW domain ownership, HIGH worker affinity, and GPU DMA behavior;
+3. regenerate targeted NN/NRNL/BLOCK/CROSS HIGH weights on v5.20 under the selected LOW schedule/domain condition, then compare the resulting non-monotone policy against the best threshold with the alternating A/B harness;
+4. only after those measurements, evaluate THP, 4 KiB pages, interleave, or coarse socket-local placement rather than imposing per-group `mbind` blindly;
+5. for multi-GPU B300 nodes, keep the largest HIGH occupancy groups resident across more than one local step when dependencies permit, while CPU handles the long tail of small groups.

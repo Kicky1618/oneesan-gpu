@@ -1,0 +1,74 @@
+name: B300 Stage R preflight
+
+on:
+  push:
+    paths:
+      - 'scripts/build/gen-b300-mainrec-ilp2-pair-block-load-policy.py'
+      - 'scripts/build/b300-forced-nextgen-hybrid8-stager-ilp2-load-policy.sh'
+      - 'scripts/build/gen-b300-grand-selector-stager.py'
+      - 'scripts/build/gen-b300-grand-firstpass-stager.py'
+      - 'scripts/bench/b300-mainrec-ilp2-pair-block-load-policy-preflight.sh'
+      - 'scripts/bench/b300-nextgen-hybrid8-stager-ilp2-load-policy-sweep.sh'
+      - 'scripts/bench/b300-nextgen-hybrid8-stager-ilp2-load-policy-staged-calibrate.sh'
+      - 'scripts/bench/b300-stager-preflight.sh'
+      - 'scripts/bench/b300-grand-stager-contract-preflight.sh'
+      - 'scripts/bench/b300-grand-stager-firstpass-preflight.sh'
+      - 'scripts/bench/b300-grand-stager-exact-promotion-preflight.sh'
+      - 'scripts/bench/b300-grand-latest-entrypoint-preflight.sh'
+      - 'scripts/bench/b300-latest-environment-preflight-test.sh'
+      - 'scripts/run/b300x8-nextgen-hybrid8-stager-ilp2-load-policy-staged-fullprime-race.sh'
+      - 'scripts/run/b300x8-joint-nextself-hybrid8-select-stager.sh'
+      - 'scripts/run/b300x8-grand-firstpass-stager.sh'
+      - 'scripts/run/b300x8-grand-promote-exact-stager.sh'
+      - 'scripts/run/b300x8-grand-firstpass-latest.sh'
+      - 'scripts/run/b300x8-grand-promote-exact-latest.sh'
+      - 'scripts/run/b300x8-grand-latest-preflight.sh'
+      - '.github/workflows/b300-stager-preflight.yml'
+  pull_request:
+    paths:
+      - 'scripts/build/gen-b300-mainrec-ilp2-pair-block-load-policy.py'
+      - 'scripts/build/b300-forced-nextgen-hybrid8-stager-ilp2-load-policy.sh'
+      - 'scripts/build/gen-b300-grand-selector-stager.py'
+      - 'scripts/build/gen-b300-grand-firstpass-stager.py'
+      - 'scripts/bench/b300-mainrec-ilp2-pair-block-load-policy-preflight.sh'
+      - 'scripts/bench/b300-nextgen-hybrid8-stager-ilp2-load-policy-sweep.sh'
+      - 'scripts/bench/b300-nextgen-hybrid8-stager-ilp2-load-policy-staged-calibrate.sh'
+      - 'scripts/bench/b300-stager-preflight.sh'
+      - 'scripts/bench/b300-grand-stager-contract-preflight.sh'
+      - 'scripts/bench/b300-grand-stager-firstpass-preflight.sh'
+      - 'scripts/bench/b300-grand-stager-exact-promotion-preflight.sh'
+      - 'scripts/bench/b300-grand-latest-entrypoint-preflight.sh'
+      - 'scripts/bench/b300-latest-environment-preflight-test.sh'
+      - 'scripts/run/b300x8-nextgen-hybrid8-stager-ilp2-load-policy-staged-fullprime-race.sh'
+      - 'scripts/run/b300x8-joint-nextself-hybrid8-select-stager.sh'
+      - 'scripts/run/b300x8-grand-firstpass-stager.sh'
+      - 'scripts/run/b300x8-grand-promote-exact-stager.sh'
+      - 'scripts/run/b300x8-grand-firstpass-latest.sh'
+      - 'scripts/run/b300x8-grand-promote-exact-latest.sh'
+      - 'scripts/run/b300x8-grand-latest-preflight.sh'
+      - '.github/workflows/b300-stager-preflight.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  preflight:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - name: Validate Stage R ILP2 pair block transform
+        run: bash scripts/bench/b300-mainrec-ilp2-pair-block-load-policy-preflight.sh
+      - name: Validate Stage R composition staged and promotion contract
+        run: bash scripts/bench/b300-stager-preflight.sh
+      - name: Validate Stage R grand selector contract
+        run: bash scripts/bench/b300-grand-stager-contract-preflight.sh
+      - name: Validate Stage R grand firstpass contract
+        run: bash scripts/bench/b300-grand-stager-firstpass-preflight.sh
+      - name: Validate Stage R exact provenance
+        run: bash scripts/bench/b300-grand-stager-exact-promotion-preflight.sh
+      - name: Validate latest Stage R entrypoints
+        run: bash scripts/bench/b300-grand-latest-entrypoint-preflight.sh
+      - name: Validate latest Stage R environment preflight
+        run: bash scripts/bench/b300-latest-environment-preflight-test.sh

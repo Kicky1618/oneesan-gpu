@@ -1,0 +1,163 @@
+name: ramstream32 LOW schedule harness CI
+
+on:
+  push:
+    paths:
+      - 'scripts/bench/ramstream32-cpu-low-schedule-ab.sh'
+      - 'scripts/bench/ramstream32-cpu-low-schedule-compare.sh'
+      - 'scripts/bench/ramstream32-cpu-low-schedule-plan-sweep.sh'
+      - 'scripts/bench/ramstream32-cpu-low-domain-refine-ab.sh'
+      - 'scripts/bench/ramstream32-cpu-low-domain-refine-plan-ab.sh'
+      - 'scripts/bench/ramstream32-cpu-low-domain-page-ab.sh'
+      - 'scripts/bench/ramstream32-cpu-low-domain-page-plan-ab.sh'
+      - 'scripts/tools/analyze_cpu_low_schedule_plan_sweep.py'
+      - 'docs/ramstream32-cpu-low-scheduling.md'
+      - 'docs/ramstream32-cpu-low-page-aware.md'
+      - '.github/workflows/ramstream32-low-schedule-script-ci.yml'
+  pull_request:
+    paths:
+      - 'scripts/bench/ramstream32-cpu-low-schedule-ab.sh'
+      - 'scripts/bench/ramstream32-cpu-low-schedule-compare.sh'
+      - 'scripts/bench/ramstream32-cpu-low-schedule-plan-sweep.sh'
+      - 'scripts/bench/ramstream32-cpu-low-domain-refine-ab.sh'
+      - 'scripts/bench/ramstream32-cpu-low-domain-refine-plan-ab.sh'
+      - 'scripts/bench/ramstream32-cpu-low-domain-page-ab.sh'
+      - 'scripts/bench/ramstream32-cpu-low-domain-page-plan-ab.sh'
+      - 'scripts/tools/analyze_cpu_low_schedule_plan_sweep.py'
+      - 'docs/ramstream32-cpu-low-scheduling.md'
+      - 'docs/ramstream32-cpu-low-page-aware.md'
+      - '.github/workflows/ramstream32-low-schedule-script-ci.yml'
+  workflow_dispatch:
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Syntax
+        shell: bash
+        run: |
+          bash -n scripts/bench/ramstream32-cpu-low-schedule-ab.sh
+          bash -n scripts/bench/ramstream32-cpu-low-schedule-compare.sh
+          bash -n scripts/bench/ramstream32-cpu-low-schedule-plan-sweep.sh
+          bash -n scripts/bench/ramstream32-cpu-low-domain-refine-ab.sh
+          bash -n scripts/bench/ramstream32-cpu-low-domain-refine-plan-ab.sh
+          bash -n scripts/bench/ramstream32-cpu-low-domain-page-ab.sh
+          bash -n scripts/bench/ramstream32-cpu-low-domain-page-plan-ab.sh
+          python3 -m py_compile scripts/tools/analyze_cpu_low_schedule_plan_sweep.py
+      - name: Four-way schedule provenance
+        shell: bash
+        run: |
+          f=scripts/bench/ramstream32-cpu-low-schedule-compare.sh
+          grep -Fq 'dynamic-sticky-contiguous-domain' "$f"
+          grep -Fq 'order_design=cyclic-latin-4' "$f"
+          grep -Fq 'CPU_LOW_DOMAIN_REFINE="${CPU_LOW_DOMAIN_REFINE:-1}"' "$f"
+          grep -Fq 'CPU_LOW_DOMAIN_PAGE_TIEBREAK="${CPU_LOW_DOMAIN_PAGE_TIEBREAK:-0}"' "$f"
+          grep -Fq 'cpu_low_domain_page_tiebreak=$CPU_LOW_DOMAIN_PAGE_TIEBREAK' "$f"
+          grep -Fq 'page provenance mismatch' "$f"
+          grep -Fq 'domain_vs_dynamic_wall' "$f"
+          grep -Fq 'RAMSTREAM_NUMA_SAMPLE_MIB=0' "$f"
+      - name: Domain refinement runtime A/B design
+        shell: bash
+        run: |
+          f=scripts/bench/ramstream32-cpu-low-domain-refine-ab.sh
+          grep -Fq 'variants=refine0,refine1' "$f"
+          grep -Fq 'order_design=alternating-pairs' "$f"
+          grep -Fq 'CPU_LOW_DOMAIN_REFINE="$refine"' "$f"
+          grep -Fq 'CPU_LOW_DOMAIN_PAGE_TIEBREAK=0' "$f"
+          grep -Fq 'cpu_low_domain_page_tiebreak=0' "$f"
+          grep -Fq 'page tie-break leaked into refine A/B' "$f"
+          grep -Fq 'refine stdout provenance mismatch' "$f"
+          grep -Fq 'refine_speedup' "$f"
+          grep -Fq 'refine_low_speedup' "$f"
+          grep -Fq 'refine_extra_build_s' "$f"
+      - name: Domain refinement preflight A/B design
+        shell: bash
+        run: |
+          f=scripts/bench/ramstream32-cpu-low-domain-refine-plan-ab.sh
+          grep -Fq 'CONFIGS="${CONFIGS:-32:16 64:32 96:48 128:64}"' "$f"
+          grep -Fq 'variants=refine0,refine1' "$f"
+          grep -Fq 'CPU_LOW_DOMAIN_PAGE_TIEBREAK=0' "$f"
+          grep -Fq 'cpu_low_domain_page_tiebreak=0' "$f"
+          grep -Fq 'page tie-break leaked into refine preflight' "$f"
+          grep -Fq 'refinement max-worker regression' "$f"
+          grep -Fq 'balance_page_tradeoff' "$f"
+          grep -Fq 'page_only_improvement' "$f"
+          grep -Fq 'imbalance_speedup=' "$f"
+      - name: Domain page runtime A/B design
+        shell: bash
+        run: |
+          f=scripts/bench/ramstream32-cpu-low-domain-page-ab.sh
+          grep -Fq 'variants=page0,page1' "$f"
+          grep -Fq 'order_design=alternating-pairs' "$f"
+          grep -Fq 'page_objective=max_guard-page-sum-v5.23' "$f"
+          grep -Fq 'CPU_LOW_DOMAIN_REFINE=1' "$f"
+          grep -Fq 'CPU_LOW_DOMAIN_PAGE_TIEBREAK="$page"' "$f"
+          grep -Fq 'page stdout provenance mismatch' "$f"
+          grep -Fq 'page objective mismatch' "$f"
+          grep -Fq 'candidate_evaluations' "$f"
+          grep -Fq 'max_guard_rejections' "$f"
+          grep -Fq 'page_improving_moves' "$f"
+          grep -Fq 'page_tie_load_moves' "$f"
+          grep -Fq 'page_improve_sum_increase_moves' "$f"
+          grep -Fq 'page max-worker regression' "$f"
+          grep -Fq 'page penalty regression' "$f"
+          grep -Fq 'page_speedup' "$f"
+          grep -Fq 'page_low_speedup' "$f"
+          grep -Fq 'page_extra_build_s' "$f"
+          grep -Fq 'RAMSTREAM_NUMA_SAMPLE_MIB=0' "$f"
+      - name: Domain page preflight A/B design
+        shell: bash
+        run: |
+          f=scripts/bench/ramstream32-cpu-low-domain-page-plan-ab.sh
+          grep -Fq 'CONFIGS="${CONFIGS:-32:16 64:32 96:48 128:64}"' "$f"
+          grep -Fq 'cpu_low_domain_refine=1' "$f"
+          grep -Fq 'CPU_LOW_DOMAIN_PAGE_TIEBREAK="$page"' "$f"
+          grep -Fq 'local page penalty regression' "$f"
+          grep -Fq 'page tie-break max-worker regression' "$f"
+          grep -Fq 'global_page_improvement' "$f"
+          grep -Fq 'global_page_tradeoff' "$f"
+          grep -Fq 'cross_domain_2m_delta=' "$f"
+          grep -Fq 'page_extra_build_s=' "$f"
+      - name: Topology sweep and Pareto analyzer
+        shell: bash
+        run: |
+          f=scripts/bench/ramstream32-cpu-low-schedule-plan-sweep.sh
+          grep -Fq 'CONFIGS="${CONFIGS:-32:16 64:32 96:48 128:64}"' "$f"
+          grep -Fq 'CPU_LOW_DOMAIN_REFINE=1' "$f"
+          grep -Fq 'CPU_LOW_DOMAIN_PAGE_TIEBREAK=0' "$f"
+          grep -Fq 'cpu_low_domain_refine=$CPU_LOW_DOMAIN_REFINE' "$f"
+          grep -Fq 'cpu_low_domain_page_tiebreak=$CPU_LOW_DOMAIN_PAGE_TIEBREAK' "$f"
+          grep -Fq 'page provenance mismatch for $cfg' "$f"
+          grep -Fq -- '--domain-size "$domain"' "$f"
+          grep -Fq 'domain_imbalance' "$f"
+          grep -Fq 'domain_refined_boundaries' "$f"
+          grep -Fq 'analyze_cpu_low_schedule_plan_sweep.py' "$f"
+          cat >/tmp/low-sweep.tsv <<'EOF'
+          workers	domain_size	domains	lpt_imbalance	lpt_cross_domain_4k	lpt_cross_domain_2m	contiguous_imbalance	contiguous_cross_domain_4k	contiguous_cross_domain_2m	hybrid_imbalance	hybrid_cross_domain_4k	hybrid_cross_domain_2m	hybrid_cross_worker_4k	hybrid_cross_worker_2m	hybrid_domain_cap	hybrid_active_domains	raw
+          32	16	2	1.000	100	100	1.200	10	10	1.050	20	20	40	40	1000	2	x
+          64	32	2	0.990	120	120	1.150	8	8	1.020	15	15	35	35	900	2	y
+          EOF
+          python3 scripts/tools/analyze_cpu_low_schedule_plan_sweep.py /tmp/low-sweep.tsv >/tmp/pareto.txt
+          grep -Fq 'schemes=contiguous,domain,lpt' /tmp/pareto.txt
+          grep -Fq 'pareto scheme=domain workers=64 domain_size=32' /tmp/pareto.txt
+      - name: Documentation
+        shell: bash
+        run: |
+          d=docs/ramstream32-cpu-low-scheduling.md
+          p=docs/ramstream32-cpu-low-page-aware.md
+          grep -Fq 'core backend banner remains v5.22' "$d"
+          grep -Fq 'v5.23 relaxed objective' "$d"
+          grep -Fq 'CPU_LOW_DOMAIN_REFINE' "$d"
+          grep -Fq 'CPU_LOW_DOMAIN_PAGE_TIEBREAK' "$d"
+          grep -Fq 'candidate_pair_max <= current_pair_max' "$d"
+          grep -Fq 'page_improve_sum_increase_moves' "$d"
+          grep -Fq 'global unique' "$d"
+          grep -Fq 'ramstream32-cpu-low-domain-refine-ab.sh' "$p"
+          grep -Fq 'ramstream32-cpu-low-domain-refine-plan-ab.sh' "$p"
+          grep -Fq 'ramstream32-cpu-low-domain-page-ab.sh' "$p"
+          grep -Fq 'ramstream32-cpu-low-domain-page-plan-ab.sh' "$p"
+          grep -Fq 'standard topology/Pareto sweep' "$p"
+          grep -Fq 'objective=max_guard-page-sum-v5.23' "$p"
+          grep -Fq 'page_improve_sum_increase_moves' "$p"
+          grep -Fq 'global unique' "$p"

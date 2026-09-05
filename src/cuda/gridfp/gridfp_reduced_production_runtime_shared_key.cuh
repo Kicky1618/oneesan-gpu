@@ -1,0 +1,444 @@
+#pragma once
+
+#include "gridfp_reduced_production_discovery_device.cuh"
+
+namespace oneesan::gridfp::reducedprod {
+
+#ifndef RP_RUNTIME_PACK_SHARED_KEYS
+#define RP_RUNTIME_PACK_SHARED_KEYS 1
+#endif
+#ifndef RP_RUNTIME_FAST_DISCOVERY_VALIDITY
+#define RP_RUNTIME_FAST_DISCOVERY_VALIDITY 1
+#endif
+#ifndef RP_RUNTIME_DISCOVERY_ENDPOINT_SCAN
+#define RP_RUNTIME_DISCOVERY_ENDPOINT_SCAN 1
+#endif
+#ifndef RP_RUNTIME_FIND_RECENT_FIRST
+#define RP_RUNTIME_FIND_RECENT_FIRST 0
+#endif
+#ifndef RP_RUNTIME_FIND_RECENT_UNROLLED
+#define RP_RUNTIME_FIND_RECENT_UNROLLED 1
+#endif
+#ifndef RP_RUNTIME_FIND_SIGNATURE_FILTER
+#define RP_RUNTIME_FIND_SIGNATURE_FILTER 0
+#endif
+static_assert(RP_RUNTIME_PACK_SHARED_KEYS == 0 || RP_RUNTIME_PACK_SHARED_KEYS == 1,
+              "RP_RUNTIME_PACK_SHARED_KEYS must be 0 or 1");
+static_assert(RP_RUNTIME_FAST_DISCOVERY_VALIDITY == 0 ||
+              RP_RUNTIME_FAST_DISCOVERY_VALIDITY == 1,
+              "RP_RUNTIME_FAST_DISCOVERY_VALIDITY must be 0 or 1");
+static_assert(RP_RUNTIME_DISCOVERY_ENDPOINT_SCAN == 0 ||
+              RP_RUNTIME_DISCOVERY_ENDPOINT_SCAN == 1,
+              "RP_RUNTIME_DISCOVERY_ENDPOINT_SCAN must be 0 or 1");
+static_assert(RP_RUNTIME_FIND_RECENT_FIRST == 0 || RP_RUNTIME_FIND_RECENT_FIRST == 1,
+              "RP_RUNTIME_FIND_RECENT_FIRST must be 0 or 1");
+static_assert(RP_RUNTIME_FIND_RECENT_UNROLLED == 0 ||
+              RP_RUNTIME_FIND_RECENT_UNROLLED == 1,
+              "RP_RUNTIME_FIND_RECENT_UNROLLED must be 0 or 1");
+static_assert(RP_RUNTIME_FIND_SIGNATURE_FILTER == 0 ||
+              RP_RUNTIME_FIND_SIGNATURE_FILTER == 1,
+              "RP_RUNTIME_FIND_SIGNATURE_FILTER must be 0 or 1");
+
+static constexpr std::uint64_t RP_RUNTIME_SHARED_BLOCKED_BIT = 1ULL << 63;
+static constexpr std::uint64_t RP_RUNTIME_SHARED_MATE_MASK =
+    RP_RUNTIME_SHARED_BLOCKED_BIT - 1ULL;
+static_assert(2 * RP_MAX_W < 63,
+              "packed shared key requires one free high bit");
+
+#if RP_RUNTIME_PACK_SHARED_KEYS
+using RuntimeSharedKey = std::uint64_t;
+#else
+using RuntimeSharedKey = DeviceKey;
+#endif
+
+__device__ __forceinline__ RuntimeSharedKey runtime_shared_key_encode(DeviceKey k) {
+#if RP_RUNTIME_PACK_SHARED_KEYS
+    return std::uint64_t(k.mate) |
+           (k.blocked ? RP_RUNTIME_SHARED_BLOCKED_BIT : 0ULL);
+#else
+    return k;
+#endif
+}
+
+__device__ __forceinline__ DeviceKey runtime_shared_key_decode(RuntimeSharedKey k) {
+#if RP_RUNTIME_PACK_SHARED_KEYS
+    return DeviceKey{
+        MateID(std::uint64_t(k) & RP_RUNTIME_SHARED_MATE_MASK),
+        std::uint8_t((std::uint64_t(k) & RP_RUNTIME_SHARED_BLOCKED_BIT) != 0)};
+#else
+    return k;
+#endif
+}
+
+__device__ __forceinline__ std::uint64_t runtime_shared_key_signature_bit(DeviceKey k) {
+    std::uint64_t x = std::uint64_t(k.mate) |
+        (k.blocked ? RP_RUNTIME_SHARED_BLOCKED_BIT : 0ULL);
+    x ^= x >> 7;
+    x ^= x >> 14;
+    return 1ULL << (x & 63ULL);
+}
+
+__device__ __forceinline__ int runtime_find_shared_key(
+    const RuntimeSharedKey* a, int n, DeviceKey k
+) {
+#if RP_RUNTIME_PACK_SHARED_KEYS
+    const RuntimeSharedKey needle = runtime_shared_key_encode(k);
+#if RP_RUNTIME_FIND_RECENT_FIRST
+#if RP_RUNTIME_FIND_RECENT_UNROLLED
+    // Runtime components are capped at 20 pairs. A fallthrough switch preserves
+    // exact recent-first order while removing loop counter/back-edge control.
+    if (n <= 20) {
+#define RP_RUNTIME_FIND_CHECK(I) \
+        case I: if (a[(I) - 1] == needle) return (I) - 1; [[fallthrough]]
+        switch (n) {
+        RP_RUNTIME_FIND_CHECK(20); RP_RUNTIME_FIND_CHECK(19);
+        RP_RUNTIME_FIND_CHECK(18); RP_RUNTIME_FIND_CHECK(17);
+        RP_RUNTIME_FIND_CHECK(16); RP_RUNTIME_FIND_CHECK(15);
+        RP_RUNTIME_FIND_CHECK(14); RP_RUNTIME_FIND_CHECK(13);
+        RP_RUNTIME_FIND_CHECK(12); RP_RUNTIME_FIND_CHECK(11);
+        RP_RUNTIME_FIND_CHECK(10); RP_RUNTIME_FIND_CHECK(9);
+        RP_RUNTIME_FIND_CHECK(8); RP_RUNTIME_FIND_CHECK(7);
+        RP_RUNTIME_FIND_CHECK(6); RP_RUNTIME_FIND_CHECK(5);
+        RP_RUNTIME_FIND_CHECK(4); RP_RUNTIME_FIND_CHECK(3);
+        RP_RUNTIME_FIND_CHECK(2); RP_RUNTIME_FIND_CHECK(1);
+        case 0: break;
+        default: break;
+        }
+#undef RP_RUNTIME_FIND_CHECK
+        return -1;
+    }
+#endif
+    for (int i = n - 1; i >= 0; --i)
+        if (a[i] == needle) return i;
+#else
+    for (int i = 0; i < n; ++i)
+        if (a[i] == needle) return i;
+#endif
+#else
+#if RP_RUNTIME_FIND_RECENT_FIRST
+    for (int i = n - 1; i >= 0; --i)
+        if (key_equal(a[i], k)) return i;
+#else
+    for (int i = 0; i < n; ++i)
+        if (key_equal(a[i], k)) return i;
+#endif
+#endif
+    return -1;
+}
+
+__device__ __forceinline__ int runtime_find_shared_key_filtered(
+    const RuntimeSharedKey* a,
+    int n,
+    DeviceKey k,
+    std::uint64_t signature
+) {
+#if RP_RUNTIME_FIND_SIGNATURE_FILTER
+    if ((signature & runtime_shared_key_signature_bit(k)) == 0) return -1;
+#else
+    (void)signature;
+#endif
+    return runtime_find_shared_key(a, n, k);
+}
+
+struct RuntimeSharedKeySetSink {
+    RuntimeSharedKey* out = nullptr;
+    int* n = nullptr;
+    int cap = 0;
+    std::uint64_t* signature = nullptr;
+    __device__ __forceinline__ bool emit(DeviceKey k) {
+#if RP_RUNTIME_FIND_SIGNATURE_FILTER
+        const std::uint64_t bit = runtime_shared_key_signature_bit(k);
+        if (!signature || ((*signature & bit) != 0)) {
+            if (runtime_find_shared_key(out, *n, k) >= 0) return true;
+        }
+#else
+        if (runtime_find_shared_key(out, *n, k) >= 0) return true;
+#endif
+        if (*n >= cap) return false;
+        out[(*n)++] = runtime_shared_key_encode(k);
+#if RP_RUNTIME_FIND_SIGNATURE_FILTER
+        if (signature) *signature |= bit;
+#endif
+        return true;
+    }
+};
+
+struct RuntimeSharedMirroredKeySetSink {
+    RuntimeSharedKeySetSink sink{};
+    int W = 0;
+    __device__ __forceinline__ bool emit(DeviceKey k) {
+        return sink.emit(mirror_key_device(k, W));
+    }
+};
+
+enum RuntimeDiscoveryValidityHint : std::uint8_t {
+    RP_RUNTIME_DISCOVERY_CHECK_FULL = 0,
+    RP_RUNTIME_DISCOVERY_KNOWN_VALID = 1,
+    RP_RUNTIME_DISCOVERY_RL_FROM_VALID_NN = 2,
+};
+
+__device__ __forceinline__ bool runtime_discovery_rl_candidate_valid(
+    MateID x, int W, int p
+) {
+#if RP_RUNTIME_FAST_DISCOVERY_VALIDITY
+    const int first_high = p + 1;
+    const MateID prefix = first_high >= W ? 0 : (x >> (2 * first_high));
+    constexpr MateID EVEN = 0x5555555555555555ULL;
+    const int r = __popcll(prefix & EVEN);
+    const int l = __popcll((prefix >> 1) & EVEN);
+    return 1 + l - r > 0;
+#else
+    return valid_mate_device(x, W);
+#endif
+}
+
+__device__ __forceinline__ bool runtime_discovery_candidate_valid(
+    MateID x, int W, int p, RuntimeDiscoveryValidityHint hint
+) {
+#if RP_RUNTIME_FAST_DISCOVERY_VALIDITY
+    if (hint == RP_RUNTIME_DISCOVERY_KNOWN_VALID) return true;
+    if (hint == RP_RUNTIME_DISCOVERY_RL_FROM_VALID_NN)
+        return runtime_discovery_rl_candidate_valid(x, W, p);
+#endif
+    return valid_mate_device(x, W);
+}
+
+__device__ __forceinline__ std::uint32_t runtime_discovery_endpoint_mask(
+    MateID mate, int W
+) {
+    std::uint64_t x = (std::uint64_t(mate) | (std::uint64_t(mate) >> 1)) &
+                      0x5555555555555555ULL;
+    x = (x | (x >> 1)) & 0x3333333333333333ULL;
+    x = (x | (x >> 2)) & 0x0f0f0f0f0f0f0f0fULL;
+    x = (x | (x >> 4)) & 0x00ff00ff00ff00ffULL;
+    x = (x | (x >> 8)) & 0x0000ffff0000ffffULL;
+    x = (x | (x >> 16)) & 0x00000000ffffffffULL;
+    std::uint32_t out = static_cast<std::uint32_t>(x);
+    if (W < 32) out &= (std::uint32_t(1) << W) - 1u;
+    return out;
+}
+
+template<class Sink>
+__device__ __forceinline__ bool runtime_discover_blocked_include_candidate_forward(
+    MateID x, MateID blocked_dest, int W, int p,
+    RuntimeDiscoveryValidityHint hint, Sink& sink
+) {
+#if RP_RUNTIME_FAST_DISCOVERY_VALIDITY
+    if (hint == RP_RUNTIME_DISCOVERY_CHECK_FULL) {
+        const IncludeResult z = include_horizontal(x, W, p);
+        if (!z.valid || !z.blocked || z.mate != blocked_dest) return true;
+        if (!valid_mate_device(x, W)) return true;
+        return sink.emit(DeviceKey{x, 0});
+    }
+#endif
+    if (!runtime_discovery_candidate_valid(x, W, p, hint)) return true;
+    const IncludeResult z = include_horizontal(x, W, p);
+    if (!z.valid || !z.blocked || z.mate != blocked_dest) return true;
+    return sink.emit(DeviceKey{x, 0});
+}
+
+template<class Sink>
+__device__ __forceinline__ bool runtime_discover_blocked_include_preimages_forward(
+    MateID b, int W, int p, Sink& sink
+) {
+    if (is_endpoint(mget(b, p - 1))) {
+        const MateID x = minsert(b, p, N);
+#if RP_RUNTIME_FAST_DISCOVERY_VALIDITY
+        if (!sink.emit(DeviceKey{x, 0})) return false;
+#else
+        if (!runtime_discover_blocked_include_candidate_forward(
+                x, b, W, p, RP_RUNTIME_DISCOVERY_KNOWN_VALID, sink))
+            return false;
+#endif
+    }
+
+    const MateID d = minsert(b, p - 1, N);
+    if (p <= 0 || p >= W || mpair(d, p) != NN) return true;
+
+    const MateID rl = msetpair(d, p, RL);
+#if RP_RUNTIME_FAST_DISCOVERY_VALIDITY
+    if (runtime_discovery_rl_candidate_valid(rl, W, p)) {
+        if (!sink.emit(DeviceKey{rl, 0})) return false;
+    }
+#else
+    if (!runtime_discover_blocked_include_candidate_forward(
+            rl, b, W, p, RP_RUNTIME_DISCOVERY_RL_FROM_VALID_NN, sink))
+        return false;
+#endif
+
+#if RP_RUNTIME_DISCOVERY_ENDPOINT_SCAN
+    const std::uint32_t endpoints = runtime_discovery_endpoint_mask(d, W);
+    std::uint32_t left = p <= 1 ? 0u :
+        (endpoints & ((std::uint32_t(1) << (p - 1)) - 1u));
+    int bal = 0;
+    while (left) {
+        const int q = 31 - __clz(left);
+        const MateValue v = mget(d, q);
+        if (bal == 0 && v == L) {
+            MateID x = msetpair(d, p, LL);
+            x = mset(x, q, R);
+#if RP_RUNTIME_FAST_DISCOVERY_VALIDITY
+            if (!sink.emit(DeviceKey{x, 0})) return false;
+#else
+            if (!runtime_discover_blocked_include_candidate_forward(
+                    x, b, W, p, RP_RUNTIME_DISCOVERY_CHECK_FULL, sink))
+                return false;
+#endif
+        }
+        if (v == L) ++bal;
+        else --bal;
+        left ^= std::uint32_t(1) << q;
+        if (bal < 0) break;
+    }
+
+    const std::uint32_t width_mask =
+        W == 32 ? ~0u : ((std::uint32_t(1) << W) - 1u);
+    const std::uint32_t low_mask =
+        (std::uint32_t(1) << (p + 1)) - 1u;
+    std::uint32_t right = endpoints & width_mask & ~low_mask;
+    bal = 0;
+    while (right) {
+        const int q = __ffs(right) - 1;
+        const MateValue v = mget(d, q);
+        if (bal == 0 && v == R) {
+            MateID x = msetpair(d, p, RR);
+            x = mset(x, q, L);
+#if RP_RUNTIME_FAST_DISCOVERY_VALIDITY
+            if (!sink.emit(DeviceKey{x, 0})) return false;
+#else
+            if (!runtime_discover_blocked_include_candidate_forward(
+                    x, b, W, p, RP_RUNTIME_DISCOVERY_CHECK_FULL, sink))
+                return false;
+#endif
+        }
+        if (v == R) ++bal;
+        else --bal;
+        right &= right - 1u;
+        if (bal < 0) break;
+    }
+#else
+    int bal = 0;
+    for (int q = p - 2; q >= 0; --q) {
+        const MateValue v = mget(d, q);
+        if (bal == 0 && v == L) {
+            MateID x = msetpair(d, p, LL);
+            x = mset(x, q, R);
+#if RP_RUNTIME_FAST_DISCOVERY_VALIDITY
+            if (!sink.emit(DeviceKey{x, 0})) return false;
+#else
+            if (!runtime_discover_blocked_include_candidate_forward(
+                    x, b, W, p, RP_RUNTIME_DISCOVERY_CHECK_FULL, sink))
+                return false;
+#endif
+        }
+        if (v == L) ++bal;
+        else if (v == R) --bal;
+        if (bal < 0) break;
+    }
+
+    bal = 0;
+    for (int q = p + 1; q < W; ++q) {
+        const MateValue v = mget(d, q);
+        if (bal == 0 && v == R) {
+            MateID x = msetpair(d, p, RR);
+            x = mset(x, q, L);
+#if RP_RUNTIME_FAST_DISCOVERY_VALIDITY
+            if (!sink.emit(DeviceKey{x, 0})) return false;
+#else
+            if (!runtime_discover_blocked_include_candidate_forward(
+                    x, b, W, p, RP_RUNTIME_DISCOVERY_CHECK_FULL, sink))
+                return false;
+#endif
+        }
+        if (v == R) ++bal;
+        else if (v == L) --bal;
+        if (bal < 0) break;
+    }
+#endif
+    return true;
+}
+
+template<class Sink>
+__device__ __forceinline__ bool runtime_discover_try_main_inverse_forward(
+    MateID x, MateID dest, int W, int p, Sink& sink
+) {
+    if (!valid_mate_device(x, W)) return true;
+    const IncludeResult z = include_horizontal(x, W, p);
+    if (z.valid && !z.blocked && z.mate == dest)
+        return sink.emit(DeviceKey{x, 0});
+    return true;
+}
+
+template<class Sink>
+__device__ __forceinline__ bool runtime_discover_inverse_reduced_forward(
+    DeviceKey dest, int W, int p, Sink& sink
+) {
+    if (dest.blocked)
+        return runtime_discover_blocked_include_preimages_forward(
+            dest.mate, W, p, sink);
+
+    const MateID d = dest.mate;
+    if (!sink.emit(DeviceKey{d, 0})) return false;
+
+    const MateValuePair w = mpair(d, p);
+#if RP_RUNTIME_FAST_DISCOVERY_VALIDITY
+    if (w == LR && !sink.emit(DeviceKey{msetpair(d, p, NN), 0})) return false;
+    if (w == NR && !sink.emit(DeviceKey{msetpair(d, p, RN), 0})) return false;
+    if (w == NL && !sink.emit(DeviceKey{msetpair(d, p, LN), 0})) return false;
+#else
+    if (w == LR && !runtime_discover_try_main_inverse_forward(
+            msetpair(d, p, NN), d, W, p, sink)) return false;
+    if (w == NR && !runtime_discover_try_main_inverse_forward(
+            msetpair(d, p, RN), d, W, p, sink)) return false;
+    if (w == NL && !runtime_discover_try_main_inverse_forward(
+            msetpair(d, p, LN), d, W, p, sink)) return false;
+#endif
+
+    if (mget(d, p) == N && is_endpoint(mget(d, p - 1))) {
+        const MateID b = mshrink(d, p);
+#if RP_RUNTIME_FAST_DISCOVERY_VALIDITY
+        if (!sink.emit(DeviceKey{b, 1})) return false;
+#else
+        if (valid_mate_device(b, W - 1) && mget(b, p - 1) != N &&
+            blocked_exclude(b, p) == d) {
+            if (!sink.emit(DeviceKey{b, 1})) return false;
+        }
+#endif
+    }
+
+    const int q = p - 1;
+    const MateValuePair qp = mpair(d, q);
+    if (qp == NN || qp == LR) {
+        const MateID nn = qp == NN ? d : msetpair(d, q, NN);
+        const MateID b = mshrink(nn, q);
+#if RP_RUNTIME_FAST_DISCOVERY_VALIDITY
+        if (!runtime_discover_blocked_include_preimages_forward(
+                b, W, p, sink)) return false;
+#else
+        if (valid_mate_device(b, W - 1) && mget(b, q - 1) == N) {
+            if (!runtime_discover_blocked_include_preimages_forward(
+                    b, W, p, sink)) return false;
+        }
+#endif
+    }
+    return true;
+}
+
+__device__ __forceinline__ bool runtime_discover_inverse_direction_to_shared(
+    DeviceKey dest, int W, int p, bool reverse,
+    RuntimeSharedKey* source_set, int& source_count, int capacity,
+    std::uint64_t* source_signature = nullptr
+) {
+    RuntimeSharedKeySetSink base{source_set, &source_count, capacity, source_signature};
+    if (!reverse)
+        return runtime_discover_inverse_reduced_forward(dest, W, p, base);
+
+    RuntimeSharedMirroredKeySetSink mirrored{base, W};
+    const DeviceKey md = mirror_key_device(dest, W);
+    return runtime_discover_inverse_reduced_forward(md, W, W - p, mirrored);
+}
+
+static constexpr int RP_RUNTIME_SHARED_KEY_BYTES = sizeof(RuntimeSharedKey);
+static constexpr int RP_RUNTIME_DEVICE_KEY_BYTES = sizeof(DeviceKey);
+
+} // namespace oneesan::gridfp::reducedprod

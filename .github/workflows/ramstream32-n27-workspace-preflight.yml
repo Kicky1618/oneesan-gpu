@@ -1,0 +1,64 @@
+name: ramstream32 n27 workspace preflight
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  preflight:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    container: nvidia/cuda:12.8.1-devel-ubuntu22.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build n27 workspace preflight
+        shell: bash
+        run: |
+          N=27 ARCH=sm_80 \
+            bash scripts/build/gridfp-ramstream32-cpu-low-worker-dense-page-plan.sh
+          N=27 ARCH=sm_80 \
+            bash scripts/build/gridfp-ramstream32-cpu-low-worker-augmented-plan.sh
+
+      - name: Compare n27 dense workspace builders
+        shell: bash
+        run: |
+          rm -rf work/n27-workspace-preflight
+          mkdir -p work/n27-workspace-preflight
+          build/ramstream32_cpu_low_worker_dense_page_plan_n27 27 \
+            2>&1 | tee work/n27-workspace-preflight/dense-builder-compare.log
+          grep -Fq 'cpu_low_worker_dense_page_plan OK' \
+            work/n27-workspace-preflight/dense-builder-compare.log
+          grep -Fq 'identical_index=1' \
+            work/n27-workspace-preflight/dense-builder-compare.log
+          grep -Fq 'legacy_dense_build_s=' \
+            work/n27-workspace-preflight/dense-builder-compare.log
+          grep -Fq 'streaming_dense_build_s=' \
+            work/n27-workspace-preflight/dense-builder-compare.log
+
+      - name: Run n27 exact workspace audit
+        shell: bash
+        run: |
+          N=27 \
+          ARCH=sm_80 \
+          BUILD=0 \
+          PREFLIGHT_ONLY=1 \
+          OUT_DIR="$PWD/work/n27-workspace-preflight" \
+            bash scripts/bench/ramstream32-cpu-low-worker-augmented-plan-sweep.sh \
+            | tee work/n27-workspace-preflight/runner.log
+          grep -Fq 'preflight_ok=1 n=27 builder=streaming-two-pass' \
+            work/n27-workspace-preflight/runner.log
+          grep -R -Fq 'workspace_audit_ok=1' work/n27-workspace-preflight
+          grep -R -Fq 'rss_before_workspace_kib=' work/n27-workspace-preflight
+          grep -R -Fq 'rss_after_workspace_kib=' work/n27-workspace-preflight
+          grep -R -Fq 'peak_rss_kib=' work/n27-workspace-preflight
+
+      - name: Upload n27 preflight result
+        uses: actions/upload-artifact@v4
+        with:
+          name: ramstream32-n27-workspace-preflight
+          path: work/n27-workspace-preflight/
+          if-no-files-found: error
+          retention-days: 14

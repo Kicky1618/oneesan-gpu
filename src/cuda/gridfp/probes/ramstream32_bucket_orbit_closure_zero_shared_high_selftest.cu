@@ -1,0 +1,4 @@
+#include "../ramstream32_bucket_orbit_closure_zero_shared_high.cuh"
+#define bucket_launch_high_orbit_closure_zero bucket_launch_high_orbit_closure_zero_shared
+#define bucket_launch_reverse_high_split54_zero bucket_launch_reverse_high_split54_zero_shared
+#include "ramstream32_bucket_orbit_closure_zero_selftest.cu"

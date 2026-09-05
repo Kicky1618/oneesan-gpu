@@ -27,6 +27,10 @@ static constexpr int MAXW=28, MAXGPU=8;
 #ifndef HIGH_LUT_K
 #define HIGH_LUT_K 0
 #endif
+#ifndef B300_FAST_SHARD_ADDRESS8
+#define B300_FAST_SHARD_ADDRESS8 0
+#endif
+static_assert(B300_FAST_SHARD_ADDRESS8==0||B300_FAST_SHARD_ADDRESS8==1,"B300_FAST_SHARD_ADDRESS8 must be 0 or 1");
 
 enum MateValue:uint8_t{N=0,R=1,L=2,X=3};
 enum MateValuePair:uint8_t{NN=0x0,NR=0x1,NL=0x2,NX=0x3,RN=0x4,RR=0x5,RL=0x6,RX=0x7,LN=0x8,LR=0x9,LL=0xa,LX=0xb,XN=0xc,XR=0xd,XL=0xe,XX=0xf};
@@ -367,10 +371,19 @@ __device__ __forceinline__ Code rank_full_t(MateID m){
     for(int pos=WIDTH-1;pos>=0;--pos){MateValue v=mget(m,pos);if(v>N)rank+=D_FULL_DP[pos][h];if(v>R&&h>0)rank+=D_FULL_DP[pos][h-1];if(v==R)--h;else if(v==L)++h;}
     return rank;
 }
+struct ShardAddress8{int owner;Code local;};
+__device__ __forceinline__ ShardAddress8 shard_address8(Code g,Code chunk){int o=0;Code c4=chunk<<2;if(g>=c4){g-=c4;o|=4;}Code c2=chunk<<1;if(g>=c2){g-=c2;o|=2;}if(g>=chunk){g-=chunk;o|=1;}return{o,g};}
+#if B300_FAST_SHARD_ADDRESS8
+__device__ __forceinline__ Count global_load_main(Code g){auto a=shard_address8(g,D_MAIN_CHUNK);return D_MAIN_PTR[a.owner][a.local];}
+__device__ __forceinline__ Count global_load_block(Code g){auto a=shard_address8(g,D_BLOCK_CHUNK);return D_BLOCK_PTR[a.owner][a.local];}
+__device__ __forceinline__ void global_store_main(Code g,Count v){auto a=shard_address8(g,D_MAIN_CHUNK);D_MAIN_PTR[a.owner][a.local]=v;}
+__device__ __forceinline__ void global_store_block(Code g,Count v){auto a=shard_address8(g,D_BLOCK_CHUNK);D_BLOCK_PTR[a.owner][a.local]=v;}
+#else
 __device__ __forceinline__ Count global_load_main(Code g){int o=int(g/D_MAIN_CHUNK);if(o>=D_NGPU)o=D_NGPU-1;return D_MAIN_PTR[o][g-Code(o)*D_MAIN_CHUNK];}
 __device__ __forceinline__ Count global_load_block(Code g){int o=int(g/D_BLOCK_CHUNK);if(o>=D_NGPU)o=D_NGPU-1;return D_BLOCK_PTR[o][g-Code(o)*D_BLOCK_CHUNK];}
 __device__ __forceinline__ void global_store_main(Code g,Count v){int o=int(g/D_MAIN_CHUNK);if(o>=D_NGPU)o=D_NGPU-1;D_MAIN_PTR[o][g-Code(o)*D_MAIN_CHUNK]=v;}
 __device__ __forceinline__ void global_store_block(Code g,Count v){int o=int(g/D_BLOCK_CHUNK);if(o>=D_NGPU)o=D_NGPU-1;D_BLOCK_PTR[o][g-Code(o)*D_BLOCK_CHUNK]=v;}
+#endif
 
 __global__ void gather_main_kernel(Count*out,MateID*mates,Code n){Code i=Code(blockIdx.x)*blockDim.x+threadIdx.x,stride=Code(gridDim.x)*blockDim.x;for(;i<n;i+=stride){Code g;MateID m=unrank_group_global_t<TARGET_W>(i,D_MAIN_FIXED,D_MAIN_OCC,D_MAIN_DP,g);out[i]=global_load_main(g);if(mates)mates[i]=m;}}
 __global__ void gather_block_kernel(Count*out,Code n){Code i=Code(blockIdx.x)*blockDim.x+threadIdx.x,stride=Code(gridDim.x)*blockDim.x;for(;i<n;i+=stride){Code g;unrank_group_global_t<TARGET_W-1>(i,D_BLOCK_FIXED,D_BLOCK_OCC,D_BLOCK_DP,g);out[i]=global_load_block(g);}}

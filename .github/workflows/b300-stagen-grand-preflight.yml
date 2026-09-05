@@ -1,0 +1,32 @@
+name: B300 Stage N grand preflight
+
+on:
+  push:
+    paths:
+      - 'scripts/build/gen-b300-grand-selector-stagen.py'
+      - 'scripts/run/b300x8-joint-nextself-hybrid8-select-stagen.sh'
+      - 'scripts/run/b300x8-joint-nextself-hybrid8-select.sh'
+      - 'scripts/run/b300x8-nextgen-hybrid8-pair-block-load-stagen-staged-fullprime-race.sh'
+      - 'scripts/bench/b300-grand-stagen-contract-preflight.sh'
+      - '.github/workflows/b300-stagen-grand-preflight.yml'
+  pull_request:
+    paths:
+      - 'scripts/build/gen-b300-grand-selector-stagen.py'
+      - 'scripts/run/b300x8-joint-nextself-hybrid8-select-stagen.sh'
+      - 'scripts/run/b300x8-joint-nextself-hybrid8-select.sh'
+      - 'scripts/run/b300x8-nextgen-hybrid8-pair-block-load-stagen-staged-fullprime-race.sh'
+      - 'scripts/bench/b300-grand-stagen-contract-preflight.sh'
+      - '.github/workflows/b300-stagen-grand-preflight.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  preflight:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - name: Validate Stage N grand selector overlay
+        run: bash scripts/bench/b300-grand-stagen-contract-preflight.sh
